@@ -12,14 +12,17 @@ env:
 jobs:
   rust:
     name: fmt + clippy + tests + build release
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, byoc]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Toolchain Rust stable
-        run: |
-          rustup toolchain install stable --profile minimal --component rustfmt,clippy
-          rustup default stable
+      # `rustup` est préinstallé sur `ubuntu-latest` mais PAS sur un runner
+      # self-hosted : l'appeler directement échouait en « command not found ».
+      # Cette action installe rustup ET la toolchain, donc elle marche des deux
+      # côtés.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
 
@@ -37,14 +40,11 @@ jobs:
 
   compat:
     name: harnais de compatibilite (client officiel)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, byoc]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Toolchain Rust stable
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+      - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
 
@@ -62,7 +62,7 @@ jobs:
 
   docker:
     name: image minimale
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, byoc]
     steps:
       - uses: actions/checkout@v4
 
