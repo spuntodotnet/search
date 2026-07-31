@@ -12,12 +12,12 @@ use tantivy::query::{
     AllQuery, BooleanQuery, BoostQuery, ConstScoreQuery, EmptyQuery, ExistsQuery, Occur,
     PhraseQuery, Query, RangeQuery, TermQuery,
 };
-use tantivy::schema::{Field, IndexRecordOption};
+use tantivy::schema::IndexRecordOption;
 use tantivy::Index;
 
 use crate::dismax::DisMaxQuery;
 use crate::error::{EsError, EsResult};
-use crate::mapping::{self, FieldKind, FieldType, Fields, TEXT_TOKENIZER};
+use crate::mapping::{self, FieldKind, Fields, MappedField, TEXT_TOKENIZER};
 
 /// Ce dont la traduction a besoin : le schema resolu et l'index (pour les
 /// tokenizers).
@@ -27,7 +27,7 @@ pub struct QueryCtx<'a> {
 }
 
 impl QueryCtx<'_> {
-    fn field(&self, name: &str, clause: &str) -> EsResult<(Field, FieldType)> {
+    fn field(&self, name: &str, clause: &str) -> EsResult<MappedField> {
         self.fields.get(name).ok_or_else(|| {
             // ES cherche le champ dans le mapping dynamique ; ferrite n'en a pas,
             // donc un champ inconnu est une erreur explicite et non « 0 hit ».
@@ -128,7 +128,7 @@ fn field_match(
     clause: &str,
     ctx: &QueryCtx,
 ) -> EsResult<Box<dyn Query>> {
-    let (field, ty) = ctx.field(field_name, clause)?;
+    let MappedField { field, ty, .. } = ctx.field(field_name, clause)?;
     Ok(match ty.kind() {
         FieldKind::Text => {
             let tokens = ctx.analyze(&query_text(field_name, value, clause)?)?;
@@ -313,7 +313,7 @@ fn multi_match_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
 fn match_phrase_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     let obj = as_object(body, "match_phrase")?;
     let (field_name, spec) = single_key(obj, "match_phrase")?;
-    let (field, ty) = ctx.field(field_name, "match_phrase")?;
+    let MappedField { field, ty, .. } = ctx.field(field_name, "match_phrase")?;
 
     let (value, slop, boost_value) = match spec {
         Value::Object(o) => {
@@ -376,7 +376,7 @@ fn exists_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         .get("field")
         .and_then(Value::as_str)
         .ok_or_else(|| EsError::illegal_argument("[exists] : cle [field] manquante"))?;
-    let (field, ty) = ctx.field(name, "exists")?;
+    let MappedField { field, ty, .. } = ctx.field(name, "exists")?;
 
     let inner: Box<dyn Query> = match ty.kind() {
         // Les champs `text` n'ont pas de fast field (ce serait doubler le
@@ -395,7 +395,7 @@ fn exists_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
 fn term_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     let obj = as_object(body, "term")?;
     let (field_name, spec) = single_key(obj, "term")?;
-    let (field, ty) = ctx.field(field_name, "term")?;
+    let MappedField { field, ty, .. } = ctx.field(field_name, "term")?;
 
     let (value, boost_value) = match spec {
         Value::Object(o) => {
@@ -442,7 +442,7 @@ fn terms_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     }
     let (field_name, values) =
         entry.ok_or_else(|| EsError::parsing("[terms] : aucun champ fourni"))?;
-    let (field, ty) = ctx.field(field_name, "terms")?;
+    let MappedField { field, ty, .. } = ctx.field(field_name, "terms")?;
     let list = values.as_array().ok_or_else(|| {
         EsError::illegal_argument(format!(
             "[terms] sur [{field_name}] : une liste de valeurs est attendue (les lookups de \
@@ -471,7 +471,7 @@ fn terms_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
 fn range_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     let obj = as_object(body, "range")?;
     let (field_name, spec) = single_key(obj, "range")?;
-    let (field, ty) = ctx.field(field_name, "range")?;
+    let MappedField { field, ty, .. } = ctx.field(field_name, "range")?;
     let spec = as_object(spec, "range")?;
     expect_only(spec, &["gte", "gt", "lte", "lt", "boost"], "range")?;
 

@@ -154,11 +154,57 @@ def parametre_de_champ_non_supporte(es):
 
 
 @scenario
-def multi_fields_refuses(es):
-    refused(lambda: es.indices.create(
-        index="multi", mappings={"properties": {
-            "t": {"type": "text", "fields": {"keyword": {"type": "keyword"}}}}}),
-        contains="fields")
+def multi_fields(es):
+    """Le mapping que genere Elasticsearch tout seul pour une chaine :
+    `text` pour chercher, `.keyword` pour trier et filtrer exactement."""
+    es.options(ignore_status=404).indices.delete(index="multi")
+    es.indices.create(index="multi", mappings={"properties": {
+        "titre": {"type": "text",
+                  "fields": {"keyword": {"type": "keyword", "ignore_above": 8}}},
+        "tag": {"type": "keyword", "fields": {"texte": {"type": "text"}}},
+    }})
+    mapping = es.indices.get_mapping(index="multi")["multi"]["mappings"]["properties"]
+    assert mapping["titre"]["fields"]["keyword"]["type"] == "keyword"
+    assert mapping["titre"]["fields"]["keyword"]["ignore_above"] == 8
+
+    es.bulk(operations=[
+        {"index": {"_index": "multi", "_id": "1"}},
+        {"titre": "Bel-Ami", "tag": "roman social"},
+        {"index": {"_index": "multi", "_id": "2"}},
+        {"titre": "Nana", "tag": "roman"},
+        {"index": {"_index": "multi", "_id": "3"}},
+        {"titre": "un titre beaucoup trop long", "tag": "essai"},
+    ], refresh=True)
+
+    def hits(**kw):
+        return sorted(h["_id"] for h in es.search(index="multi", size=10, **kw)["hits"]["hits"])
+
+    # Le champ analyse cherche par mot...
+    assert hits(query={"match": {"titre": "bel"}}) == ["1"]
+    # ...le multi-field keyword exige la valeur entiere.
+    assert hits(query={"term": {"titre.keyword": "Bel-Ami"}}) == ["1"]
+    assert hits(query={"term": {"titre.keyword": "bel"}}) == []
+    # On peut trier sur le keyword, pas sur le text.
+    assert [h["_id"] for h in es.search(index="multi", query={"match_all": {}},
+                                        sort=[{"titre.keyword": "asc"}],
+                                        size=10)["hits"]["hits"]][:2] == ["1", "2"]
+    refused(lambda: es.search(index="multi", query={"match_all": {}},
+                              sort=[{"titre": "asc"}]))
+    # L'inverse marche aussi : un keyword avec un sous-champ analyse.
+    assert hits(query={"match": {"tag.texte": "social"}}) == ["1"]
+    assert hits(query={"term": {"tag": "roman social"}}) == ["1"]
+    # `ignore_above` : la valeur trop longue n'entre pas dans le keyword.
+    assert hits(query={"exists": {"field": "titre.keyword"}}) == ["1", "2"]
+    assert hits(query={"exists": {"field": "titre"}}) == ["1", "2", "3"]
+    es.indices.delete(index="multi")
+
+
+@scenario
+def multi_fields_deux_niveaux_refuses(es):
+    refused(lambda: es.indices.create(index="multi2", mappings={"properties": {
+        "t": {"type": "text", "fields": {
+            "k": {"type": "keyword", "fields": {"encore": {"type": "text"}}}}}}}),
+        contains="niveau")
 
 
 @scenario
