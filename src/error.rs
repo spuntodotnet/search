@@ -154,6 +154,12 @@ impl std::fmt::Display for EsError {
 
 impl std::error::Error for EsError {}
 
+impl From<std::io::Error> for EsError {
+    fn from(e: std::io::Error) -> Self {
+        EsError::internal(format!("io: {e}"))
+    }
+}
+
 impl From<tantivy::TantivyError> for EsError {
     fn from(e: tantivy::TantivyError) -> Self {
         EsError::internal(format!("tantivy: {e}"))

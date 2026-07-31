@@ -27,7 +27,7 @@ Toutes depuis la **racine** du repo.
 |---|---|
 | `cargo run` | Lance le serveur sur `:9200` |
 | `cargo build --release` | Build optimisé |
-| `cargo test` | Tests unitaires + intégration |
+| `cargo test` | Tests unitaires + intégration (dont concurrence : ~6 s) |
 | `cargo clippy --all-targets -- -D warnings` | Lint, **zéro warning toléré** |
 | `cargo fmt --check` | Vérifie le formatage (`cargo fmt` pour corriger) |
 | `./tests/compat/run.sh` | **Le harnais de compat** : compile, lance ferrite sur un port jetable, et l'exerce avec le client Elasticsearch officiel (critère d'acceptation + suite complète) |

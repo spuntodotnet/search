@@ -152,10 +152,54 @@ impl FieldMapping {
     }
 }
 
+/// Que faire d'un champ absent du mapping, a l'indexation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Dynamic {
+    /// Le defaut d'ES : le type est devine et le champ ajoute au mapping.
+    #[default]
+    True,
+    /// Le champ reste dans `_source` mais n'est ni indexe ni interrogeable.
+    False,
+    /// Le document est refuse.
+    Strict,
+}
+
+impl Dynamic {
+    fn parse(v: &Value) -> EsResult<Self> {
+        let s = match v {
+            Value::Bool(true) => "true",
+            Value::Bool(false) => "false",
+            Value::String(s) => s.as_str(),
+            _ => return Err(EsError::mapper_parsing("[dynamic] : valeur invalide")),
+        };
+        match s.to_ascii_lowercase().as_str() {
+            "true" => Ok(Self::True),
+            "false" => Ok(Self::False),
+            "strict" => Ok(Self::Strict),
+            "runtime" => Err(EsError::unsupported(
+                "ferrite ne supporte pas [dynamic: runtime] ; valeurs acceptees : true, false, \
+                 strict",
+            )),
+            other => Err(EsError::mapper_parsing(format!(
+                "[dynamic] : valeur [{other}] invalide (true, false, strict)"
+            ))),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::True => "true",
+            Self::False => "false",
+            Self::Strict => "strict",
+        }
+    }
+}
+
 /// Le mapping d'un index. Ordonne par nom, comme le rend ES.
 #[derive(Debug, Clone, Default)]
 pub struct Mapping {
     pub properties: BTreeMap<String, FieldMapping>,
+    pub dynamic: Dynamic,
 }
 
 impl Mapping {
@@ -169,7 +213,12 @@ impl Mapping {
         for (name, fm) in &self.properties {
             props.insert(name.clone(), fm.to_json());
         }
-        json!({ "properties": Value::Object(props) })
+        let mut o = Map::new();
+        if self.dynamic != Dynamic::True {
+            o.insert("dynamic".into(), json!(self.dynamic.name()));
+        }
+        o.insert("properties".into(), Value::Object(props));
+        Value::Object(o)
     }
 
     /// Parse `{"properties": {...}}`.
@@ -182,6 +231,7 @@ impl Mapping {
             .ok_or_else(|| EsError::mapper_parsing("[mappings] doit etre un objet"))?;
 
         let mut properties = BTreeMap::new();
+        let mut dynamic = Dynamic::default();
         for (key, val) in obj {
             match key.as_str() {
                 "properties" => {
@@ -193,17 +243,7 @@ impl Mapping {
                         properties.insert(name.clone(), parse_field_mapping(name, spec, false)?);
                     }
                 }
-                "dynamic" => {
-                    // Le seul reglage compatible avec l'absence de mapping
-                    // dynamique est `strict` : l'accepter, refuser les autres.
-                    let s = val.as_str().unwrap_or("");
-                    if !s.eq_ignore_ascii_case("strict") {
-                        return Err(EsError::unsupported(
-                            "ferrite ne supporte pas le mapping dynamique : seul \
-                             [dynamic: strict] est accepte",
-                        ));
-                    }
-                }
+                "dynamic" => dynamic = Dynamic::parse(val)?,
                 other => {
                     return Err(EsError::unsupported(format!(
                         "ferrite ne supporte pas le parametre de mapping [{other}]"
@@ -212,12 +252,18 @@ impl Mapping {
             }
         }
 
-        if properties.is_empty() {
+        // Un mapping vide est desormais licite : les champs viendront des
+        // documents si `dynamic` le permet.
+        if properties.is_empty() && dynamic == Dynamic::Strict {
             return Err(EsError::illegal_argument(
-                "ferrite exige un mapping explicite : [mappings.properties] est vide ou absent",
+                "[dynamic: strict] avec un mapping vide refuserait tous les documents : declare \
+                 des [properties]",
             ));
         }
-        Ok(Self { properties })
+        Ok(Self {
+            properties,
+            dynamic,
+        })
     }
 }
 
@@ -304,6 +350,53 @@ fn parse_field_mapping(name: &str, spec: &Value, sous_champ: bool) -> EsResult<F
         fields,
         ignore_above,
     })
+}
+
+/// Devine le mapping d'un champ a partir de sa premiere valeur, comme le fait
+/// Elasticsearch quand `dynamic` vaut `true`.
+///
+/// Les regles sont celles d'ES et elles ont des consequences : une chaine
+/// devient un `text` **doublé d'un sous-champ `keyword`** (c'est ce qui permet
+/// de trier et de filtrer exactement dessus), et la detection de date est
+/// active par defaut alors que la detection de nombre ne l'est pas.
+pub fn infer(value: &Value) -> Option<FieldMapping> {
+    match value {
+        Value::Null => None,
+        // Un tableau prend le type de son premier element non nul.
+        Value::Array(a) => a.iter().find_map(infer),
+        Value::Bool(_) => Some(FieldMapping::new(FieldType::Boolean)),
+        Value::Number(n) => Some(FieldMapping::new(if n.is_f64() {
+            // ES retient `float`, pas `double`, pour un flottant devine.
+            FieldType::Float
+        } else {
+            FieldType::Long
+        })),
+        Value::String(s) => {
+            // `date_detection` est actif par defaut chez ES ; `numeric_detection`
+            // ne l'est pas, donc « 42 » reste du texte.
+            if parse_date("_", value).is_ok() && ressemble_a_une_date(s) {
+                return Some(FieldMapping::new(FieldType::Date));
+            }
+            let mut fm = FieldMapping::new(FieldType::Text);
+            fm.fields.insert(
+                "keyword".to_string(),
+                FieldMapping {
+                    ty: FieldType::Keyword,
+                    fields: BTreeMap::new(),
+                    ignore_above: Some(256),
+                },
+            );
+            Some(fm)
+        }
+        Value::Object(_) => None,
+    }
+}
+
+/// `parse_date` accepte aussi les entiers en chaine (`epoch_millis`) ; la
+/// detection dynamique d'ES, elle, ne considere que les formats de date.
+fn ressemble_a_une_date(s: &str) -> bool {
+    let s = s.trim();
+    s.len() >= 8 && s.as_bytes().iter().filter(|b| **b == b'-').count() >= 2
 }
 
 fn validate_field_name_part(name: &str, chemin: &str) -> EsResult<()> {
@@ -655,8 +748,36 @@ mod tests {
     }
 
     #[test]
-    fn refuse_un_mapping_vide() {
-        assert!(mapping(r#"{"properties":{}}"#).is_err());
+    fn un_mapping_vide_est_licite_en_dynamique() {
+        // Les champs viendront des documents : c'est le defaut d'ES.
+        let m = mapping(r#"{"properties":{}}"#).unwrap();
+        assert!(m.properties.is_empty());
+        assert_eq!(m.dynamic, Dynamic::True);
+    }
+
+    #[test]
+    fn refuse_un_mapping_vide_en_strict() {
+        assert!(mapping(r#"{"dynamic":"strict","properties":{}}"#).is_err());
+    }
+
+    #[test]
+    fn inference_des_types() {
+        let t = |v: Value| infer(&v).map(|fm| fm.ty);
+        assert_eq!(t(json!(42)), Some(FieldType::Long));
+        assert_eq!(t(json!(4.5)), Some(FieldType::Float));
+        assert_eq!(t(json!(true)), Some(FieldType::Boolean));
+        assert_eq!(t(json!("2025-01-15")), Some(FieldType::Date));
+        // `numeric_detection` est desactive chez ES : « 42 » reste du texte.
+        assert_eq!(t(json!("42")), Some(FieldType::Text));
+        assert_eq!(t(json!(null)), None);
+        // Un tableau prend le type de son premier element non nul.
+        assert_eq!(t(json!([null, 7])), Some(FieldType::Long));
+
+        // Une chaine gagne son sous-champ `.keyword`, comme chez ES.
+        let fm = infer(&json!("bonjour")).unwrap();
+        assert_eq!(fm.ty, FieldType::Text);
+        assert_eq!(fm.fields["keyword"].ty, FieldType::Keyword);
+        assert_eq!(fm.fields["keyword"].ignore_above, Some(256));
     }
 
     const UNSUPPORTED_TY: &str = crate::error::UNSUPPORTED;

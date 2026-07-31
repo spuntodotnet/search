@@ -35,15 +35,56 @@ Version d'API annoncée : **Elasticsearch 8.15.0** (`version.number`,
 
 | | État | Détail |
 |---|---|---|
-| `PUT /{index}` | 🟡 | `mappings.properties` **obligatoire** (voir plus bas). `settings` limité à `number_of_shards` / `number_of_replicas` (acceptés, sans effet : ferrite est mono-shard). `aliases` doit être vide. `dynamic` accepté seulement à `strict` |
+| `PUT /{index}` | 🟡 | `mappings` est **optionnel** (les champs viendront des documents). `settings` limité à `number_of_shards` / `number_of_replicas` (acceptés, sans effet : ferrite est mono-shard). `aliases` doit être vide |
 | `DELETE /{index}` | ✅ | `ignore_unavailable` honoré |
 | `HEAD /{index}` | ✅ | |
 | `GET /{index}` | ✅ | `aliases` / `mappings` / `settings` |
 | `GET /{index}/_mapping` | ✅ | |
-| `PUT /{index}/_mapping` | ❌ | le schéma tantivy est figé à la création |
+| `PUT /{index}/_mapping` | ❌ | ajouter un champ passe par l'indexation d'un document (mapping dynamique) |
 | `POST /{index}/_refresh` | ✅ | |
-| Mapping dynamique | ❌ | un champ absent du mapping → `strict_dynamic_mapping_exception` |
+| Mapping dynamique | ✅ | `dynamic` : `true` (défaut), `false`, `strict`. `runtime` ❌. Voir plus bas |
 | Alias, templates, ILM, `_settings`, `_close`, `_open` | ❌ | |
+
+### Mapping dynamique
+
+`dynamic` vaut `true` par défaut, comme chez ES.
+
+| Valeur | Comportement |
+|---|---|
+| `true` | le type du champ est deviné et le mapping grandit |
+| `false` | le champ reste dans `_source`, sans être indexé ni interrogeable |
+| `strict` | le document est refusé (`strict_dynamic_mapping_exception`) |
+| `runtime` | ❌ |
+
+Les règles d'inférence sont celles d'ES, vérifiées champ par champ contre un
+vrai 8.15 : chaîne → `text` **plus un sous-champ `.keyword`** (`ignore_above:
+256`), entier → `long`, flottant → `float`, booléen → `boolean`, chaîne de date
+ISO → `date`. `numeric_detection` est désactivé comme chez ES, donc `"42"` reste
+du texte. Un tableau prend le type de son premier élément non nul ; `null` et le
+tableau vide ne créent pas de champ.
+
+**Ce que ça coûte.** tantivy fige le schéma à la création de l'index : ferrite ne
+peut pas y ajouter un champ. Quand le mapping dynamique en découvre un, ferrite
+construit donc une **nouvelle génération** de l'index et y rejoue tous les
+documents depuis le `_source` qu'il conserve déjà. Mesuré sur ce worker :
+
+| Documents déjà indexés | Durée de l'ajout d'un champ |
+|---|---|
+| 100 | 23 ms |
+| 1 000 | 29 ms |
+| 10 000 | 92 ms |
+| 50 000 | 446 ms |
+
+Soit environ 9 µs par document, linéaire. En pratique les nouveaux champs
+apparaissent au début de la vie d'un index, quand il est encore petit. Un champ
+qui apparaît après un million de documents coûterait en revanche plusieurs
+secondes — c'est la contrepartie assumée d'un schéma figé, et `dynamic: strict`
+reste là pour l'éviter.
+
+La bascule est sûre : la nouvelle génération est entièrement écrite et validée
+avant que `ferrite.json` ne la désigne (écriture atomique par renommage), et une
+écriture en cours empêche la bascule le temps qu'elle se termine. Les générations
+remplacées ne sont effacées que lorsque plus aucune recherche ne les tient.
 
 ### Types de champ
 
@@ -58,7 +99,9 @@ Version d'API annoncée : **Elasticsearch 8.15.0** (`version.number`,
 | Tableaux de valeurs | ✅ | tout champ accepte une valeur ou un tableau |
 | `null` | ✅ | ignoré à l'indexation, comme chez ES (pas de `null_value`) |
 | Tout autre type (`geo_point`, `nested`, `object`, `ip`, `binary`…) | ❌ | |
-| Paramètres de champ (`analyzer`, `index`, `fields`, `format`, `null_value`, `doc_values`…) | ❌ | seul `type` est accepté |
+| Multi-fields (`fields`) | ✅ | un seul niveau, comme ES. `titre.keyword` s'interroge et se trie comme un champ à part entière |
+| `ignore_above` | ✅ | sur un `keyword` : au-delà, la valeur reste dans `_source` sans être indexée |
+| Autres paramètres de champ (`analyzer`, `index`, `format`, `null_value`, `doc_values`…) | ❌ | acceptés : `type`, `fields`, `ignore_above` |
 | Noms de champ pointés (`a.b`) ou préfixés `_` | ❌ | |
 
 ## Ingestion
