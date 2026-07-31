@@ -49,7 +49,6 @@ pub async fn health(State(st): State<SharedState>, uri: Uri) -> EsResult<Json> {
     // Ces parametres d'attente sont sans objet : le cluster est deja `green`.
     p.opt("wait_for_status");
     p.opt("timeout");
-    p.opt("level");
     p.done()?;
     Ok(Json::ok(health_body(&st, st.catalog.list().len())))
 }
@@ -62,7 +61,6 @@ pub async fn health_index(
     let mut p = Params::parse(&uri);
     p.opt("wait_for_status");
     p.opt("timeout");
-    p.opt("level");
     p.done()?;
     st.catalog.get(&index)?;
     Ok(Json::ok(health_body(&st, 1)))
@@ -92,7 +90,6 @@ pub async fn cat_health(State(st): State<SharedState>, uri: Uri) -> EsResult<Res
     let mut p = Params::parse(&uri);
     let format = p.opt("format");
     let verbose = p.flag("v", false)?;
-    p.opt("h");
     p.done()?;
 
     let shards = st.catalog.list().len();
@@ -127,17 +124,10 @@ pub async fn cat_indices_one(
     cat_indices_inner(st, uri, Some(index)).await
 }
 
-async fn cat_indices_inner(
-    st: SharedState,
-    uri: Uri,
-    only: Option<String>,
-) -> EsResult<Response> {
+async fn cat_indices_inner(st: SharedState, uri: Uri, only: Option<String>) -> EsResult<Response> {
     let mut p = Params::parse(&uri);
     let format = p.opt("format");
     let verbose = p.flag("v", false)?;
-    p.opt("h");
-    p.opt("s");
-    p.opt("bytes");
     p.done()?;
 
     let mut rows = Vec::new();
@@ -204,7 +194,12 @@ fn cat_response(rows: &[Value], format: Option<&str>, verbose: bool) -> Response
 }
 
 fn human_bytes(n: u64) -> String {
-    const UNITS: [(&str, u64); 4] = [("tb", 1 << 40), ("gb", 1 << 30), ("mb", 1 << 20), ("kb", 1 << 10)];
+    const UNITS: [(&str, u64); 4] = [
+        ("tb", 1 << 40),
+        ("gb", 1 << 30),
+        ("mb", 1 << 20),
+        ("kb", 1 << 10),
+    ];
     for (unit, size) in UNITS {
         if n >= size {
             return format!("{:.1}{unit}", n as f64 / size as f64);
@@ -215,9 +210,7 @@ fn human_bytes(n: u64) -> String {
 
 /// `GET /_nodes` — le minimum dont se contentent les clients et les outils.
 pub async fn nodes(State(st): State<SharedState>, uri: Uri) -> EsResult<Json> {
-    let mut p = Params::parse(&uri);
-    p.opt("flat_settings");
-    p.done()?;
+    Params::parse(&uri).done()?;
 
     let node_id = &st.catalog.cluster_uuid;
     Ok(Json::ok(json!({

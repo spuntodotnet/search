@@ -13,13 +13,11 @@ use std::sync::{Arc, Mutex, RwLock};
 use serde_json::{json, Value};
 use tantivy::collector::TopDocs;
 use tantivy::query::TermQuery;
-use tantivy::schema::{IndexRecordOption, OwnedValue, Schema, TantivyDocument, Value as _};
+use tantivy::schema::{IndexRecordOption, TantivyDocument, Value as _};
 use tantivy::{DateTime, Index, IndexReader, IndexWriter, ReloadPolicy, Searcher, Term};
 
 use crate::error::{EsError, EsResult};
-use crate::mapping::{
-    self, FieldKind, Fields, Mapping, TypedValue, F_ID, F_SEQ_NO, F_VERSION,
-};
+use crate::mapping::{self, Fields, Mapping, TypedValue, F_ID, F_SEQ_NO, F_VERSION};
 use crate::util;
 
 const META_FILE: &str = "ferrite.json";
@@ -34,10 +32,23 @@ pub struct WriteOutcome {
     pub created: bool,
 }
 
+/// L'etat d'un `_id` connu de l'index.
+///
+/// Une entree survit a la suppression du document (`deleted`) pour que
+/// `_version` reste monotone par identifiant, comme chez ES.
 #[derive(Debug, Clone, Copy)]
 struct DocMeta {
     version: u64,
     seq_no: u64,
+    deleted: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DeleteOutcome {
+    /// `false` si l'identifiant n'existait pas ou etait deja supprime.
+    pub found: bool,
+    pub version: u64,
+    pub seq_no: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -72,7 +83,12 @@ impl FerriteIndex {
     }
 
     pub fn doc_count(&self) -> usize {
-        self.docs.read().expect("docs lock").len()
+        self.docs
+            .read()
+            .expect("docs lock")
+            .values()
+            .filter(|m| !m.deleted)
+            .count()
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -110,7 +126,8 @@ impl FerriteIndex {
 
         let mut docs = self.docs.write().expect("docs lock");
         let existing = docs.get(id).copied();
-        if require_absent && existing.is_some() {
+        let live = existing.filter(|m| !m.deleted);
+        if require_absent && live.is_some() {
             return Err(EsError::version_conflict(&self.name, id));
         }
         let version = existing.map_or(1, |m| m.version + 1);
@@ -122,45 +139,68 @@ impl FerriteIndex {
 
         {
             let w = self.writer.lock().expect("writer lock");
-            if existing.is_some() {
+            if live.is_some() {
                 w.delete_term(Term::from_field_text(self.fields.id, id));
             }
             w.add_document(doc)?;
         }
-        docs.insert(id.to_string(), DocMeta { version, seq_no });
+        docs.insert(
+            id.to_string(),
+            DocMeta {
+                version,
+                seq_no,
+                deleted: false,
+            },
+        );
         self.dirty.store(true, Ordering::Release);
 
         Ok(WriteOutcome {
             version,
             seq_no,
-            created: existing.is_none(),
+            created: live.is_none(),
         })
     }
 
-    /// Supprime un document. `None` s'il n'existait pas.
-    pub fn delete_doc(&self, id: &str) -> EsResult<Option<WriteOutcome>> {
+    /// Supprime un document.
+    ///
+    /// Supprimer un identifiant deja supprime n'est pas une erreur : ES
+    /// repond 404 tout en faisant avancer `_version`. On garde donc une
+    /// pierre tombale plutot que d'oublier l'identifiant.
+    pub fn delete_doc(&self, id: &str) -> EsResult<DeleteOutcome> {
         let mut docs = self.docs.write().expect("docs lock");
-        let Some(meta) = docs.remove(id) else {
-            return Ok(None);
-        };
-        {
+        let existing = docs.get(id).copied();
+        let was_live = existing.is_some_and(|m| !m.deleted);
+
+        if was_live {
             let w = self.writer.lock().expect("writer lock");
             w.delete_term(Term::from_field_text(self.fields.id, id));
+            self.dirty.store(true, Ordering::Release);
         }
+
+        let version = existing.map_or(1, |m| m.version + 1);
         let seq_no = self.seq_counter.fetch_add(1, Ordering::Relaxed);
-        self.dirty.store(true, Ordering::Release);
-        Ok(Some(WriteOutcome {
-            version: meta.version + 1,
+        docs.insert(
+            id.to_string(),
+            DocMeta {
+                version,
+                seq_no,
+                deleted: true,
+            },
+        );
+        Ok(DeleteOutcome {
+            found: was_live,
+            version,
             seq_no,
-            created: false,
-        }))
+        })
     }
 
     /// `GET /{index}/_doc/{id}`. Temps reel comme chez ES : si des ecritures
     /// sont en attente, on les rend visibles avant de lire.
     pub fn get_doc(&self, id: &str) -> EsResult<Option<GetResult>> {
         let meta = { self.docs.read().expect("docs lock").get(id).copied() };
-        let Some(meta) = meta else { return Ok(None) };
+        let Some(meta) = meta.filter(|m| !m.deleted) else {
+            return Ok(None);
+        };
         self.refresh()?;
 
         let searcher = self.searcher();
@@ -181,27 +221,12 @@ impl FerriteIndex {
         }))
     }
 
-    /// Le `_source` d'un hit, tel qu'il a ete indexe.
-    pub fn source_of(&self, searcher: &Searcher, addr: tantivy::DocAddress) -> EsResult<Value> {
-        let doc: TantivyDocument = searcher.doc(addr)?;
-        stored_source(&doc, &self.fields)
-    }
-
-    /// L'identifiant ES d'un hit.
-    pub fn id_of(&self, searcher: &Searcher, addr: tantivy::DocAddress) -> EsResult<String> {
-        let doc: TantivyDocument = searcher.doc(addr)?;
-        Ok(doc
-            .get_first(self.fields.id)
-            .and_then(|v| v.as_str().map(str::to_string))
-            .unwrap_or_default())
-    }
-
     /// Traduit un document JSON en document tantivy, en refusant tout champ
     /// absent du mapping explicite.
     fn build_doc(&self, id: &str, source: &Value) -> EsResult<TantivyDocument> {
-        let obj = source.as_object().ok_or_else(|| {
-            EsError::mapper_parsing("le document doit etre un objet JSON")
-        })?;
+        let obj = source
+            .as_object()
+            .ok_or_else(|| EsError::mapper_parsing("le document doit etre un objet JSON"))?;
 
         let mut doc = TantivyDocument::new();
         doc.add_text(self.fields.id, id);
@@ -284,6 +309,9 @@ impl Catalog {
     }
 
     pub fn get(&self, name: &str) -> EsResult<Arc<FerriteIndex>> {
+        // Un nom invalide n'est pas un index absent : c'est ce que repond ES a
+        // `GET /_une_route_inconnue`, et c'est plus utile qu'un 404.
+        validate_index_name(name)?;
         self.indices
             .read()
             .expect("catalog lock")
@@ -293,7 +321,10 @@ impl Catalog {
     }
 
     pub fn exists(&self, name: &str) -> bool {
-        self.indices.read().expect("catalog lock").contains_key(name)
+        self.indices
+            .read()
+            .expect("catalog lock")
+            .contains_key(name)
     }
 
     /// Les index, tries par nom.
@@ -332,8 +363,11 @@ impl Catalog {
             "ferrite_version": crate::FERRITE_VERSION,
             "mappings": mapping.to_json(),
         });
-        fs::write(dir.join(META_FILE), serde_json::to_vec_pretty(&meta).unwrap())
-            .map_err(|e| EsError::internal(format!("ecriture du mapping: {e}")))?;
+        fs::write(
+            dir.join(META_FILE),
+            serde_json::to_vec_pretty(&meta).unwrap(),
+        )
+        .map_err(|e| EsError::internal(format!("ecriture du mapping: {e}")))?;
 
         let (schema, fields) = mapping::build_schema(&mapping);
         let index = Index::create_in_dir(&index_dir, schema)?;
@@ -438,10 +472,7 @@ fn open_index(dir: &Path, name: &str) -> EsResult<FerriteIndex> {
 ///
 /// ES garde ces compteurs dans le translog ; ferrite les relit a l'ouverture,
 /// ce qui suffit a un mono-noeud et evite un journal supplementaire.
-fn rebuild_doc_table(
-    index: &Index,
-    fields: &Fields,
-) -> EsResult<(HashMap<String, DocMeta>, u64)> {
+fn rebuild_doc_table(index: &Index, fields: &Fields) -> EsResult<(HashMap<String, DocMeta>, u64)> {
     let reader: IndexReader = index
         .reader_builder()
         .reload_policy(ReloadPolicy::Manual)
@@ -469,9 +500,17 @@ fn rebuild_doc_table(
             let version = versions.first(doc_id).unwrap_or(1);
             let seq_no = seqs.first(doc_id).unwrap_or(0);
             max_seq = max_seq.max(seq_no);
-            let entry = docs.entry(id).or_insert(DocMeta { version, seq_no });
+            let entry = docs.entry(id).or_insert(DocMeta {
+                version,
+                seq_no,
+                deleted: false,
+            });
             if version > entry.version {
-                *entry = DocMeta { version, seq_no };
+                *entry = DocMeta {
+                    version,
+                    seq_no,
+                    deleted: false,
+                };
             }
         }
     }
@@ -489,6 +528,7 @@ pub fn validate_index_name(name: &str) -> EsResult<()> {
             "invalid_index_name_exception",
             format!("Invalid index name [{name}], {reason}"),
         )
+        .with("index_uuid", json!("_na_"))
         .with("index", json!(name)))
     };
     if name.is_empty() {
@@ -500,7 +540,10 @@ pub fn validate_index_name(name: &str) -> EsResult<()> {
     if name == "." || name == ".." {
         return invalid("must not be '.' or '..'");
     }
-    if name.starts_with('_') || name.starts_with('-') || name.starts_with('+') {
+    if name.starts_with('_') {
+        return invalid("must not start with '_'.");
+    }
+    if name.starts_with('-') || name.starts_with('+') {
         return invalid("must not start with '_', '-', or '+'");
     }
     if name.chars().any(|c| c.is_uppercase()) {
@@ -526,23 +569,3 @@ fn dir_size(path: &Path) -> u64 {
         })
         .sum()
 }
-
-/// Le `kind` d'un champ, pour les modules qui n'ont pas besoin du type ES exact.
-pub fn kind_of(fields: &Fields, name: &str) -> Option<FieldKind> {
-    fields.get(name).map(|(_, ty)| ty.kind())
-}
-
-/// Rend une valeur stockee tantivy en JSON (utilise par les tests).
-#[allow(dead_code)]
-fn owned_to_json(v: &OwnedValue) -> Value {
-    match v {
-        OwnedValue::Str(s) => json!(s),
-        OwnedValue::I64(n) => json!(n),
-        OwnedValue::F64(n) => json!(n),
-        OwnedValue::Bool(b) => json!(b),
-        _ => Value::Null,
-    }
-}
-
-#[allow(dead_code)]
-fn _assert_schema_is_used(_: &Schema) {}

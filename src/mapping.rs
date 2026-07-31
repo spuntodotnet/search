@@ -10,8 +10,8 @@ use std::collections::BTreeMap;
 
 use serde_json::{json, Map, Value};
 use tantivy::schema::{
-    DateOptions, DateTimePrecision, Field, IndexRecordOption, NumericOptions, Schema, SchemaBuilder,
-    TextFieldIndexing, TextOptions, FAST, INDEXED, STORED, STRING,
+    DateOptions, DateTimePrecision, Field, IndexRecordOption, NumericOptions, Schema,
+    SchemaBuilder, TextFieldIndexing, TextOptions, FAST, INDEXED, STORED, STRING,
 };
 use tantivy::{DateTime, Term};
 
@@ -335,11 +335,10 @@ impl TypedValue {
             Self::I64(v) => Term::from_field_i64(field, *v),
             Self::F64(v) => Term::from_field_f64(field, *v),
             Self::Bool(v) => Term::from_field_bool(field, *v),
-            Self::Date(ms) => {
-                Term::from_field_date(field, DateTime::from_timestamp_millis(*ms).truncate(
-                    DateTimePrecision::Milliseconds,
-                ))
-            }
+            Self::Date(ms) => Term::from_field_date(
+                field,
+                DateTime::from_timestamp_millis(*ms).truncate(DateTimePrecision::Milliseconds),
+            ),
         }
     }
 }
@@ -425,9 +424,9 @@ fn parse_date(field: &str, v: &Value) -> EsResult<i64> {
     use time::{Date, OffsetDateTime, PrimitiveDateTime};
 
     match v {
-        Value::Number(n) => n
-            .as_i64()
-            .ok_or_else(|| EsError::mapper_parsing(format!("[{field}] : date epoch_millis {n} invalide"))),
+        Value::Number(n) => n.as_i64().ok_or_else(|| {
+            EsError::mapper_parsing(format!("[{field}] : date epoch_millis {n} invalide"))
+        }),
         Value::String(s) => {
             let s = s.trim();
             if let Ok(dt) = OffsetDateTime::parse(s, &Rfc3339) {

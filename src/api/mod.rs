@@ -43,12 +43,7 @@ impl Json {
 impl IntoResponse for Json {
     fn into_response(self) -> Response {
         let body = serde_json::to_vec(&self.1).unwrap_or_else(|_| b"{}".to_vec());
-        (
-            self.0,
-            [(header::CONTENT_TYPE, "application/json")],
-            body,
-        )
-            .into_response()
+        (self.0, [(header::CONTENT_TYPE, "application/json")], body).into_response()
     }
 }
 
@@ -80,11 +75,11 @@ pub fn router(state: SharedState) -> Router {
             "/{index}/_refresh",
             post(indices::refresh).get(indices::refresh),
         )
+        .route("/{index}/_search", post(search::search).get(search::search))
         .route(
-            "/{index}/_search",
-            post(search::search).get(search::search),
+            "/{index}/_bulk",
+            post(docs::bulk_index).put(docs::bulk_index),
         )
-        .route("/{index}/_bulk", post(docs::bulk_index).put(docs::bulk_index))
         .route("/{index}/_doc", post(docs::index_auto_id))
         .route(
             "/{index}/_doc/{id}",
@@ -98,9 +93,15 @@ pub fn router(state: SharedState) -> Router {
             "/{index}/_create/{id}",
             put(docs::create_doc).post(docs::create_doc),
         )
-        .route("/{index}/_count", get(unsupported_route).post(unsupported_route))
+        .route(
+            "/{index}/_count",
+            get(unsupported_route).post(unsupported_route),
+        )
         .route("/{index}/_update/{id}", post(unsupported_route))
-        .route("/{index}/_mget", get(unsupported_route).post(unsupported_route))
+        .route(
+            "/{index}/_mget",
+            get(unsupported_route).post(unsupported_route),
+        )
         .fallback(no_handler)
         .layer(axum::middleware::from_fn(elastic_headers))
         .with_state(state)
@@ -123,7 +124,6 @@ async fn no_handler(req: Request) -> Response {
             "no handler found for uri [{}] and method [{}]",
             req.uri(), req.method()
         ),
-        "status": 400,
     });
     (
         StatusCode::BAD_REQUEST,
@@ -326,12 +326,15 @@ pub fn parse_body(body: &Bytes) -> EsResult<Value> {
     if body.is_empty() {
         return Ok(Value::Null);
     }
-    serde_json::from_slice(body)
-        .map_err(|e| EsError::parsing(format!("corps JSON invalide : {e}")))
+    serde_json::from_slice(body).map_err(|e| EsError::parsing(format!("corps JSON invalide : {e}")))
 }
 
 /// Refuse toute cle inconnue dans un corps de requete.
-pub fn expect_only(obj: &serde_json::Map<String, Value>, allowed: &[&str], what: &str) -> EsResult<()> {
+pub fn expect_only(
+    obj: &serde_json::Map<String, Value>,
+    allowed: &[&str],
+    what: &str,
+) -> EsResult<()> {
     for key in obj.keys() {
         if !allowed.contains(&key.as_str()) {
             return Err(EsError::unsupported(format!(

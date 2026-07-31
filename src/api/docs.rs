@@ -55,8 +55,17 @@ async fn write_one(
 ) -> EsResult<Json> {
     let mut p = Params::parse(&uri);
     let refresh = p.refresh()?;
+    // Ecriture synchrone : il n'y a pas de file d'attente a temporiser.
     p.opt("timeout");
-    p.opt("op_type");
+    let require_absent = match p.opt("op_type").as_deref() {
+        None | Some("index") => require_absent,
+        Some("create") => true,
+        Some(other) => {
+            return Err(EsError::illegal_argument(format!(
+                "opType [{other}] invalide (index|create)"
+            )))
+        }
+    };
     p.done()?;
 
     let source = parse_body(&body)?;
@@ -87,19 +96,25 @@ async fn write_one(
     } else {
         StatusCode::OK
     };
-    Ok(Json(status, write_body(&index, &id, &outcome)))
+    Ok(Json(status, write_body(&index, &id, &outcome, refresh)))
 }
 
-fn write_body(index: &str, id: &str, out: &WriteOutcome) -> Value {
-    json!({
-        "_index": index,
-        "_id": id,
-        "_version": out.version,
-        "result": if out.created { "created" } else { "updated" },
-        "_shards": shards_ok(),
-        "_seq_no": out.seq_no,
-        "_primary_term": 1,
-    })
+fn write_body(index: &str, id: &str, out: &WriteOutcome, forced_refresh: bool) -> Value {
+    let mut o = Map::new();
+    o.insert("_index".into(), json!(index));
+    o.insert("_id".into(), json!(id));
+    o.insert("_version".into(), json!(out.version));
+    o.insert(
+        "result".into(),
+        json!(if out.created { "created" } else { "updated" }),
+    );
+    if forced_refresh {
+        o.insert("forced_refresh".into(), json!(true));
+    }
+    o.insert("_shards".into(), shards_ok());
+    o.insert("_seq_no".into(), json!(out.seq_no));
+    o.insert("_primary_term".into(), json!(1));
+    Value::Object(o)
 }
 
 /// `GET /{index}/_doc/{id}`
@@ -110,6 +125,8 @@ pub async fn get_doc(
 ) -> EsResult<Json> {
     let mut p = Params::parse(&uri);
     let filter = source_filter(&mut p)?;
+    // `get` est toujours temps reel chez ferrite : `realtime=false` ne peut pas
+    // rendre une reponse plus fraiche que demandee.
     p.opt("realtime");
     p.opt("preference");
     p.done()?;
@@ -185,29 +202,30 @@ pub async fn delete_doc(
         .map_err(|e| EsError::internal(format!("suppression: {e}")))??
     };
 
-    match outcome {
-        Some(out) => Ok(Json::ok(json!({
-            "_index": index,
-            "_id": id,
-            "_version": out.version,
-            "result": "deleted",
-            "_shards": shards_ok(),
-            "_seq_no": out.seq_no,
-            "_primary_term": 1,
-        }))),
-        None => Ok(Json(
-            StatusCode::NOT_FOUND,
-            json!({
-                "_index": index,
-                "_id": id,
-                "_version": 1,
-                "result": "not_found",
-                "_shards": shards_ok(),
-                "_seq_no": 0,
-                "_primary_term": 1,
-            }),
-        )),
+    let status = if outcome.found {
+        StatusCode::OK
+    } else {
+        StatusCode::NOT_FOUND
+    };
+    let mut o = Map::new();
+    o.insert("_index".into(), json!(index));
+    o.insert("_id".into(), json!(id));
+    o.insert("_version".into(), json!(outcome.version));
+    o.insert(
+        "result".into(),
+        json!(if outcome.found {
+            "deleted"
+        } else {
+            "not_found"
+        }),
+    );
+    if refresh && outcome.found {
+        o.insert("forced_refresh".into(), json!(true));
     }
+    o.insert("_shards".into(), shards_ok());
+    o.insert("_seq_no".into(), json!(outcome.seq_no));
+    o.insert("_primary_term".into(), json!(1));
+    Ok(Json(status, Value::Object(o)))
 }
 
 // ---------------------------------------------------------------------------
@@ -256,9 +274,11 @@ async fn bulk_inner(
         }
     }
 
-    let errors = items
-        .iter()
-        .any(|it| it.as_object().and_then(|o| o.values().next()).is_some_and(is_error_item));
+    let errors = items.iter().any(|it| {
+        it.as_object()
+            .and_then(|o| o.values().next())
+            .is_some_and(is_error_item)
+    });
 
     Ok(Json::ok(json!({
         "errors": errors,
@@ -303,10 +323,7 @@ fn run_bulk(
             ))
         })?;
 
-        let action = match parse_action(&value, default_index, lineno + 1) {
-            Ok(a) => a,
-            Err(e) => return Err(e),
-        };
+        let action = parse_action(&value, default_index, lineno + 1)?;
 
         // Les actions `index`/`create` sont suivies du document ; `delete` non.
         let source = if action.op == "delete" {
@@ -339,7 +356,9 @@ fn run_bulk(
 
 fn parse_action(value: &Value, default_index: Option<&str>, lineno: usize) -> EsResult<Action> {
     let obj = value.as_object().ok_or_else(|| {
-        EsError::parsing(format!("[_bulk] ligne {lineno} : l'action doit etre un objet"))
+        EsError::parsing(format!(
+            "[_bulk] ligne {lineno} : l'action doit etre un objet"
+        ))
     })?;
     if obj.len() != 1 {
         return Err(EsError::parsing(format!(
@@ -401,26 +420,27 @@ fn execute_action(
     source: Option<Value>,
     forced_refresh: bool,
 ) -> Value {
-    let id = action
-        .id
-        .clone()
-        .unwrap_or_else(util::random_uuid);
+    let id = action.id.clone().unwrap_or_else(util::random_uuid);
 
     let result = (|| -> EsResult<(StatusCode, &'static str, WriteOutcome)> {
         let idx = catalog.get(&action.index)?;
         match action.op.as_str() {
-            "delete" => match idx.delete_doc(&id)? {
-                Some(out) => Ok((StatusCode::OK, "deleted", out)),
-                None => Ok((
-                    StatusCode::NOT_FOUND,
-                    "not_found",
+            "delete" => {
+                let out = idx.delete_doc(&id)?;
+                Ok((
+                    if out.found {
+                        StatusCode::OK
+                    } else {
+                        StatusCode::NOT_FOUND
+                    },
+                    if out.found { "deleted" } else { "not_found" },
                     WriteOutcome {
-                        version: 1,
-                        seq_no: 0,
+                        version: out.version,
+                        seq_no: out.seq_no,
                         created: false,
                     },
-                )),
-            },
+                ))
+            }
             op => {
                 let doc = source.as_ref().ok_or_else(|| {
                     EsError::parsing(format!("[_bulk] action [{op}] sans document"))

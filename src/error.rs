@@ -58,7 +58,11 @@ impl EsError {
 
     /// Document refuse par le mapping.
     pub fn mapper_parsing(reason: impl Into<String>) -> Self {
-        Self::new(StatusCode::BAD_REQUEST, "document_parsing_exception", reason)
+        Self::new(
+            StatusCode::BAD_REQUEST,
+            "document_parsing_exception",
+            reason,
+        )
     }
 
     /// Champ absent du mapping explicite. ferrite ne fait pas de mapping

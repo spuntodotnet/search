@@ -40,10 +40,9 @@ pub async fn search(
     let param_size = p.number("size")?;
     let param_sort = p.list("sort");
     let param_source = source_filter_opt(&mut p)?;
+    // `preference` choisit un shard : ferrite n'en a qu'un, le parametre est
+    // donc sans objet — pas ignore, juste sans effet possible.
     p.opt("preference");
-    p.opt("ignore_unavailable");
-    p.opt("allow_no_indices");
-    p.opt("expand_wildcards");
     if let Some(v) = p.opt("track_total_hits") {
         check_track_total_hits(&Value::String(v))?;
     }
@@ -63,7 +62,14 @@ pub async fn search(
     };
     expect_only(
         &body_obj,
-        &["query", "from", "size", "sort", "_source", "track_total_hits"],
+        &[
+            "query",
+            "from",
+            "size",
+            "sort",
+            "_source",
+            "track_total_hits",
+        ],
         "_search",
     )?;
 
@@ -72,10 +78,20 @@ pub async fn search(
     }
 
     let from = param_from
-        .or_else(|| body_obj.get("from").and_then(Value::as_u64).map(|v| v as usize))
+        .or_else(|| {
+            body_obj
+                .get("from")
+                .and_then(Value::as_u64)
+                .map(|v| v as usize)
+        })
         .unwrap_or(0);
     let size = param_size
-        .or_else(|| body_obj.get("size").and_then(Value::as_u64).map(|v| v as usize))
+        .or_else(|| {
+            body_obj
+                .get("size")
+                .and_then(Value::as_u64)
+                .map(|v| v as usize)
+        })
         .unwrap_or(DEFAULT_SIZE);
 
     if from + size > MAX_RESULT_WINDOW {
@@ -201,9 +217,9 @@ fn parse_source_body(v: &Value) -> EsResult<SourceFilter> {
             includes: a
                 .iter()
                 .map(|x| {
-                    x.as_str()
-                        .map(str::to_string)
-                        .ok_or_else(|| EsError::illegal_argument("[_source] : liste de chaines attendue"))
+                    x.as_str().map(str::to_string).ok_or_else(|| {
+                        EsError::illegal_argument("[_source] : liste de chaines attendue")
+                    })
                 })
                 .collect::<EsResult<_>>()?,
             excludes: vec![],
@@ -257,7 +273,10 @@ fn parse_sort_body(v: &Value, idx: &crate::engine::FerriteIndex) -> EsResult<Vec
                         Value::String(s) => Some(s.clone()),
                         Value::Object(inner) => {
                             expect_only(inner, &["order"], "sort")?;
-                            inner.get("order").and_then(Value::as_str).map(str::to_string)
+                            inner
+                                .get("order")
+                                .and_then(Value::as_str)
+                                .map(str::to_string)
                         }
                         _ => {
                             return Err(EsError::illegal_argument(

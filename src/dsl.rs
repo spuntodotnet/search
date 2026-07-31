@@ -16,7 +16,7 @@ use tantivy::schema::{Field, IndexRecordOption};
 use tantivy::Index;
 
 use crate::error::{EsError, EsResult};
-use crate::mapping::{self, FieldKind, FieldType, Fields, TypedValue, TEXT_TOKENIZER};
+use crate::mapping::{self, FieldKind, FieldType, Fields, TEXT_TOKENIZER};
 
 /// Ce dont la traduction a besoin : le schema resolu et l'index (pour les
 /// tokenizers).
@@ -80,7 +80,7 @@ pub fn build_query(v: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
 fn match_all(body: &Value) -> EsResult<Box<dyn Query>> {
     let obj = as_object(body, "match_all")?;
     expect_only(obj, &["boost"], "match_all")?;
-    Ok(boost(Box::new(AllQuery), obj.get("boost"))?)
+    boost(Box::new(AllQuery), obj.get("boost"))
 }
 
 fn match_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
@@ -92,7 +92,9 @@ fn match_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         Value::Object(o) => {
             expect_only(o, &["query", "operator", "boost"], "match")?;
             let q = o.get("query").ok_or_else(|| {
-                EsError::parsing(format!("[match] sur [{field_name}] : cle [query] manquante"))
+                EsError::parsing(format!(
+                    "[match] sur [{field_name}] : cle [query] manquante"
+                ))
             })?;
             let op = match o.get("operator").and_then(Value::as_str) {
                 None => Occur::Should,
@@ -201,8 +203,8 @@ fn terms_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
             entry = Some((k, v));
         }
     }
-    let (field_name, values) = entry
-        .ok_or_else(|| EsError::parsing("[terms] : aucun champ fourni"))?;
+    let (field_name, values) =
+        entry.ok_or_else(|| EsError::parsing("[terms] : aucun champ fourni"))?;
     let (field, ty) = ctx.field(field_name, "terms")?;
     let list = values.as_array().ok_or_else(|| {
         EsError::illegal_argument(format!(
@@ -333,6 +335,14 @@ fn bool_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         return boost(Box::new(AllQuery), obj.get("boost"));
     }
 
+    // Un `bool` qui n'a que des `must_not` ne matche rien chez tantivy, alors
+    // qu'ES l'interprete comme « tous les documents, sauf ceux-la ». On pose la
+    // clause positive implicite.
+    if !has_required && should_count == 0 {
+        clauses.insert(0, (Occur::Must, Box::new(AllQuery)));
+        has_required = true;
+    }
+
     // Semantique ES : sans clause obligatoire, au moins un `should` doit matcher.
     let min_should = match obj.get("minimum_should_match") {
         None => {
@@ -342,9 +352,12 @@ fn bool_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
                 1
             }
         }
-        Some(Value::Number(n)) => n.as_i64().and_then(|v| usize::try_from(v).ok()).ok_or_else(
-            || EsError::illegal_argument("[minimum_should_match] : entier positif attendu"),
-        )?,
+        Some(Value::Number(n)) => n
+            .as_i64()
+            .and_then(|v| usize::try_from(v).ok())
+            .ok_or_else(|| {
+                EsError::illegal_argument("[minimum_should_match] : entier positif attendu")
+            })?,
         Some(Value::String(s)) => s.trim().parse::<usize>().map_err(|_| {
             EsError::unsupported(format!(
                 "ferrite ne supporte que la forme entiere de [minimum_should_match] (recu \
@@ -363,8 +376,7 @@ fn bool_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
 
     let inner: Box<dyn Query> = if min_should > 0 {
         Box::new(BooleanQuery::with_minimum_required_clauses(
-            clauses,
-            min_should,
+            clauses, min_should,
         ))
     } else {
         Box::new(BooleanQuery::new(clauses))
@@ -414,15 +426,4 @@ fn expect_only(obj: &Map<String, Value>, allowed: &[&str], clause: &str) -> EsRe
         }
     }
     Ok(())
-}
-
-/// Conversion d'une valeur typee vers JSON, pour les tableaux `sort` des hits.
-pub fn typed_to_json(v: &TypedValue) -> Value {
-    match v {
-        TypedValue::Str(s) => Value::from(s.clone()),
-        TypedValue::I64(n) => Value::from(*n),
-        TypedValue::F64(n) => Value::from(*n),
-        TypedValue::Bool(b) => Value::from(*b),
-        TypedValue::Date(ms) => Value::from(*ms),
-    }
 }

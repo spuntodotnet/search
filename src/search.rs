@@ -166,9 +166,9 @@ impl SegmentCollector for SortSegmentCollector {
                 Accessor::I64(c) => c.first(doc).map_or(SortValue::Missing, SortValue::I64),
                 Accessor::F64(c) => c.first(doc).map_or(SortValue::Missing, SortValue::F64),
                 Accessor::Bool(c) => c.first(doc).map_or(SortValue::Missing, SortValue::Bool),
-                Accessor::Date(c) => c
-                    .first(doc)
-                    .map_or(SortValue::Missing, |d| SortValue::I64(d.into_timestamp_millis())),
+                Accessor::Date(c) => c.first(doc).map_or(SortValue::Missing, |d| {
+                    SortValue::I64(d.into_timestamp_millis())
+                }),
             });
         }
         self.hits.push(Hit {
@@ -324,7 +324,14 @@ pub fn execute(idx: &FerriteIndex, req: &SearchRequest) -> EsResult<SearchOutcom
         let mut hits = Vec::new();
         if wanted > 0 {
             for (score, addr) in top.into_iter().skip(req.from) {
-                hits.push(build_hit(idx, &searcher, addr, Some(score), None, &req.source)?);
+                hits.push(build_hit(
+                    idx,
+                    &searcher,
+                    addr,
+                    Some(score),
+                    None,
+                    &req.source,
+                )?);
             }
         }
         return Ok(SearchOutcome {

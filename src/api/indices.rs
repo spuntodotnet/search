@@ -38,7 +38,11 @@ pub async fn create(
     let obj = match &body {
         Value::Null => serde_json::Map::new(),
         Value::Object(o) => o.clone(),
-        _ => return Err(EsError::parsing("le corps de [PUT /{index}] doit etre un objet")),
+        _ => {
+            return Err(EsError::parsing(
+                "le corps de [PUT /{index}] doit etre un objet",
+            ))
+        }
     };
     expect_only(&obj, &["mappings", "settings", "aliases"], "PUT /{index}")?;
 
@@ -104,12 +108,19 @@ pub async fn delete(
     uri: Uri,
 ) -> EsResult<Json> {
     let mut p = Params::parse(&uri);
+    // Operations synchrones et immediates : ces delais n'ont rien a attendre.
     p.opt("timeout");
     p.opt("master_timeout");
-    p.opt("ignore_unavailable");
+    let ignore_unavailable = p.flag("ignore_unavailable", false)?;
     p.done()?;
-    st.catalog.delete(&index)?;
-    Ok(Json::ok(json!({"acknowledged": true})))
+
+    match st.catalog.delete(&index) {
+        Ok(()) => Ok(Json::ok(json!({"acknowledged": true}))),
+        Err(e) if ignore_unavailable && e.ty == "index_not_found_exception" => {
+            Ok(Json::ok(json!({"acknowledged": true})))
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// `HEAD /{index}` — 200 ou 404, sans corps.
@@ -173,11 +184,7 @@ pub async fn refresh(
     Path(index): Path<String>,
     uri: Uri,
 ) -> EsResult<Json> {
-    let mut p = Params::parse(&uri);
-    p.opt("ignore_unavailable");
-    p.opt("allow_no_indices");
-    p.opt("expand_wildcards");
-    p.done()?;
+    Params::parse(&uri).done()?;
     let idx = st.catalog.get(&index)?;
     tokio::task::spawn_blocking(move || idx.refresh())
         .await

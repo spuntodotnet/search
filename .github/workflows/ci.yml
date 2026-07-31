@@ -1,0 +1,75 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  rust:
+    name: fmt + clippy + tests + build release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+      - name: cargo clippy (zero warning)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test
+
+      - name: cargo build --release
+        run: cargo build --release
+
+  compat:
+    name: harnais de compatibilite (client officiel)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Client Elasticsearch officiel
+        run: pip install "elasticsearch>=8,<9"
+
+      # La seule preuve valable qu'une fonctionnalite marche : un vrai client
+      # Elasticsearch officiel qui l'exerce contre ferrite.
+      - name: tests/compat/run.sh
+        run: ./tests/compat/run.sh
+
+  docker:
+    name: image minimale
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: docker build
+        run: docker build -t ferrite:ci .
+
+      # Les trois chiffres qui portent le projet sont mesures a chaque CI, pas
+      # une fois pour toutes dans un README.
+      - name: taille d'image, RSS au repos, temps de demarrage
+        run: ./tests/compat/measure_container.sh ferrite:ci
