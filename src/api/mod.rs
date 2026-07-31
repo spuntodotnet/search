@@ -56,7 +56,7 @@ pub fn router(state: SharedState) -> Router {
         .route("/_cat/indices", get(cluster::cat_indices))
         .route("/_cat/indices/{index}", get(cluster::cat_indices_one))
         .route("/_nodes", get(cluster::nodes))
-        .route("/_nodes/{spec}", get(cluster::nodes))
+        .route("/_nodes/{spec}", get(cluster::nodes_spec))
         .route("/_bulk", post(docs::bulk).put(docs::bulk))
         .route("/_search", post(search::search_all).get(search::search_all))
         .route(

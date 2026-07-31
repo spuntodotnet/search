@@ -28,7 +28,7 @@ Version d'API annoncée : **Elasticsearch 8.15.0** (`version.number`,
 | `GET /_cluster/health`, `/_cluster/health/{index}` | 🟡 | toujours `green`, 1 nœud, 0 shard non assigné. `wait_for_status` et `timeout` sont acceptés et sans objet (déjà vert) ; `level` est ❌ (il change la forme de la réponse) |
 | `GET /_cat/indices`, `/_cat/indices/{index}` | 🟡 | texte aligné par défaut, `?format=json`, `?v`. `h`, `s`, `bytes` sont ❌ |
 | `GET /_cat/health` | 🟡 | idem |
-| `GET /_nodes`, `/_nodes/{spec}` | 🟡 | un nœud, champs d'identité et `http` ; pas de `settings`, `os`, `jvm`, `stats`. Le sélecteur `{spec}` est ignoré (il n'y a qu'un nœud) |
+| `GET /_nodes`, `/_nodes/{spec}` | 🟡 | un nœud, champs d'identité et `http` ; pas de `settings`, `os`, `jvm`. `{spec}` accepte `_all`, `_local`, `_master` et l'identifiant du nœud ; les sous-ressources (`_nodes/stats`, `_nodes/hot_threads`…) sont ❌ |
 | Tout le reste de `_cluster/*`, `_cat/*`, `_nodes/*` | ❌ | `no handler found for uri [...]` |
 
 ## Index et mapping
@@ -83,7 +83,8 @@ Sans `refresh`, une écriture devient visible **au plus tard après 1 seconde**
 ## Recherche
 
 `POST\|GET /{index}/_search` ✅. `POST\|GET /_search` (multi-index) ❌ — il faut
-nommer un index ; les motifs (`livres*`, `a,b`) sont ❌ eux aussi.
+nommer un index ; les motifs et les listes (`livres*`, `a,b`) sont ❌ eux aussi,
+avec une erreur qui dit pourquoi.
 
 ### Clauses du Query DSL
 

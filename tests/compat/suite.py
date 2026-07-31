@@ -567,6 +567,10 @@ def routes_de_cluster(es):
     node = list(nodes["nodes"].values())[0]
     assert node["version"] == es.info()["version"]["number"]
 
+    # Une sous-ressource de `_nodes` demande une autre reponse : la confondre
+    # avec `/_nodes` serait rendre le mauvais document en silence.
+    refused(lambda: es.nodes.stats())
+
 
 @scenario
 def route_inconnue_refusee(es):
@@ -581,6 +585,9 @@ def route_inconnue_refusee(es):
     # Un nom d'index reserve n'est pas un index absent, comme chez ES.
     refused(lambda: es.perform_request("GET", "/_route_reservee"),
             contains="must not start with")
+    # Un motif multi-index dit pourquoi il est refuse.
+    refused(lambda: es.search(index="compat_*", query={"match_all": {}}),
+            contains="motifs")
 
 
 # ---------------------------------------------------------------------------

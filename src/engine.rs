@@ -540,6 +540,12 @@ pub fn validate_index_name(name: &str) -> EsResult<()> {
     if name == "." || name == ".." {
         return invalid("must not be '.' or '..'");
     }
+    if name.contains('*') || name.contains(',') {
+        return Err(EsError::unsupported(format!(
+            "ferrite ne supporte pas les motifs ni les listes d'index (recu [{name}]) : nomme un \
+             index unique"
+        )));
+    }
     if name.starts_with('_') {
         return invalid("must not start with '_'.");
     }

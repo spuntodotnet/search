@@ -209,6 +209,23 @@ fn human_bytes(n: u64) -> String {
 }
 
 /// `GET /_nodes` — le minimum dont se contentent les clients et les outils.
+pub async fn nodes_spec(
+    State(st): State<SharedState>,
+    axum::extract::Path(spec): axum::extract::Path<String>,
+    uri: Uri,
+) -> EsResult<Json> {
+    // Un seul noeud : ces selecteurs le designent forcement. Tout le reste
+    // (`stats`, `os`, `jvm`, `hot_threads`...) demande une autre reponse, pas
+    // la meme — le confondre avec `/_nodes` serait mentir.
+    if !matches!(spec.as_str(), "_all" | "_local" | "_master") && spec != st.catalog.cluster_uuid {
+        return Err(EsError::unsupported(format!(
+            "ferrite ne supporte pas [/_nodes/{spec}] ; selecteurs acceptes : _all, _local, \
+             _master, ou l'identifiant du noeud"
+        )));
+    }
+    nodes(State(st), uri).await
+}
+
 pub async fn nodes(State(st): State<SharedState>, uri: Uri) -> EsResult<Json> {
     Params::parse(&uri).done()?;
 
