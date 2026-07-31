@@ -334,6 +334,107 @@ def recherche_match_multi_termes(es):
 
 
 @scenario
+def recherche_multi_match(es):
+    """La clause d'une barre de recherche : un mot, plusieurs champs."""
+    # « presse » n'est que dans un resume, « bel » que dans un titre.
+    assert ids(es.search(index=INDEX, query={
+        "multi_match": {"query": "presse", "fields": ["titre", "resume"]}})) == ["2"]
+    assert ids(es.search(index=INDEX, query={
+        "multi_match": {"query": "germinal", "fields": ["titre", "resume"]}})) == ["3"]
+    assert sorted(ids(es.search(index=INDEX, query={
+        "multi_match": {"query": "greve presse", "fields": ["titre", "resume"]}}))) == ["2", "3"]
+    assert ids(es.search(index=INDEX, query={
+        "multi_match": {"query": "greve presse", "fields": ["titre", "resume"],
+                        "operator": "and"}})) == []
+    # Ponderation d'un champ, et les deux strategies de score.
+    for requete in (
+        {"multi_match": {"query": "bel", "fields": ["titre^3", "resume"]}},
+        {"multi_match": {"query": "bel", "fields": ["titre", "resume"],
+                         "type": "most_fields"}},
+        {"multi_match": {"query": "bel", "fields": ["titre", "resume"],
+                         "tie_breaker": 0.3}},
+    ):
+        assert ids(es.search(index=INDEX, query=requete)) == ["2"], requete
+
+    # `best_fields` prend le meilleur champ, pas la somme : un document qui
+    # porte le terme dans les deux champs ne doit pas doubler son score.
+    un_champ = es.search(index=INDEX, query={
+        "multi_match": {"query": "maupassant", "fields": ["auteur"]}})
+    deux_champs = es.search(index=INDEX, query={
+        "multi_match": {"query": "maupassant", "fields": ["auteur", "titre"]}})
+    assert deux_champs["hits"]["max_score"] == un_champ["hits"]["max_score"], \
+        "best_fields doit garder le meilleur score, pas additionner"
+
+
+@scenario
+def multi_match_refus(es):
+    refused(lambda: es.search(index=INDEX, query={
+        "multi_match": {"query": "x", "fields": ["titre"], "type": "cross_fields"}}),
+        contains="cross_fields")
+    refused(lambda: es.search(index=INDEX, query={
+        "multi_match": {"query": "x", "fields": ["tit*"]}}), contains="motifs")
+    refused(lambda: es.search(index=INDEX, query={"multi_match": {"query": "x"}}),
+            contains="fields")
+
+
+@scenario
+def recherche_match_phrase(es):
+    """Les mots dans cet ordre, cote a cote — pas juste tous presents."""
+    assert ids(es.search(index=INDEX, query={
+        "match_phrase": {"resume": "la presse parisienne"}})) == ["2"]
+    # Les memes mots dans le desordre ne matchent pas...
+    assert ids(es.search(index=INDEX, query={
+        "match_phrase": {"resume": "parisienne presse"}})) == []
+    # ...alors qu'un `match` ordinaire, si.
+    assert ids(es.search(index=INDEX, query={
+        "match": {"resume": {"query": "parisienne presse", "operator": "and"}}})) == ["2"]
+    assert ids(es.search(index=INDEX, query={
+        "match_phrase": {"resume": "greve des mineurs"}})) == ["3"]
+    # Une phrase d'un seul mot reste valide.
+    assert ids(es.search(index=INDEX, query={
+        "match_phrase": {"resume": "parisienne"}})) == ["2"]
+    # Sur un keyword, la phrase est la valeur entiere.
+    assert sorted(ids(es.search(index=INDEX, query={
+        "match_phrase": {"auteur": "Maupassant"}}))) == ["1", "2"]
+
+
+@scenario
+def match_phrase_slop_refuse(es):
+    """`slop` est refuse : tantivy et Lucene ne le comptent pas pareil au-dela
+    de deux termes, et ferrite rendrait moins de documents qu'ES en silence."""
+    refused(lambda: es.search(index=INDEX, query={
+        "match_phrase": {"resume": {"query": "la presse", "slop": 2}}}),
+        contains="slop")
+
+
+@scenario
+def recherche_exists(es):
+    """`exists` sur chaque famille de champ, y compris `text` (qui n'a pas de
+    fast field et passe donc par l'index inverse)."""
+    tous = sorted(ids(es.search(index=INDEX, query={"match_all": {}}, size=100)))
+    for champ in ("titre", "resume", "auteur", "annee", "note", "dispo", "paru", "tags"):
+        assert sorted(ids(es.search(index=INDEX, query={"exists": {"field": champ}},
+                                    size=100))) == tous, champ
+
+    # Un document sans le champ ne doit pas ressortir.
+    es.index(index=INDEX, id="40", refresh=True,
+             document={"titre": "Sans auteur ni note", "annee": 1900})
+    trouves = ids(es.search(index=INDEX, query={"exists": {"field": "note"}}, size=100))
+    assert "40" not in trouves
+    assert "40" in ids(es.search(index=INDEX, query={"exists": {"field": "annee"}},
+                                 size=100))
+    # Une valeur nulle explicite compte comme absente, comme chez ES.
+    es.index(index=INDEX, id="41", refresh=True,
+             document={"titre": "Note nulle", "note": None})
+    assert "41" not in ids(es.search(index=INDEX, query={"exists": {"field": "note"}},
+                                     size=100))
+    refused(lambda: es.search(index=INDEX, query={"exists": {"field": "inconnu"}}),
+            contains="inconnu")
+    for doc_id in ("40", "41"):
+        es.delete(index=INDEX, id=doc_id, refresh=True)
+
+
+@scenario
 def recherche_match_all(es):
     r = es.search(index=INDEX, query={"match_all": {}}, size=100)
     assert r["hits"]["total"]["value"] == 3
@@ -484,10 +585,10 @@ def clause_de_dsl_inconnue_refusee(es):
     refused(lambda: es.search(index=INDEX,
                               query={"clause_inexistante": {"titre": "x"}}),
             contains="clause_inexistante")
-    refused(lambda: es.search(index=INDEX, query={"match_phrase": {"titre": "bel ami"}}),
-            contains="match_phrase")
     refused(lambda: es.search(index=INDEX, query={"wildcard": {"auteur": "Mau*"}}),
             contains="wildcard")
+    refused(lambda: es.search(index=INDEX, query={"prefix": {"auteur": "Mau"}}),
+            contains="prefix")
 
 
 @scenario

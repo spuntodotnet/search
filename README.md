@@ -102,12 +102,17 @@ L'image finale est un `scratch` qui ne contient que le binaire statique.
 
 **Ce qui marche** : un client Elasticsearch officiel non modifié crée un index
 avec un mapping explicite, indexe des documents via `_bulk`, et les retrouve via
-`_search` (`match`, `term`, `terms`, `range`, `bool`, `match_all`), avec
-scoring BM25, `from`/`size`, tri, filtrage de `_source`, et le format de réponse
-exact d'ES.
+`_search` — `match`, `multi_match`, `match_phrase`, `term`, `terms`, `range`,
+`exists`, `bool`, `match_all` — avec scoring BM25, `from`/`size`, tri, filtrage
+de `_source`, et le format de réponse exact d'ES.
+
+Sur un corpus de 600 documents et 114 requêtes, ferrite et un vrai
+Elasticsearch 8.15 renvoient **les mêmes documents dans le même ordre**
+(`tests/compat/diff_relevance.py`).
 
 **Ce qui n'y est pas encore** : mapping dynamique, agrégations, `highlight`,
-`search_after`, analyzers configurables, multi-fields, `_update`, `_mget`.
+`search_after`, analyzers configurables, multi-fields, `_update`, `_mget`,
+`prefix` / `wildcard` / `fuzzy`.
 
 L'inventaire complet — supporté, partiel, refusé, et les divergences assumées —
 est dans [`docs/compat.md`](docs/compat.md). Rien de ce qui n'est pas supporté
