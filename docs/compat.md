@@ -93,11 +93,14 @@ avec une erreur qui dit pourquoi.
 | `match_all` | ✅ | `boost` |
 | `match_none` | ✅ | |
 | `match` | 🟡 | `query`, `operator` (`or` / `and`), `boost`. Sur un champ non analysé, se comporte comme `term`. `fuzziness`, `minimum_should_match`, `analyzer`, `zero_terms_query`, `prefix_length` : ❌ |
+| `multi_match` | 🟡 | `query`, `fields` (**obligatoire**, avec la pondération `champ^3`), `type` `best_fields` (défaut) et `most_fields`, `operator`, `tie_breaker`, `boost`. `cross_fields`, `phrase`, `phrase_prefix`, `bool_prefix` et les motifs de champ (`tit*`) : ❌ |
+| `match_phrase` | 🟡 | les termes dans l'ordre, adjacents. `boost`. `slop` : ❌ (voir les divergences) |
+| `exists` | ✅ | sur tous les types, y compris `text`. Un champ absent, `null`, ou un tableau vide compte comme absent, comme chez ES |
 | `term` | ✅ | forme courte et forme `{value, boost}`. `case_insensitive` ❌ |
 | `terms` | 🟡 | liste de valeurs, score constant comme chez ES. Les *terms lookup* sont ❌ |
 | `range` | 🟡 | `gte`, `gt`, `lte`, `lt`, `boost`, sur `keyword` / numérique / `date` / `boolean`. Sur un champ `text` : ❌. `format`, `time_zone`, `relation` : ❌ |
 | `bool` | 🟡 | `must`, `should`, `filter`, `must_not`, `boost`, et `minimum_should_match` **sous forme entière** (les pourcentages et expressions sont ❌). `filter` ne contribue pas au score. Un `bool` qui n'a que des `must_not` matche tous les autres documents, comme chez ES |
-| `match_phrase`, `multi_match`, `query_string`, `prefix`, `wildcard`, `exists`, `fuzzy`, `ids`, `nested`, `function_score`, `script`… | ❌ | `parsing_exception: unknown query [...]` |
+| `query_string`, `prefix`, `wildcard`, `fuzzy`, `ids`, `nested`, `function_score`, `match_phrase_prefix`, `script`… | ❌ | `parsing_exception: unknown query [...]` |
 
 ### Corps et paramètres de `_search`
 
@@ -151,24 +154,42 @@ pas pour être découverts en production.
    « aucun résultat » serait exactement le résultat faux présenté comme complet
    que ce projet refuse. ferrite renvoie `query_shard_exception`.
 
-2. **Analyse du texte.** Les champs `text` utilisent le tokenizer `default` de
+2. **`slop` est refusé dans `match_phrase`.** tantivy et Lucene ne comptent pas
+   les déplacements de la même façon dès que la phrase dépasse deux termes :
+   cherchée comme `un deux trois`, la phrase `deux un trois` correspond à
+   `slop: 2` chez Elasticsearch et seulement à `slop: 3` chez tantivy. Accepter
+   le paramètre ferait donc rendre à ferrite **moins de documents** qu'ES sur la
+   même requête, sans que rien ne le signale. La phrase exacte (`slop` absent ou
+   `0`) est vérifiée identique à ES.
+
+3. **`best_fields` n'utilise pas le `DisjunctionMaxQuery` de tantivy.**
+   Dans tantivy 0.26 cette requête rend la **somme** des scores et non leur
+   maximum, quel que soit le `tie_breaker` (le combineur est court-circuité par
+   une spécialisation interne, et le constructeur correct est `pub(crate)`).
+   S'en servir donnerait silencieusement un classement `most_fields` à qui
+   demande `best_fields`. ferrite implémente donc `dis_max` lui-même dans
+   `src/dismax.rs`, en déléguant le parcours des documents à tantivy et en ne
+   recalculant que le score. Un test unitaire verrouille « max, pas somme » pour
+   qu'une montée de version ne puisse pas dégrader la pertinence en silence.
+
+4. **Analyse du texte.** Les champs `text` utilisent le tokenizer `default` de
    tantivy (découpe sur les non-alphanumériques + minuscules + rejet des tokens
    de plus de 40 caractères). Très proche de l'analyzer `standard` d'ES pour du
    texte latin, mais ce n'est pas la même implémentation : sur de l'unicode
    exotique ou du CJK, les tokens peuvent différer.
 
-3. **Les scores ne sont pas identiques à ceux d'ES.** Même formule (BM25), mais
+5. **Les scores ne sont pas identiques à ceux d'ES.** Même formule (BM25), mais
    statistiques d'index et normalisation de longueur différentes. L'*ordre* des
    résultats est comparé à celui d'ES par `tests/compat/diff_against_es.py` ;
    les valeurs absolues, non.
 
-4. **`_shards.total` vaut 1** (un shard, zéro réplique) là où un ES par défaut
+6. **`_shards.total` vaut 1** (un shard, zéro réplique) là où un ES par défaut
    annonce 2 dans les réponses d'écriture.
 
-5. **`_cluster/health` est toujours `green`.** C'est le comportement voulu pour
+7. **`_cluster/health` est toujours `green`.** C'est le comportement voulu pour
    un mono-nœud : il n'y a pas de réplique à assigner.
 
-6. **`wait_for` vaut `true` pour `refresh`.** Le commit est synchrone, il n'y a
+8. **`wait_for` vaut `true` pour `refresh`.** Le commit est synchrone, il n'y a
    rien à attendre.
 
 ## Limites connues (perf, pas fonctionnalité)

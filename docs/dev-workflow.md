@@ -31,7 +31,9 @@ Toutes depuis la **racine** du repo.
 | `cargo clippy --all-targets -- -D warnings` | Lint, **zéro warning toléré** |
 | `cargo fmt --check` | Vérifie le formatage (`cargo fmt` pour corriger) |
 | `./tests/compat/run.sh` | **Le harnais de compat** : compile, lance ferrite sur un port jetable, et l'exerce avec le client Elasticsearch officiel (critère d'acceptation + suite complète) |
-| `./tests/compat/measure_container.sh [tag]` | Construit rien, mesure une image déjà buildée : taille, RSS au repos, temps de démarrage |
+| `python3 tests/compat/diff_against_es.py` | Compare la **forme** des réponses à celles d'un vrai ES (voir plus bas) |
+| `python3 tests/compat/diff_relevance.py` | Compare les **résultats et leur ordre** à ceux d'un vrai ES, sur 600 documents |
+| `./tests/compat/measure_container.sh [tag]` | Ne construit rien, mesure une image déjà buildée : taille, RSS au repos, temps de démarrage |
 | `docker build -t ferrite .` | Image minimale (`scratch` + binaire statique musl) |
 
 Le harnais de compat installe le client officiel dans un venv (`.venv-compat/`)
@@ -53,13 +55,27 @@ docker run -d --name es-ref -p 9201:9200 \
   docker.elastic.co/elasticsearch/elasticsearch:8.15.0
 
 cargo run &                                     # ferrite sur :9200
-python3 tests/compat/diff_against_es.py         # diff champ par champ
+python3 tests/compat/diff_against_es.py         # la forme des réponses
+python3 tests/compat/diff_relevance.py          # les résultats et leur ordre
 ```
 
-`diff_against_es.py` envoie la même suite d'appels aux deux serveurs via le
-client officiel et compare chaque réponse, champ par champ, après
-neutralisation des valeurs qui ne peuvent pas coïncider (durées, uuid, scores).
-C'est un outil de développement, pas un test de CI : il exige Docker.
+Deux comparateurs, qui ne cherchent pas la même chose :
+
+| Script | Ce qu'il compare |
+|---|---|
+| `tests/compat/diff_against_es.py` | la **forme** des réponses — champ par champ, sur une quarantaine d'appels, après neutralisation des valeurs qui ne peuvent pas coïncider (durées, uuid, scores) |
+| `tests/compat/diff_relevance.py` | la **pertinence** — même corpus de 600 documents des deux côtés, ~115 requêtes générées, et pour chacune : même total, mêmes documents, **même ordre** |
+
+Le second est celui qui compte pour un moteur de recherche : l'ordre des
+résultats est précisément ce qu'un test écrit à la main ne sait pas vérifier,
+puisqu'on l'écrirait avec la même idée fausse que le code. Il signale un écart
+d'ordre sauf s'il ne porte que sur des documents qu'Elasticsearch lui-même
+classe ex æquo.
+
+Le corpus vit dans `tests/compat/corpus.py` et est généré avec une graine fixe :
+un écart constaté est toujours reproductible.
+
+Ce sont des outils de développement, pas des tests de CI : ils exigent Docker.
 
 ## La règle qui prime sur tout : la compatibilité se prouve, elle ne se déclare pas
 
