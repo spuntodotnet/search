@@ -233,7 +233,7 @@ impl FerriteIndex {
         doc.add_text(self.fields.source, serde_json::to_string(source).unwrap());
 
         for (name, value) in obj {
-            let Some((field, ty)) = self.fields.get(name) else {
+            let Some(cibles) = self.fields.targets_of(name) else {
                 return Err(EsError::strict_mapping(&self.name, name));
             };
             let values: Vec<&Value> = match value {
@@ -245,13 +245,22 @@ impl FerriteIndex {
                 if v.is_null() {
                     continue;
                 }
-                match mapping::coerce(name, ty, v)? {
-                    TypedValue::Str(s) => doc.add_text(field, s),
-                    TypedValue::I64(n) => doc.add_i64(field, n),
-                    TypedValue::F64(n) => doc.add_f64(field, n),
-                    TypedValue::Bool(b) => doc.add_bool(field, b),
-                    TypedValue::Date(ms) => {
-                        doc.add_date(field, DateTime::from_timestamp_millis(ms))
+                // Le meme contenu part dans le champ et dans chacun de ses
+                // multi-fields, chacun avec son propre type.
+                for cible in cibles {
+                    if let Some(limite) = cible.ignore_above {
+                        if v.as_str().is_some_and(|s| s.chars().count() > limite) {
+                            continue;
+                        }
+                    }
+                    match mapping::coerce(name, cible.ty, v)? {
+                        TypedValue::Str(s) => doc.add_text(cible.field, s),
+                        TypedValue::I64(n) => doc.add_i64(cible.field, n),
+                        TypedValue::F64(n) => doc.add_f64(cible.field, n),
+                        TypedValue::Bool(b) => doc.add_bool(cible.field, b),
+                        TypedValue::Date(ms) => {
+                            doc.add_date(cible.field, DateTime::from_timestamp_millis(ms))
+                        }
                     }
                 }
             }

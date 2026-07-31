@@ -117,6 +117,39 @@ pub enum FieldKind {
 #[derive(Debug, Clone)]
 pub struct FieldMapping {
     pub ty: FieldType,
+    /// Les multi-fields : le meme contenu indexe autrement, sous
+    /// `parent.sous_champ`. ES n'en autorise qu'un niveau.
+    pub fields: BTreeMap<String, FieldMapping>,
+    /// `ignore_above` : au-dela de cette longueur, la chaine n'est pas indexee
+    /// (elle reste dans `_source`). Le defaut d'ES pour les `.keyword` generes
+    /// dynamiquement est 256.
+    pub ignore_above: Option<usize>,
+}
+
+impl FieldMapping {
+    pub fn new(ty: FieldType) -> Self {
+        Self {
+            ty,
+            fields: BTreeMap::new(),
+            ignore_above: None,
+        }
+    }
+
+    fn to_json(&self) -> Value {
+        let mut o = Map::new();
+        o.insert("type".into(), json!(self.ty.name()));
+        if let Some(n) = self.ignore_above {
+            o.insert("ignore_above".into(), json!(n));
+        }
+        if !self.fields.is_empty() {
+            let mut subs = Map::new();
+            for (name, fm) in &self.fields {
+                subs.insert(name.clone(), fm.to_json());
+            }
+            o.insert("fields".into(), Value::Object(subs));
+        }
+        Value::Object(o)
+    }
 }
 
 /// Le mapping d'un index. Ordonne par nom, comme le rend ES.
@@ -134,7 +167,7 @@ impl Mapping {
     pub fn to_json(&self) -> Value {
         let mut props = Map::new();
         for (name, fm) in &self.properties {
-            props.insert(name.clone(), json!({ "type": fm.ty.name() }));
+            props.insert(name.clone(), fm.to_json());
         }
         json!({ "properties": Value::Object(props) })
     }
@@ -157,7 +190,7 @@ impl Mapping {
                     })?;
                     for (name, spec) in props {
                         validate_field_name(name)?;
-                        properties.insert(name.clone(), parse_field_mapping(name, spec)?);
+                        properties.insert(name.clone(), parse_field_mapping(name, spec, false)?);
                     }
                 }
                 "dynamic" => {
@@ -188,12 +221,19 @@ impl Mapping {
     }
 }
 
-fn parse_field_mapping(name: &str, spec: &Value) -> EsResult<FieldMapping> {
+/// Parse la declaration d'un champ.
+///
+/// `sous_champ` indique qu'on est deja dans un `fields` : ES n'autorise qu'un
+/// seul niveau de multi-fields, et ferrite refuse le second explicitement.
+fn parse_field_mapping(name: &str, spec: &Value, sous_champ: bool) -> EsResult<FieldMapping> {
     let obj = spec.as_object().ok_or_else(|| {
         EsError::mapper_parsing(format!("[mappings.properties.{name}] doit etre un objet"))
     })?;
 
     let mut ty = None;
+    let mut fields = BTreeMap::new();
+    let mut ignore_above = None;
+
     for (key, val) in obj {
         match key.as_str() {
             "type" => {
@@ -208,6 +248,35 @@ fn parse_field_mapping(name: &str, spec: &Value) -> EsResult<FieldMapping> {
                     ))
                 })?);
             }
+            "fields" => {
+                if sous_champ {
+                    return Err(EsError::mapper_parsing(format!(
+                        "[{name}] : un multi-field ne peut pas en contenir d'autres \
+                         (Elasticsearch n'autorise qu'un niveau)"
+                    )));
+                }
+                let subs = val.as_object().ok_or_else(|| {
+                    EsError::mapper_parsing(format!("[{name}.fields] doit etre un objet"))
+                })?;
+                for (sub_name, sub_spec) in subs {
+                    validate_field_name_part(sub_name, &format!("{name}.{sub_name}"))?;
+                    fields.insert(
+                        sub_name.clone(),
+                        parse_field_mapping(&format!("{name}.{sub_name}"), sub_spec, true)?,
+                    );
+                }
+            }
+            "ignore_above" => {
+                ignore_above = Some(
+                    val.as_u64()
+                        .and_then(|n| usize::try_from(n).ok())
+                        .ok_or_else(|| {
+                            EsError::mapper_parsing(format!(
+                                "[{name}.ignore_above] : entier positif attendu"
+                            ))
+                        })?,
+                );
+            }
             "properties" => {
                 return Err(EsError::unsupported(format!(
                     "ferrite ne supporte pas les champs objet/imbriques (champ [{name}])"
@@ -216,7 +285,7 @@ fn parse_field_mapping(name: &str, spec: &Value) -> EsResult<FieldMapping> {
             other => {
                 return Err(EsError::unsupported(format!(
                     "ferrite ne supporte pas le parametre de champ [{other}] (champ [{name}]) ; \
-                     seul [type] est accepte"
+                     parametres acceptes : type, fields, ignore_above"
                 )))
             }
         }
@@ -225,7 +294,28 @@ fn parse_field_mapping(name: &str, spec: &Value) -> EsResult<FieldMapping> {
     let ty = ty.ok_or_else(|| {
         EsError::mapper_parsing(format!("[{name}] doit declarer un [type] explicite"))
     })?;
-    Ok(FieldMapping { ty })
+    if ignore_above.is_some() && ty.kind() != FieldKind::Keyword {
+        return Err(EsError::mapper_parsing(format!(
+            "[{name}] : [ignore_above] ne s'applique qu'a un champ [keyword]"
+        )));
+    }
+    Ok(FieldMapping {
+        ty,
+        fields,
+        ignore_above,
+    })
+}
+
+fn validate_field_name_part(name: &str, chemin: &str) -> EsResult<()> {
+    if name.is_empty() {
+        return Err(EsError::mapper_parsing("nom de champ vide"));
+    }
+    if name.contains('.') {
+        return Err(EsError::unsupported(format!(
+            "ferrite ne supporte pas les noms de champ pointes (champ [{chemin}])"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_field_name(name: &str) -> EsResult<()> {
@@ -245,6 +335,14 @@ fn validate_field_name(name: &str) -> EsResult<()> {
     Ok(())
 }
 
+/// Un champ du schema tantivy, resolu.
+#[derive(Debug, Clone, Copy)]
+pub struct MappedField {
+    pub field: Field,
+    pub ty: FieldType,
+    pub ignore_above: Option<usize>,
+}
+
 /// Les handles tantivy resolus une fois pour toutes a l'ouverture de l'index.
 #[derive(Debug, Clone)]
 pub struct Fields {
@@ -252,16 +350,29 @@ pub struct Fields {
     pub source: Field,
     pub version: Field,
     pub seq_no: Field,
-    pub mapped: BTreeMap<String, (Field, FieldType)>,
+    /// Tous les champs interrogeables, par chemin complet : `titre`,
+    /// `titre.keyword`, ...
+    pub mapped: BTreeMap<String, MappedField>,
+    /// Pour une propriete de premier niveau, toutes les cibles a alimenter a
+    /// l'indexation : le champ lui-meme **et** ses multi-fields.
+    pub targets: BTreeMap<String, Vec<MappedField>>,
 }
 
 impl Fields {
-    pub fn get(&self, name: &str) -> Option<(Field, FieldType)> {
+    pub fn get(&self, name: &str) -> Option<MappedField> {
         self.mapped.get(name).copied()
+    }
+
+    pub fn targets_of(&self, name: &str) -> Option<&[MappedField]> {
+        self.targets.get(name).map(Vec::as_slice)
     }
 }
 
 /// Construit le schema tantivy correspondant a un mapping ES.
+///
+/// Un multi-field devient un champ tantivy a part entiere, nomme par son chemin
+/// (`titre.keyword`) : c'est ce qui permet de l'interroger et de trier dessus
+/// comme n'importe quel autre champ, sans traitement particulier ailleurs.
 pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
     let mut b = SchemaBuilder::new();
 
@@ -271,37 +382,24 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
     let seq_no = b.add_u64_field(F_SEQ_NO, FAST | STORED);
 
     let mut mapped = BTreeMap::new();
+    let mut targets: BTreeMap<String, Vec<MappedField>> = BTreeMap::new();
+
     for (name, fm) in &mapping.properties {
-        let field = match fm.ty.kind() {
-            FieldKind::Text => {
-                let opts = TextOptions::default().set_indexing_options(
-                    TextFieldIndexing::default()
-                        .set_tokenizer(TEXT_TOKENIZER)
-                        .set_index_option(IndexRecordOption::WithFreqsAndPositions),
-                );
-                b.add_text_field(name, opts)
-            }
-            FieldKind::Keyword => {
-                // `fast` pour pouvoir trier dessus ; `raw` pour que le terme soit
-                // la valeur entiere, comme un keyword ES.
-                let opts = TextOptions::default()
-                    .set_indexing_options(
-                        TextFieldIndexing::default()
-                            .set_tokenizer(RAW_TOKENIZER)
-                            .set_index_option(IndexRecordOption::Basic),
-                    )
-                    .set_fast(Some(RAW_TOKENIZER));
-                b.add_text_field(name, opts)
-            }
-            FieldKind::I64 => b.add_i64_field(name, NumericOptions::from(INDEXED | FAST)),
-            FieldKind::F64 => b.add_f64_field(name, NumericOptions::from(INDEXED | FAST)),
-            FieldKind::Bool => b.add_bool_field(name, NumericOptions::from(INDEXED | FAST)),
-            FieldKind::Date => b.add_date_field(
-                name,
-                DateOptions::from(INDEXED | FAST).set_precision(DateTimePrecision::Milliseconds),
-            ),
-        };
-        mapped.insert(name.clone(), (field, fm.ty));
+        let mut cibles = Vec::with_capacity(1 + fm.fields.len());
+        for (chemin, decl) in std::iter::once((name.clone(), fm)).chain(
+            fm.fields
+                .iter()
+                .map(|(sub, decl)| (format!("{name}.{sub}"), decl)),
+        ) {
+            let entry = MappedField {
+                field: add_field(&mut b, &chemin, decl.ty),
+                ty: decl.ty,
+                ignore_above: decl.ignore_above,
+            };
+            mapped.insert(chemin, entry);
+            cibles.push(entry);
+        }
+        targets.insert(name.clone(), cibles);
     }
 
     (
@@ -312,8 +410,41 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
             version,
             seq_no,
             mapped,
+            targets,
         },
     )
+}
+
+fn add_field(b: &mut SchemaBuilder, name: &str, ty: FieldType) -> Field {
+    match ty.kind() {
+        FieldKind::Text => {
+            let opts = TextOptions::default().set_indexing_options(
+                TextFieldIndexing::default()
+                    .set_tokenizer(TEXT_TOKENIZER)
+                    .set_index_option(IndexRecordOption::WithFreqsAndPositions),
+            );
+            b.add_text_field(name, opts)
+        }
+        FieldKind::Keyword => {
+            // `fast` pour pouvoir trier dessus ; `raw` pour que le terme soit
+            // la valeur entiere, comme un keyword ES.
+            let opts = TextOptions::default()
+                .set_indexing_options(
+                    TextFieldIndexing::default()
+                        .set_tokenizer(RAW_TOKENIZER)
+                        .set_index_option(IndexRecordOption::Basic),
+                )
+                .set_fast(Some(RAW_TOKENIZER));
+            b.add_text_field(name, opts)
+        }
+        FieldKind::I64 => b.add_i64_field(name, NumericOptions::from(INDEXED | FAST)),
+        FieldKind::F64 => b.add_f64_field(name, NumericOptions::from(INDEXED | FAST)),
+        FieldKind::Bool => b.add_bool_field(name, NumericOptions::from(INDEXED | FAST)),
+        FieldKind::Date => b.add_date_field(
+            name,
+            DateOptions::from(INDEXED | FAST).set_precision(DateTimePrecision::Milliseconds),
+        ),
+    }
 }
 
 /// Une valeur JSON convertie au type du champ, prete a devenir un `Term` ou une
@@ -490,12 +621,37 @@ mod tests {
     }
 
     #[test]
-    fn refuse_les_multi_fields() {
+    fn multi_fields() {
+        let m = mapping(
+            r#"{"properties":{"t":{"type":"text",
+                "fields":{"keyword":{"type":"keyword","ignore_above":256}}}}}"#,
+        )
+        .unwrap();
+        let sous = &m.get("t").unwrap().fields["keyword"];
+        assert_eq!(sous.ty, FieldType::Keyword);
+        assert_eq!(sous.ignore_above, Some(256));
+
+        // Le schema expose le sous-champ par son chemin complet.
+        let (_, fields) = build_schema(&m);
+        assert!(fields.get("t").is_some());
+        assert!(fields.get("t.keyword").is_some());
+        assert_eq!(fields.targets_of("t").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn refuse_deux_niveaux_de_multi_fields() {
         let e = mapping(
-            r#"{"properties":{"t":{"type":"text","fields":{"keyword":{"type":"keyword"}}}}}"#,
+            r#"{"properties":{"t":{"type":"text","fields":{
+                "k":{"type":"keyword","fields":{"encore":{"type":"text"}}}}}}}"#,
         )
         .unwrap_err();
-        assert!(e.reason.contains("fields"));
+        assert!(e.reason.contains("niveau"));
+    }
+
+    #[test]
+    fn ignore_above_reserve_aux_keyword() {
+        let e = mapping(r#"{"properties":{"t":{"type":"text","ignore_above":10}}}"#).unwrap_err();
+        assert!(e.reason.contains("ignore_above"));
     }
 
     #[test]

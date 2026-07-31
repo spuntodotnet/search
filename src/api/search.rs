@@ -322,12 +322,12 @@ fn sort_spec(
         "_score" => SortKey::Score,
         "_doc" => SortKey::Doc,
         name => {
-            let (_, ty) = idx.fields.get(name).ok_or_else(|| {
+            let mapped = idx.fields.get(name).ok_or_else(|| {
                 EsError::illegal_argument(format!(
                     "No mapping found for [{name}] in order to sort on"
                 ))
             })?;
-            if ty.kind() == FieldKind::Text {
+            if mapped.ty.kind() == FieldKind::Text {
                 return Err(EsError::illegal_argument(format!(
                     "Fielddata is disabled on [{name}] : ferrite ne trie pas sur un champ [text] \
                      ; utilise un champ [keyword]"
@@ -335,7 +335,7 @@ fn sort_spec(
             }
             SortKey::Field {
                 name: name.to_string(),
-                kind: ty.kind(),
+                kind: mapped.ty.kind(),
             }
         }
     };
