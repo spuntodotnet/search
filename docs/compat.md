@@ -1,0 +1,187 @@
+# compat — ce que ferrite sait faire, et ce qu'il refuse
+
+Inventaire du support de l'API Elasticsearch par ferrite. **Mis à jour dans la
+PR qui change le comportement, pas après.**
+
+| | |
+|---|---|
+| ✅ | supporté, vérifié par le harnais de compat (`tests/compat/`) |
+| 🟡 | partiel — la partie supportée est décrite, le reste est refusé |
+| ❌ | refusé **explicitement**, avec une erreur au format d'Elasticsearch |
+
+La règle qui prime : **jamais d'échec silencieux**. Rien de ce qui figure en ❌
+ne renvoie « 0 résultat » ou un résultat partiel — tout produit une erreur
+lisible. Le type d'erreur `not_implemented_in_ferrite_exception` signale
+précisément « Elasticsearch sait faire, ferrite pas encore ».
+
+Version d'API annoncée : **Elasticsearch 8.15.0** (`version.number`,
+`_nodes`). Toutes les réponses portent `X-elastic-product: Elasticsearch`.
+
+---
+
+## Poignée de main et cluster
+
+| Route | État | Détail |
+|---|---|---|
+| `GET /` | ✅ | `name`, `cluster_name`, `cluster_uuid`, bloc `version` complet, `tagline` |
+| `HEAD /` (`ping`) | ✅ | |
+| `GET /_cluster/health`, `/_cluster/health/{index}` | 🟡 | toujours `green`, 1 nœud, 0 shard non assigné. `wait_for_status` et `timeout` sont acceptés et sans objet (déjà vert) ; `level` est ❌ (il change la forme de la réponse) |
+| `GET /_cat/indices`, `/_cat/indices/{index}` | 🟡 | texte aligné par défaut, `?format=json`, `?v`. `h`, `s`, `bytes` sont ❌ |
+| `GET /_cat/health` | 🟡 | idem |
+| `GET /_nodes`, `/_nodes/{spec}` | 🟡 | un nœud, champs d'identité et `http` ; pas de `settings`, `os`, `jvm`, `stats`. Le sélecteur `{spec}` est ignoré (il n'y a qu'un nœud) |
+| Tout le reste de `_cluster/*`, `_cat/*`, `_nodes/*` | ❌ | `no handler found for uri [...]` |
+
+## Index et mapping
+
+| | État | Détail |
+|---|---|---|
+| `PUT /{index}` | 🟡 | `mappings.properties` **obligatoire** (voir plus bas). `settings` limité à `number_of_shards` / `number_of_replicas` (acceptés, sans effet : ferrite est mono-shard). `aliases` doit être vide. `dynamic` accepté seulement à `strict` |
+| `DELETE /{index}` | ✅ | `ignore_unavailable` honoré |
+| `HEAD /{index}` | ✅ | |
+| `GET /{index}` | ✅ | `aliases` / `mappings` / `settings` |
+| `GET /{index}/_mapping` | ✅ | |
+| `PUT /{index}/_mapping` | ❌ | le schéma tantivy est figé à la création |
+| `POST /{index}/_refresh` | ✅ | |
+| Mapping dynamique | ❌ | un champ absent du mapping → `strict_dynamic_mapping_exception` |
+| Alias, templates, ILM, `_settings`, `_close`, `_open` | ❌ | |
+
+### Types de champ
+
+| Type ES | État | Traduction tantivy |
+|---|---|---|
+| `text` | ✅ | champ indexé tokenisé (positions + fréquences), tokenizer `default` |
+| `keyword` | ✅ | champ indexé non tokenisé (`raw`) + fast field (tri) |
+| `byte`, `short`, `integer`, `long` | ✅ | `i64` indexé + fast. Les bornes du type sont vérifiées à l'indexation |
+| `float`, `double` | ✅ | `f64` indexé + fast |
+| `boolean` | ✅ | `bool` indexé + fast |
+| `date` | 🟡 | `date` (millisecondes) indexé + fast. Formats acceptés : `strict_date_optional_time` (ISO-8601, avec ou sans fuseau, date seule) et `epoch_millis`. `format` personnalisé : ❌ |
+| Tableaux de valeurs | ✅ | tout champ accepte une valeur ou un tableau |
+| `null` | ✅ | ignoré à l'indexation, comme chez ES (pas de `null_value`) |
+| Tout autre type (`geo_point`, `nested`, `object`, `ip`, `binary`…) | ❌ | |
+| Paramètres de champ (`analyzer`, `index`, `fields`, `format`, `null_value`, `doc_values`…) | ❌ | seul `type` est accepté |
+| Noms de champ pointés (`a.b`) ou préfixés `_` | ❌ | |
+
+## Ingestion
+
+| Route | État | Détail |
+|---|---|---|
+| `PUT\|POST /{index}/_doc/{id}` | ✅ | `_version`, `result`, `_seq_no`, `_primary_term`, `_shards`. `op_type=create` honoré |
+| `POST /{index}/_doc` | ✅ | identifiant généré par le serveur |
+| `PUT\|POST /{index}/_create/{id}` | ✅ | 409 `version_conflict_engine_exception` si présent |
+| `GET /{index}/_doc/{id}` | ✅ | temps réel : une écriture non rafraîchie est visible. `_source_includes` / `_source_excludes` / `_source` supportés |
+| `HEAD /{index}/_doc/{id}` | ✅ | |
+| `DELETE /{index}/_doc/{id}` | ✅ | 404 + `result: not_found` si absent, `_version` reste monotone |
+| `POST\|PUT /_bulk`, `/{index}/_bulk` | 🟡 | NDJSON, actions `index` / `create` / `delete`, statut et erreur **par item**. Métadonnées acceptées : `_index`, `_id`. L'action `update` et les autres métadonnées (`_routing`, `if_seq_no`, `pipeline`…) sont ❌ |
+| `refresh` (`true` / `false` / `wait_for`) | ✅ | `wait_for` est traité comme `true` : le commit est synchrone et mono-shard |
+| `POST /{index}/_update/{id}`, `_update_by_query` | ❌ | |
+| `_mget`, `_delete_by_query`, `_reindex`, pipelines d'ingestion | ❌ | |
+| Versionnage optimiste (`if_seq_no`, `if_primary_term`, `version`) | ❌ | |
+
+Sans `refresh`, une écriture devient visible **au plus tard après 1 seconde**
+(équivalent du `index.refresh_interval` d'ES).
+
+## Recherche
+
+`POST\|GET /{index}/_search` ✅. `POST\|GET /_search` (multi-index) ❌ — il faut
+nommer un index ; les motifs (`livres*`, `a,b`) sont ❌ eux aussi.
+
+### Clauses du Query DSL
+
+| Clause | État | Détail |
+|---|---|---|
+| `match_all` | ✅ | `boost` |
+| `match_none` | ✅ | |
+| `match` | 🟡 | `query`, `operator` (`or` / `and`), `boost`. Sur un champ non analysé, se comporte comme `term`. `fuzziness`, `minimum_should_match`, `analyzer`, `zero_terms_query`, `prefix_length` : ❌ |
+| `term` | ✅ | forme courte et forme `{value, boost}`. `case_insensitive` ❌ |
+| `terms` | 🟡 | liste de valeurs, score constant comme chez ES. Les *terms lookup* sont ❌ |
+| `range` | 🟡 | `gte`, `gt`, `lte`, `lt`, `boost`, sur `keyword` / numérique / `date` / `boolean`. Sur un champ `text` : ❌. `format`, `time_zone`, `relation` : ❌ |
+| `bool` | 🟡 | `must`, `should`, `filter`, `must_not`, `boost`, et `minimum_should_match` **sous forme entière** (les pourcentages et expressions sont ❌). `filter` ne contribue pas au score. Un `bool` qui n'a que des `must_not` matche tous les autres documents, comme chez ES |
+| `match_phrase`, `multi_match`, `query_string`, `prefix`, `wildcard`, `exists`, `fuzzy`, `ids`, `nested`, `function_score`, `script`… | ❌ | `parsing_exception: unknown query [...]` |
+
+### Corps et paramètres de `_search`
+
+| | État | Détail |
+|---|---|---|
+| `query` | ✅ | |
+| `from` / `size` | ✅ | corps ou query string. `from + size > 10000` ❌ (`max_result_window`) |
+| `sort` | 🟡 | multi-clés, `asc` / `desc`, sur `keyword` / numérique / `date` / `boolean`, plus `_score` et `_doc`. Valeurs manquantes en dernier (`missing: _last`). Le tableau `sort` est rendu dans chaque hit. Tri sur un champ `text` ❌ ; `missing`, `mode`, `nested`, tri par script ❌ |
+| `_source` | ✅ | `true` / `false`, chaîne, liste, `{includes, excludes}`, motifs `*`. Aussi via `_source_includes` / `_source_excludes` en query string |
+| `track_total_hits` | 🟡 | le total est **toujours exact** (`relation: "eq"`), donc `true` et une valeur numérique sont acceptés ; `false` est ❌ |
+| Scoring | ✅ | BM25 (tantivy), `_score` et `max_score` renseignés ; `null` quand un tri est demandé, comme chez ES |
+| Format de réponse | ✅ | `took`, `timed_out`, `_shards`, `hits.total.{value,relation}`, `hits.max_score`, `hits.hits[]` avec `_index` / `_id` / `_score` / `_source` / `sort` |
+| `preference` | 🟡 | accepté, sans objet : il n'y a qu'un shard |
+| `aggs` / `aggregations`, `highlight`, `search_after`, `scroll`, PIT, `collapse`, `knn`, `explain`, `fields`, `post_filter`, `min_score`, `suggest`, `rescore`, `track_scores`, `q` | ❌ | |
+| `ignore_unavailable`, `allow_no_indices`, `expand_wildcards`, `routing`, `filter_path`, `typed_keys` | ❌ | ils n'ont de sens qu'avec des motifs multi-index ou changent la forme de la réponse |
+| `_count`, `_msearch`, `_search/template`, `_explain`, `_validate` | ❌ | |
+
+Les paramètres purement cosmétiques `pretty`, `human` et `error_trace` sont
+acceptés partout ; `pretty` est implémenté (indentation de la réponse).
+
+**Tout paramètre de query string non reconnu est refusé** avec
+`request [...] contains unrecognized parameter: [...]`, comme chez ES.
+
+## Erreurs
+
+Format identique à celui d'Elasticsearch :
+
+```json
+{"error": {"root_cause": [{"type": "...", "reason": "..."}],
+           "type": "...", "reason": "..."},
+ "status": 400}
+```
+
+Types réutilisés d'ES : `index_not_found_exception`,
+`resource_already_exists_exception`, `invalid_index_name_exception`,
+`illegal_argument_exception`, `parsing_exception`, `query_shard_exception`,
+`document_parsing_exception`, `strict_dynamic_mapping_exception`,
+`version_conflict_engine_exception`. Une route inconnue renvoie le 400
+`no handler found for uri [...] and method [...]` d'ES.
+
+---
+
+## Divergences assumées avec Elasticsearch
+
+Ce ne sont pas des manques, ce sont des choix — ils sont ici pour être discutés,
+pas pour être découverts en production.
+
+1. **Un champ inconnu dans une requête est une erreur, pas 0 résultat.**
+   ES renvoie `hits.total = 0` quand on interroge un champ absent du mapping.
+   Sans mapping dynamique, ce cas est toujours un bug du client, et répondre
+   « aucun résultat » serait exactement le résultat faux présenté comme complet
+   que ce projet refuse. ferrite renvoie `query_shard_exception`.
+
+2. **Analyse du texte.** Les champs `text` utilisent le tokenizer `default` de
+   tantivy (découpe sur les non-alphanumériques + minuscules + rejet des tokens
+   de plus de 40 caractères). Très proche de l'analyzer `standard` d'ES pour du
+   texte latin, mais ce n'est pas la même implémentation : sur de l'unicode
+   exotique ou du CJK, les tokens peuvent différer.
+
+3. **Les scores ne sont pas identiques à ceux d'ES.** Même formule (BM25), mais
+   statistiques d'index et normalisation de longueur différentes. L'*ordre* des
+   résultats est comparé à celui d'ES par `tests/compat/diff_against_es.py` ;
+   les valeurs absolues, non.
+
+4. **`_shards.total` vaut 1** (un shard, zéro réplique) là où un ES par défaut
+   annonce 2 dans les réponses d'écriture.
+
+5. **`_cluster/health` est toujours `green`.** C'est le comportement voulu pour
+   un mono-nœud : il n'y a pas de réplique à assigner.
+
+6. **`wait_for` vaut `true` pour `refresh`.** Le commit est synchrone, il n'y a
+   rien à attendre.
+
+## Limites connues (perf, pas fonctionnalité)
+
+- **Le tri charge tous les hits en mémoire.** Le collecteur de tri ramasse tous
+  les documents correspondants avec leurs clés avant de les ordonner. C'est
+  correct pour toutes les combinaisons de clés (y compris `keyword` et
+  multi-clés, où un tri par ordinal de terme serait faux entre segments), mais
+  l'occupation mémoire est proportionnelle au nombre de résultats. À revoir
+  quand le tri deviendra un chemin chaud. La recherche **sans** tri utilise un
+  top-K classique et n'a pas cette limite.
+- **`GET /{index}/_doc/{id}` déclenche un commit** si des écritures sont en
+  attente, pour rester temps réel comme ES. Sous forte charge d'écriture, un
+  `get` peut donc coûter cher.
+- **La table `_id → (_version, _seq_no)` est en mémoire** et reconstruite au
+  démarrage en relisant les fast fields de l'index. Coût proportionnel au
+  nombre de documents au démarrage.
