@@ -16,7 +16,7 @@ répondre à des requêtes `bool` + `terms` + un tri.
 |---|---|---|
 | Image | ~1,3 Go | **2,4 Mo** (`scratch`) |
 | RSS au repos | > 1 Go | **2,9 Mo** |
-| Démarrage | 30-60 s | **11 ms** (252 ms via `docker run`) |
+| Démarrage | 30-60 s | **11 ms** (~230 ms via `docker run`) |
 | Runtime | JVM + tuning heap | un binaire statique |
 
 Ces chiffres sont mesurés, pas visés — voir [Le conteneur](#le-conteneur).
@@ -94,7 +94,7 @@ conditions.
 |---|---|---|
 | Image | 638 Mo | **2,4 Mo** |
 | Mémoire au repos | 1,02 Gio | **2,9 Mo** (RSS) |
-| Démarrage (`docker run` → premier `GET /` servi) | 22,9 s | **252 ms** (11 ms pour le binaire seul) |
+| Démarrage (`docker run` → premier `GET /` servi) | 22,9 s | **232 ms** (11 ms pour le binaire seul : le reste est la création du conteneur par Docker) |
 
 L'image finale est un `scratch` qui ne contient que le binaire statique.
 
