@@ -435,12 +435,29 @@ def pagination(es):
     assert page == tous[1:2]
     r = es.search(index=INDEX, query={"match_all": {}}, size=0)
     assert r["hits"]["total"]["value"] == 3 and r["hits"]["hits"] == []
+    # ES ne calcule pas de score quand aucun document n'est demande.
+    assert r["hits"]["max_score"] is None
+    # Au-dela du dernier hit : page vide, mais le meilleur score reste rendu.
+    r = es.search(index=INDEX, query={"match_all": {}}, from_=50, size=2)
+    assert r["hits"]["hits"] == [] and r["hits"]["max_score"] > 0
+    # Aucun resultat : pas de score.
+    r = es.search(index=INDEX, query={"term": {"auteur": "Personne"}})
+    assert r["hits"]["total"]["value"] == 0 and r["hits"]["max_score"] is None
 
 
 @scenario
 def pagination_profonde_refusee(es):
     refused(lambda: es.search(index=INDEX, query={"match_all": {}},
                               from_=10000, size=10))
+
+
+@scenario
+def taille_invalide_refusee(es):
+    """`size: -1` doit se voir, pas retomber en silence sur le defaut."""
+    refused(lambda: es.perform_request(
+        "POST", f"/{INDEX}/_search",
+        headers={"content-type": "application/json"},
+        body={"query": {"match_all": {}}, "size": -1}))
 
 
 @scenario

@@ -77,22 +77,14 @@ pub async fn search(
         check_track_total_hits(v)?;
     }
 
-    let from = param_from
-        .or_else(|| {
-            body_obj
-                .get("from")
-                .and_then(Value::as_u64)
-                .map(|v| v as usize)
-        })
-        .unwrap_or(0);
-    let size = param_size
-        .or_else(|| {
-            body_obj
-                .get("size")
-                .and_then(Value::as_u64)
-                .map(|v| v as usize)
-        })
-        .unwrap_or(DEFAULT_SIZE);
+    let from = match param_from {
+        Some(v) => v,
+        None => body_usize(&body_obj, "from")?.unwrap_or(0),
+    };
+    let size = match param_size {
+        Some(v) => v,
+        None => body_usize(&body_obj, "size")?.unwrap_or(DEFAULT_SIZE),
+    };
 
     if from + size > MAX_RESULT_WINDOW {
         return Err(EsError::illegal_argument(format!(
@@ -153,6 +145,21 @@ pub async fn search(
             "hits": outcome.hits,
         }
     })))
+}
+
+/// Lit un entier positif du corps. Une valeur invalide est refusee plutot que
+/// remplacee par le defaut : `size: -1` doit se voir, pas devenir `10`.
+fn body_usize(obj: &Map<String, Value>, key: &str) -> EsResult<Option<usize>> {
+    match obj.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v
+            .as_u64()
+            .and_then(|n| usize::try_from(n).ok())
+            .map(Some)
+            .ok_or_else(|| {
+                EsError::illegal_argument(format!("[{key}] : entier positif attendu, recu {v}"))
+            }),
+    }
 }
 
 /// ferrite compte toujours les hits exactement — `relation` vaut donc toujours

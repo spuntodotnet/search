@@ -313,26 +313,31 @@ pub fn execute(idx: &FerriteIndex, req: &SearchRequest) -> EsResult<SearchOutcom
 
     if req.sort.is_empty() {
         let count = searcher.search(&req.query, &Count)?;
-        let wanted = req.from + req.size;
-        let top = if wanted == 0 {
-            searcher.search(&req.query, &TopDocs::with_limit(1).order_by_score())?
-        } else {
-            searcher.search(&req.query, &TopDocs::with_limit(wanted).order_by_score())?
-        };
+        // `size: 0` ne demande aucun document : ES ne calcule alors pas de score
+        // et rend `max_score: null`.
+        if req.size == 0 {
+            return Ok(SearchOutcome {
+                total: count,
+                max_score: None,
+                hits: Vec::new(),
+            });
+        }
+        let top = searcher.search(
+            &req.query,
+            &TopDocs::with_limit(req.from + req.size).order_by_score(),
+        )?;
         // ES rapporte le meilleur score de la requete, pas de la page courante.
         let max_score = top.first().map(|(score, _)| *score);
         let mut hits = Vec::new();
-        if wanted > 0 {
-            for (score, addr) in top.into_iter().skip(req.from) {
-                hits.push(build_hit(
-                    idx,
-                    &searcher,
-                    addr,
-                    Some(score),
-                    None,
-                    &req.source,
-                )?);
-            }
+        for (score, addr) in top.into_iter().skip(req.from) {
+            hits.push(build_hit(
+                idx,
+                &searcher,
+                addr,
+                Some(score),
+                None,
+                &req.source,
+            )?);
         }
         return Ok(SearchOutcome {
             total: count,
