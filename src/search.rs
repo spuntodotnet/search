@@ -9,7 +9,7 @@ use tantivy::columnar::{Column, StrColumn};
 use tantivy::query::Query;
 use tantivy::{DocAddress, DocId, Score, SegmentOrdinal, SegmentReader};
 
-use crate::engine::FerriteIndex;
+use crate::engine::Generation;
 use crate::error::{EsError, EsResult};
 use crate::mapping::FieldKind;
 
@@ -308,8 +308,8 @@ pub struct SearchOutcome {
     pub hits: Vec<Value>,
 }
 
-pub fn execute(idx: &FerriteIndex, req: &SearchRequest) -> EsResult<SearchOutcome> {
-    let searcher = idx.searcher();
+pub fn execute(index_name: &str, gen: &Generation, req: &SearchRequest) -> EsResult<SearchOutcome> {
+    let searcher = gen.searcher();
 
     if req.sort.is_empty() {
         let count = searcher.search(&req.query, &Count)?;
@@ -331,7 +331,8 @@ pub fn execute(idx: &FerriteIndex, req: &SearchRequest) -> EsResult<SearchOutcom
         let mut hits = Vec::new();
         for (score, addr) in top.into_iter().skip(req.from) {
             hits.push(build_hit(
-                idx,
+                index_name,
+                gen,
                 &searcher,
                 addr,
                 Some(score),
@@ -362,7 +363,8 @@ pub fn execute(idx: &FerriteIndex, req: &SearchRequest) -> EsResult<SearchOutcom
         let sort_values: Vec<Value> = hit.keys.iter().map(SortValue::to_json).collect();
         let score = if needs_score { Some(hit.score) } else { None };
         hits.push(build_hit(
-            idx,
+            index_name,
+            gen,
             &searcher,
             addr,
             score,
@@ -402,8 +404,10 @@ fn compare(specs: &[SortSpec], a: &Hit, b: &Hit) -> Ordering {
     (a.seg, a.doc).cmp(&(b.seg, b.doc))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_hit(
-    idx: &FerriteIndex,
+    index_name: &str,
+    gen: &Generation,
     searcher: &tantivy::Searcher,
     addr: DocAddress,
     score: Option<f32>,
@@ -413,14 +417,14 @@ fn build_hit(
     let doc: tantivy::schema::TantivyDocument = searcher.doc(addr)?;
     let id = {
         use tantivy::schema::Value as _;
-        doc.get_first(idx.fields.id)
+        doc.get_first(gen.fields.id)
             .and_then(|v| v.as_str().map(str::to_string))
             .ok_or_else(|| EsError::internal("hit sans _id"))?
     };
     let source = {
         use tantivy::schema::Value as _;
         let raw = doc
-            .get_first(idx.fields.source)
+            .get_first(gen.fields.source)
             .and_then(|v| v.as_str().map(str::to_string))
             .ok_or_else(|| EsError::internal("hit sans _source"))?;
         serde_json::from_str::<Value>(&raw)
@@ -428,7 +432,7 @@ fn build_hit(
     };
 
     let mut hit = Map::new();
-    hit.insert("_index".into(), json!(idx.name));
+    hit.insert("_index".into(), json!(index_name));
     hit.insert("_id".into(), json!(id));
     hit.insert(
         "_score".into(),

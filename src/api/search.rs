@@ -34,6 +34,9 @@ pub async fn search(
 ) -> EsResult<Json> {
     let started = Instant::now();
     let idx = st.catalog.get(&index)?;
+    // Une seule generation pour toute la requete : les `Field` d'une generation
+    // n'ont aucun sens dans une autre.
+    let gen = idx.current();
 
     let mut p = Params::parse(&uri);
     let param_from = p.number("from")?;
@@ -103,17 +106,17 @@ pub async fn search(
     };
 
     let sort = match param_sort {
-        Some(list) => parse_sort_params(&list, &idx)?,
+        Some(list) => parse_sort_params(&list, &gen)?,
         None => match body_obj.get("sort") {
-            Some(v) => parse_sort_body(v, &idx)?,
+            Some(v) => parse_sort_body(v, &gen)?,
             None => Vec::new(),
         },
     };
 
     let query = {
         let ctx = QueryCtx {
-            fields: &idx.fields,
-            index: idx.tantivy_index(),
+            fields: &gen.fields,
+            index: &gen.index,
         };
         match body_obj.get("query") {
             Some(v) => build_query(v, &ctx)?,
@@ -129,7 +132,7 @@ pub async fn search(
         source,
     };
 
-    let outcome = tokio::task::spawn_blocking(move || execute(&idx, &req))
+    let outcome = tokio::task::spawn_blocking(move || execute(&index, &gen, &req))
         .await
         .map_err(|e| EsError::internal(format!("recherche: {e}")))??;
 
@@ -265,7 +268,7 @@ fn parse_source_body(v: &Value) -> EsResult<SourceFilter> {
 // sort
 // ---------------------------------------------------------------------------
 
-fn parse_sort_body(v: &Value, idx: &crate::engine::FerriteIndex) -> EsResult<Vec<SortSpec>> {
+fn parse_sort_body(v: &Value, gen: &crate::engine::Generation) -> EsResult<Vec<SortSpec>> {
     let entries: Vec<&Value> = match v {
         Value::Array(a) => a.iter().collect(),
         other => vec![other],
@@ -273,7 +276,7 @@ fn parse_sort_body(v: &Value, idx: &crate::engine::FerriteIndex) -> EsResult<Vec
     let mut specs = Vec::new();
     for entry in entries {
         match entry {
-            Value::String(s) => specs.push(sort_spec(s, None, idx)?),
+            Value::String(s) => specs.push(sort_spec(s, None, gen)?),
             Value::Object(o) => {
                 for (field, spec) in o {
                     let order = match spec {
@@ -291,7 +294,7 @@ fn parse_sort_body(v: &Value, idx: &crate::engine::FerriteIndex) -> EsResult<Vec
                             ))
                         }
                     };
-                    specs.push(sort_spec(field, order.as_deref(), idx)?);
+                    specs.push(sort_spec(field, order.as_deref(), gen)?);
                 }
             }
             _ => return Err(EsError::illegal_argument("[sort] : entree invalide")),
@@ -301,14 +304,11 @@ fn parse_sort_body(v: &Value, idx: &crate::engine::FerriteIndex) -> EsResult<Vec
 }
 
 /// `?sort=annee:desc,titre`
-fn parse_sort_params(
-    list: &[String],
-    idx: &crate::engine::FerriteIndex,
-) -> EsResult<Vec<SortSpec>> {
+fn parse_sort_params(list: &[String], gen: &crate::engine::Generation) -> EsResult<Vec<SortSpec>> {
     list.iter()
         .map(|entry| match entry.split_once(':') {
-            Some((field, order)) => sort_spec(field, Some(order), idx),
-            None => sort_spec(entry, None, idx),
+            Some((field, order)) => sort_spec(field, Some(order), gen),
+            None => sort_spec(entry, None, gen),
         })
         .collect()
 }
@@ -316,13 +316,13 @@ fn parse_sort_params(
 fn sort_spec(
     field: &str,
     order: Option<&str>,
-    idx: &crate::engine::FerriteIndex,
+    gen: &crate::engine::Generation,
 ) -> EsResult<SortSpec> {
     let key = match field {
         "_score" => SortKey::Score,
         "_doc" => SortKey::Doc,
         name => {
-            let mapped = idx.fields.get(name).ok_or_else(|| {
+            let mapped = gen.fields.get(name).ok_or_else(|| {
                 EsError::illegal_argument(format!(
                     "No mapping found for [{name}] in order to sort on"
                 ))

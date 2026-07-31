@@ -110,9 +110,12 @@ Sur un corpus de 600 documents et 114 requêtes, ferrite et un vrai
 Elasticsearch 8.15 renvoient **les mêmes documents dans le même ordre**
 (`tests/compat/diff_relevance.py`).
 
-**Ce qui n'y est pas encore** : mapping dynamique, agrégations, `highlight`,
-`search_after`, analyzers configurables, multi-fields, `_update`, `_mget`,
-`prefix` / `wildcard` / `fuzzy`.
+Le **mapping dynamique** et les **multi-fields** (`titre.keyword`) sont
+supportés : on peut rejouer le mapping d'un Elasticsearch existant, ou indexer
+sans rien déclarer.
+
+**Ce qui n'y est pas encore** : agrégations, `highlight`, `search_after`,
+analyzers configurables, `_update`, `_mget`, `prefix` / `wildcard` / `fuzzy`.
 
 L'inventaire complet — supporté, partiel, refusé, et les divergences assumées —
 est dans [`docs/compat.md`](docs/compat.md). Rien de ce qui n'est pas supporté

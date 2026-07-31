@@ -20,6 +20,9 @@ URL = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:9200"
 INDEX = "compat_suite"
 
 MAPPINGS = {
+    # `strict` : la suite verifie surtout des refus explicites ; le mapping
+    # dynamique a ses propres scenarios.
+    "dynamic": "strict",
     "properties": {
         "titre": {"type": "text"},
         "auteur": {"type": "keyword"},
@@ -133,9 +136,87 @@ def index_inconnu(es):
 
 
 @scenario
-def mapping_explicite_obligatoire(es):
-    es.options(ignore_status=404).indices.delete(index="sans_mapping")
-    refused(lambda: es.indices.create(index="sans_mapping"))
+def mapping_dynamique(es):
+    """Sans mapping declare, les champs viennent des documents — et leur type
+    est devine avec les memes regles qu'Elasticsearch."""
+    es.options(ignore_status=404).indices.delete(index="dyn")
+    es.indices.create(index="dyn")
+    es.index(index="dyn", id="1", refresh=True, document={
+        "titre": "Bel-Ami", "annee": 1885, "note": 4.1,
+        "dispo": True, "paru": "1885-04-01", "chiffre_en_chaine": "42",
+        "tags": ["roman", "social"],
+    })
+    props = es.indices.get_mapping(index="dyn")["dyn"]["mappings"]["properties"]
+    assert props["annee"]["type"] == "long"
+    assert props["note"]["type"] == "float"
+    assert props["dispo"]["type"] == "boolean"
+    assert props["paru"]["type"] == "date"
+    # Une chaine devient `text` + un sous-champ `.keyword`, comme chez ES.
+    assert props["titre"]["type"] == "text"
+    assert props["titre"]["fields"]["keyword"]["type"] == "keyword"
+    assert props["titre"]["fields"]["keyword"]["ignore_above"] == 256
+    # `numeric_detection` est desactive chez ES : « 42 » reste du texte.
+    assert props["chiffre_en_chaine"]["type"] == "text"
+
+    def hits(**kw):
+        return sorted(h["_id"] for h in es.search(index="dyn", size=10, **kw)["hits"]["hits"])
+
+    assert hits(query={"match": {"titre": "bel"}}) == ["1"]
+    assert hits(query={"term": {"titre.keyword": "Bel-Ami"}}) == ["1"]
+    assert hits(query={"range": {"annee": {"gte": 1880}}}) == ["1"]
+    assert hits(query={"term": {"tags.keyword": "social"}}) == ["1"]
+    assert hits(query={"range": {"paru": {"lt": "1900-01-01"}}}) == ["1"]
+    es.indices.delete(index="dyn")
+
+
+@scenario
+def mapping_dynamique_preserve_l_existant(es):
+    """Le point dur : tantivy fige le schema, donc ferrite change de generation
+    quand un champ apparait. Les documents deja indexes doivent survivre."""
+    es.options(ignore_status=404).indices.delete(index="dyn2")
+    es.indices.create(index="dyn2", mappings={"properties": {"titre": {"type": "text"}}})
+    es.index(index="dyn2", id="1", document={"titre": "premier"}, refresh=True)
+    avant = es.get(index="dyn2", id="1")
+
+    # Un champ inedit fait grandir le mapping.
+    es.index(index="dyn2", id="2", document={"titre": "second", "annee": 1885},
+             refresh=True)
+    assert "annee" in es.indices.get_mapping(index="dyn2")["dyn2"]["mappings"]["properties"]
+
+    # Le document anterieur est intact : contenu, version, et interrogeable.
+    apres = es.get(index="dyn2", id="1")
+    assert apres["_source"] == avant["_source"]
+    assert apres["_version"] == avant["_version"]
+    assert [h["_id"] for h in es.search(
+        index="dyn2", query={"match": {"titre": "premier"}})["hits"]["hits"]] == ["1"]
+    assert es.search(index="dyn2", query={"match_all": {}},
+                     size=10)["hits"]["total"]["value"] == 2
+    es.indices.delete(index="dyn2")
+
+
+@scenario
+def dynamic_false_et_strict(es):
+    # `false` : le champ reste dans `_source` mais n'est pas interrogeable.
+    es.options(ignore_status=404).indices.delete(index="dynfalse")
+    es.indices.create(index="dynfalse", mappings={
+        "dynamic": False, "properties": {"titre": {"type": "text"}}})
+    es.index(index="dynfalse", id="1", refresh=True,
+             document={"titre": "Bel-Ami", "note": 5})
+    assert es.get(index="dynfalse", id="1")["_source"]["note"] == 5
+    assert "note" not in es.indices.get_mapping(
+        index="dynfalse")["dynfalse"]["mappings"]["properties"]
+    refused(lambda: es.search(index="dynfalse", query={"term": {"note": 5}}),
+            contains="note")
+    es.indices.delete(index="dynfalse")
+
+    # `strict` : le document est refuse.
+    es.options(ignore_status=404).indices.delete(index="dynstrict")
+    es.indices.create(index="dynstrict", mappings={
+        "dynamic": "strict", "properties": {"titre": {"type": "text"}}})
+    refused(lambda: es.index(index="dynstrict", id="1",
+                             document={"titre": "x", "note": 5}),
+            contains="note")
+    es.indices.delete(index="dynstrict")
 
 
 @scenario
@@ -313,6 +394,7 @@ def id_genere_par_le_serveur(es):
 
 @scenario
 def champ_absent_du_mapping_refuse(es):
+    """L'index de la suite est en `dynamic: strict`."""
     error = refused(lambda: es.index(index=INDEX, id="x",
                                      document={"inconnu": "valeur"}))
     assert "inconnu" in error["reason"]

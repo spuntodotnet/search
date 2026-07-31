@@ -57,13 +57,12 @@ pub async fn create(
         check_settings(settings)?;
     }
 
-    let mappings = obj.get("mappings").ok_or_else(|| {
-        EsError::illegal_argument(
-            "ferrite exige un mapping explicite a la creation de l'index : [mappings.properties] \
-             est obligatoire (le mapping dynamique n'est pas supporte)",
-        )
-    })?;
-    let mapping = Mapping::parse(mappings)?;
+    // Sans `mappings`, l'index part vide et se remplit par mapping dynamique,
+    // comme chez ES.
+    let mapping = match obj.get("mappings") {
+        Some(m) => Mapping::parse(m)?,
+        None => Mapping::default(),
+    };
 
     st.catalog.create(&index, mapping)?;
     Ok(Json::ok(json!({
@@ -143,7 +142,7 @@ pub async fn get_index(
     Ok(Json::ok(json!({
         index.as_str(): {
             "aliases": {},
-            "mappings": idx.mapping.to_json(),
+            "mappings": idx.mapping().to_json(),
             "settings": {"index": {
                 "number_of_shards": "1",
                 "number_of_replicas": "0",
@@ -165,7 +164,7 @@ pub async fn get_mapping(
     Params::parse(&uri).done()?;
     let idx = st.catalog.get(&index)?;
     Ok(Json::ok(json!({
-        index.as_str(): {"mappings": idx.mapping.to_json()}
+        index.as_str(): {"mappings": idx.mapping().to_json()}
     })))
 }
 
