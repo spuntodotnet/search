@@ -170,27 +170,66 @@ def mapping_dynamique(es):
 
 
 @scenario
-def document_imbrique_refuse(es):
-    """Les objets sont hors perimetre — encore faut-il le dire.
+def sous_objets(es):
+    """Un sous-objet s'indexe par ses chemins, declare ou devine.
 
-    Le cas du tableau (`[{...}]`) est le seul qui compte vraiment : le type
-    devine `None` comme pour un objet nu, mais sans ce refus explicite le
-    document serait accepte, garde dans `_source`, et son champ introuvable.
+    Un objet n'est pas un champ : `client` n'existe pas, `client.ville` si —
+    c'est le modele d'Elasticsearch, et le mapping rendu re-niche les chemins.
     """
     es.options(ignore_status=404).indices.delete(index="imbrique")
-    es.indices.create(index="imbrique")
-    refused(lambda: es.index(index="imbrique", id="1", refresh=True,
-                             document={"titre": "x", "auteur": {"nom": "Zola"}}),
-            contains="objet/imbriques")
-    refused(lambda: es.index(index="imbrique", id="2", refresh=True,
-                             document={"titre": "x", "auteurs": [{"nom": "Zola"}]}),
-            contains="objet/imbriques")
-    # Un tableau de scalaires, lui, reste un champ multivalue ordinaire.
-    es.index(index="imbrique", id="3", refresh=True,
-             document={"titre": "x", "tags": ["a", "b"]})
-    assert es.search(index="imbrique", query={"term": {"tags.keyword": "b"}}
-                     )["hits"]["total"]["value"] == 1
+    es.indices.create(index="imbrique", mappings={"properties": {
+        "titre": {"type": "text"},
+        "client": {"properties": {
+            "ville": {"type": "keyword"},
+            "adr": {"properties": {"cp": {"type": "integer"}}},
+        }},
+    }})
+    es.index(index="imbrique", id="1", refresh=True, document={
+        "titre": "commande", "client": {"ville": "Lyon", "adr": {"cp": 69001}}})
+
+    def hits(**kw):
+        return sorted(h["_id"] for h in es.search(index="imbrique", **kw)["hits"]["hits"])
+
+    assert hits(query={"term": {"client.ville": "Lyon"}}) == ["1"]
+    assert hits(query={"range": {"client.adr.cp": {"gte": 69000}}}) == ["1"]
+    assert hits(query={"match_all": {}}, sort=[{"client.ville": "asc"}]) == ["1"]
+    # `_source` n'est pas touche, et son filtrage suit les chemins.
+    assert es.get(index="imbrique", id="1")["_source"]["client"]["adr"]["cp"] == 69001
+    assert es.search(index="imbrique", query={"match_all": {}},
+                     source_includes=["client.ville"]
+                     )["hits"]["hits"][0]["_source"] == {"client": {"ville": "Lyon"}}
+    # Le mapping rendu est niche, pas pointe.
+    props = es.indices.get_mapping(index="imbrique")["imbrique"]["mappings"]["properties"]
+    assert props["client"]["properties"]["adr"]["properties"]["cp"]["type"] == "integer"
+    # Un objet declare comme champ, ou l'inverse : refus explicite.
+    refused(lambda: es.indices.create(index="conflit", mappings={"properties": {
+        "a": {"type": "keyword"}, "a.b": {"type": "keyword"}}}),
+        contains="a la fois comme champ et comme objet")
     es.indices.delete(index="imbrique")
+
+
+@scenario
+def sous_objets_devines(es):
+    """Sans mapping, les chemins viennent des documents — et un tableau d'objets
+    est aplati, exactement comme chez ES : la correspondance entre sous-champs
+    d'un meme element est perdue (c'est ce que `nested` existe pour garder)."""
+    es.options(ignore_status=404).indices.delete(index="imbdyn")
+    es.indices.create(index="imbdyn")
+    es.index(index="imbdyn", id="1", refresh=True,
+             document={"l": [{"ref": "A", "qte": 5}, {"ref": "B", "qte": 20}]})
+    props = es.indices.get_mapping(index="imbdyn")["imbdyn"]["mappings"]["properties"]
+    assert props["l"]["properties"]["qte"]["type"] == "long"
+    assert props["l"]["properties"]["ref"]["fields"]["keyword"]["type"] == "keyword"
+
+    def total(query):
+        return es.search(index="imbdyn", query=query)["hits"]["total"]["value"]
+
+    assert total({"term": {"l.ref.keyword": "B"}}) == 1
+    # A a une quantite de 5, mais le document correspond quand meme : c'est le
+    # comportement d'ES pour un `object`, et il est verifie tel quel.
+    assert total({"bool": {"must": [{"term": {"l.ref.keyword": "A"}},
+                                    {"range": {"l.qte": {"gte": 20}}}]}}) == 1
+    es.indices.delete(index="imbdyn")
 
 
 @scenario

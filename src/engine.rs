@@ -438,30 +438,26 @@ impl FerriteIndex {
             .ok_or_else(|| EsError::mapper_parsing("le document doit etre un objet JSON"))?;
 
         let mut nouveaux: BTreeMap<String, FieldMapping> = BTreeMap::new();
-        for (name, value) in obj {
-            if gen.fields.targets_of(name).is_some() {
-                continue;
+        // Le document est parcouru en profondeur : un sous-objet ne cree pas de
+        // champ pour lui-meme, seulement pour ses feuilles (`client.ville`).
+        mapping::parcours_feuilles(obj, &mut |chemin, valeur| {
+            if gen.fields.targets_of(chemin).is_some() {
+                return Ok(());
             }
             match gen.mapping.dynamic {
-                Dynamic::Strict => return Err(EsError::strict_mapping(&self.name, name)),
-                Dynamic::False => continue,
+                Dynamic::Strict => Err(EsError::strict_mapping(&self.name, chemin)),
+                Dynamic::False => Ok(()),
                 Dynamic::True => {
-                    if mapping::contient_un_objet(value) {
-                        return Err(EsError::unsupported(format!(
-                            "ferrite ne supporte pas les champs objet/imbriques : [{name}] dans \
-                             l'index [{}]",
-                            self.name
-                        )));
-                    }
-                    validate_dynamic_field_name(name)?;
+                    validate_dynamic_field_name(chemin)?;
                     // Une valeur nulle ou un tableau vide ne cree pas de champ,
                     // comme chez ES : le type reste inconnu.
-                    if let Some(fm) = mapping::infer(value) {
-                        nouveaux.insert(name.clone(), fm);
+                    if let Some(fm) = mapping::infer(valeur) {
+                        nouveaux.insert(chemin.to_string(), fm);
                     }
+                    Ok(())
                 }
             }
-        }
+        })?;
         Ok((!nouveaux.is_empty()).then_some(nouveaux))
     }
 
@@ -584,12 +580,12 @@ fn build_doc(
     doc.add_u64(gen.fields.version, version);
     doc.add_u64(gen.fields.seq_no, seq_no);
 
-    for (name, value) in obj {
-        let Some(cibles) = gen.fields.targets_of(name) else {
-            continue;
+    mapping::parcours_feuilles(obj, &mut |chemin, value| {
+        let Some(cibles) = gen.fields.targets_of(chemin) else {
+            return Ok(());
         };
         let values: Vec<&Value> = match value {
-            Value::Null => continue,
+            Value::Null => return Ok(()),
             Value::Array(a) => a.iter().collect(),
             v => vec![v],
         };
@@ -605,7 +601,7 @@ fn build_doc(
                         continue;
                     }
                 }
-                match mapping::coerce(name, cible.ty, v)? {
+                match mapping::coerce(chemin, cible.ty, v)? {
                     TypedValue::Str(s) => doc.add_text(cible.field, s),
                     TypedValue::I64(n) => doc.add_i64(cible.field, n),
                     TypedValue::F64(n) => doc.add_f64(cible.field, n),
@@ -616,21 +612,25 @@ fn build_doc(
                 }
             }
         }
-    }
+        Ok(())
+    })?;
     Ok(doc)
 }
 
 /// Un champ devine ne doit pas pouvoir entrer en collision avec les champs
-/// internes, ni introduire un chemin pointe.
+/// internes du schema.
 fn validate_dynamic_field_name(name: &str) -> EsResult<()> {
     if name.starts_with('_') {
         return Err(EsError::mapper_parsing(format!(
             "[{name}] : les noms de champ commencant par [_] sont reserves"
         )));
     }
-    if name.contains('.') {
-        return Err(EsError::unsupported(format!(
-            "ferrite ne supporte pas les noms de champ pointes (champ [{name}])"
+    // Un chemin pointe est licite — il vient d'un sous-objet, ou d'une cle que
+    // le document ecrit deja a plat (`{"client.ville": ...}`), qu'Elasticsearch
+    // traite comme un chemin. Un segment vide, lui, ne l'est pas.
+    if name.split('.').any(str::is_empty) {
+        return Err(EsError::mapper_parsing(format!(
+            "[{name}] : chemin de champ invalide"
         )));
     }
     Ok(())

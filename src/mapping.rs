@@ -202,6 +202,14 @@ impl Dynamic {
 }
 
 /// Le mapping d'un index. Ordonne par nom, comme le rend ES.
+///
+/// Les sous-objets n'ont pas de representation propre : ils sont **aplatis en
+/// chemins pointes** (`fournisseur.nom`), exactement comme le fait
+/// Elasticsearch, qui n'indexe pas non plus d'objet — il indexe des chemins.
+/// C'est ce qui permet aux requetes, aux tris et aux agregations de resoudre un
+/// champ imbrique sans rien connaitre des objets : `Fields.mapped` est deja une
+/// table `chemin -> champ`. Le nichage n'existe que dans la reponse
+/// `GET /{index}/_mapping`, ou [`Mapping::to_json`] le reconstruit.
 #[derive(Debug, Clone, Default)]
 pub struct Mapping {
     pub properties: BTreeMap<String, FieldMapping>,
@@ -213,11 +221,12 @@ impl Mapping {
         self.properties.get(field)
     }
 
-    /// Le mapping tel qu'ES le rend sur `GET /{index}/_mapping`.
+    /// Le mapping tel qu'ES le rend sur `GET /{index}/_mapping` : les chemins
+    /// pointes y redeviennent des objets imbriques.
     pub fn to_json(&self) -> Value {
         let mut props = Map::new();
-        for (name, fm) in &self.properties {
-            props.insert(name.clone(), fm.to_json());
+        for (chemin, fm) in &self.properties {
+            niche(&mut props, chemin, fm.to_json());
         }
         let mut o = Map::new();
         if self.dynamic != Dynamic::True {
@@ -227,7 +236,7 @@ impl Mapping {
         Value::Object(o)
     }
 
-    /// Parse `{"properties": {...}}`.
+    /// Parse `{"properties": {...}}`, sous-objets compris.
     ///
     /// Tout ce qui n'est pas compris est refuse : c'est la seule facon de ne pas
     /// mentir sur ce qui est indexe.
@@ -245,8 +254,7 @@ impl Mapping {
                         EsError::mapper_parsing("[mappings.properties] doit etre un objet")
                     })?;
                     for (name, spec) in props {
-                        validate_field_name(name)?;
-                        properties.insert(name.clone(), parse_field_mapping(name, spec, false)?);
+                        parse_propriete(name, spec, &mut properties)?;
                     }
                 }
                 "dynamic" => dynamic = Dynamic::parse(val)?,
@@ -270,6 +278,117 @@ impl Mapping {
             properties,
             dynamic,
         })
+    }
+}
+
+/// Parse une propriete du mapping, qui peut etre un champ ou un sous-objet.
+///
+/// Un sous-objet ne produit aucune entree pour lui-meme : il n'existe que par
+/// les chemins de ses feuilles (`fournisseur` -> `fournisseur.nom`,
+/// `fournisseur.pays`). C'est exactement le modele d'Elasticsearch, ou un objet
+/// n'est pas un champ indexable.
+fn parse_propriete(
+    chemin: &str,
+    spec: &Value,
+    dans: &mut BTreeMap<String, FieldMapping>,
+) -> EsResult<()> {
+    for part in chemin.split('.') {
+        validate_field_name_part(part, chemin)?;
+    }
+    if chemin.starts_with('_') {
+        return Err(EsError::mapper_parsing(format!(
+            "[{chemin}] : les noms de champ commencant par [_] sont reserves"
+        )));
+    }
+
+    let obj = spec.as_object().ok_or_else(|| {
+        EsError::mapper_parsing(format!("[mappings.properties.{chemin}] doit etre un objet"))
+    })?;
+
+    // Un objet se reconnait a son `properties`. ES accepte les deux ecritures :
+    // avec ou sans `"type": "object"`.
+    if let Some(sous) = obj.get("properties") {
+        let ty = obj.get("type").and_then(Value::as_str);
+        if !matches!(ty, None | Some("object")) {
+            return Err(EsError::mapper_parsing(format!(
+                "[{chemin}] : [properties] n'a pas de sens sur un champ de type [{}]",
+                ty.unwrap_or("?")
+            )));
+        }
+        for autre in obj.keys() {
+            if autre != "properties" && autre != "type" && autre != "dynamic" {
+                return Err(EsError::unsupported(format!(
+                    "ferrite ne supporte pas le parametre [{autre}] sur l'objet [{chemin}] ; \
+                     parametres acceptes : type, properties"
+                )));
+            }
+        }
+        if obj.contains_key("dynamic") {
+            return Err(EsError::unsupported(format!(
+                "ferrite ne supporte pas [dynamic] par objet (champ [{chemin}]) ; il se declare \
+                 au niveau du mapping"
+            )));
+        }
+        let sous = sous.as_object().ok_or_else(|| {
+            EsError::mapper_parsing(format!("[{chemin}.properties] doit etre un objet"))
+        })?;
+        if sous.is_empty() {
+            return Err(EsError::mapper_parsing(format!(
+                "[{chemin}] : un objet sans [properties] n'indexe rien"
+            )));
+        }
+        for (nom, decl) in sous {
+            parse_propriete(&format!("{chemin}.{nom}"), decl, dans)?;
+        }
+        return Ok(());
+    }
+    if obj.get("type").and_then(Value::as_str) == Some("object") {
+        return Err(EsError::mapper_parsing(format!(
+            "[{chemin}] : un objet sans [properties] n'indexe rien"
+        )));
+    }
+
+    let fm = parse_field_mapping(chemin, spec, false)?;
+    // `a` feuille et `a.b` objet ne peuvent pas coexister — ES refuse aussi.
+    conflit_de_chemin(chemin, dans)?;
+    dans.insert(chemin.to_string(), fm);
+    Ok(())
+}
+
+/// Un chemin ne doit etre ni le prefixe, ni le prolongement d'un autre.
+fn conflit_de_chemin(chemin: &str, dans: &BTreeMap<String, FieldMapping>) -> EsResult<()> {
+    for existant in dans.keys() {
+        let (court, long) = if existant.len() < chemin.len() {
+            (existant.as_str(), chemin)
+        } else {
+            (chemin, existant.as_str())
+        };
+        if long.strip_prefix(court).is_some_and(|r| r.starts_with('.')) {
+            return Err(EsError::mapper_parsing(format!(
+                "[{court}] est declare a la fois comme champ et comme objet (avec [{long}])"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Repose un chemin pointe dans l'arbre `properties` d'une reponse `_mapping`.
+fn niche(props: &mut Map<String, Value>, chemin: &str, feuille: Value) {
+    match chemin.split_once('.') {
+        None => {
+            props.insert(chemin.to_string(), feuille);
+        }
+        Some((tete, reste)) => {
+            let entree = props
+                .entry(tete.to_string())
+                .or_insert_with(|| json!({"properties": {}}));
+            let sous = entree
+                .as_object_mut()
+                .and_then(|o| o.get_mut("properties"))
+                .and_then(Value::as_object_mut)
+                .expect("un prefixe de chemin est toujours un objet");
+            niche(sous, reste, feuille);
+        }
     }
 }
 
@@ -336,11 +455,6 @@ fn parse_field_mapping(name: &str, spec: &Value, sous_champ: bool) -> EsResult<F
                         })?,
                 );
             }
-            "properties" => {
-                return Err(EsError::unsupported(format!(
-                    "ferrite ne supporte pas les champs objet/imbriques (champ [{name}])"
-                )))
-            }
             other => {
                 return Err(EsError::unsupported(format!(
                     "ferrite ne supporte pas le parametre de champ [{other}] (champ [{name}]) ; \
@@ -371,17 +485,62 @@ fn parse_field_mapping(name: &str, spec: &Value, sous_champ: bool) -> EsResult<F
     })
 }
 
-/// Le champ porte-t-il un objet, directement ou dans un tableau ?
+/// Parcourt un document en profondeur et appelle `f` sur chaque **feuille**,
+/// avec son chemin pointe.
 ///
-/// `infer` rend `None` sur un objet — sans ce test, un document dont un champ
-/// vaut `[{...}]` serait **accepte en silence** : conserve dans `_source`,
-/// absent du mapping, donc introuvable. C'est exactement l'echec silencieux que
-/// ce projet refuse ; l'objet nu, lui, etait deja rejete.
-pub fn contient_un_objet(value: &Value) -> bool {
-    match value {
-        Value::Object(_) => true,
-        Value::Array(a) => a.iter().any(contient_un_objet),
-        _ => false,
+/// C'est la traduction, cote document, du choix fait cote mapping : un objet
+/// n'est pas une valeur indexable, ses feuilles le sont.
+/// `{"client": {"ville": "Lyon"}}` appelle `f("client.ville", "Lyon")`.
+///
+/// Un tableau d'objets est **aplati**, comme chez Elasticsearch :
+/// `{"l": [{"ref": "A"}, {"ref": "B"}]}` appelle `f("l.ref", "A")` puis
+/// `f("l.ref", "B")` — le champ devient multivalue et la correspondance entre
+/// sous-champs d'un meme element est perdue. C'est precisement ce que le type
+/// `nested` existe pour conserver.
+pub fn parcours_feuilles(
+    obj: &Map<String, Value>,
+    f: &mut impl FnMut(&str, &Value) -> EsResult<()>,
+) -> EsResult<()> {
+    fn descend(
+        chemin: &str,
+        valeur: &Value,
+        f: &mut impl FnMut(&str, &Value) -> EsResult<()>,
+    ) -> EsResult<()> {
+        match valeur {
+            Value::Object(o) => {
+                for (nom, v) in o {
+                    descend(&joins(chemin, nom), v, f)?;
+                }
+                Ok(())
+            }
+            Value::Array(a) if a.iter().any(Value::is_object) => {
+                if a.iter().any(|v| !v.is_object() && !v.is_null()) {
+                    return Err(EsError::mapper_parsing(format!(
+                        "[{chemin}] melange des objets et des valeurs dans le meme tableau"
+                    )));
+                }
+                for v in a {
+                    if !v.is_null() {
+                        descend(chemin, v, f)?;
+                    }
+                }
+                Ok(())
+            }
+            v => f(chemin, v),
+        }
+    }
+
+    for (nom, valeur) in obj {
+        descend(nom, valeur, f)?;
+    }
+    Ok(())
+}
+
+fn joins(prefixe: &str, nom: &str) -> String {
+    if prefixe.is_empty() {
+        nom.to_string()
+    } else {
+        format!("{prefixe}.{nom}")
     }
 }
 
@@ -440,23 +599,6 @@ fn validate_field_name_part(name: &str, chemin: &str) -> EsResult<()> {
     if name.contains('.') {
         return Err(EsError::unsupported(format!(
             "ferrite ne supporte pas les noms de champ pointes (champ [{chemin}])"
-        )));
-    }
-    Ok(())
-}
-
-fn validate_field_name(name: &str) -> EsResult<()> {
-    if name.is_empty() {
-        return Err(EsError::mapper_parsing("nom de champ vide"));
-    }
-    if name.starts_with('_') {
-        return Err(EsError::mapper_parsing(format!(
-            "[{name}] : les noms de champ commencant par [_] sont reserves"
-        )));
-    }
-    if name.contains('.') {
-        return Err(EsError::unsupported(format!(
-            "ferrite ne supporte pas les noms de champ pointes (champ [{name}])"
         )));
     }
     Ok(())
@@ -817,18 +959,56 @@ mod tests {
         assert_eq!(fm.fields["keyword"].ignore_above, Some(256));
     }
 
+    fn feuilles(v: Value) -> Vec<(String, Value)> {
+        let mut out = Vec::new();
+        parcours_feuilles(v.as_object().unwrap(), &mut |chemin, valeur| {
+            out.push((chemin.to_string(), valeur.clone()));
+            Ok(())
+        })
+        .unwrap();
+        out
+    }
+
     #[test]
-    fn un_objet_se_reconnait_meme_dans_un_tableau() {
-        // `infer` rend `None` dans les deux cas ; c'est ce test qui distingue
-        // « pas de type » de « type refuse », et donc l'erreur explicite de
-        // l'acceptation en silence.
-        assert!(contient_un_objet(&json!({"a": 1})));
-        assert!(contient_un_objet(&json!([{"a": 1}])));
-        assert!(contient_un_objet(&json!([null, [{"a": 1}]])));
-        assert!(!contient_un_objet(&json!([1, 2])));
-        assert!(!contient_un_objet(&json!([])));
-        assert!(!contient_un_objet(&json!("a")));
-        assert!(!contient_un_objet(&json!(null)));
+    fn un_document_se_parcourt_par_chemins() {
+        assert_eq!(
+            // L'ordre est celui du document (`serde_json` preserve les cles).
+            feuilles(json!({"titre": "a", "client": {"ville": "Lyon", "cp": 69}})),
+            vec![
+                ("titre".into(), json!("a")),
+                ("client.ville".into(), json!("Lyon")),
+                ("client.cp".into(), json!(69)),
+            ]
+        );
+        // Profondeur quelconque.
+        assert_eq!(
+            feuilles(json!({"a": {"b": {"c": 1}}})),
+            vec![("a.b.c".into(), json!(1))]
+        );
+        // Un tableau d'objets est aplati : deux valeurs pour le meme chemin,
+        // comme chez ES — c'est ce que `nested` existe pour eviter.
+        assert_eq!(
+            feuilles(json!({"l": [{"ref": "A"}, {"ref": "B"}]})),
+            vec![("l.ref".into(), json!("A")), ("l.ref".into(), json!("B"))]
+        );
+        // Un tableau de scalaires reste une seule feuille multivaluee.
+        assert_eq!(
+            feuilles(json!({"tags": ["a", "b"]})),
+            vec![("tags".into(), json!(["a", "b"]))]
+        );
+        // Une cle deja pointee est un chemin, comme chez ES.
+        assert_eq!(
+            feuilles(json!({"client.ville": "Lyon"})),
+            vec![("client.ville".into(), json!("Lyon"))]
+        );
+    }
+
+    #[test]
+    fn un_tableau_ne_melange_pas_objets_et_valeurs() {
+        let mut rien = |_: &str, _: &Value| Ok(());
+        let v = json!({"l": [{"ref": "A"}, 42]});
+        let err = parcours_feuilles(v.as_object().unwrap(), &mut rien).unwrap_err();
+        assert!(err.reason.contains("melange"), "{}", err.reason);
     }
 
     const UNSUPPORTED_TY: &str = crate::error::UNSUPPORTED;
