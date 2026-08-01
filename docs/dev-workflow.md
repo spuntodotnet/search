@@ -27,13 +27,59 @@ Toutes depuis la **racine** du repo.
 |---|---|
 | `cargo run` | Lance le serveur sur `:9200` |
 | `cargo build --release` | Build optimisé |
-| `cargo test` | Tests unitaires + intégration |
+| `cargo test` | Tests unitaires + intégration (dont concurrence : ~6 s) |
 | `cargo clippy --all-targets -- -D warnings` | Lint, **zéro warning toléré** |
 | `cargo fmt --check` | Vérifie le formatage (`cargo fmt` pour corriger) |
+| `./tests/compat/run.sh` | **Le harnais de compat** : compile, lance ferrite sur un port jetable, et l'exerce avec le client Elasticsearch officiel (critère d'acceptation + suite complète) |
+| `python3 tests/compat/diff_against_es.py` | Compare la **forme** des réponses à celles d'un vrai ES (voir plus bas) |
+| `python3 tests/compat/diff_relevance.py` | Compare les **résultats et leur ordre** à ceux d'un vrai ES, sur 600 documents |
+| `python3 tests/compat/diff_aggs.py` | Compare les **agrégations** à celles d'un vrai ES, champ par champ |
+| `python3 tests/compat/diff_analyzers.py` | Compare les **analyzers** à ceux d'un vrai ES, token par token |
+| `./tests/compat/measure_container.sh [tag]` | Ne construit rien, mesure une image déjà buildée : taille, RSS au repos, temps de démarrage |
+| `docker build -t ferrite .` | Image minimale (`scratch` + binaire statique musl) |
 
-Tant que ces commandes n'existent pas (repo pas encore initialisé), c'est à la
-première itération de les créer — **et de mettre ce tableau à jour dans la même
-PR**. Ce fichier doit toujours décrire les commandes réelles du repo.
+Le harnais de compat installe le client officiel dans un venv (`.venv-compat/`)
+s'il n'est pas déjà disponible. Il accepte `FERRITE_PORT` (port d'écoute) et
+`FERRITE_URL` (viser un serveur déjà lancé, sans rien compiler).
+
+Ce fichier doit toujours décrire les commandes réelles du repo : une PR qui
+change ces commandes met ce tableau à jour dans la même PR.
+
+### Comparer à un vrai Elasticsearch
+
+Le moyen le plus rapide de trouver un écart, c'est de faire répondre les deux
+serveurs à la même question :
+
+```bash
+docker run -d --name es-ref -p 9201:9200 \
+  -e discovery.type=single-node -e xpack.security.enabled=false \
+  -e ES_JAVA_OPTS="-Xms512m -Xmx512m" \
+  docker.elastic.co/elasticsearch/elasticsearch:8.15.0
+
+cargo run &                                     # ferrite sur :9200
+python3 tests/compat/diff_against_es.py         # la forme des réponses
+python3 tests/compat/diff_relevance.py          # les résultats et leur ordre
+```
+
+Deux comparateurs, qui ne cherchent pas la même chose :
+
+| Script | Ce qu'il compare |
+|---|---|
+| `tests/compat/diff_against_es.py` | la **forme** des réponses — champ par champ, sur une quarantaine d'appels, après neutralisation des valeurs qui ne peuvent pas coïncider (durées, uuid, scores) |
+| `tests/compat/diff_relevance.py` | la **pertinence** — même corpus de 600 documents des deux côtés, ~115 requêtes générées, et pour chacune : même total, mêmes documents, **même ordre** |
+| `tests/compat/diff_aggs.py` | les **agrégations** — 34 requêtes, comparaison du JSON champ par champ, clés comprises |
+| `tests/compat/diff_analyzers.py` | les **analyzers** — chaque analyzer intégré confronté à son homonyme d'ES sur 28 textes, token par token |
+
+Le second est celui qui compte pour un moteur de recherche : l'ordre des
+résultats est précisément ce qu'un test écrit à la main ne sait pas vérifier,
+puisqu'on l'écrirait avec la même idée fausse que le code. Il signale un écart
+d'ordre sauf s'il ne porte que sur des documents qu'Elasticsearch lui-même
+classe ex æquo.
+
+Le corpus vit dans `tests/compat/corpus.py` et est généré avec une graine fixe :
+un écart constaté est toujours reproductible.
+
+Ce sont des outils de développement, pas des tests de CI : ils exigent Docker.
 
 ## La règle qui prime sur tout : la compatibilité se prouve, elle ne se déclare pas
 
