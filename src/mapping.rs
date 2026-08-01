@@ -15,6 +15,7 @@ use tantivy::schema::{
 };
 use tantivy::{DateTime, Term};
 
+use crate::analysis::{self, Analyzer};
 use crate::error::{EsError, EsResult};
 
 /// Champs internes du schema tantivy. Prefixes par `_` — un mapping utilisateur
@@ -24,12 +25,6 @@ pub const F_SOURCE: &str = "_source";
 pub const F_VERSION: &str = "_version";
 pub const F_SEQ_NO: &str = "_seq_no";
 
-/// Le tokenizer applique aux champs `text`.
-///
-/// `default` de tantivy = decoupe sur les non-alphanumeriques + minuscules +
-/// rejet des tokens > 40 caracteres. Proche de l'analyzer `standard` d'ES pour
-/// du texte latin, pas identique (voir `docs/compat.md`).
-pub const TEXT_TOKENIZER: &str = "default";
 /// Tokenizer des champs `keyword` : la valeur entiere, telle quelle.
 pub const RAW_TOKENIZER: &str = "raw";
 
@@ -117,6 +112,8 @@ pub enum FieldKind {
 #[derive(Debug, Clone)]
 pub struct FieldMapping {
     pub ty: FieldType,
+    /// L'analyzer d'un champ `text`. `None` = celui par defaut (`standard`).
+    pub analyzer: Option<Analyzer>,
     /// Les multi-fields : le meme contenu indexe autrement, sous
     /// `parent.sous_champ`. ES n'en autorise qu'un niveau.
     pub fields: BTreeMap<String, FieldMapping>,
@@ -130,14 +127,23 @@ impl FieldMapping {
     pub fn new(ty: FieldType) -> Self {
         Self {
             ty,
+            analyzer: None,
             fields: BTreeMap::new(),
             ignore_above: None,
         }
     }
 
+    /// L'analyzer effectif d'un champ `text`.
+    pub fn analyzer(&self) -> Analyzer {
+        self.analyzer.unwrap_or_default()
+    }
+
     fn to_json(&self) -> Value {
         let mut o = Map::new();
         o.insert("type".into(), json!(self.ty.name()));
+        if let Some(a) = self.analyzer {
+            o.insert("analyzer".into(), json!(a.name()));
+        }
         if let Some(n) = self.ignore_above {
             o.insert("ignore_above".into(), json!(n));
         }
@@ -279,6 +285,7 @@ fn parse_field_mapping(name: &str, spec: &Value, sous_champ: bool) -> EsResult<F
     let mut ty = None;
     let mut fields = BTreeMap::new();
     let mut ignore_above = None;
+    let mut analyzer = None;
 
     for (key, val) in obj {
         match key.as_str() {
@@ -312,6 +319,12 @@ fn parse_field_mapping(name: &str, spec: &Value, sous_champ: bool) -> EsResult<F
                     );
                 }
             }
+            "analyzer" => {
+                let nom = val.as_str().ok_or_else(|| {
+                    EsError::mapper_parsing(format!("[{name}.analyzer] doit etre une chaine"))
+                })?;
+                analyzer = Some(analysis::parse_declaration(nom, name)?);
+            }
             "ignore_above" => {
                 ignore_above = Some(
                     val.as_u64()
@@ -331,7 +344,7 @@ fn parse_field_mapping(name: &str, spec: &Value, sous_champ: bool) -> EsResult<F
             other => {
                 return Err(EsError::unsupported(format!(
                     "ferrite ne supporte pas le parametre de champ [{other}] (champ [{name}]) ; \
-                     parametres acceptes : type, fields, ignore_above"
+                     parametres acceptes : type, analyzer, fields, ignore_above"
                 )))
             }
         }
@@ -345,8 +358,14 @@ fn parse_field_mapping(name: &str, spec: &Value, sous_champ: bool) -> EsResult<F
             "[{name}] : [ignore_above] ne s'applique qu'a un champ [keyword]"
         )));
     }
+    if analyzer.is_some() && ty.kind() != FieldKind::Text {
+        return Err(EsError::mapper_parsing(format!(
+            "[{name}] : [analyzer] ne s'applique qu'a un champ [text]"
+        )));
+    }
     Ok(FieldMapping {
         ty,
+        analyzer,
         fields,
         ignore_above,
     })
@@ -382,6 +401,7 @@ pub fn infer(value: &Value) -> Option<FieldMapping> {
                 "keyword".to_string(),
                 FieldMapping {
                     ty: FieldType::Keyword,
+                    analyzer: None,
                     fields: BTreeMap::new(),
                     ignore_above: Some(256),
                 },
@@ -434,6 +454,8 @@ pub struct MappedField {
     pub field: Field,
     pub ty: FieldType,
     pub ignore_above: Option<usize>,
+    /// L'analyzer a appliquer aux requetes sur ce champ.
+    pub analyzer: Analyzer,
 }
 
 /// Les handles tantivy resolus une fois pour toutes a l'ouverture de l'index.
@@ -485,9 +507,10 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
                 .map(|(sub, decl)| (format!("{name}.{sub}"), decl)),
         ) {
             let entry = MappedField {
-                field: add_field(&mut b, &chemin, decl.ty),
+                field: add_field(&mut b, &chemin, decl.ty, decl.analyzer()),
                 ty: decl.ty,
                 ignore_above: decl.ignore_above,
+                analyzer: decl.analyzer(),
             };
             mapped.insert(chemin, entry);
             cibles.push(entry);
@@ -508,12 +531,12 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
     )
 }
 
-fn add_field(b: &mut SchemaBuilder, name: &str, ty: FieldType) -> Field {
+fn add_field(b: &mut SchemaBuilder, name: &str, ty: FieldType, analyzer: Analyzer) -> Field {
     match ty.kind() {
         FieldKind::Text => {
             let opts = TextOptions::default().set_indexing_options(
                 TextFieldIndexing::default()
-                    .set_tokenizer(TEXT_TOKENIZER)
+                    .set_tokenizer(analyzer.tokenizer())
                     .set_index_option(IndexRecordOption::WithFreqsAndPositions),
             );
             b.add_text_field(name, opts)

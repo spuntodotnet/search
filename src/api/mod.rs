@@ -72,6 +72,16 @@ pub fn router(state: SharedState) -> Router {
             get(indices::get_mapping).put(indices::put_mapping),
         )
         .route(
+            "/_analyze",
+            post(|s, u, b| indices::analyze(s, None, u, b))
+                .get(|s, u, b| indices::analyze(s, None, u, b)),
+        )
+        .route(
+            "/{index}/_analyze",
+            post(|s, p, u, b| indices::analyze(s, Some(p), u, b))
+                .get(|s, p, u, b| indices::analyze(s, Some(p), u, b)),
+        )
+        .route(
             "/{index}/_refresh",
             post(indices::refresh).get(indices::refresh),
         )

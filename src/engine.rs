@@ -618,6 +618,7 @@ fn construire_generation(
 
     let (schema, fields) = mapping::build_schema(&mapping);
     let index = Index::create_in_dir(&gen_dir, schema)?;
+    crate::analysis::register_all(index.tokenizers());
     let writer: IndexWriter = index.writer_with_num_threads(1, WRITER_HEAP)?;
     let reader: IndexReader = index
         .reader_builder()
@@ -701,6 +702,7 @@ fn open_index(dir: &Path, name: &str) -> EsResult<FerriteIndex> {
     let gen_dir = dir.join(format!("{INDEX_DIR_PREFIX}{seq}"));
     let (schema, fields) = mapping::build_schema(&mapping);
     let index = Index::open_in_dir(&gen_dir)?;
+    crate::analysis::register_all(index.tokenizers());
     if index.schema() != schema {
         return Err(EsError::internal(format!(
             "[{name}] : le schema sur disque ne correspond pas au mapping enregistre"

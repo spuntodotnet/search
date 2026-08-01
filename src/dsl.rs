@@ -15,9 +15,10 @@ use tantivy::query::{
 use tantivy::schema::IndexRecordOption;
 use tantivy::Index;
 
+use crate::analysis::Analyzer;
 use crate::dismax::DisMaxQuery;
 use crate::error::{EsError, EsResult};
-use crate::mapping::{self, FieldKind, Fields, MappedField, TEXT_TOKENIZER};
+use crate::mapping::{self, FieldKind, Fields, MappedField};
 
 /// Ce dont la traduction a besoin : le schema resolu et l'index (pour les
 /// tokenizers).
@@ -46,10 +47,14 @@ impl QueryCtx<'_> {
     ///
     /// Rend les positions en plus des termes : `match_phrase` en a besoin, et
     /// elles ne sont pas toujours consecutives (l'analyzer peut jeter un token).
-    fn analyze(&self, text: &str) -> EsResult<Vec<(usize, String)>> {
-        let mut analyzer = self.index.tokenizers().get(TEXT_TOKENIZER).ok_or_else(|| {
-            EsError::internal(format!("tokenizer [{TEXT_TOKENIZER}] introuvable"))
-        })?;
+    fn analyze(&self, text: &str, analyzer: Analyzer) -> EsResult<Vec<(usize, String)>> {
+        let mut analyzer = self
+            .index
+            .tokenizers()
+            .get(analyzer.tokenizer())
+            .ok_or_else(|| {
+                EsError::internal(format!("analyzer [{}] introuvable", analyzer.name()))
+            })?;
         let mut stream = analyzer.token_stream(text);
         let mut out = Vec::new();
         while stream.advance() {
@@ -128,10 +133,15 @@ fn field_match(
     clause: &str,
     ctx: &QueryCtx,
 ) -> EsResult<Box<dyn Query>> {
-    let MappedField { field, ty, .. } = ctx.field(field_name, clause)?;
+    let MappedField {
+        field,
+        ty,
+        analyzer,
+        ..
+    } = ctx.field(field_name, clause)?;
     Ok(match ty.kind() {
         FieldKind::Text => {
-            let tokens = ctx.analyze(&query_text(field_name, value, clause)?)?;
+            let tokens = ctx.analyze(&query_text(field_name, value, clause)?, analyzer)?;
             match tokens.len() {
                 0 => Box::new(EmptyQuery),
                 1 => Box::new(TermQuery::new(
@@ -313,7 +323,12 @@ fn multi_match_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
 fn match_phrase_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     let obj = as_object(body, "match_phrase")?;
     let (field_name, spec) = single_key(obj, "match_phrase")?;
-    let MappedField { field, ty, .. } = ctx.field(field_name, "match_phrase")?;
+    let MappedField {
+        field,
+        ty,
+        analyzer,
+        ..
+    } = ctx.field(field_name, "match_phrase")?;
 
     let (value, slop, boost_value) = match spec {
         Value::Object(o) => {
@@ -334,7 +349,7 @@ fn match_phrase_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> 
 
     let inner: Box<dyn Query> = match ty.kind() {
         FieldKind::Text => {
-            let tokens = ctx.analyze(&query_text(field_name, &value, "match_phrase")?)?;
+            let tokens = ctx.analyze(&query_text(field_name, &value, "match_phrase")?, analyzer)?;
             match tokens.len() {
                 0 => Box::new(EmptyQuery),
                 // Une phrase d'un seul terme est un `term` : tantivy exige au

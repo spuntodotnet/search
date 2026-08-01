@@ -16,6 +16,7 @@
 //!   d'erreur. Ne contient aucune logique de moteur.
 
 pub mod aggs;
+pub mod analysis;
 pub mod api;
 pub mod dismax;
 pub mod dsl;

@@ -42,6 +42,7 @@ Version d'API annoncée : **Elasticsearch 8.15.0** (`version.number`,
 | `GET /{index}/_mapping` | ✅ | |
 | `PUT /{index}/_mapping` | ❌ | ajouter un champ passe par l'indexation d'un document (mapping dynamique) |
 | `POST /{index}/_refresh` | ✅ | |
+| `POST\|GET /_analyze`, `/{index}/_analyze` | 🟡 | `text` (chaîne ou liste), `analyzer`, `field`. `tokenizer` / `filter` / `char_filter` explicites : ❌ |
 | Mapping dynamique | ✅ | `dynamic` : `true` (défaut), `false`, `strict`. `runtime` ❌. Voir plus bas |
 | Alias, templates, ILM, `_settings`, `_close`, `_open` | ❌ | |
 
@@ -86,6 +87,40 @@ avant que `ferrite.json` ne la désigne (écriture atomique par renommage), et u
 écriture en cours empêche la bascule le temps qu'elle se termine. Les générations
 remplacées ne sont effacées que lorsque plus aucune recherche ne les tient.
 
+### Analyzers
+
+Chaque analyzer intégré est comparé **token par token** à son homonyme d'ES sur
+28 textes français et anglais (`tests/compat/diff_analyzers.py`).
+
+| Analyzer | État |
+|---|---|
+| `standard` (défaut) | ✅ identique à ES sur les 28 textes |
+| `simple` | ✅ identique |
+| `whitespace` | ✅ identique |
+| `keyword` | ✅ identique |
+| `stop` | ✅ identique |
+| `french`, `english`, `snowball` et les autres analyzers de langue | ❌ **refus assumé** |
+| Analyzers sur mesure (`settings.analysis`) | ❌ |
+
+**Pourquoi les analyzers de langue sont refusés.** Ils reposent sur un stemmer,
+et celui de tantivy (Snowball) n'est pas celui de Lucene (stemmer *léger* pour
+le français, Porter pour l'anglais). Mesuré sur les mêmes 28 textes : **17
+donnent des termes différents en `french`, 19 en `english`**. Par exemple
+« Horla » devient `horl` chez tantivy et `horla` chez ES, « mineurs » `mineur`
+contre `mineu`, « arriviste » `arriv` contre `arivist`.
+
+Porter le nom d'ES en indexant autre chose changerait silencieusement le
+comportement d'un mapping existant — précisément ce que ce projet refuse. Les
+supporter demande de porter les stemmers de Lucene, ce qui mérite sa propre
+itération.
+
+**Ce que la comparaison a corrigé au passage.** `standard` — l'analyzer **par
+défaut** — découpait `l'ascension` en `l` et `ascension`, là où ES garde
+`l'ascension` en un seul terme : tout texte français était donc indexé
+différemment. ferrite applique désormais les frontières de mots d'Unicode
+(UAX#29), celles de Lucene. `stop`, lui, se construit chez ES sur le tokenizer
+« lettres » et non sur `standard` (les chiffres sont donc des séparateurs).
+
 ### Types de champ
 
 | Type ES | État | Traduction tantivy |
@@ -99,9 +134,10 @@ remplacées ne sont effacées que lorsque plus aucune recherche ne les tient.
 | Tableaux de valeurs | ✅ | tout champ accepte une valeur ou un tableau |
 | `null` | ✅ | ignoré à l'indexation, comme chez ES (pas de `null_value`) |
 | Tout autre type (`geo_point`, `nested`, `object`, `ip`, `binary`…) | ❌ | |
+| `analyzer` | 🟡 | sur un champ `text` : `standard` (défaut), `simple`, `whitespace`, `keyword`, `stop` — voir la section dédiée |
 | Multi-fields (`fields`) | ✅ | un seul niveau, comme ES. `titre.keyword` s'interroge et se trie comme un champ à part entière |
 | `ignore_above` | ✅ | sur un `keyword` : au-delà, la valeur reste dans `_source` sans être indexée |
-| Autres paramètres de champ (`analyzer`, `index`, `format`, `null_value`, `doc_values`…) | ❌ | acceptés : `type`, `fields`, `ignore_above` |
+| Autres paramètres de champ (`index`, `format`, `null_value`, `doc_values`…) | ❌ | acceptés : `type`, `analyzer`, `fields`, `ignore_above` |
 | Noms de champ pointés (`a.b`) ou préfixés `_` | ❌ | |
 
 ## Ingestion

@@ -177,6 +177,102 @@ pub async fn put_mapping(Path(index): Path<String>) -> EsError {
     ))
 }
 
+/// `POST|GET /{index}/_analyze` et `/_analyze` — montre comment un texte est
+/// decoupe en termes.
+///
+/// C'est l'API qui rend l'analyse **verifiable** : le meme appel sur ferrite et
+/// sur Elasticsearch doit rendre les memes tokens, et
+/// `tests/compat/diff_analyzers.py` s'en sert pour le mesurer.
+pub async fn analyze(
+    State(st): State<SharedState>,
+    index: Option<Path<String>>,
+    uri: Uri,
+    body: Bytes,
+) -> EsResult<Json> {
+    Params::parse(&uri).done()?;
+    let body = parse_body(&body)?;
+    let obj = body
+        .as_object()
+        .ok_or_else(|| EsError::parsing("le corps de [_analyze] doit etre un objet"))?;
+    expect_only(obj, &["text", "analyzer", "field"], "_analyze")?;
+
+    let textes: Vec<String> = match obj.get("text") {
+        Some(Value::String(s)) => vec![s.clone()],
+        Some(Value::Array(a)) => a
+            .iter()
+            .map(|v| {
+                v.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| EsError::illegal_argument("[_analyze.text] : chaines attendues"))
+            })
+            .collect::<EsResult<_>>()?,
+        _ => {
+            return Err(EsError::illegal_argument(
+                "[_analyze] : [text] est obligatoire",
+            ))
+        }
+    };
+
+    // Soit un analyzer nomme, soit celui d'un champ de l'index.
+    let (analyzer, gen) = match (obj.get("analyzer"), obj.get("field")) {
+        (Some(_), Some(_)) => {
+            return Err(EsError::illegal_argument(
+                "[_analyze] : [analyzer] et [field] sont exclusifs",
+            ))
+        }
+        (Some(a), None) => {
+            let nom = a.as_str().ok_or_else(|| {
+                EsError::illegal_argument("[_analyze.analyzer] : chaine attendue")
+            })?;
+            let gen = match &index {
+                Some(Path(nom_index)) => Some(st.catalog.get(nom_index)?.current()),
+                None => None,
+            };
+            (crate::analysis::parse_declaration(nom, "_analyze")?, gen)
+        }
+        (None, Some(f)) => {
+            let Path(nom_index) = index.as_ref().ok_or_else(|| {
+                EsError::illegal_argument("[_analyze.field] exige un index dans l'URL")
+            })?;
+            let champ = f
+                .as_str()
+                .ok_or_else(|| EsError::illegal_argument("[_analyze.field] : chaine attendue"))?;
+            let gen = st.catalog.get(nom_index)?.current();
+            let mapped = gen.fields.get(champ).ok_or_else(|| {
+                EsError::illegal_argument(format!("[_analyze] : champ [{champ}] inconnu"))
+            })?;
+            (mapped.analyzer, Some(gen))
+        }
+        (None, None) => (crate::analysis::Analyzer::default(), None),
+    };
+
+    // Sans index, on se sert d'un gestionnaire de tokenizers autonome.
+    let manager = match &gen {
+        Some(g) => g.index.tokenizers().clone(),
+        None => {
+            let m = tantivy::tokenizer::TokenizerManager::default();
+            crate::analysis::register_all(&m);
+            m
+        }
+    };
+
+    let mut tokens = Vec::new();
+    let mut decalage = 0usize;
+    for texte in &textes {
+        for t in crate::analysis::analyser(&manager, analyzer, texte)? {
+            tokens.push(json!({
+                "token": t.text,
+                "start_offset": decalage + t.start_offset,
+                "end_offset": decalage + t.end_offset,
+                "type": "<ALPHANUM>",
+                "position": t.position,
+            }));
+        }
+        decalage += texte.chars().count();
+    }
+    Ok(Json::ok(json!({"tokens": tokens})))
+}
+
 /// `POST /{index}/_refresh`
 pub async fn refresh(
     State(st): State<SharedState>,
