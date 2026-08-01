@@ -79,7 +79,7 @@ async fn write_one(
             "le corps du document doit etre un objet JSON",
         ));
     }
-    let idx = st.catalog.get(&index)?;
+    let idx = st.catalog.get_or_create(&index)?;
     let id = id.unwrap_or_else(util::random_uuid);
 
     let outcome = {
@@ -277,7 +277,7 @@ pub async fn update_doc(
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
-    let idx = st.catalog.get(&index)?;
+    let idx = st.catalog.get_or_create(&index)?;
     let (outcome, resultat) = {
         let idx = idx.clone();
         let id = id.clone();
@@ -613,7 +613,11 @@ fn execute_action(
     let id = action.id.clone().unwrap_or_else(util::random_uuid);
 
     let result = (|| -> EsResult<(StatusCode, &str, WriteOutcome)> {
-        let idx = catalog.get(&action.index)?;
+        let idx = if action.op == "delete" {
+            catalog.get(&action.index)?
+        } else {
+            catalog.get_or_create(&action.index)?
+        };
         match action.op.as_str() {
             "delete" => {
                 let out = idx.delete_doc(&id, WriteOptions::default())?;

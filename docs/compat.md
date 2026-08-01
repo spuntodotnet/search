@@ -22,12 +22,12 @@ Version d'API annoncée : **Elasticsearch 8.15.0** (`version.number`,
 
 | | ferrite | ES 7.10.2 (validation du runner) |
 |---|---|---|
-| réussis | 24 | 537 |
-| refusés explicitement (hors périmètre) | 305 | 0 |
-| sautés (version, fonctionnalité du runner) | 96 | 103 |
-| **échecs** | **218** | 3 |
+| réussis | 44 | 537 |
+| refusés explicitement (hors périmètre) | 333 | 0 |
+| sautés (version, fonctionnalité du runner) | 97 | 103 |
+| **échecs** | **169** | 3 |
 
-Les 218 échecs sont l'inventaire des écarts qui restent — les plus gros sont
+Les 169 échecs sont l'inventaire des écarts qui restent — les plus gros sont
 listés dans [`conformance.md`](conformance.md). C'est la mesure la moins
 complaisante du projet : les cas viennent d'Elastic, pas de nous.
 
@@ -49,6 +49,8 @@ complaisante du projet : les cas viennent d'Elastic, pas de nous.
 
 | | État | Détail |
 |---|---|---|
+| Création à l'écriture | ✅ | indexer dans un index absent le **crée**, comme ES (`action.auto_create_index`) : `index`, `create`, `update`, et le `_bulk`. La lecture, la recherche et la suppression rendent toujours 404 |
+| `POST /_refresh`, `GET /_mapping`, `_all` / `*` sur ces routes | ✅ | les formes sans index portent sur tous les index. La **recherche** continue de refuser les motifs : y répondre demanderait de fusionner des mappings différents |
 | `PUT /{index}` | 🟡 | `mappings` est **optionnel** (les champs viendront des documents). `settings` limité à `number_of_shards` / `number_of_replicas` (acceptés, sans effet : ferrite est mono-shard). `aliases` doit être vide |
 | `DELETE /{index}` | ✅ | `ignore_unavailable` honoré |
 | `HEAD /{index}` | ✅ | |

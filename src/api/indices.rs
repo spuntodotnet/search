@@ -162,10 +162,40 @@ pub async fn get_mapping(
     uri: Uri,
 ) -> EsResult<Json> {
     Params::parse(&uri).done()?;
-    let idx = st.catalog.get(&index)?;
-    Ok(Json::ok(json!({
-        index.as_str(): {"mappings": idx.mapping().to_json()}
-    })))
+    let mut out = serde_json::Map::new();
+    for idx in cibles(&st, &index)? {
+        out.insert(
+            idx.name.clone(),
+            json!({"mappings": idx.mapping().to_json()}),
+        );
+    }
+    Ok(Json::ok(Value::Object(out)))
+}
+
+/// `GET /_mapping` — tous les index, comme `_all`.
+pub async fn get_mapping_all(State(st): State<SharedState>, uri: Uri) -> EsResult<Json> {
+    get_mapping(State(st), Path("_all".to_string()), uri).await
+}
+
+/// `POST /_refresh` — tous les index.
+pub async fn refresh_all(State(st): State<SharedState>, uri: Uri) -> EsResult<Json> {
+    refresh(State(st), Path("_all".to_string()), uri).await
+}
+
+/// Les index vises par un nom de route.
+///
+/// `_all` et `*` designent tous les index — c'est ce qu'attendent les routes
+/// administratives (`_refresh`, `_mapping`). La **recherche**, elle, continue
+/// de refuser les motifs : y repondre demanderait de fusionner des resultats
+/// venus de mappings differents, et c'est la que se cachent les resultats faux.
+fn cibles(
+    st: &SharedState,
+    nom: &str,
+) -> EsResult<Vec<std::sync::Arc<crate::engine::FerriteIndex>>> {
+    if nom == "_all" || nom == "*" {
+        return Ok(st.catalog.list());
+    }
+    Ok(vec![st.catalog.get(nom)?])
 }
 
 /// `PUT /{index}/_mapping` — ajoute des champs au mapping.
@@ -301,9 +331,14 @@ pub async fn refresh(
     uri: Uri,
 ) -> EsResult<Json> {
     Params::parse(&uri).done()?;
-    let idx = st.catalog.get(&index)?;
-    tokio::task::spawn_blocking(move || idx.refresh())
-        .await
-        .map_err(|e| EsError::internal(format!("refresh: {e}")))??;
+    let index = cibles(&st, &index)?;
+    tokio::task::spawn_blocking(move || {
+        for idx in index {
+            idx.refresh()?;
+        }
+        Ok::<_, EsError>(())
+    })
+    .await
+    .map_err(|e| EsError::internal(format!("refresh: {e}")))??;
     Ok(Json::ok(json!({"_shards": super::shards_ok()})))
 }

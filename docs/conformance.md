@@ -30,10 +30,10 @@ lancé contre un **vrai Elasticsearch 7.10.2**, où il doit être quasi tout ver
 
 | | ferrite | ES 7.10.2 |
 |---|---|---|
-| réussis | 24 | **537** |
-| refusés explicitement (hors périmètre) | 305 | 0 |
-| sautés (borne de version, fonctionnalité du runner) | 96 | 103 |
-| **échecs** | **218** | **3** |
+| réussis | **44** | **537** |
+| refusés explicitement (hors périmètre) | 333 | 0 |
+| sautés (borne de version, fonctionnalité du runner) | 97 | 103 |
+| **échecs** | **169** | **3** |
 | | | sur 643 cas |
 
 Les 3 échecs côté ES sont ES lui-même (`distance_feature` sur `date` et
@@ -53,27 +53,24 @@ Les colonnes ne mesurent pas la même chose. **« refusé »** veut dire que fer
 répond « je ne sais pas faire », ce qui est le contrat ; **« échec »** veut dire
 qu'il répond autre chose qu'Elasticsearch. Seuls les seconds sont des écarts.
 
-Par ordre de poids dans les 218 :
+Le premier passage donnait 24 réussis et 218 échecs. Il en est ressorti **deux
+manques francs**, tous deux corrigés depuis — c'est ce qui fait passer le compte
+à 44 réussis et 169 échecs :
+
+| Combien | Ce que c'était | Corrigé |
+|---|---|---|
+| **58** | `no such index [test_1]` — les tests indexent sans créer l'index | ✅ l'écriture crée l'index à la volée (`index`, `create`, `update`, `_bulk`), comme ES. La **lecture** et la **suppression** rendent toujours 404, comme ES aussi |
+| **34** | `Invalid index name [_refresh]`, `[_all]`, `[_mapping]` | ✅ `POST /_refresh`, `GET /_mapping`, et `_all` / `*` sur les routes administratives |
+| **3** | `{"type": "object"}` sans `properties` refusé | ✅ accepté, l'objet ne déclare rien et ses champs viendront des documents |
+
+Ce qui reste dans les 169 :
 
 | Combien | Ce que c'est | Verdict |
 |---|---|---|
-| **58** | `no such index [test_1]` — les tests indexent sans créer l'index d'abord | **vrai manque** : ES crée l'index à la volée à l'écriture (`action.auto_create_index`), ferrite exige un `PUT /{index}` |
-| **34** | `Invalid index name [_refresh]`, `[_all]`, `[_mapping]` | **vrai manque** : les formes sans index (`POST /_refresh`, `GET /_all/_mapping`) sont prises pour un nom d'index |
-| **22** | `unknown query [intervals]` | hors périmètre — mais l'erreur ne porte pas le type `not_implemented_in_ferrite_exception`, donc elle est comptée comme un échec au lieu d'un refus |
-| **~20** | `unrecognized parameter: [version]`, `[rest_total_hits_as_int]`… | idem : refus réels, mal étiquetés |
+| **~40** | `unknown query [intervals]`, `unrecognized parameter: [version]`… | des refus **réels**, mais dont le type d'erreur imite celui d'Elasticsearch (`parsing_exception`) au lieu de porter le marqueur `not_implemented_in_ferrite_exception`. Compter juste demanderait de mentir sur le type ; on préfère la fidélité et une colonne moins flatteuse |
 | **~18** | `include_type_name`, `_type` attendu dans la réponse | la suite est celle de la 7.10 ; ces cas testent ce que la **8.x a supprimé**. Un vrai ES 8 y échoue aussi |
 | **7** | `_close` / `_open` | hors périmètre déclaré |
-| reste | agrégations, `intervals`, `collapse`, `docvalue_fields`… | hors périmètre déclaré |
-
-Autrement dit : **deux manques francs** (création d'index à l'écriture, routes
-sans index), un lot de refus qui gagneraient à porter le bon type d'erreur pour
-être comptés comme tels, et une famille de cas qui testent la 7.x là où ferrite
-annonce la 8.x.
-
-Un écart trouvé par ce passage a déjà été corrigé : `{"type": "object"}` sans
-`properties` était refusé, alors qu'Elasticsearch l'accepte (l'objet ne déclare
-rien, ses champs viendront des documents). Mapping rendu compris, c'est
-désormais identique.
+| reste | `collapse`, `docvalue_fields`, `stored_fields`, agrégations non supportées, `scroll`… | hors périmètre déclaré, voir [`compat.md`](compat.md) |
 
 ## Ce que le runner ne fait pas
 

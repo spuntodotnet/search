@@ -590,8 +590,9 @@ def bulk_statut_par_item(es):
         {"create": {"_index": INDEX, "_id": "1"}},
         {"titre": "conflit", "auteur": "x"},
         {"delete": {"_index": INDEX, "_id": "ok1"}},
-        {"index": {"_index": "index_absent", "_id": "z"}},
-        {"titre": "x"},
+        # Supprimer dans un index absent reste un 404 : seule l'ecriture cree
+        # l'index a la volee, comme chez ES.
+        {"delete": {"_index": "index_absent", "_id": "z"}},
     ], refresh=True)
     assert resp["errors"] is True
     statuses = [list(item.values())[0]["status"] for item in resp["items"]]
@@ -602,6 +603,45 @@ def bulk_statut_par_item(es):
     assert bodies[4]["error"]["type"] == "index_not_found_exception"
     # Le document valide a bien ete indexe puis supprime.
     assert not es.exists(index=INDEX, id="ok1")
+
+
+@scenario
+def index_cree_a_l_ecriture(es):
+    """Indexer dans un index absent le cree, comme chez ES — mais lire ou
+    supprimer dans un index absent reste un 404."""
+    for nom in ("auto1", "auto2", "auto3"):
+        es.options(ignore_status=404).indices.delete(index=nom)
+    es.index(index="auto1", id="1", document={"titre": "cree a la volee"}, refresh=True)
+    assert es.indices.exists(index="auto1")
+    assert es.search(index="auto1", query={"match": {"titre": "volee"}}
+                     )["hits"]["total"]["value"] == 1
+    # `_update` avec upsert cree aussi l'index ; sans upsert, le document manque.
+    es.update(index="auto2", id="1", doc={"a": 1}, doc_as_upsert=True, refresh=True)
+    assert es.get(index="auto2", id="1")["_source"] == {"a": 1}
+    refused(lambda: es.update(index="auto3", id="1", doc={"a": 1}), status=404,
+            contains="document")
+    # Le bulk aussi, sauf pour une suppression.
+    r = es.bulk(operations=[{"index": {"_index": "auto4", "_id": "1"}}, {"a": 1}],
+                refresh=True)
+    assert r["items"][0]["index"]["status"] == 201
+    refused(lambda: es.search(index="jamais_creee", query={"match_all": {}}), status=404)
+    refused(lambda: es.delete(index="jamais_creee", id="1"), status=404)
+    for nom in ("auto1", "auto2", "auto3", "auto4"):
+        es.options(ignore_status=404).indices.delete(index=nom)
+
+
+@scenario
+def routes_sans_index(es):
+    """`_refresh` et `_mapping` sans index portent sur tous, comme chez ES."""
+    for nom in ("multi1", "multi2"):
+        es.options(ignore_status=404).indices.delete(index=nom)
+        es.index(index=nom, id="1", document={"titre": "x"})
+    assert es.indices.refresh()["_shards"]["successful"] == 1
+    m = es.indices.get_mapping()
+    assert {"multi1", "multi2"} <= set(m), sorted(m)
+    assert set(es.indices.get_mapping(index="_all")) == set(m)
+    for nom in ("multi1", "multi2"):
+        es.indices.delete(index=nom)
 
 
 @scenario

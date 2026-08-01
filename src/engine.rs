@@ -803,6 +803,26 @@ impl Catalog {
             .ok_or_else(|| EsError::index_not_found(name))
     }
 
+    /// L'index, cree a la volee s'il n'existe pas encore.
+    ///
+    /// C'est le comportement d'Elasticsearch a l'ecriture
+    /// (`action.auto_create_index`, actif par defaut) : indexer dans un index
+    /// absent le cree, avec un mapping vide que les documents rempliront. La
+    /// lecture, elle, ne cree rien — `GET` et `_search` rendent toujours 404.
+    pub fn get_or_create(&self, name: &str) -> EsResult<Arc<FerriteIndex>> {
+        match self.get(name) {
+            Ok(idx) => Ok(idx),
+            Err(e) if e.ty == "index_not_found_exception" => {
+                match self.create(name, Mapping::default()) {
+                    Ok(idx) => Ok(idx),
+                    // Un autre appel a gagne la course : son index fait l'affaire.
+                    Err(_) => self.get(name),
+                }
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     pub fn exists(&self, name: &str) -> bool {
         self.indices
             .read()
