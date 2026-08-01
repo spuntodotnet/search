@@ -18,8 +18,14 @@ répondre à des requêtes `bool` + `terms` + un tri.
 | RSS au repos | > 1 Go | **2,9 Mo** |
 | Démarrage | 30-60 s | **11 ms** (~230 ms via `docker run`) |
 | Runtime | JVM + tuning heap | un binaire statique |
+| Latence de recherche (médiane / p95) | 4,90 / 7,00 ms | **1,41 / 1,98 ms** |
+| Débit (8 requêtes en vol) | 779 req/s | **1 172 req/s** |
 
-Ces chiffres sont mesurés, pas visés — voir [Le conteneur](#le-conteneur).
+Ces chiffres sont mesurés, pas visés — voir [Le conteneur](#le-conteneur) pour
+l'enveloppe, et `tests/compat/bench_vs_es.py` pour les deux dernières lignes :
+mêmes 600 documents et mêmes 138 requêtes des deux côtés, dont **137 rendent
+exactement les mêmes documents dans le même ordre** (la 138ᵉ permute deux
+ex æquo). Le banc se lance contre n'importe quel Elasticsearch, 7.x ou 8.x.
 
 L'argument n'est pas « on refait Elasticsearch en mieux ». C'est : **le code
 client existant ne change pas** (mêmes bibliothèques officielles, mêmes

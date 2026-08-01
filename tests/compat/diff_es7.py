@@ -36,7 +36,7 @@ import sys
 from elasticsearch import Elasticsearch, helpers
 
 import corpus
-from diff_relevance import requetes
+from corpus import requetes
 
 FERRITE = next((a for a in sys.argv[1:] if not a.startswith("-")), "http://localhost:9200")
 ES = next((a for a in sys.argv[1:] if not a.startswith("-")

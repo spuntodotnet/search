@@ -1,5 +1,38 @@
 # Un projet resté en Elasticsearch 7.10.2 peut-il basculer sur ferrite ?
 
+## En clair, si le contrat c'est « mêmes résultats, sans que ça rame »
+
+Une commande répond aux deux, sur vos serveurs, sans installer de client :
+
+```bash
+python3 tests/compat/bench_vs_es.py http://ferrite:9200 http://mon-es:9200
+```
+
+Mesuré contre l'instance 7.10.2 de référence (600 documents, 138 requêtes) :
+
+```
+                                  ferrite  Elasticsearch
+indexation (s)                       0.03           0.26   x9.6
+latence mediane (ms)                 1.41           4.90   x3.5
+latence p95 (ms)                     1.98           7.00   x3.5
+debit (8 en vol, req/s)              1172            779    x1.5
+
+resultats : 137/138 requetes identiques (memes documents, meme ordre)
+            1 memes documents, ordre different  (des ex aequo — voir plus bas)
+```
+
+Donc, sur ce que ferrite sait faire : **les résultats sont les mêmes, et c'est
+3 à 4 fois plus rapide**. Les mêmes chiffres contre un ES 8.15.0 donnent le
+même verdict (x3,8 en latence, x2 en débit).
+
+**Ce qui bloque n'est donc pas là.** C'est que des documents contenant des
+sous-objets (`{"client": {"ville": "Lyon"}}`) sont refusés à l'indexation : sur
+un index qui en contient, il n'y a rien à comparer parce qu'il n'y a rien à
+indexer. Tout le reste de ce fichier détaille ce point et ce qu'il faudrait pour
+le lever.
+
+---
+
 Il y a deux questions derrière celle-là, et elles n'ont pas la même réponse.
 
 | | Question | Réponse |
