@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use ferrite::engine::Catalog;
+use ferrite::engine::{Catalog, WriteOptions};
 use ferrite::mapping::Mapping;
 use serde_json::json;
 
@@ -47,20 +47,20 @@ fn un_index_survit_au_redemarrage() {
         idx.index_doc(
             "1",
             &json!({"titre": "Le Horla", "auteur": "Maupassant", "annee": 1887}),
-            false,
+            WriteOptions::default(),
         )
         .unwrap();
         // Deux ecritures sur le meme identifiant : `_version` doit valoir 2.
         idx.index_doc(
             "1",
             &json!({"titre": "Le Horla", "auteur": "Maupassant", "annee": 1888}),
-            false,
+            WriteOptions::default(),
         )
         .unwrap();
         idx.index_doc(
             "2",
             &json!({"titre": "Bel-Ami", "auteur": "Maupassant"}),
-            false,
+            WriteOptions::default(),
         )
         .unwrap();
         idx.refresh().unwrap();
@@ -77,7 +77,11 @@ fn un_index_survit_au_redemarrage() {
 
     // Les compteurs reprennent la ou ils s'etaient arretes.
     let out = idx
-        .index_doc("1", &json!({"titre": "Le Horla", "auteur": "M."}), false)
+        .index_doc(
+            "1",
+            &json!({"titre": "Le Horla", "auteur": "M."}),
+            WriteOptions::default(),
+        )
         .unwrap();
     assert_eq!(out.version, 3);
     assert!(!out.created);
@@ -104,7 +108,11 @@ fn un_champ_absent_du_mapping_est_refuse_en_strict() {
     let cat = catalog(&dir);
     let idx = cat.create("livres", mapping()).unwrap();
     let err = idx
-        .index_doc("1", &json!({"titre": "x", "inconnu": 1}), false)
+        .index_doc(
+            "1",
+            &json!({"titre": "x", "inconnu": 1}),
+            WriteOptions::default(),
+        )
         .unwrap_err();
     assert_eq!(err.ty, "strict_dynamic_mapping_exception");
     assert!(err.reason.contains("inconnu"));
@@ -119,19 +127,27 @@ fn un_champ_decouvert_fait_changer_de_generation() {
     {
         let cat = catalog(&dir);
         let idx = cat.create("livres", mapping_dynamique()).unwrap();
-        idx.index_doc("1", &json!({"titre": "Bel-Ami"}), false)
+        idx.index_doc("1", &json!({"titre": "Bel-Ami"}), WriteOptions::default())
             .unwrap();
         idx.refresh().unwrap();
 
         // Nouveau champ : le mapping grandit...
-        idx.index_doc("2", &json!({"titre": "Nana", "annee": 1880}), false)
-            .unwrap();
+        idx.index_doc(
+            "2",
+            &json!({"titre": "Nana", "annee": 1880}),
+            WriteOptions::default(),
+        )
+        .unwrap();
         idx.refresh().unwrap();
         let m = idx.mapping();
         assert_eq!(m.properties["annee"].ty.name(), "long");
         // ...et une chaine gagne son sous-champ keyword, comme chez ES.
-        idx.index_doc("3", &json!({"titre": "Germinal", "auteur": "Zola"}), false)
-            .unwrap();
+        idx.index_doc(
+            "3",
+            &json!({"titre": "Germinal", "auteur": "Zola"}),
+            WriteOptions::default(),
+        )
+        .unwrap();
         idx.refresh().unwrap();
         let m = idx.mapping();
         assert_eq!(m.properties["auteur"].ty.name(), "text");
@@ -170,8 +186,12 @@ fn dynamic_false_conserve_sans_indexer() {
     }))
     .unwrap();
     let idx = cat.create("livres", mapping).unwrap();
-    idx.index_doc("1", &json!({"titre": "Bel-Ami", "note": 5}), false)
-        .unwrap();
+    idx.index_doc(
+        "1",
+        &json!({"titre": "Bel-Ami", "note": 5}),
+        WriteOptions::default(),
+    )
+    .unwrap();
     idx.refresh().unwrap();
 
     // Le champ n'entre pas dans le mapping...

@@ -103,10 +103,11 @@ L'image finale est un `scratch` qui ne contient que le binaire statique.
 **Ce qui marche** : un client Elasticsearch officiel non modifié crée un index
 avec un mapping explicite, indexe des documents via `_bulk`, et les retrouve via
 `_search` — `match`, `multi_match`, `match_phrase`, `term`, `terms`, `range`,
-`exists`, `bool`, `match_all` — avec scoring BM25, `from`/`size`, tri, filtrage
-de `_source`, et le format de réponse exact d'ES.
+`exists`, `ids`, `prefix`, `wildcard`, `fuzzy`, `bool`, `constant_score`,
+`dis_max`, `match_all` — avec scoring BM25, `from`/`size`, tri, filtrage de
+`_source`, et le format de réponse exact d'ES.
 
-Sur un corpus de 600 documents et 114 requêtes, ferrite et un vrai
+Sur un corpus de 600 documents et 138 requêtes, ferrite et un vrai
 Elasticsearch 8.15 renvoient **les mêmes documents dans le même ordre**
 (`tests/compat/diff_relevance.py`).
 
@@ -123,8 +124,13 @@ constater. Les analyzers de langue (`french`, `english`…) sont **refusés** :
 le stemmer de tantivy n'est pas celui de Lucene, et porter le nom d'ES en
 indexant autre chose changerait silencieusement les résultats.
 
+Côté API de documents : `_update` (fusion partielle, `upsert`), `_mget`,
+`_count`, l'action `update` du `_bulk`, le versionnage optimiste
+(`if_seq_no`/`if_primary_term`) et `PUT _mapping` pour ajouter des champs.
+
 **Ce qui n'y est pas encore** : `highlight`, `search_after`, analyzers de langue
-et sur mesure, `_update`, `_mget`, `prefix` / `wildcard` / `fuzzy`.
+et sur mesure, `_update_by_query` / `_reindex`, `query_string`, recherche
+multi-index, alias.
 
 L'inventaire complet — supporté, partiel, refusé, et les divergences assumées —
 est dans [`docs/compat.md`](docs/compat.md). Rien de ce qui n'est pas supporté

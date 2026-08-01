@@ -40,7 +40,7 @@ Version d'API annoncée : **Elasticsearch 8.15.0** (`version.number`,
 | `HEAD /{index}` | ✅ | |
 | `GET /{index}` | ✅ | `aliases` / `mappings` / `settings` |
 | `GET /{index}/_mapping` | ✅ | |
-| `PUT /{index}/_mapping` | ❌ | ajouter un champ passe par l'indexation d'un document (mapping dynamique) |
+| `PUT /{index}/_mapping` | 🟡 | **ajoute** des champs (une nouvelle génération est construite). Changer le type d'un champ existant reste refusé, comme chez ES. Modifier `dynamic` : ❌ |
 | `POST /{index}/_refresh` | ✅ | |
 | `POST\|GET /_analyze`, `/{index}/_analyze` | 🟡 | `text` (chaîne ou liste), `analyzer`, `field`. `tokenizer` / `filter` / `char_filter` explicites : ❌ |
 | Mapping dynamique | ✅ | `dynamic` : `true` (défaut), `false`, `strict`. `runtime` ❌. Voir plus bas |
@@ -150,11 +150,14 @@ différemment. ferrite applique désormais les frontières de mots d'Unicode
 | `GET /{index}/_doc/{id}` | ✅ | temps réel : une écriture non rafraîchie est visible. `_source_includes` / `_source_excludes` / `_source` supportés |
 | `HEAD /{index}/_doc/{id}` | ✅ | |
 | `DELETE /{index}/_doc/{id}` | ✅ | 404 + `result: not_found` si absent, `_version` reste monotone |
-| `POST\|PUT /_bulk`, `/{index}/_bulk` | 🟡 | NDJSON, actions `index` / `create` / `delete`, statut et erreur **par item**. Métadonnées acceptées : `_index`, `_id`. L'action `update` et les autres métadonnées (`_routing`, `if_seq_no`, `pipeline`…) sont ❌ |
+| `POST\|PUT /_bulk`, `/{index}/_bulk` | 🟡 | NDJSON, actions `index` / `create` / `delete` / `update`, statut et erreur **par item**. Métadonnées acceptées : `_index`, `_id` ; les autres (`_routing`, `if_seq_no`, `pipeline`…) sont ❌ |
 | `refresh` (`true` / `false` / `wait_for`) | ✅ | `wait_for` est traité comme `true` : le commit est synchrone et mono-shard |
-| `POST /{index}/_update/{id}`, `_update_by_query` | ❌ | |
-| `_mget`, `_delete_by_query`, `_reindex`, pipelines d'ingestion | ❌ | |
-| Versionnage optimiste (`if_seq_no`, `if_primary_term`, `version`) | ❌ | |
+| `POST /{index}/_update/{id}` | 🟡 | `doc` (fusion partielle), `upsert`, `doc_as_upsert`, `detect_noop`. Les scripts : ❌ |
+| `GET\|POST /_mget`, `/{index}/_mget` | ✅ | formes `ids` et `docs`, filtrage de `_source`, erreur par document |
+| `GET\|POST /{index}/_count` | ✅ | avec ou sans `query` |
+| Versionnage optimiste `if_seq_no` / `if_primary_term` | ✅ | 409 `version_conflict_engine_exception` si le document a bougé |
+| `version` / `version_type` externes | ❌ | |
+| `_update_by_query`, `_delete_by_query`, `_reindex`, pipelines d'ingestion | ❌ | |
 
 Sans `refresh`, une écriture devient visible **au plus tard après 1 seconde**
 (équivalent du `index.refresh_interval` d'ES).
@@ -176,10 +179,16 @@ avec une erreur qui dit pourquoi.
 | `match_phrase` | 🟡 | les termes dans l'ordre, adjacents. `boost`. `slop` : ❌ (voir les divergences) |
 | `exists` | ✅ | sur tous les types, y compris `text`. Un champ absent, `null`, ou un tableau vide compte comme absent, comme chez ES |
 | `term` | ✅ | forme courte et forme `{value, boost}`. `case_insensitive` ❌ |
+| `ids` | ✅ | `values`, `boost` |
+| `prefix` | 🟡 | non analysée comme chez ES. `case_insensitive` / `rewrite` : ❌ |
+| `wildcard` | 🟡 | `*` et `?`. `case_insensitive` / `rewrite` : ❌ |
+| `fuzzy` | 🟡 | `fuzziness` (`AUTO` ou distance entière), `transpositions`, `boost`. `prefix_length` / `max_expansions` / `rewrite` : ❌ |
+| `constant_score` | ✅ | `filter`, `boost` |
+| `dis_max` | ✅ | `queries`, `tie_breaker`, `boost` — voir [`src/dismax.rs`](../src/dismax.rs) |
 | `terms` | 🟡 | liste de valeurs, score constant comme chez ES. Les *terms lookup* sont ❌ |
 | `range` | 🟡 | `gte`, `gt`, `lte`, `lt`, `boost`, sur `keyword` / numérique / `date` / `boolean`. Sur un champ `text` : ❌. `format`, `time_zone`, `relation` : ❌ |
 | `bool` | 🟡 | `must`, `should`, `filter`, `must_not`, `boost`, et `minimum_should_match` **sous forme entière** (les pourcentages et expressions sont ❌). `filter` ne contribue pas au score. Un `bool` qui n'a que des `must_not` matche tous les autres documents, comme chez ES |
-| `query_string`, `prefix`, `wildcard`, `fuzzy`, `ids`, `nested`, `function_score`, `match_phrase_prefix`, `script`… | ❌ | `parsing_exception: unknown query [...]` |
+| `query_string`, `simple_query_string`, `regexp`, `nested`, `function_score`, `boosting`, `match_phrase_prefix`, `terms_set`, `script`… | ❌ | `parsing_exception: unknown query [...]` |
 
 ### Corps et paramètres de `_search`
 
@@ -196,7 +205,7 @@ avec une erreur qui dit pourquoi.
 | `aggs` / `aggregations` | 🟡 | voir la section dédiée |
 | `highlight`, `search_after`, `scroll`, PIT, `collapse`, `knn`, `explain`, `fields`, `post_filter`, `min_score`, `suggest`, `rescore`, `track_scores`, `q` | ❌ | |
 | `ignore_unavailable`, `allow_no_indices`, `expand_wildcards`, `routing`, `filter_path`, `typed_keys` | ❌ | ils n'ont de sens qu'avec des motifs multi-index ou changent la forme de la réponse |
-| `_count`, `_msearch`, `_search/template`, `_explain`, `_validate` | ❌ | |
+| `_msearch`, `_search/template`, `_explain`, `_validate` | ❌ | |
 
 Les paramètres purement cosmétiques `pretty`, `human` et `error_trace` sont
 acceptés partout ; `pretty` est implémenté (indentation de la réponse).

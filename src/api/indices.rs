@@ -168,13 +168,34 @@ pub async fn get_mapping(
     })))
 }
 
-/// `PUT /{index}/_mapping` — refuse explicitement : modifier un mapping veut
-/// dire modifier le schema tantivy, qui est fige.
-pub async fn put_mapping(Path(index): Path<String>) -> EsError {
-    EsError::unsupported(format!(
-        "ferrite ne supporte pas la modification du mapping d'un index existant (index \
-         [{index}]) : le schema est fige a la creation"
-    ))
+/// `PUT /{index}/_mapping` — ajoute des champs au mapping.
+///
+/// Possible depuis que le schema vit dans des generations. Comme chez ES, on
+/// **ajoute** des champs : en changer le type reste refuse.
+pub async fn put_mapping(
+    State(st): State<SharedState>,
+    Path(index): Path<String>,
+    uri: Uri,
+    body: Bytes,
+) -> EsResult<Json> {
+    let mut p = Params::parse(&uri);
+    p.opt("timeout");
+    p.opt("master_timeout");
+    p.done()?;
+
+    let body = parse_body(&body)?;
+    let mapping = Mapping::parse(&body)?;
+    if mapping.dynamic != crate::mapping::Dynamic::default() {
+        return Err(EsError::unsupported(
+            "ferrite ne supporte pas la modification de [dynamic] sur un index existant",
+        ));
+    }
+
+    let idx = st.catalog.get(&index)?;
+    tokio::task::spawn_blocking(move || idx.add_fields(mapping.properties))
+        .await
+        .map_err(|e| EsError::internal(format!("put_mapping: {e}")))??;
+    Ok(Json::ok(json!({"acknowledged": true})))
 }
 
 /// `POST|GET /{index}/_analyze` et `/_analyze` — montre comment un texte est

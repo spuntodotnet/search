@@ -103,15 +103,38 @@ pub fn router(state: SharedState) -> Router {
             "/{index}/_create/{id}",
             put(docs::create_doc).post(docs::create_doc),
         )
+        .route("/{index}/_count", get(search::count).post(search::count))
+        .route("/{index}/_update/{id}", post(docs::update_doc))
         .route(
-            "/{index}/_count",
-            get(unsupported_route).post(unsupported_route),
+            "/_mget",
+            post(|s, u, b| docs::mget(s, None, u, b)).get(|s, u, b| docs::mget(s, None, u, b)),
         )
-        .route("/{index}/_update/{id}", post(unsupported_route))
         .route(
             "/{index}/_mget",
-            get(unsupported_route).post(unsupported_route),
+            post(|s, p, u, b| docs::mget(s, Some(p), u, b))
+                .get(|s, p, u, b| docs::mget(s, Some(p), u, b)),
         )
+        // Des routes qu'ES expose et que ferrite n'implemente pas : mieux vaut
+        // le dire que de laisser croire a une faute de frappe.
+        .route(
+            "/{index}/_update_by_query",
+            post(unsupported_route).get(unsupported_route),
+        )
+        .route(
+            "/{index}/_delete_by_query",
+            post(unsupported_route).get(unsupported_route),
+        )
+        .route("/_reindex", post(unsupported_route))
+        .route(
+            "/{index}/_msearch",
+            post(unsupported_route).get(unsupported_route),
+        )
+        .route("/_msearch", post(unsupported_route).get(unsupported_route))
+        .route(
+            "/{index}/_alias/{nom}",
+            put(unsupported_route).post(unsupported_route),
+        )
+        .route("/_aliases", post(unsupported_route))
         .fallback(no_handler)
         .layer(axum::middleware::from_fn(elastic_headers))
         .with_state(state)

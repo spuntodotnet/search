@@ -9,8 +9,8 @@ use std::ops::Bound;
 
 use serde_json::{Map, Value};
 use tantivy::query::{
-    AllQuery, BooleanQuery, BoostQuery, ConstScoreQuery, EmptyQuery, ExistsQuery, Occur,
-    PhraseQuery, Query, RangeQuery, TermQuery,
+    AllQuery, BooleanQuery, BoostQuery, ConstScoreQuery, EmptyQuery, ExistsQuery, FuzzyTermQuery,
+    Occur, PhraseQuery, Query, RangeQuery, RegexQuery, TermQuery,
 };
 use tantivy::schema::IndexRecordOption;
 use tantivy::Index;
@@ -79,13 +79,20 @@ pub fn build_query(v: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         "multi_match" => multi_match_query(body, ctx),
         "match_phrase" => match_phrase_query(body, ctx),
         "exists" => exists_query(body, ctx),
+        "ids" => ids_query(body, ctx),
+        "prefix" => prefix_query(body, ctx),
+        "wildcard" => wildcard_query(body, ctx),
+        "fuzzy" => fuzzy_query(body, ctx),
+        "constant_score" => constant_score_query(body, ctx),
+        "dis_max" => dis_max_query(body, ctx),
         "term" => term_query(body, ctx),
         "terms" => terms_query(body, ctx),
         "range" => range_query(body, ctx),
         "bool" => bool_query(body, ctx),
         other => Err(EsError::parsing(format!(
             "unknown query [{other}] : ferrite supporte [match_all, match_none, match, \
-             multi_match, match_phrase, exists, term, terms, range, bool]"
+             multi_match, match_phrase, exists, ids, prefix, wildcard, fuzzy, term, terms, \
+             range, bool, constant_score, dis_max]"
         ))),
     }
 }
@@ -634,6 +641,259 @@ fn bool_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         Box::new(BooleanQuery::new(clauses))
     };
     boost(inner, obj.get("boost"))
+}
+
+/// `ids` : les documents dont l'identifiant figure dans la liste.
+fn ids_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
+    let obj = as_object(body, "ids")?;
+    expect_only(obj, &["values", "boost"], "ids")?;
+    let values = obj
+        .get("values")
+        .and_then(Value::as_array)
+        .ok_or_else(|| EsError::illegal_argument("[ids] : [values] (liste) est obligatoire"))?;
+
+    let clauses: Vec<(Occur, Box<dyn Query>)> = values
+        .iter()
+        .map(|v| {
+            let id = v
+                .as_str()
+                .ok_or_else(|| EsError::illegal_argument("[ids.values] : chaines attendues"))?;
+            let q: Box<dyn Query> = Box::new(TermQuery::new(
+                tantivy::Term::from_field_text(ctx.fields.id, id),
+                IndexRecordOption::Basic,
+            ));
+            Ok((Occur::Should, q))
+        })
+        .collect::<EsResult<_>>()?;
+    boost(
+        Box::new(ConstScoreQuery::new(
+            Box::new(BooleanQuery::new(clauses)),
+            1.0,
+        )),
+        obj.get("boost"),
+    )
+}
+
+/// Lit la forme courte (`{"champ": "valeur"}`) ou longue
+/// (`{"champ": {"value": ..., "boost": ...}}`) d'une clause a un champ.
+fn valeur_et_boost<'a>(
+    obj: &'a Map<String, Value>,
+    clause: &str,
+    extra: &[&str],
+) -> EsResult<(&'a str, String, Option<Value>)> {
+    let (champ, spec) = single_key(obj, clause)?;
+    match spec {
+        Value::Object(o) => {
+            let mut permis = vec!["value", "boost"];
+            permis.extend_from_slice(extra);
+            expect_only(o, &permis, clause)?;
+            let v = o.get("value").ok_or_else(|| {
+                EsError::parsing(format!("[{clause}] sur [{champ}] : cle [value] manquante"))
+            })?;
+            Ok((
+                champ,
+                query_text(champ, v, clause)?,
+                o.get("boost").cloned(),
+            ))
+        }
+        v => Ok((champ, query_text(champ, v, clause)?, None)),
+    }
+}
+
+/// Un champ interrogeable par motif doit etre non analyse : sur un `text`, ES
+/// compare au **terme** indexe, ce qui surprend plus souvent que ca n'aide.
+fn champ_de_motif(ctx: &QueryCtx, champ: &str, clause: &str) -> EsResult<tantivy::schema::Field> {
+    let MappedField { field, ty, .. } = ctx.field(champ, clause)?;
+    if ty.kind() != FieldKind::Keyword && ty.kind() != FieldKind::Text {
+        return Err(EsError::illegal_argument(format!(
+            "[{clause}] ne s'applique qu'a un champ [text] ou [keyword] ; [{champ}] est de type \
+             [{}]",
+            ty.name()
+        )));
+    }
+    Ok(field)
+}
+
+/// `prefix` : les termes qui commencent par cette chaine. Non analysee, comme
+/// chez ES.
+fn prefix_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
+    let obj = as_object(body, "prefix")?;
+    let (champ, valeur, boost_value) =
+        valeur_et_boost(obj, "prefix", &["case_insensitive", "rewrite"])?;
+    refuser_insensible(obj, "prefix")?;
+    let field = champ_de_motif(ctx, champ, "prefix")?;
+    let motif = format!("{}.*", regex_echappe(&valeur));
+    let q = RegexQuery::from_pattern(&motif, field)
+        .map_err(|e| EsError::illegal_argument(format!("[prefix] : {e}")))?;
+    boost(
+        Box::new(ConstScoreQuery::new(Box::new(q), 1.0)),
+        boost_value.as_ref(),
+    )
+}
+
+/// `wildcard` : `*` remplace n'importe quelle suite, `?` un seul caractere.
+fn wildcard_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
+    let obj = as_object(body, "wildcard")?;
+    let (champ, valeur, boost_value) = valeur_et_boost(
+        obj,
+        "wildcard",
+        &["case_insensitive", "rewrite", "wildcard"],
+    )?;
+    refuser_insensible(obj, "wildcard")?;
+    let field = champ_de_motif(ctx, champ, "wildcard")?;
+
+    let mut motif = String::new();
+    for c in valeur.chars() {
+        match c {
+            '*' => motif.push_str(".*"),
+            '?' => motif.push('.'),
+            autre => motif.push_str(&regex_echappe(&autre.to_string())),
+        }
+    }
+    let q = RegexQuery::from_pattern(&motif, field)
+        .map_err(|e| EsError::illegal_argument(format!("[wildcard] : {e}")))?;
+    boost(
+        Box::new(ConstScoreQuery::new(Box::new(q), 1.0)),
+        boost_value.as_ref(),
+    )
+}
+
+/// `fuzzy` : les termes a faible distance d'edition.
+///
+/// `fuzziness` suit la regle `AUTO` d'ES — 0 sous 3 caracteres, 1 jusqu'a 5,
+/// 2 au-dela — ou une distance explicite.
+fn fuzzy_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
+    let obj = as_object(body, "fuzzy")?;
+    let (champ, valeur, boost_value) = valeur_et_boost(
+        obj,
+        "fuzzy",
+        &[
+            "fuzziness",
+            "transpositions",
+            "prefix_length",
+            "max_expansions",
+            "rewrite",
+        ],
+    )?;
+    let spec = single_key(obj, "fuzzy")?.1;
+    let params = spec.as_object();
+
+    if params.is_some_and(|o| o.contains_key("prefix_length")) {
+        return Err(EsError::unsupported(
+            "ferrite ne supporte pas [prefix_length] dans [fuzzy]",
+        ));
+    }
+    let distance = match params.and_then(|o| o.get("fuzziness")) {
+        None => fuzziness_auto(&valeur),
+        Some(Value::String(s)) if s.eq_ignore_ascii_case("auto") => fuzziness_auto(&valeur),
+        Some(Value::Number(n)) => n.as_u64().unwrap_or(2).min(2) as u8,
+        Some(Value::String(s)) => s.parse::<u8>().map(|d| d.min(2)).map_err(|_| {
+            EsError::unsupported(format!(
+                "ferrite ne supporte que [AUTO] ou une distance entiere pour [fuzziness] (recu \
+                 [{s}])"
+            ))
+        })?,
+        Some(_) => return Err(EsError::illegal_argument("[fuzziness] : valeur invalide")),
+    };
+    // ES compte une transposition comme une seule operation.
+    let transpositions = params
+        .and_then(|o| o.get("transpositions"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+
+    let MappedField { field, .. } = ctx.field(champ, "fuzzy")?;
+    let terme = tantivy::Term::from_field_text(field, &valeur);
+    let q = FuzzyTermQuery::new(terme, distance, transpositions);
+    boost(
+        Box::new(ConstScoreQuery::new(Box::new(q), 1.0)),
+        boost_value.as_ref(),
+    )
+}
+
+/// La regle `AUTO` d'Elasticsearch.
+fn fuzziness_auto(terme: &str) -> u8 {
+    match terme.chars().count() {
+        0..=2 => 0,
+        3..=5 => 1,
+        _ => 2,
+    }
+}
+
+fn refuser_insensible(obj: &Map<String, Value>, clause: &str) -> EsResult<()> {
+    let (_, spec) = single_key(obj, clause)?;
+    if spec
+        .as_object()
+        .is_some_and(|o| o.contains_key("case_insensitive"))
+    {
+        return Err(EsError::unsupported(format!(
+            "ferrite ne supporte pas [case_insensitive] dans [{clause}]"
+        )));
+    }
+    if spec.as_object().is_some_and(|o| o.contains_key("rewrite")) {
+        return Err(EsError::unsupported(format!(
+            "ferrite ne supporte pas [rewrite] dans [{clause}]"
+        )));
+    }
+    Ok(())
+}
+
+/// Echappe ce qui a un sens dans une expression reguliere.
+fn regex_echappe(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if "\\.+*?()|[]{}^$".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// `constant_score` : le filtre decide, le score est fixe.
+fn constant_score_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
+    let obj = as_object(body, "constant_score")?;
+    expect_only(obj, &["filter", "boost"], "constant_score")?;
+    let filtre = obj
+        .get("filter")
+        .ok_or_else(|| EsError::illegal_argument("[constant_score] : [filter] est obligatoire"))?;
+    let inner = build_query(filtre, ctx)?;
+    let score = match obj.get("boost") {
+        None => 1.0,
+        Some(v) => v
+            .as_f64()
+            .ok_or_else(|| EsError::illegal_argument("[boost] : nombre attendu"))?
+            as f32,
+    };
+    Ok(Box::new(ConstScoreQuery::new(inner, score)))
+}
+
+/// `dis_max` : le meilleur score l'emporte (voir [`crate::dismax`]).
+fn dis_max_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
+    let obj = as_object(body, "dis_max")?;
+    expect_only(obj, &["queries", "tie_breaker", "boost"], "dis_max")?;
+    let queries = obj
+        .get("queries")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            EsError::illegal_argument("[dis_max] : [queries] (liste) est obligatoire")
+        })?;
+    if queries.is_empty() {
+        return Err(EsError::illegal_argument(
+            "[dis_max.queries] ne peut pas etre vide",
+        ));
+    }
+    let sous: Vec<Box<dyn Query>> = queries
+        .iter()
+        .map(|q| build_query(q, ctx))
+        .collect::<EsResult<_>>()?;
+    let tie = match obj.get("tie_breaker") {
+        None => 0.0f32,
+        Some(v) => v
+            .as_f64()
+            .ok_or_else(|| EsError::illegal_argument("[tie_breaker] : nombre attendu"))?
+            as f32,
+    };
+    boost(Box::new(DisMaxQuery::new(sous, tie)), obj.get("boost"))
 }
 
 fn boost(query: Box<dyn Query>, value: Option<&Value>) -> EsResult<Box<dyn Query>> {
