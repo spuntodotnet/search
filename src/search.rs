@@ -296,6 +296,8 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 
 pub struct SearchRequest {
     pub query: Box<dyn Query>,
+    /// Les agregations demandees, deja validees.
+    pub aggs: Option<Value>,
     pub from: usize,
     pub size: usize,
     pub sort: Vec<SortSpec>,
@@ -306,10 +308,17 @@ pub struct SearchOutcome {
     pub total: usize,
     pub max_score: Option<f32>,
     pub hits: Vec<Value>,
+    pub aggregations: Option<Value>,
 }
 
 pub fn execute(index_name: &str, gen: &Generation, req: &SearchRequest) -> EsResult<SearchOutcome> {
     let searcher = gen.searcher();
+    // Les agregations portent sur tous les documents qui correspondent, pas sur
+    // la page rendue : elles se calculent a part.
+    let aggregations = match &req.aggs {
+        Some(aggs) => Some(crate::aggs::run(gen, &searcher, &*req.query, aggs)?),
+        None => None,
+    };
 
     if req.sort.is_empty() {
         let count = searcher.search(&req.query, &Count)?;
@@ -320,6 +329,7 @@ pub fn execute(index_name: &str, gen: &Generation, req: &SearchRequest) -> EsRes
                 total: count,
                 max_score: None,
                 hits: Vec::new(),
+                aggregations,
             });
         }
         let top = searcher.search(
@@ -344,6 +354,7 @@ pub fn execute(index_name: &str, gen: &Generation, req: &SearchRequest) -> EsRes
             total: count,
             max_score,
             hits,
+            aggregations,
         });
     }
 
@@ -376,6 +387,7 @@ pub fn execute(index_name: &str, gen: &Generation, req: &SearchRequest) -> EsRes
         total,
         max_score: None,
         hits,
+        aggregations,
     })
 }
 

@@ -157,7 +157,8 @@ avec une erreur qui dit pourquoi.
 | Scoring | ✅ | BM25 (tantivy), `_score` et `max_score` renseignés ; `null` quand un tri est demandé, comme chez ES |
 | Format de réponse | ✅ | `took`, `timed_out`, `_shards`, `hits.total.{value,relation}`, `hits.max_score`, `hits.hits[]` avec `_index` / `_id` / `_score` / `_source` / `sort` |
 | `preference` | 🟡 | accepté, sans objet : il n'y a qu'un shard |
-| `aggs` / `aggregations`, `highlight`, `search_after`, `scroll`, PIT, `collapse`, `knn`, `explain`, `fields`, `post_filter`, `min_score`, `suggest`, `rescore`, `track_scores`, `q` | ❌ | |
+| `aggs` / `aggregations` | 🟡 | voir la section dédiée |
+| `highlight`, `search_after`, `scroll`, PIT, `collapse`, `knn`, `explain`, `fields`, `post_filter`, `min_score`, `suggest`, `rescore`, `track_scores`, `q` | ❌ | |
 | `ignore_unavailable`, `allow_no_indices`, `expand_wildcards`, `routing`, `filter_path`, `typed_keys` | ❌ | ils n'ont de sens qu'avec des motifs multi-index ou changent la forme de la réponse |
 | `_count`, `_msearch`, `_search/template`, `_explain`, `_validate` | ❌ | |
 
@@ -166,6 +167,39 @@ acceptés partout ; `pretty` est implémenté (indentation de la réponse).
 
 **Tout paramètre de query string non reconnu est refusé** avec
 `request [...] contains unrecognized parameter: [...]`, comme chez ES.
+
+## Agrégations
+
+Comparées champ par champ à un vrai ES 8.15 sur 34 requêtes
+(`tests/compat/diff_aggs.py`), clés de réponse comprises.
+
+| Agrégation | État | Détail |
+|---|---|---|
+| `min`, `max`, `sum`, `avg`, `value_count`, `stats` | ✅ | `field`, `missing`. Sur un champ `date`, la valeur est en millisecondes et le `*_as_string` est rendu comme chez ES |
+| `terms` | 🟡 | `field`, `size`, `shard_size`, `min_doc_count`, `order` (`_count` / `_key` seulement). `doc_count_error_upper_bound` et `sum_other_doc_count` sont renseignés. `include` / `exclude` / ordre par sous-agrégation : ❌ |
+| `range` | ✅ | `ranges` avec `from` / `to` / `key`, `keyed` |
+| `histogram` | ✅ | `interval`, `offset`, `min_doc_count`, `hard_bounds`, `extended_bounds`, `keyed` |
+| `date_histogram` | 🟡 | `fixed_interval` et les mêmes paramètres. `calendar_interval` ❌ (mois et années civils n'ont pas d'équivalent dans tantivy) |
+| Sous-agrégations | ✅ | sur tous les types de buckets, vérifiées jusqu'à trois niveaux |
+| `cardinality` | ❌ | **refus assumé** : l'estimation de tantivy diffère de celle d'ES (mesuré : 582 valeurs distinctes annoncées là où ES en compte 598), y compris sous le seuil où ES est exact |
+| `filter` | ❌ | l'agrégation `filter` de tantivy prend une chaîne dans sa propre syntaxe de requête, pas une requête du Query DSL : la traduction serait approximative |
+| `percentiles`, `extended_stats`, `top_hits`, `composite`, `filters`, `nested`, `significant_terms`, `date_range`, `ip_range`… | ❌ | |
+
+Agréger sur un champ `text` est refusé, comme chez ES (`Fielddata is disabled`) :
+utiliser son multi-field `.keyword`.
+
+**Quatre écarts avec tantivy sont corrigés au passage** — ils sont la raison
+d'être de la couche de mise en forme dans `src/aggs.rs` :
+
+1. tantivy compte les dates en **nanosecondes**, ES en millisecondes ;
+2. ES ajoute un `*_as_string` à côté de chaque métrique de date ;
+3. ES départage les buckets `terms` **ex æquo par clé croissante**, pas tantivy —
+   ce qui changeait non seulement l'ordre mais la **sélection** au bord de la
+   troncature. ferrite demande donc 500 buckets de plus que la `size` voulue,
+   applique l'ordre d'ES, puis tronque. Au-delà de 500 termes à égalité sur la
+   frontière, la sélection pourrait encore différer ;
+4. ES formate les bornes d'un `range` en flottants (`*-100.0`), même sur un champ
+   entier, et rend la clé d'un `date_histogram` en entier.
 
 ## Erreurs
 

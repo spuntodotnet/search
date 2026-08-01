@@ -114,8 +114,11 @@ Le **mapping dynamique** et les **multi-fields** (`titre.keyword`) sont
 supportés : on peut rejouer le mapping d'un Elasticsearch existant, ou indexer
 sans rien déclarer.
 
-**Ce qui n'y est pas encore** : agrégations, `highlight`, `search_after`,
-analyzers configurables, `_update`, `_mget`, `prefix` / `wildcard` / `fuzzy`.
+Les **agrégations** sont là aussi : métriques, `terms`, `range`, `histogram`,
+`date_histogram`, et sous-agrégations — de quoi construire des facettes.
+
+**Ce qui n'y est pas encore** : `highlight`, `search_after`, analyzers
+configurables, `_update`, `_mget`, `prefix` / `wildcard` / `fuzzy`.
 
 L'inventaire complet — supporté, partiel, refusé, et les divergences assumées —
 est dans [`docs/compat.md`](docs/compat.md). Rien de ce qui n'est pas supporté

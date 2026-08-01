@@ -33,6 +33,7 @@ Toutes depuis la **racine** du repo.
 | `./tests/compat/run.sh` | **Le harnais de compat** : compile, lance ferrite sur un port jetable, et l'exerce avec le client Elasticsearch officiel (critère d'acceptation + suite complète) |
 | `python3 tests/compat/diff_against_es.py` | Compare la **forme** des réponses à celles d'un vrai ES (voir plus bas) |
 | `python3 tests/compat/diff_relevance.py` | Compare les **résultats et leur ordre** à ceux d'un vrai ES, sur 600 documents |
+| `python3 tests/compat/diff_aggs.py` | Compare les **agrégations** à celles d'un vrai ES, champ par champ |
 | `./tests/compat/measure_container.sh [tag]` | Ne construit rien, mesure une image déjà buildée : taille, RSS au repos, temps de démarrage |
 | `docker build -t ferrite .` | Image minimale (`scratch` + binaire statique musl) |
 
@@ -65,6 +66,7 @@ Deux comparateurs, qui ne cherchent pas la même chose :
 |---|---|
 | `tests/compat/diff_against_es.py` | la **forme** des réponses — champ par champ, sur une quarantaine d'appels, après neutralisation des valeurs qui ne peuvent pas coïncider (durées, uuid, scores) |
 | `tests/compat/diff_relevance.py` | la **pertinence** — même corpus de 600 documents des deux côtés, ~115 requêtes générées, et pour chacune : même total, mêmes documents, **même ordre** |
+| `tests/compat/diff_aggs.py` | les **agrégations** — 34 requêtes, comparaison du JSON champ par champ, clés comprises |
 
 Le second est celui qui compte pour un moteur de recherche : l'ordre des
 résultats est précisément ce qu'un test écrit à la main ne sait pas vérifier,
