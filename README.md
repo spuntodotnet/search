@@ -66,6 +66,13 @@ cargo run                       # ferrite écoute sur :9200
 docker build -t ferrite . && docker run --rm -p 9200:9200 -v ferrite-data:/data ferrite
 ```
 
+Sans rien compiler : chaque version publie un binaire statique Linux **x86-64**
+et **arm64** dans les [releases](../../releases) (archive `.tar.gz` + `.sha256`).
+
+```bash
+tar xzf ferrite-v0.1.0-x86_64-unknown-linux-musl.tar.gz && ./ferrite
+```
+
 Puis, avec le client officiel — sans une ligne de code spécifique à ferrite :
 
 ```python

@@ -170,3 +170,19 @@ curl -s -X PATCH "https://api.notion.com/v1/pages/$NOTION_PAGE_ID" \
 
 Au merge de la PR, un webhook GitHub repasse la carte en `completed` et arrête
 le worker — rien à faire de plus.
+
+## Publier une version
+
+Une release = un **tag sur `main`**, rien d'autre :
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+`.github/workflows/release.yml` compile alors le binaire statique musl sur un
+runner **x86-64** et un runner **arm64** (pas de cross-compilation), attache les
+deux archives `.tar.gz` + `.sha256` à une release GitHub, et génère les notes
+depuis les PR mergées depuis le tag précédent.
+
+Le workflow **refuse** un tag posé sur un commit absent de `main` : une release
+publiée depuis une branche de travail serait invérifiable après coup.
