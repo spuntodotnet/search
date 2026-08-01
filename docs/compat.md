@@ -134,6 +134,7 @@ différemment. ferrite applique désormais les frontières de mots d'Unicode
 | Tableaux de valeurs | ✅ | tout champ accepte une valeur ou un tableau |
 | `null` | ✅ | ignoré à l'indexation, comme chez ES (pas de `null_value`) |
 | Tout autre type (`geo_point`, `nested`, `object`, `ip`, `binary`…) | ❌ | |
+| Sous-objet dans un **document** (`{"a": {"b": 1}}`) | ❌ | refus explicite à l'indexation, **y compris dans un tableau** (`{"a": [{"b": 1}]}`) : sans ce refus le champ serait gardé dans `_source` mais absent du mapping, donc introuvable |
 | `analyzer` | 🟡 | sur un champ `text` : `standard` (défaut), `simple`, `whitespace`, `keyword`, `stop` — voir la section dédiée |
 | Multi-fields (`fields`) | ✅ | un seul niveau, comme ES. `titre.keyword` s'interroge et se trie comme un champ à part entière |
 | `ignore_above` | ✅ | sur un `keyword` : au-delà, la valeur reste dans `_source` sans être indexée |

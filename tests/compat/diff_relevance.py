@@ -21,7 +21,12 @@ Outil de developpement : exige un Elasticsearch 8.x lance a cote (Docker).
 import random
 import sys
 
-from elasticsearch import ApiError, Elasticsearch
+try:
+    from elasticsearch import ApiError, Elasticsearch
+except ImportError:  # client 7.x : l'exception ne porte pas le meme nom.
+    # `diff_es7.py` importe la batterie de requetes de ce module en pilotant un
+    # client 7.x ; seul `requetes()` l'interesse, mais l'import doit passer.
+    from elasticsearch import Elasticsearch, TransportError as ApiError
 
 import corpus
 

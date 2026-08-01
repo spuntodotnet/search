@@ -446,7 +446,7 @@ impl FerriteIndex {
                 Dynamic::Strict => return Err(EsError::strict_mapping(&self.name, name)),
                 Dynamic::False => continue,
                 Dynamic::True => {
-                    if value.is_object() {
+                    if mapping::contient_un_objet(value) {
                         return Err(EsError::unsupported(format!(
                             "ferrite ne supporte pas les champs objet/imbriques : [{name}] dans \
                              l'index [{}]",

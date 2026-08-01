@@ -1,13 +1,22 @@
 # Un projet resté en Elasticsearch 7.10.2 peut-il basculer sur ferrite ?
 
-**Réponse courte : oui, la connexion et le gros du code passent tels quels — le
-travail n'est pas de « faire marcher ferrite », c'est de faire la migration
-7.x → 8.x que le projet n'a pas encore faite.** ferrite annonce l'API 8.15.0 :
-tout ce qu'Elastic a supprimé entre 7 et 8 est cassé chez ferrite exactement
-comme ça le serait sur un vrai Elasticsearch 8. À cela s'ajoutent les manques
-propres à ferrite, qui, eux, ne dépendent pas de la version.
+Il y a deux questions derrière celle-là, et elles n'ont pas la même réponse.
 
-Ce fichier sépare les deux, parce qu'ils ne se corrigent pas au même endroit.
+| | Question | Réponse |
+|---|---|---|
+| **Le client** | mon code 7.x se connecte-t-il et parle-t-il à ferrite ? | **Oui**, et ce qui casse est le coût de la migration 7→8, pas ferrite |
+| **L'instance** | ferrite peut-il remplacer mon Elasticsearch 7.10.2 ? | **Sur les requêtes, oui — à l'identique.** Sur les index et les documents, seulement s'ils sont **plats** |
+
+Le point dur n'est donc pas la version : c'est le périmètre de ferrite.
+**Un document contenant un sous-objet est refusé** (`{"fournisseur": {…}}` comme
+`[{…}]`), et un mapping 7.x traîne presque toujours des analyzers sur mesure,
+un `format` de date ou un objet. En revanche, sur un corpus identique,
+ferrite rend **les mêmes documents dans le même ordre** que l'instance 7.10.2.
+
+Les deux moitiés de ce fichier traitent les deux questions séparément, parce
+qu'elles ne se corrigent pas au même endroit.
+
+# Première question : le client
 
 ## Comment ces réponses ont été obtenues
 
@@ -144,3 +153,118 @@ Par ordre décroissant de coût, sur le code client :
 
 Rien dans cette liste ne dépend du fait que le serveur actuel soit un 7.10.2
 plutôt qu'un 7.17 : ce qui compte, c'est que le code n'a pas encore vu la 8.
+
+# Seconde question : l'instance
+
+Reprendre une instance 7.10.2, c'est trois choses distinctes : ses **index**,
+ses **documents**, ses **requêtes**. `tests/compat/diff_es7.py` les prend dans
+cet ordre, contre une vraie instance 7.10.2 lancée à côté :
+
+```bash
+docker run -d --name es7 -p 9201:9200 -e discovery.type=single-node \
+  docker.elastic.co/elasticsearch/elasticsearch:7.10.2
+cargo run &
+python3 tests/compat/diff_es7.py http://localhost:9200 http://localhost:9201
+```
+
+Le script **lit** l'instance (export des définitions, `scan` des documents) et
+n'écrit que sur ferrite ; seule la phase de comparaison des requêtes indexe un
+corpus des deux côtés, et `--sans-ecriture` la désactive. Il est donc utilisable
+tel quel contre une instance qui compte : ce qu'il rapporte, ce sont **vos**
+index, pas ceux d'un exemple.
+
+## Les requêtes : identiques (137/138)
+
+C'est le résultat qui rassure, et c'est le cœur du sujet.
+
+Même corpus de 600 documents des deux côtés, les **138 requêtes** de
+`diff_relevance.py` (`match`, `multi_match`, `match_phrase`, `bool`, `dis_max`,
+`term(s)`, `range`, `exists`, `prefix`, `fuzzy`, `constant_score`, tris)
+rejouées sur les deux serveurs :
+
+```
+  137/138 requetes : memes documents, meme ordre qu'ES 7.10.2
+  1/138 : ordre permute uniquement entre ex aequo d'ES 7
+  0/138 refusees par ferrite, 0/138 ecarts reels
+```
+
+**Zéro écart réel.** Le seul déplacement porte sur deux documents auxquels
+Elasticsearch attribue lui-même le même score. C'est exactement le résultat que
+donne la même batterie contre un ES **8.15.0** : la fidélité de ferrite ne se
+dégrade pas quand la référence est une 7.10.2.
+
+## Les documents : seulement s'ils sont plats
+
+C'est le blocage réel, et il n'a rien à voir avec la version.
+
+```
+== Phase 2 — transfert des documents (scan 7.x -> bulk ferrite)
+  [KO] legacy_7x : 0/2 documents transferes
+       2 refus : ferrite ne supporte pas les champs objet/imbriques :
+                 [fournisseur] dans l'index [migre_legacy_7x]
+```
+
+Un document dont un champ vaut `{"nom": "Atelier"}` — ou `[{"nom": …}]` — est
+refusé. Les noms pointés (`"fournisseur.nom": "Atelier"`) le sont aussi. Un
+document 7.x doit donc être **aplati côté client** (`fournisseur_nom`) pour
+entrer dans ferrite, ce qui n'est plus « le code client ne change pas ».
+
+À vérifier en premier sur l'instance : est-ce que les documents ont des
+sous-objets ? Si oui, la migration demande une transformation, pas un transfert.
+
+> Ce transfert a mis au jour un bug, corrigé dans la même PR : un champ valant
+> `[{…}]` était **accepté en silence** (gardé dans `_source`, absent du mapping,
+> donc introuvable) là où l'objet nu était refusé. Il est désormais refusé de la
+> même façon.
+
+## Les index : hébergeables dégradés
+
+La définition exportée d'un index 7.x typique (analyzer sur mesure, analyzer
+`french`, `format` de date, sous-objet, `refresh_interval`) est rejouée sur
+ferrite en pelant les couches. Aucune ne passe telle quelle ; ce qui reste :
+
+```
+  [ok] legacy_7x -> cree sur ferrite (mappings nettoyes (7/8 champs))
+       retire : champ [fournisseur]  — champs objet/imbriques
+       retire : champ [cree_le]      — parametre [format]
+       retire : champ [description]  — analyzer [french]
+       retire : champ [titre]        — analyzer [fr_produit] (settings.analysis)
+```
+
+Trois familles de refus, par ordre de gêne :
+
+1. **`settings.analysis` et les analyzers de langue** — ce n'est pas un détail
+   de configuration : un champ `text` analysé en `french` n'est pas indexé de la
+   même façon en `standard`, donc les résultats changeront. `compat.md` explique
+   pourquoi le refus est assumé (le stemmer de tantivy n'est pas celui de
+   Lucene) ; la conséquence pratique est qu'un index 7.x qui s'appuie sur un
+   analyzer de langue **ne se réplique pas à l'identique** aujourd'hui.
+2. **Les sous-objets** — voir ci-dessus.
+3. **Les paramètres de champ décoratifs** (`format` sur une date, etc.) et tous
+   les réglages d'index (`refresh_interval`, allocation…) : ceux-là se retirent
+   sans conséquence sur les résultats.
+
+Les réglages « privés » que l'export contient (`index.uuid`, `creation_date`,
+`provided_name`, `version`, `routing.allocation.*`) sont refusés par
+Elasticsearch lui-même à la création : les retirer fait partie de n'importe
+quelle migration, y compris d'un ES 7 vers un ES 8.
+
+Rien ne se transfère au niveau fichier : ferrite ne lit pas un index Lucene, et
+les `_snapshot` ne sont pas implémentés. Une migration passe forcément par une
+réindexation depuis la source (`scan` + `bulk`), ce que fait la phase 2.
+
+## La forme des réponses : seul `_type` manque
+
+Sur les réponses qu'un code 7.x lit vraiment, clé par clé :
+
+| Réponse | Écart avec l'instance 7.10.2 |
+|---|---|
+| indexation, `get`, `delete`, item de `_bulk`, hit de recherche | **`_type` absent** (il n'existe plus en 8.x) |
+| enveloppe `hits` (`total`, `max_score`, `_shards`, `timed_out`) | aucun |
+| `_cluster/health` | aucun |
+
+Deux différences de *valeur* à connaître en plus des clés : `_shards.total` vaut
+1 chez ferrite (mono-shard) contre 2 sur un ES par défaut, et `hits.total` est
+**toujours exact** là où ES plafonne à 10 000 (`relation: "gte"`). Un code qui
+teste `relation == "gte"` continue de fonctionner, il ne verra simplement jamais
+ce cas.

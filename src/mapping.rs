@@ -371,6 +371,20 @@ fn parse_field_mapping(name: &str, spec: &Value, sous_champ: bool) -> EsResult<F
     })
 }
 
+/// Le champ porte-t-il un objet, directement ou dans un tableau ?
+///
+/// `infer` rend `None` sur un objet — sans ce test, un document dont un champ
+/// vaut `[{...}]` serait **accepte en silence** : conserve dans `_source`,
+/// absent du mapping, donc introuvable. C'est exactement l'echec silencieux que
+/// ce projet refuse ; l'objet nu, lui, etait deja rejete.
+pub fn contient_un_objet(value: &Value) -> bool {
+    match value {
+        Value::Object(_) => true,
+        Value::Array(a) => a.iter().any(contient_un_objet),
+        _ => false,
+    }
+}
+
 /// Devine le mapping d'un champ a partir de sa premiere valeur, comme le fait
 /// Elasticsearch quand `dynamic` vaut `true`.
 ///
@@ -801,6 +815,20 @@ mod tests {
         assert_eq!(fm.ty, FieldType::Text);
         assert_eq!(fm.fields["keyword"].ty, FieldType::Keyword);
         assert_eq!(fm.fields["keyword"].ignore_above, Some(256));
+    }
+
+    #[test]
+    fn un_objet_se_reconnait_meme_dans_un_tableau() {
+        // `infer` rend `None` dans les deux cas ; c'est ce test qui distingue
+        // « pas de type » de « type refuse », et donc l'erreur explicite de
+        // l'acceptation en silence.
+        assert!(contient_un_objet(&json!({"a": 1})));
+        assert!(contient_un_objet(&json!([{"a": 1}])));
+        assert!(contient_un_objet(&json!([null, [{"a": 1}]])));
+        assert!(!contient_un_objet(&json!([1, 2])));
+        assert!(!contient_un_objet(&json!([])));
+        assert!(!contient_un_objet(&json!("a")));
+        assert!(!contient_un_objet(&json!(null)));
     }
 
     const UNSUPPORTED_TY: &str = crate::error::UNSUPPORTED;

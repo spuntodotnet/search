@@ -170,6 +170,30 @@ def mapping_dynamique(es):
 
 
 @scenario
+def document_imbrique_refuse(es):
+    """Les objets sont hors perimetre — encore faut-il le dire.
+
+    Le cas du tableau (`[{...}]`) est le seul qui compte vraiment : le type
+    devine `None` comme pour un objet nu, mais sans ce refus explicite le
+    document serait accepte, garde dans `_source`, et son champ introuvable.
+    """
+    es.options(ignore_status=404).indices.delete(index="imbrique")
+    es.indices.create(index="imbrique")
+    refused(lambda: es.index(index="imbrique", id="1", refresh=True,
+                             document={"titre": "x", "auteur": {"nom": "Zola"}}),
+            contains="objet/imbriques")
+    refused(lambda: es.index(index="imbrique", id="2", refresh=True,
+                             document={"titre": "x", "auteurs": [{"nom": "Zola"}]}),
+            contains="objet/imbriques")
+    # Un tableau de scalaires, lui, reste un champ multivalue ordinaire.
+    es.index(index="imbrique", id="3", refresh=True,
+             document={"titre": "x", "tags": ["a", "b"]})
+    assert es.search(index="imbrique", query={"term": {"tags.keyword": "b"}}
+                     )["hits"]["total"]["value"] == 1
+    es.indices.delete(index="imbrique")
+
+
+@scenario
 def mapping_dynamique_preserve_l_existant(es):
     """Le point dur : tantivy fige le schema, donc ferrite change de generation
     quand un champ apparait. Les documents deja indexes doivent survivre."""
