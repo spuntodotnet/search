@@ -16,6 +16,7 @@ use tantivy::schema::{
 use tantivy::{DateTime, Term};
 
 use crate::analysis::{self, Analyzer};
+use crate::dateformat::DateFormat;
 use crate::error::{EsError, EsResult};
 
 /// Champs internes du schema tantivy. Prefixes par `_` — un mapping utilisateur
@@ -121,6 +122,8 @@ pub struct FieldMapping {
     /// (elle reste dans `_source`). Le defaut d'ES pour les `.keyword` generes
     /// dynamiquement est 256.
     pub ignore_above: Option<usize>,
+    /// Le `format` d'un champ `date`. `None` = celui d'ES par defaut.
+    pub format: Option<DateFormat>,
 }
 
 impl FieldMapping {
@@ -130,7 +133,13 @@ impl FieldMapping {
             analyzer: None,
             fields: BTreeMap::new(),
             ignore_above: None,
+            format: None,
         }
+    }
+
+    /// Le format effectif d'un champ `date`.
+    pub fn format(&self) -> DateFormat {
+        self.format.clone().unwrap_or_default()
     }
 
     /// L'analyzer effectif d'un champ `text`.
@@ -146,6 +155,9 @@ impl FieldMapping {
         }
         if let Some(n) = self.ignore_above {
             o.insert("ignore_above".into(), json!(n));
+        }
+        if let Some(f) = &self.format {
+            o.insert("format".into(), json!(f.source));
         }
         if !self.fields.is_empty() {
             let mut subs = Map::new();
@@ -586,6 +598,7 @@ fn parse_field_mapping(name: &str, spec: &Value, sous_champ: bool) -> EsResult<F
     let mut fields = BTreeMap::new();
     let mut ignore_above = None;
     let mut analyzer = None;
+    let mut format = None;
 
     for (key, val) in obj {
         match key.as_str() {
@@ -625,6 +638,12 @@ fn parse_field_mapping(name: &str, spec: &Value, sous_champ: bool) -> EsResult<F
                 })?;
                 analyzer = Some(analysis::parse_declaration(nom, name)?);
             }
+            "format" => {
+                let motif = val.as_str().ok_or_else(|| {
+                    EsError::mapper_parsing(format!("[{name}.format] doit etre une chaine"))
+                })?;
+                format = Some(DateFormat::parse(motif)?);
+            }
             "ignore_above" => {
                 ignore_above = Some(
                     val.as_u64()
@@ -639,7 +658,7 @@ fn parse_field_mapping(name: &str, spec: &Value, sous_champ: bool) -> EsResult<F
             other => {
                 return Err(EsError::unsupported(format!(
                     "ferrite ne supporte pas le parametre de champ [{other}] (champ [{name}]) ; \
-                     parametres acceptes : type, analyzer, fields, ignore_above"
+                     parametres acceptes : type, analyzer, fields, ignore_above, format"
                 )))
             }
         }
@@ -663,6 +682,7 @@ fn parse_field_mapping(name: &str, spec: &Value, sous_champ: bool) -> EsResult<F
         analyzer,
         fields,
         ignore_above,
+        format,
     })
 }
 
@@ -827,6 +847,7 @@ pub fn infer(value: &Value) -> Option<FieldMapping> {
                     analyzer: None,
                     fields: BTreeMap::new(),
                     ignore_above: Some(256),
+                    format: None,
                 },
             );
             Some(fm)
@@ -893,6 +914,9 @@ pub struct Fields {
     pub nested: BTreeSet<String>,
     /// Par racine `nested` : le nombre d'elements du document.
     pub nelem: BTreeMap<String, Field>,
+    /// Le `format` declare des champs `date`, par chemin. Il sert a la lecture
+    /// (indexation, bornes d'un `range`) comme au rendu (`*_as_string`).
+    pub formats: BTreeMap<String, DateFormat>,
     /// Le champ `join` declare, et ses deux colonnes : le nom de la relation
     /// (interrogeable comme un `keyword`, sous le nom du champ) et
     /// l'identifiant du parent.
@@ -908,6 +932,11 @@ impl Fields {
 
     pub fn targets_of(&self, name: &str) -> Option<&[MappedField]> {
         self.targets.get(name).map(Vec::as_slice)
+    }
+
+    /// Le format de date d'un champ, s'il en declare un.
+    pub fn format_de(&self, chemin: &str) -> Option<&DateFormat> {
+        self.formats.get(chemin)
     }
 
     /// La racine `nested` dont ce chemin depend, s'il y en a une.
@@ -936,6 +965,7 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
     let mut mapped: BTreeMap<String, MappedField> = BTreeMap::new();
     let mut targets: BTreeMap<String, Vec<MappedField>> = BTreeMap::new();
     let mut nelem = BTreeMap::new();
+    let mut formats = BTreeMap::new();
     let (mut join_name, mut join_parent) = (None, None);
     if let Some(j) = &mapping.join {
         let f = add_field(&mut b, &j.champ, FieldType::Keyword, Analyzer::default());
@@ -988,6 +1018,9 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
                         b.add_u64_field(&format!("{P_ELEM}{chemin}"), NumericOptions::from(FAST))
                     }),
             };
+            if let Some(f) = &decl.format {
+                formats.insert(chemin.clone(), f.clone());
+            }
             mapped.insert(chemin, entry);
             cibles.push(entry);
         }
@@ -1005,6 +1038,7 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
             targets,
             nested: mapping.nested.clone(),
             nelem,
+            formats,
             join: mapping.join.clone(),
             join_name,
             join_parent,
@@ -1076,6 +1110,16 @@ impl TypedValue {
 ///
 /// Toute valeur non convertible est une erreur : jamais de valeur ignoree.
 pub fn coerce(field: &str, ty: FieldType, v: &Value) -> EsResult<TypedValue> {
+    coerce_avec(field, ty, v, None)
+}
+
+/// Comme [`coerce`], avec le `format` declare du champ pour les dates.
+pub fn coerce_avec(
+    field: &str,
+    ty: FieldType,
+    v: &Value,
+    format: Option<&DateFormat>,
+) -> EsResult<TypedValue> {
     let bad = |expected: &str| {
         EsError::mapper_parsing(format!(
             "failed to parse field [{field}] of type [{}] : valeur {v} non convertible en \
@@ -1141,11 +1185,15 @@ pub fn coerce(field: &str, ty: FieldType, v: &Value) -> EsResult<TypedValue> {
             };
             Ok(TypedValue::Bool(b))
         }
-        FieldKind::Date => Ok(TypedValue::Date(parse_date(field, v)?)),
+        FieldKind::Date => Ok(TypedValue::Date(match format {
+            Some(f) => f.lit(field, v)?,
+            None => parse_date(field, v)?,
+        })),
     }
 }
 
 /// `strict_date_optional_time || epoch_millis`, le format par defaut d'ES.
+/// La lecture d'une date sans `format` declare : celui d'ES par defaut.
 fn parse_date(field: &str, v: &Value) -> EsResult<i64> {
     use time::format_description::well_known::Rfc3339;
     use time::macros::format_description;

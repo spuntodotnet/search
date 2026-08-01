@@ -43,8 +43,7 @@ Le point dur n'est donc pas la version : c'est le périmètre de ferrite. Les
 documents imbriqués, eux, ne sont plus un obstacle — `object`, `nested` et
 `join` sont supportés et vérifiés contre un vrai 7.10.2. Ce qu'un mapping 7.x
 traîne encore et que ferrite refuse : les **analyzers sur mesure** et les
-**analyzers de langue** (`french`, `english`), et les **formats de date
-personnalisés** (`yyyy-MM-dd HH:mm:ss`). Voir
+**analyzers de langue** (`french`, `english`). Voir
 [la section dédiée](#object-nested-join--trois-choses-différentes) et
 `diff_es7.py --inventaire` pour savoir ce qu'une instance donnée utilise.
 
@@ -292,7 +291,7 @@ désormais **tous les champs**, dont le sous-objet :
        retire : champ [titre]        — analyzer [fr_produit] (settings.analysis)
 ```
 
-Deux familles de refus, par ordre de gêne :
+Une famille de refus domine désormais :
 
 1. **`settings.analysis` et les analyzers de langue** — ce n'est pas un détail
    de configuration : un champ `text` analysé en `french` n'est pas indexé de la
@@ -300,9 +299,8 @@ Deux familles de refus, par ordre de gêne :
    pourquoi le refus est assumé (le stemmer de tantivy n'est pas celui de
    Lucene) ; la conséquence pratique est qu'un index 7.x qui s'appuie sur un
    analyzer de langue **ne se réplique pas à l'identique** aujourd'hui.
-2. **Les `format` de date personnalisés**, et tous les réglages d'index
-   (`refresh_interval`, allocation…). Les seconds se retirent sans conséquence
-   sur les résultats ; le premier bloque l'indexation des documents concernés.
+2. **Les réglages d'index** (`refresh_interval`, allocation…) : ceux-là se
+   retirent sans aucune conséquence sur les résultats.
 
 Les réglages « privés » que l'export contient (`index.uuid`, `creation_date`,
 `provided_name`, `version`, `routing.allocation.*`) sont refusés par

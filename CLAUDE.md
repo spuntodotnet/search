@@ -86,12 +86,12 @@ développement, pas de CI).
 
 | Commande | La question à laquelle elle répond |
 |---|---|
-| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**66/66**) |
+| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**67/67**) |
 | `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (137/138, 0 écart réel) |
 | `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (39/40) |
 | `tests/compat/diff_aggs.py` | les mêmes agrégations ? (34/34) |
 | `tests/compat/diff_analyzers.py` | les mêmes tokens ? |
-| `tests/compat/conformance_es.py` | que dit la suite de tests **d'Elastic** ? (44 réussis, 333 refus explicites, 169 échecs / 643) |
+| `tests/compat/conformance_es.py` | que dit la suite de tests **d'Elastic** ? (44 réussis, 331 refus explicites, 171 échecs / 643) |
 | `tests/compat/bench_vs_es.py` | mêmes résultats, **et à quel prix** ? (×3,5 en latence, ×9 en indexation) |
 | `tests/compat/probe_es7.py` | un **client** 7.x peut-il se brancher ? |
 | `tests/compat/diff_es7.py` | une **instance** 7.x peut-elle être reprise ? `--inventaire` liste ses types de champ |
@@ -142,11 +142,14 @@ bouger**, pas après.
 
 ## Où va le projet
 
-Le prochain caillou identifié en rejouant une migration complète depuis une
-instance 7.10.2 : les **`format` de date personnalisés** (`yyyy-MM-dd HH:mm:ss`),
-que ferrite ne sait pas lire. Puis, par ordre de gêne pour un projet réel : les
-analyzers sur mesure (`settings.analysis`), `scroll` / `helpers.scan`,
-`rest_total_hits_as_int`, `_msearch`, `_stats`.
+En rejouant une migration complète depuis une instance 7.10.2
+(`tests/compat/diff_es7.py`), il ne reste qu'un refus qui change vraiment les
+**résultats** plutôt que la forme : les **analyzers** — sur mesure
+(`settings.analysis`) et de langue (`french`, `english`). Les supporter demande
+de porter les stemmers de Lucene, c'est le prochain gros morceau.
+
+Ensuite, par ordre de gêne pour un projet réel : `scroll` / `helpers.scan`,
+`rest_total_hits_as_int`, `_msearch`, `_stats`, les alias et les templates.
 
 ## Ton, et forme des livrables
 

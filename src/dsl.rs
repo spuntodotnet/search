@@ -217,7 +217,7 @@ fn field_match(
         // Sur un champ non analyse, `match` se comporte comme `term` (ES fait
         // pareil : l'analyzer d'un keyword est `keyword`).
         _ => {
-            let tv = mapping::coerce(field_name, ty, value)?;
+            let tv = mapping::coerce_avec(field_name, ty, value, ctx.fields.format_de(field_name))?;
             Box::new(TermQuery::new(tv.to_term(field), IndexRecordOption::Basic))
         }
     })
@@ -427,7 +427,8 @@ fn match_phrase_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> 
                      [{field_name}]"
                 )));
             }
-            let tv = mapping::coerce(field_name, ty, &value)?;
+            let tv =
+                mapping::coerce_avec(field_name, ty, &value, ctx.fields.format_de(field_name))?;
             Box::new(TermQuery::new(tv.to_term(field), IndexRecordOption::Basic))
         }
     };
@@ -479,7 +480,7 @@ fn term_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         v => (v.clone(), None),
     };
 
-    let tv = mapping::coerce(field_name, ty, &value)?;
+    let tv = mapping::coerce_avec(field_name, ty, &value, ctx.fields.format_de(field_name))?;
     let record = if ty.kind() == FieldKind::Text {
         IndexRecordOption::WithFreqs
     } else {
@@ -519,7 +520,7 @@ fn terms_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     let clauses: Vec<(Occur, Box<dyn Query>)> = list
         .iter()
         .map(|v| {
-            let tv = mapping::coerce(field_name, ty, v)?;
+            let tv = mapping::coerce_avec(field_name, ty, v, ctx.fields.format_de(field_name))?;
             let q: Box<dyn Query> =
                 Box::new(TermQuery::new(tv.to_term(field), IndexRecordOption::Basic));
             Ok((Occur::Should, q))
@@ -551,7 +552,10 @@ fn range_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     let to_term = |key: &str| -> EsResult<Option<tantivy::Term>> {
         match spec.get(key) {
             None | Some(Value::Null) => Ok(None),
-            Some(v) => Ok(Some(mapping::coerce(field_name, ty, v)?.to_term(field))),
+            Some(v) => Ok(Some(
+                mapping::coerce_avec(field_name, ty, v, ctx.fields.format_de(field_name))?
+                    .to_term(field),
+            )),
         }
     };
 
@@ -1081,7 +1085,7 @@ fn clause_nested(v: &Value, ctx: &QueryCtx, racine: &str) -> EsResult<Clause> {
             Ok(Clause::Champ {
                 chemin: champ.to_string(),
                 champ: mf,
-                predicat: Predicat::Parmi(vec![valeur_de(champ, mf, &valeur)?]),
+                predicat: Predicat::Parmi(vec![valeur_de(ctx, champ, mf, &valeur)?]),
             })
         }
         "terms" => {
@@ -1093,7 +1097,7 @@ fn clause_nested(v: &Value, ctx: &QueryCtx, racine: &str) -> EsResult<Clause> {
             let mf = champ_nested(ctx, champ, racine, "terms")?;
             let vals = liste
                 .iter()
-                .map(|v| valeur_de(champ, mf, v))
+                .map(|v| valeur_de(ctx, champ, mf, v))
                 .collect::<EsResult<Vec<_>>>()?;
             Ok(Clause::Champ {
                 chemin: champ.to_string(),
@@ -1109,7 +1113,7 @@ fn clause_nested(v: &Value, ctx: &QueryCtx, racine: &str) -> EsResult<Clause> {
             let borne = |cle: &str| -> EsResult<Option<Valeur>> {
                 match spec.get(cle) {
                     None | Some(Value::Null) => Ok(None),
-                    Some(v) => Ok(Some(valeur_de(champ, mf, v)?)),
+                    Some(v) => Ok(Some(valeur_de(ctx, champ, mf, v)?)),
                 }
             };
             let bas = match (borne("gte")?, borne("gt")?) {
@@ -1261,14 +1265,16 @@ fn champ_nested(ctx: &QueryCtx, champ: &str, racine: &str, clause: &str) -> EsRe
 }
 
 /// Convertit une valeur JSON au type du champ, puis en [`Valeur`] comparable.
-fn valeur_de(champ: &str, mf: MappedField, v: &Value) -> EsResult<Valeur> {
-    Ok(match mapping::coerce(champ, mf.ty, v)? {
-        TypedValue::Str(s) => Valeur::Str(s),
-        TypedValue::I64(n) => Valeur::I64(n),
-        TypedValue::F64(n) => Valeur::F64(n),
-        TypedValue::Bool(b) => Valeur::Bool(b),
-        TypedValue::Date(ms) => Valeur::I64(ms),
-    })
+fn valeur_de(ctx: &QueryCtx, champ: &str, mf: MappedField, v: &Value) -> EsResult<Valeur> {
+    Ok(
+        match mapping::coerce_avec(champ, mf.ty, v, ctx.fields.format_de(champ))? {
+            TypedValue::Str(s) => Valeur::Str(s),
+            TypedValue::I64(n) => Valeur::I64(n),
+            TypedValue::F64(n) => Valeur::F64(n),
+            TypedValue::Bool(b) => Valeur::Bool(b),
+            TypedValue::Date(ms) => Valeur::I64(ms),
+        },
+    )
 }
 
 /// La requete privee de ses `must_not`, a tous les niveaux.

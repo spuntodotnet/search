@@ -30,6 +30,9 @@ struct Info {
     /// Le champ agrege est-il une date ? tantivy compte alors en nanosecondes
     /// la ou ES compte en millisecondes.
     date: bool,
+    /// Le `format` declare du champ, s'il en a un : ES rend le `*_as_string`
+    /// **a ce format**, pas en ISO.
+    format: Option<crate::dateformat::DateFormat>,
     /// La `size` demandee par le client, pour tronquer apres re-tri.
     size: Option<usize>,
     /// L'ordre demande sur un `terms`.
@@ -329,6 +332,7 @@ fn preparer(aggs: &Value, gen: &Generation, infos: &mut HashMap<String, Info>) -
             let date = champ
                 .and_then(|c| gen.fields.get(c))
                 .is_some_and(|m| m.ty.kind() == FieldKind::Date);
+            let format = champ.and_then(|c| gen.fields.format_de(c)).cloned();
             let ordre = valeur
                 .get("order")
                 .and_then(|o| lire_ordre(o, nom).ok())
@@ -352,6 +356,7 @@ fn preparer(aggs: &Value, gen: &Generation, infos: &mut HashMap<String, Info>) -
                 Info {
                     type_agg: cle.clone(),
                     date,
+                    format,
                     size,
                     ordre,
                 },
@@ -361,6 +366,15 @@ fn preparer(aggs: &Value, gen: &Generation, infos: &mut HashMap<String, Info>) -
         out.insert(nom.clone(), Value::Object(nouveau));
     }
     Value::Object(out)
+}
+
+/// La forme lisible d'une date : celle du `format` declare du champ, sinon
+/// l'ISO d'Elasticsearch.
+fn rend_date(millis: f64, info: &Info) -> Option<String> {
+    match &info.format {
+        Some(f) => f.rend(millis as i64),
+        None => format_date(millis),
+    }
 }
 
 /// `2023-01-01T00:00:00.000Z`, le format de sortie d'Elasticsearch.
@@ -401,6 +415,7 @@ fn mise_en_forme(brut: &Value, infos: &HashMap<String, Info>) -> Value {
         let vide = Info {
             type_agg: String::new(),
             date: false,
+            format: None,
             size: None,
             ordre: Ordre::CountDesc,
         };
@@ -443,7 +458,7 @@ fn mise_en_forme_une(valeur: &Value, info: &Info, infos: &HashMap<String, Info>)
             if let Some(nanos) = v.as_f64() {
                 let millis = nanos / 1_000_000.0;
                 out.insert(cle.clone(), json!(millis));
-                if let Some(texte) = format_date(millis) {
+                if let Some(texte) = rend_date(millis, info) {
                     out.insert(format!("{cle}_as_string"), json!(texte));
                 }
                 continue;
@@ -540,7 +555,7 @@ fn mise_en_forme_bucket(bucket: &Value, info: &Info, infos: &HashMap<String, Inf
                 // ES rend un entier de millisecondes, tantivy un flottant.
                 let millis = v.as_f64().unwrap_or(0.0);
                 out.insert("key".into(), json!(millis as i64));
-                if let Some(texte) = format_date(millis) {
+                if let Some(texte) = rend_date(millis, info) {
                     out.insert("key_as_string".into(), json!(texte));
                 }
             }
@@ -558,6 +573,7 @@ fn mise_en_forme_bucket(bucket: &Value, info: &Info, infos: &HashMap<String, Inf
                 let vide = Info {
                     type_agg: String::new(),
                     date: false,
+                    format: None,
                     size: None,
                     ordre: Ordre::CountDesc,
                 };

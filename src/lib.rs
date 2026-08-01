@@ -18,6 +18,7 @@
 pub mod aggs;
 pub mod analysis;
 pub mod api;
+pub mod dateformat;
 pub mod dismax;
 pub mod dsl;
 pub mod engine;

@@ -631,6 +631,61 @@ def index_cree_a_l_ecriture(es):
 
 
 @scenario
+def format_de_date(es):
+    """Un mapping venu d'une instance reelle declare presque toujours un
+    `format` sur ses dates. Il sert a lire (indexation, bornes d'un `range`) et
+    a rendre (`*_as_string`)."""
+    es.options(ignore_status=404).indices.delete(index="dates")
+    es.indices.create(index="dates", mappings={"properties": {
+        "cree_le": {"type": "date", "format": "yyyy-MM-dd HH:mm:ss"},
+        "jour": {"type": "date", "format": "yyyy-MM-dd"},
+        "multi": {"type": "date", "format": "yyyy-MM-dd HH:mm:ss||yyyy-MM-dd"},
+        "basique": {"type": "date", "format": "basic_date"},
+        "defaut": {"type": "date"},
+    }})
+    es.bulk(operations=[
+        {"index": {"_index": "dates", "_id": "1"}},
+        {"cree_le": "2021-03-04 10:00:00", "jour": "2021-03-04",
+         "multi": "2021-03-04", "basique": "20210304", "defaut": "2021-03-04T10:00:00Z"},
+        {"index": {"_index": "dates", "_id": "2"}},
+        {"cree_le": "2022-06-11 09:30:00", "jour": "2022-06-11",
+         "multi": "2022-06-11 09:30:00", "basique": "20220611",
+         "defaut": "2022-06-11T09:30:00Z"},
+    ], refresh=True)
+
+    def hits(query):
+        return sorted(h["_id"] for h in es.search(index="dates", query=query)["hits"]["hits"])
+
+    # Les bornes d'un `range` se lisent au format du champ, pas en ISO.
+    assert hits({"range": {"cree_le": {"gte": "2022-01-01 00:00:00"}}}) == ["2"]
+    assert hits({"range": {"jour": {"lt": "2022-01-01"}}}) == ["1"]
+    assert hits({"term": {"cree_le": "2021-03-04 10:00:00"}}) == ["1"]
+    assert hits({"range": {"basique": {"gte": "20220101"}}}) == ["2"]
+    # Une alternative `||` : les deux ecritures entrent.
+    assert hits({"range": {"multi": {"gte": "2022-01-01"}}}) == ["2"]
+    # Le format par defaut n'a pas bouge.
+    assert hits({"range": {"defaut": {"gte": "2022-01-01T00:00:00Z"}}}) == ["2"]
+    # Le mapping rend le format tel qu'il a ete declare.
+    props = es.indices.get_mapping(index="dates")["dates"]["mappings"]["properties"]
+    assert props["cree_le"]["format"] == "yyyy-MM-dd HH:mm:ss"
+    assert "format" not in props["defaut"]
+    # La forme lisible d'une agregation suit le format du champ.
+    agg = es.search(index="dates", size=0,
+                    aggs={"m": {"max": {"field": "cree_le"}}})["aggregations"]["m"]
+    assert agg["value_as_string"] == "2022-06-11 09:30:00", agg
+    # Ce qui n'est pas au format est refuse — y compris un epoch, comme chez ES.
+    refused(lambda: es.index(index="dates", id="9", document={"cree_le": "04/03/2021"}),
+            contains="failed to parse date field")
+    refused(lambda: es.index(index="dates", id="9", document={"cree_le": 1614852000000}),
+            contains="failed to parse date field")
+    # Un motif qu'on ne sait pas traduire se dit, il ne s'approxime pas.
+    refused(lambda: es.indices.create(index="dz", mappings={"properties": {
+        "x": {"type": "date", "format": "GGGG yyyy"}}}),
+        contains="ne sait pas traduire")
+    es.indices.delete(index="dates")
+
+
+@scenario
 def routes_sans_index(es):
     """`_refresh` et `_mapping` sans index portent sur tous, comme chez ES."""
     for nom in ("multi1", "multi2"):

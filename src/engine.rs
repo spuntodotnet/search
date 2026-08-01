@@ -703,7 +703,8 @@ fn build_doc(
                         continue;
                     }
                 }
-                match mapping::coerce(&chemin, cible.ty, v)? {
+                let format = gen.fields.format_de(&chemin);
+                match mapping::coerce_avec(&chemin, cible.ty, v, format)? {
                     TypedValue::Str(s) => doc.add_text(cible.field, s),
                     TypedValue::I64(n) => doc.add_i64(cible.field, n),
                     TypedValue::F64(n) => doc.add_f64(cible.field, n),
