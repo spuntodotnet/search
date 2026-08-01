@@ -35,6 +35,7 @@ Toutes depuis la **racine** du repo.
 | `python3 tests/compat/diff_relevance.py` | Compare les **résultats et leur ordre** à ceux d'un vrai ES, sur 600 documents |
 | `python3 tests/compat/diff_aggs.py` | Compare les **agrégations** à celles d'un vrai ES, champ par champ |
 | `python3 tests/compat/diff_analyzers.py` | Compare les **analyzers** à ceux d'un vrai ES, token par token |
+| `python3 tests/compat/probe_es7.py [URL]` | Exerce le serveur avec le client officiel **7.x** (code écrit pour un ES 7) : ce qu'un projet resté en 7.10.2 peut brancher tel quel — voir [`compat-es7.md`](compat-es7.md) |
 | `./tests/compat/measure_container.sh [tag]` | Ne construit rien, mesure une image déjà buildée : taille, RSS au repos, temps de démarrage |
 | `docker build -t ferrite .` | Image minimale (`scratch` + binaire statique musl) |
 
@@ -69,6 +70,7 @@ Deux comparateurs, qui ne cherchent pas la même chose :
 | `tests/compat/diff_relevance.py` | la **pertinence** — même corpus de 600 documents des deux côtés, ~115 requêtes générées, et pour chacune : même total, mêmes documents, **même ordre** |
 | `tests/compat/diff_aggs.py` | les **agrégations** — 34 requêtes, comparaison du JSON champ par champ, clés comprises |
 | `tests/compat/diff_analyzers.py` | les **analyzers** — chaque analyzer intégré confronté à son homonyme d'ES sur 28 textes, token par token |
+| `tests/compat/probe_es7.py` | ce qu'un **client 7.x** obtient — le même fichier se lance contre ferrite, contre un `elasticsearch:7.10.2` et contre un `elasticsearch:8.15.0`, ce qui sépare « ferrite est incomplet » de « la 8 a supprimé ça » |
 
 Le second est celui qui compte pour un moteur de recherche : l'ordre des
 résultats est précisément ce qu'un test écrit à la main ne sait pas vérifier,

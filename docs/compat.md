@@ -44,7 +44,7 @@ Version d'API annoncée : **Elasticsearch 8.15.0** (`version.number`,
 | `POST /{index}/_refresh` | ✅ | |
 | `POST\|GET /_analyze`, `/{index}/_analyze` | 🟡 | `text` (chaîne ou liste), `analyzer`, `field`. `tokenizer` / `filter` / `char_filter` explicites : ❌ |
 | Mapping dynamique | ✅ | `dynamic` : `true` (défaut), `false`, `strict`. `runtime` ❌. Voir plus bas |
-| Alias, templates, ILM, `_settings`, `_close`, `_open` | ❌ | |
+| Alias, templates, ILM, `_settings`, `_stats`, `_close`, `_open` | ❌ | |
 
 ### Mapping dynamique
 
@@ -207,6 +207,7 @@ avec une erreur qui dit pourquoi.
 | `aggs` / `aggregations` | 🟡 | voir la section dédiée |
 | `highlight`, `search_after`, `scroll`, PIT, `collapse`, `knn`, `explain`, `fields`, `post_filter`, `min_score`, `suggest`, `rescore`, `track_scores`, `q` | ❌ | |
 | `ignore_unavailable`, `allow_no_indices`, `expand_wildcards`, `routing`, `filter_path`, `typed_keys` | ❌ | ils n'ont de sens qu'avec des motifs multi-index ou changent la forme de la réponse |
+| `rest_total_hits_as_int` | ❌ | il change la forme de `hits.total` (nombre au lieu d'objet). Accepté par ES 8, refusé ici : du code venu de la 6.x/7.x s'en sert encore, voir [`compat-es7.md`](compat-es7.md) |
 | `_msearch`, `_search/template`, `_explain`, `_validate` | ❌ | |
 
 Les paramètres purement cosmétiques `pretty`, `human` et `error_trace` sont

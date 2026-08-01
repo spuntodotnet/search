@@ -37,7 +37,10 @@ réel est la **couche de compatibilité** au-dessus.
 ### Dans le périmètre
 
 - API HTTP compatible **Elasticsearch 8.x** — les clients officiels
-  (`elasticsearch-py`, `-js`, `-go`) doivent fonctionner sans modification.
+  (`elasticsearch-py`, `-js`, `-go`) doivent fonctionner sans modification. Un
+  client **7.x** se connecte sans rien changer lui aussi ; ce qui casse alors,
+  c'est ce que la 8 a supprimé — inventaire mesuré dans
+  [`docs/compat-es7.md`](docs/compat-es7.md).
 - **Ingestion** : `_doc`, `_create`, `_update`, `_mget`, `_bulk` (NDJSON),
   sémantique de `refresh`.
 - **Mappings** : types de base, multi-fields (`.keyword`), analyzers
