@@ -160,7 +160,9 @@ différemment. ferrite applique désormais les frontières de mots d'Unicode
 | `_update_by_query`, `_delete_by_query`, `_reindex`, pipelines d'ingestion | ❌ | |
 
 Sans `refresh`, une écriture devient visible **au plus tard après 1 seconde**
-(équivalent du `index.refresh_interval` d'ES).
+(équivalent du `index.refresh_interval` d'ES). Avec `refresh`, la visibilité est
+garantie au retour de l'appel, y compris si le rafraîchissement de fond est en
+train de tourner — les rafraîchissements sont sérialisés entre eux.
 
 ## Recherche
 

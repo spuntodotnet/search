@@ -126,6 +126,14 @@ pub struct FerriteIndex {
     docs: RwLock<HashMap<String, DocMeta>>,
     seq_counter: AtomicU64,
     dirty: AtomicBool,
+    /// Serialise les rafraichissements entre eux.
+    ///
+    /// `refresh` est une garantie : au retour, ce qui etait ecrit avant l'appel
+    /// est visible. Sans ce verrou, un appel explicite pouvait tomber pendant
+    /// qu'un rafraichissement de fond avait deja pris le drapeau `dirty` sans
+    /// avoir fini de commiter — il rendait alors la main trop tot, et le
+    /// document n'etait pas encore visible.
+    refresh_lock: Mutex<()>,
 }
 
 impl FerriteIndex {
@@ -163,6 +171,9 @@ impl FerriteIndex {
 
     /// Rend les ecritures visibles a la recherche (le `_refresh` d'ES).
     pub fn refresh(&self) -> EsResult<()> {
+        // Attendre un rafraichissement deja en cours plutot que de rendre la
+        // main pendant qu'il commite encore.
+        let _garde = self.refresh_lock.lock().expect("refresh lock");
         if !self.dirty.swap(false, Ordering::AcqRel) {
             return Ok(());
         }
@@ -734,6 +745,7 @@ impl Catalog {
             docs: RwLock::new(HashMap::new()),
             seq_counter: AtomicU64::new(0),
             dirty: AtomicBool::new(false),
+            refresh_lock: Mutex::new(()),
         });
         guard.insert(name.to_string(), idx.clone());
         Ok(idx)
@@ -900,6 +912,7 @@ fn open_index(dir: &Path, name: &str) -> EsResult<FerriteIndex> {
         docs: RwLock::new(docs),
         seq_counter: AtomicU64::new(next_seq),
         dirty: AtomicBool::new(false),
+        refresh_lock: Mutex::new(()),
     })
 }
 

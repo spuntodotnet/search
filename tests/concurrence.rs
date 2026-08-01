@@ -206,3 +206,64 @@ fn ecritures_et_suppressions_concurrentes() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `refresh` est une **garantie** : au retour, ce qui etait ecrit avant l'appel
+/// doit etre visible. Or ferrite rafraichit aussi en tache de fond.
+///
+/// Si le rafraichissement de fond a deja pris le drapeau « il y a du nouveau »
+/// et n'a pas fini de commiter, un `refresh` explicite pourrait croire qu'il n'a
+/// rien a faire et rendre la main **avant** que le document soit visible. Ce
+/// test provoque cette course.
+#[test]
+fn refresh_garantit_la_visibilite_malgre_le_rafraichissement_de_fond() {
+    let dir = tmp_dir("refresh");
+    let cat = catalog(&dir);
+    let idx = cat
+        .create(
+            "livres",
+            Mapping::parse(&json!({"properties": {"titre": {"type": "text"}}})).unwrap(),
+        )
+        .unwrap();
+
+    // Le rafraichissement de fond, en continu, comme dans le serveur.
+    let stop = Arc::new(AtomicBool::new(false));
+    let fond = {
+        let idx = idx.clone();
+        let stop = stop.clone();
+        thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                let _ = idx.refresh();
+            }
+        })
+    };
+
+    for i in 0..300 {
+        let id = format!("doc-{i}");
+        idx.index_doc(
+            &id,
+            &json!({"titre": format!("titre {i}")}),
+            WriteOptions::default(),
+        )
+        .unwrap();
+        // Le contrat : apres ce refresh, le document est visible.
+        idx.refresh().unwrap();
+
+        let gen = idx.current();
+        let searcher = gen.searcher();
+        let terme = tantivy::Term::from_field_text(gen.fields.id, &id);
+        let trouve = searcher
+            .search(
+                &tantivy::query::TermQuery::new(terme, tantivy::schema::IndexRecordOption::Basic),
+                &tantivy::collector::Count,
+            )
+            .unwrap();
+        assert_eq!(
+            trouve, 1,
+            "[{id}] devait etre visible apres refresh (tour {i})"
+        );
+    }
+
+    stop.store(true, Ordering::Relaxed);
+    fond.join().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
