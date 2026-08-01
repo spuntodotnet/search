@@ -37,19 +37,16 @@ Il y a deux questions derrière celle-là, et elles n'ont pas la même réponse.
 | | Question | Réponse |
 |---|---|---|
 | **Le client** | mon code 7.x se connecte-t-il et parle-t-il à ferrite ? | **Oui**, et ce qui casse est le coût de la migration 7→8, pas ferrite |
-| **L'instance** | ferrite peut-il remplacer mon Elasticsearch 7.10.2 ? | **Sur les requêtes, oui — à l'identique.** Sur les index et les documents, seulement s'ils sont **plats** |
+| **L'instance** | ferrite peut-il remplacer mon Elasticsearch 7.10.2 ? | **Sur les requêtes, oui — à l'identique.** Sur les index, ce qui reste à retirer est un mapping à la fois |
 
-Le point dur n'est donc pas la version : c'est le périmètre de ferrite.
-**Un document contenant un sous-objet est refusé** (`{"fournisseur": {…}}` comme
-`[{…}]`), et un mapping 7.x traîne presque toujours des analyzers sur mesure,
-un `format` de date ou un objet. En revanche, sur un corpus identique,
-ferrite rend **les mêmes documents dans le même ordre** que l'instance 7.10.2.
-
-Si les documents ont des sous-objets, la suite dépend de **lequel** des trois
-mécanismes d'Elasticsearch est en jeu — `object`, `nested` ou `join` : le
-premier est un chantier cadré, les deux autres sont un mur. Voir
-[la section dédiée](#object-nested-join--trois-choses-différentes), et
-`diff_es7.py --inventaire` pour le savoir sur une instance donnée.
+Le point dur n'est donc pas la version : c'est le périmètre de ferrite. Les
+documents imbriqués, eux, ne sont plus un obstacle — `object`, `nested` et
+`join` sont supportés et vérifiés contre un vrai 7.10.2. Ce qu'un mapping 7.x
+traîne encore et que ferrite refuse : les **analyzers sur mesure** et les
+**analyzers de langue** (`french`, `english`), et les **formats de date
+personnalisés** (`yyyy-MM-dd HH:mm:ss`). Voir
+[la section dédiée](#object-nested-join--trois-choses-différentes) et
+`diff_es7.py --inventaire` pour savoir ce qu'une instance donnée utilise.
 
 Les deux moitiés de ce fichier traitent les deux questions séparément, parce
 qu'elles ne se corrigent pas au même endroit.
@@ -250,19 +247,16 @@ entrer dans ferrite, ce qui n'est plus « le code client ne change pas ».
 À vérifier en premier sur l'instance : est-ce que les documents ont des
 sous-objets ? Si oui, la migration demande une transformation, pas un transfert.
 
-### `object`, `nested`, `join` : trois choses différentes
+### `object`, `nested`, `join` : les trois sont supportés
 
-Elasticsearch a trois façons de représenter « un objet dans un document », et
-elles ne coûtent pas du tout la même chose à reprendre. Mesuré des deux côtés :
+Elasticsearch a trois façons de représenter « un objet dans un document ».
+Chacune est implémentée et **vérifiée contre un vrai 7.10.2** :
 
-| Ce que le mapping déclare | ES 7.10.2 | ferrite |
+| Ce que le mapping déclare | ferrite | Vérification |
 |---|---|---|
-| sous-objet implicite (`{"fournisseur": {"nom": …}}`, sans mapping) | mapping `fournisseur.properties.nom`, requête `term fournisseur.nom` | refus explicite à l'indexation |
-| sous-objet déclaré (`"fournisseur": {"properties": {…}}`) | accepté | `ferrite ne supporte pas les champs objet/imbriques` |
-| `"type": "object"` | accepté | `ferrite ne supporte pas le type de champ [object]` |
-| `"type": "nested"` + requête `nested` | accepté | `ferrite ne supporte pas le type de champ [nested]` |
-| `"type": "join"` + `has_child` / `has_parent` | accepté | `ferrite ne supporte pas le type de champ [join]` |
-| champ déjà aplati (`fournisseur_nom`) | accepté | **accepté** |
+| sous-objet implicite ou déclaré, `"type": "object"` | ✅ indexé par chemins (`client.ville`), `_mapping` re-niché | **15/15** identiques à ES : `term`, `range` en profondeur, tri, agrégation, `_source` et son filtrage, mapping dynamique |
+| `"type": "nested"` + requête `nested` | ✅ la corrélation entre sous-champs d'un même élément est conservée | **15/16** identiques ; la 16ᵉ est un refus explicite là où ES rend 0 hit en silence |
+| `"type": "join"` + `has_child` / `has_parent` / `parent_id` | ✅ jointure en deux passes | **15/15** identiques |
 
 Pour savoir lequel des trois est en jeu sur une instance — et combien de fois —
 sans rien y écrire ni même lancer ferrite :
@@ -271,59 +265,34 @@ sans rien y écrire ni même lancer ferrite :
 python3 tests/compat/diff_es7.py --inventaire http://mon-es:9200
 ```
 
-```
-  structures :
-      3  object (sous-objet)    ex. blog:auteur
-      1  join (parent/enfant)   ex. blog:lien
-      1  nested                 ex. commandes:lignes
-```
+Ce qui reste hors de portée, et se refuse explicitement plutôt que de rendre un
+résultat faux :
 
-**Ce que chacun demanderait à ferrite**, pour que l'arbitrage se fasse sur des
-faits :
+- **un champ `text` dans une clause `nested`** — la vérification élément par
+  élément lit des colonnes, qui portent la valeur et non les termes analysés.
+  Son multi-field `.keyword` fonctionne, lui ;
+- **le score à l'intérieur d'un `nested` ou d'un `join`** (`score_mode`) : il
+  n'y a pas de document par élément, donc pas de score par élément ;
+- **`nested` dans un `nested`**, `inner_hits`.
 
-- **`object` — faisable, et pas énorme.** Elasticsearch n'invente rien ici : un
-  sous-objet *est* un ensemble de chemins pointés (`client.ville`), et c'est
-  ainsi qu'il l'indexe. Or ferrite indexe **déjà** par chemin pointé : ses
-  multi-fields (`titre.keyword`) sont des champs tantivy à part entière, et tout
-  le Query DSL, les tris et les agrégations résolvent un champ par son chemin
-  (`Fields.mapped`, une table `chemin → champ`). Le support demande donc de
-  parcourir récursivement le mapping et le document au lieu de leur premier
-  niveau, et de re-nicher les chemins dans la réponse `_mapping`. Le reste du
-  moteur n'a pas à bouger.
-- **`nested` — faisable sans jointure de bloc, en filtre.** tantivy n'a pas
-  l'équivalent du `ToParentBlockJoinQuery` de Lucene, mais il conserve l'ordre
-  des valeurs d'un champ multivalué (mesuré) : la corrélation entre sous-champs
-  peut donc se retrouver colonne par colonne, sans éclater le document. Exact en
-  filtre ; c'est le **scoring à l'intérieur** du `nested` qui resterait hors de
-  portée. Conception détaillée et chiffrage : [`nested-join.md`](nested-join.md).
-- **`join` — plus simple qu'il n'y paraît ici.** Parent/enfant coûte cher à
-  Elasticsearch parce qu'il est distribué ; mono-shard, `has_child` /
-  `has_parent` se ramènent à une requête en deux passes. Voir la même note.
-
-Autrement dit : les sous-objets ordinaires sont un petit chantier, `nested` en
-filtre et `join` des chantiers moyens — et aucun des trois ne demande de
-réécrire un moteur de recherche.
-
-> Ce transfert a mis au jour un bug, corrigé dans la même PR : un champ valant
-> `[{…}]` était **accepté en silence** (gardé dans `_source`, absent du mapping,
-> donc introuvable) là où l'objet nu était refusé. Il est désormais refusé de la
-> même façon.
+Comment c'est fait, et pourquoi ça n'a pas demandé de réécrire Lucene :
+[`nested-join.md`](nested-join.md).
 
 ## Les index : hébergeables dégradés
 
 La définition exportée d'un index 7.x typique (analyzer sur mesure, analyzer
 `french`, `format` de date, sous-objet, `refresh_interval`) est rejouée sur
-ferrite en pelant les couches. Aucune ne passe telle quelle ; ce qui reste :
+ferrite en pelant les couches. Aucune ne passe telle quelle ; ce qui reste —
+désormais **tous les champs**, dont le sous-objet :
 
 ```
-  [ok] legacy_7x -> cree sur ferrite (mappings nettoyes (7/8 champs))
-       retire : champ [fournisseur]  — champs objet/imbriques
+  [ok] legacy_7x -> cree sur ferrite (mappings nettoyes (8/8 champs))
        retire : champ [cree_le]      — parametre [format]
        retire : champ [description]  — analyzer [french]
        retire : champ [titre]        — analyzer [fr_produit] (settings.analysis)
 ```
 
-Trois familles de refus, par ordre de gêne :
+Deux familles de refus, par ordre de gêne :
 
 1. **`settings.analysis` et les analyzers de langue** — ce n'est pas un détail
    de configuration : un champ `text` analysé en `french` n'est pas indexé de la
@@ -331,10 +300,9 @@ Trois familles de refus, par ordre de gêne :
    pourquoi le refus est assumé (le stemmer de tantivy n'est pas celui de
    Lucene) ; la conséquence pratique est qu'un index 7.x qui s'appuie sur un
    analyzer de langue **ne se réplique pas à l'identique** aujourd'hui.
-2. **Les sous-objets** — voir ci-dessus.
-3. **Les paramètres de champ décoratifs** (`format` sur une date, etc.) et tous
-   les réglages d'index (`refresh_interval`, allocation…) : ceux-là se retirent
-   sans conséquence sur les résultats.
+2. **Les `format` de date personnalisés**, et tous les réglages d'index
+   (`refresh_interval`, allocation…). Les seconds se retirent sans conséquence
+   sur les résultats ; le premier bloque l'indexation des documents concernés.
 
 Les réglages « privés » que l'export contient (`index.uuid`, `creation_date`,
 `provided_name`, `version`, `routing.allocation.*`) sont refusés par
