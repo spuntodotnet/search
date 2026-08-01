@@ -289,6 +289,72 @@ def multi_fields_deux_niveaux_refuses(es):
 
 
 @scenario
+def analyzers(es):
+    """Un champ peut declarer son analyzer, et `_analyze` montre le decoupage."""
+    r = es.indices.analyze(analyzer="standard",
+                           text="l'ascension sociale d'un arriviste")
+    # La difference qui compte en francais : ES garde l'elision dans le terme.
+    assert [t["token"] for t in r["tokens"]] == \
+        ["l'ascension", "sociale", "d'un", "arriviste"]
+
+    assert [t["token"] for t in es.indices.analyze(
+        analyzer="whitespace", text="Bel-Ami Zola")["tokens"]] == ["Bel-Ami", "Zola"]
+    assert [t["token"] for t in es.indices.analyze(
+        analyzer="keyword", text="Bel-Ami Zola")["tokens"]] == ["Bel-Ami Zola"]
+    # `simple` coupe sur les chiffres, `standard` non.
+    assert [t["token"] for t in es.indices.analyze(
+        analyzer="simple", text="version 2 du logiciel")["tokens"]] == \
+        ["version", "du", "logiciel"]
+
+    # Un champ declare son analyzer, et la recherche s'y conforme.
+    es.options(ignore_status=404).indices.delete(index="analyse")
+    es.indices.create(index="analyse", mappings={"properties": {
+        "brut": {"type": "text", "analyzer": "whitespace"},
+        "normal": {"type": "text"},
+    }})
+    assert es.indices.get_mapping(index="analyse")["analyse"]["mappings"] \
+        ["properties"]["brut"]["analyzer"] == "whitespace"
+    es.index(index="analyse", id="1", refresh=True,
+             document={"brut": "Bel-Ami", "normal": "Bel-Ami"})
+
+    def hits(**kw):
+        return [h["_id"] for h in es.search(index="analyse", **kw)["hits"]["hits"]]
+
+    # `whitespace` ne minuscule pas : « bel-ami » ne matche pas, « Bel-Ami » oui.
+    assert hits(query={"match": {"brut": "Bel-Ami"}}) == ["1"]
+    assert hits(query={"match": {"brut": "bel-ami"}}) == []
+    # Le champ `standard` decoupe et minuscule.
+    assert hits(query={"match": {"normal": "bel"}}) == ["1"]
+
+    # `_analyze` peut aussi partir d'un champ.
+    r = es.indices.analyze(index="analyse", field="brut", text="Bel-Ami Zola")
+    assert [t["token"] for t in r["tokens"]] == ["Bel-Ami", "Zola"]
+    es.indices.delete(index="analyse")
+
+
+@scenario
+def analyzers_refuses(es):
+    """Les analyzers de langue portent le nom d'ES mais pas son stemmer :
+    les accepter changerait silencieusement les termes indexes."""
+    for nom in ("french", "english", "snowball"):
+        refused(lambda n=nom: es.indices.create(
+            index="an", mappings={"properties": {"t": {"type": "text", "analyzer": n}}}),
+            contains=nom)
+    refused(lambda: es.indices.create(
+        index="an", mappings={"properties": {"t": {"type": "text",
+                                                   "analyzer": "inexistant"}}}),
+        contains="inexistant")
+    # Un analyzer sur mesure passe par [settings.analysis], non supporte.
+    refused(lambda: es.indices.create(index="an", settings={"analysis": {
+        "analyzer": {"mien": {"type": "custom", "tokenizer": "standard"}}}}),
+        contains="analysis")
+    # `analyzer` n'a de sens que sur un champ `text`.
+    refused(lambda: es.indices.create(index="an", mappings={"properties": {
+        "k": {"type": "keyword", "analyzer": "standard"}}}),
+        contains="analyzer")
+
+
+@scenario
 def modification_de_mapping_refusee(es):
     refused(lambda: es.indices.put_mapping(
         index=INDEX, properties={"nouveau": {"type": "text"}}))

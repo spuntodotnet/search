@@ -117,8 +117,14 @@ sans rien déclarer.
 Les **agrégations** sont là aussi : métriques, `terms`, `range`, `histogram`,
 `date_histogram`, et sous-agrégations — de quoi construire des facettes.
 
-**Ce qui n'y est pas encore** : `highlight`, `search_after`, analyzers
-configurables, `_update`, `_mget`, `prefix` / `wildcard` / `fuzzy`.
+Les **analyzers** `standard`, `simple`, `whitespace`, `keyword` et `stop` sont
+vérifiés token par token identiques à ceux d'ES, et `_analyze` permet de le
+constater. Les analyzers de langue (`french`, `english`…) sont **refusés** :
+le stemmer de tantivy n'est pas celui de Lucene, et porter le nom d'ES en
+indexant autre chose changerait silencieusement les résultats.
+
+**Ce qui n'y est pas encore** : `highlight`, `search_after`, analyzers de langue
+et sur mesure, `_update`, `_mget`, `prefix` / `wildcard` / `fuzzy`.
 
 L'inventaire complet — supporté, partiel, refusé, et les divergences assumées —
 est dans [`docs/compat.md`](docs/compat.md). Rien de ce qui n'est pas supporté
