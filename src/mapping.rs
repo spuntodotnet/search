@@ -316,6 +316,10 @@ pub struct Mapping {
     /// appartient, ce qui permet de retrouver la correspondance qu'un `object`
     /// perd. Voir [`crate::nested`].
     pub nested: BTreeSet<String>,
+    /// Les objets declares sans aucun sous-champ (`{"type": "object"}`). Ils
+    /// n'indexent rien — leurs champs viendront des documents — mais ES les
+    /// rend dans `_mapping`, donc on les garde.
+    pub objets_vides: BTreeSet<String>,
     /// Le champ `join`, s'il y en a un. ES n'en autorise qu'un par index.
     pub join: Option<Join>,
     pub dynamic: Dynamic,
@@ -332,6 +336,11 @@ impl Mapping {
         let mut props = Map::new();
         for (chemin, fm) in &self.properties {
             niche(&mut props, chemin, fm.to_json());
+        }
+        for vide in &self.objets_vides {
+            if pointe_mut(&mut props, vide).is_none() {
+                niche(&mut props, vide, json!({"type": "object"}));
+            }
         }
         if let Some(j) = &self.join {
             props.insert(j.champ.clone(), j.to_json());
@@ -360,6 +369,7 @@ impl Mapping {
 
         let mut properties = BTreeMap::new();
         let mut nested = BTreeSet::new();
+        let mut vides = BTreeSet::new();
         let mut join = None;
         let mut dynamic = Dynamic::default();
         for (key, val) in obj {
@@ -378,7 +388,7 @@ impl Mapping {
                             join = Some(Join::parse(name, as_obj(spec, name)?)?);
                             continue;
                         }
-                        parse_propriete(name, spec, &mut properties, &mut nested)?;
+                        parse_propriete(name, spec, &mut properties, &mut nested, &mut vides)?;
                     }
                 }
                 "dynamic" => dynamic = Dynamic::parse(val)?,
@@ -401,6 +411,7 @@ impl Mapping {
         Ok(Self {
             properties,
             nested,
+            objets_vides: vides,
             join,
             dynamic,
         })
@@ -418,6 +429,7 @@ fn parse_propriete(
     spec: &Value,
     dans: &mut BTreeMap<String, FieldMapping>,
     nested: &mut BTreeSet<String>,
+    vides: &mut BTreeSet<String>,
 ) -> EsResult<()> {
     for part in chemin.split('.') {
         validate_field_name_part(part, chemin)?;
@@ -471,12 +483,14 @@ fn parse_propriete(
             EsError::mapper_parsing(format!("[{chemin}.properties] doit etre un objet"))
         })?;
         if sous.is_empty() {
-            return Err(EsError::mapper_parsing(format!(
-                "[{chemin}] : un objet sans [properties] n'indexe rien"
-            )));
+            // Un objet sans sous-champ ne declare rien — ES l'accepte, et ses
+            // champs viendront des documents. On le memorise quand meme pour
+            // pouvoir le rendre dans `_mapping`.
+            vides.insert(chemin.to_string());
+            return Ok(());
         }
         for (nom, decl) in sous {
-            parse_propriete(&format!("{chemin}.{nom}"), decl, dans, nested)?;
+            parse_propriete(&format!("{chemin}.{nom}"), decl, dans, nested, vides)?;
         }
         return Ok(());
     }
@@ -484,9 +498,8 @@ fn parse_propriete(
         obj.get("type").and_then(Value::as_str),
         Some("object") | Some("nested")
     ) {
-        return Err(EsError::mapper_parsing(format!(
-            "[{chemin}] : un objet sans [properties] n'indexe rien"
-        )));
+        vides.insert(chemin.to_string());
+        return Ok(());
     }
 
     let fm = parse_field_mapping(chemin, spec, false)?;

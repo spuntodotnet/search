@@ -17,6 +17,20 @@ précisément « Elasticsearch sait faire, ferrite pas encore ».
 Version d'API annoncée : **Elasticsearch 8.15.0** (`version.number`,
 `_nodes`). Toutes les réponses portent `X-elastic-product: Elasticsearch`.
 
+**La suite de conformance d'Elasticsearch elle-même** (`tests/compat/conformance_es.py`,
+643 cas de la 7.10.2 — la dernière version Apache 2.0) donne l'état d'ensemble :
+
+| | ferrite | ES 7.10.2 (validation du runner) |
+|---|---|---|
+| réussis | 24 | 537 |
+| refusés explicitement (hors périmètre) | 305 | 0 |
+| sautés (version, fonctionnalité du runner) | 96 | 103 |
+| **échecs** | **218** | 3 |
+
+Les 218 échecs sont l'inventaire des écarts qui restent — les plus gros sont
+listés dans [`conformance.md`](conformance.md). C'est la mesure la moins
+complaisante du projet : les cas viennent d'Elastic, pas de nous.
+
 ---
 
 ## Poignée de main et cluster
