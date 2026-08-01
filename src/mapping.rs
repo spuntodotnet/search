@@ -6,7 +6,7 @@
 //! qu'en bricolant un schema extensible. Le mapping dynamique aura sa propre
 //! iteration ; d'ici la, la couture est ici et nulle part ailleurs.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{json, Map, Value};
 use tantivy::schema::{
@@ -213,6 +213,11 @@ impl Dynamic {
 #[derive(Debug, Clone, Default)]
 pub struct Mapping {
     pub properties: BTreeMap<String, FieldMapping>,
+    /// Les chemins declares `type: nested`. Un `nested` s'indexe comme un objet
+    /// — mais chaque valeur retient **a quel element du tableau** elle
+    /// appartient, ce qui permet de retrouver la correspondance qu'un `object`
+    /// perd. Voir [`crate::nested`].
+    pub nested: BTreeSet<String>,
     pub dynamic: Dynamic,
 }
 
@@ -227,6 +232,11 @@ impl Mapping {
         let mut props = Map::new();
         for (chemin, fm) in &self.properties {
             niche(&mut props, chemin, fm.to_json());
+        }
+        for racine in &self.nested {
+            if let Some(o) = pointe_mut(&mut props, racine).and_then(Value::as_object_mut) {
+                o.insert("type".into(), json!("nested"));
+            }
         }
         let mut o = Map::new();
         if self.dynamic != Dynamic::True {
@@ -246,6 +256,7 @@ impl Mapping {
             .ok_or_else(|| EsError::mapper_parsing("[mappings] doit etre un objet"))?;
 
         let mut properties = BTreeMap::new();
+        let mut nested = BTreeSet::new();
         let mut dynamic = Dynamic::default();
         for (key, val) in obj {
             match key.as_str() {
@@ -254,7 +265,7 @@ impl Mapping {
                         EsError::mapper_parsing("[mappings.properties] doit etre un objet")
                     })?;
                     for (name, spec) in props {
-                        parse_propriete(name, spec, &mut properties)?;
+                        parse_propriete(name, spec, &mut properties, &mut nested)?;
                     }
                 }
                 "dynamic" => dynamic = Dynamic::parse(val)?,
@@ -276,6 +287,7 @@ impl Mapping {
         }
         Ok(Self {
             properties,
+            nested,
             dynamic,
         })
     }
@@ -291,6 +303,7 @@ fn parse_propriete(
     chemin: &str,
     spec: &Value,
     dans: &mut BTreeMap<String, FieldMapping>,
+    nested: &mut BTreeSet<String>,
 ) -> EsResult<()> {
     for part in chemin.split('.') {
         validate_field_name_part(part, chemin)?;
@@ -309,11 +322,22 @@ fn parse_propriete(
     // avec ou sans `"type": "object"`.
     if let Some(sous) = obj.get("properties") {
         let ty = obj.get("type").and_then(Value::as_str);
-        if !matches!(ty, None | Some("object")) {
+        if !matches!(ty, None | Some("object") | Some("nested")) {
             return Err(EsError::mapper_parsing(format!(
                 "[{chemin}] : [properties] n'a pas de sens sur un champ de type [{}]",
                 ty.unwrap_or("?")
             )));
+        }
+        if ty == Some("nested") {
+            // Un `nested` dans un `nested` demanderait un indice d'element par
+            // niveau : refus explicite plutot qu'une correlation fausse.
+            if let Some(parent) = nested.iter().find(|r| est_sous_chemin(chemin, r)) {
+                return Err(EsError::unsupported(format!(
+                    "ferrite ne supporte pas un [nested] dans un autre [nested] (champ \
+                     [{chemin}], deja sous [{parent}])"
+                )));
+            }
+            nested.insert(chemin.to_string());
         }
         for autre in obj.keys() {
             if autre != "properties" && autre != "type" && autre != "dynamic" {
@@ -338,11 +362,14 @@ fn parse_propriete(
             )));
         }
         for (nom, decl) in sous {
-            parse_propriete(&format!("{chemin}.{nom}"), decl, dans)?;
+            parse_propriete(&format!("{chemin}.{nom}"), decl, dans, nested)?;
         }
         return Ok(());
     }
-    if obj.get("type").and_then(Value::as_str) == Some("object") {
+    if matches!(
+        obj.get("type").and_then(Value::as_str),
+        Some("object") | Some("nested")
+    ) {
         return Err(EsError::mapper_parsing(format!(
             "[{chemin}] : un objet sans [properties] n'indexe rien"
         )));
@@ -370,6 +397,28 @@ fn conflit_de_chemin(chemin: &str, dans: &BTreeMap<String, FieldMapping>) -> EsR
         }
     }
     Ok(())
+}
+
+/// `chemin` est-il sous `racine` (strictement) ?
+pub fn est_sous_chemin(chemin: &str, racine: &str) -> bool {
+    chemin
+        .strip_prefix(racine)
+        .is_some_and(|reste| reste.starts_with('.'))
+}
+
+/// Retrouve le noeud `{"properties": {...}}` d'un chemin dans un arbre rendu.
+fn pointe_mut<'a>(props: &'a mut Map<String, Value>, chemin: &str) -> Option<&'a mut Value> {
+    match chemin.split_once('.') {
+        None => props.get_mut(chemin),
+        Some((tete, reste)) => {
+            let sous = props
+                .get_mut(tete)?
+                .as_object_mut()?
+                .get_mut("properties")?
+                .as_object_mut()?;
+            pointe_mut(sous, reste)
+        }
+    }
 }
 
 /// Repose un chemin pointe dans l'arbre `properties` d'une reponse `_mapping`.
@@ -501,15 +550,84 @@ pub fn parcours_feuilles(
     obj: &Map<String, Value>,
     f: &mut impl FnMut(&str, &Value) -> EsResult<()>,
 ) -> EsResult<()> {
-    fn descend(
+    parcours_feuilles_nested(obj, &BTreeSet::new(), &mut |chemin, valeur, _| {
+        f(chemin, valeur)
+    })
+}
+
+/// Meme parcours, mais en suivant les elements des tableaux `nested`.
+///
+/// Le troisieme argument du rappel est l'indice de l'element du tableau
+/// `nested` le plus proche — `None` hors de tout `nested`. C'est **la** donnee
+/// qui distingue `nested` d'`object` : elle permet de savoir, plus tard, que
+/// `l.ref = "A"` et `l.qte = 5` venaient du meme element.
+///
+/// Le rappel `element` est appele une fois par racine `nested` rencontree, avec
+/// le nombre d'elements du tableau.
+pub fn parcours_nested<'a>(
+    obj: &'a Map<String, Value>,
+    nested: &BTreeSet<String>,
+    f: &mut impl FnMut(&str, &'a Value, Option<u32>) -> EsResult<()>,
+    cardinal: &mut impl FnMut(&str, u32) -> EsResult<()>,
+) -> EsResult<()> {
+    parcours_feuilles_nested_avec(obj, nested, f, &mut Some(cardinal))
+}
+
+fn parcours_feuilles_nested<'a>(
+    obj: &'a Map<String, Value>,
+    nested: &BTreeSet<String>,
+    f: &mut impl FnMut(&str, &'a Value, Option<u32>) -> EsResult<()>,
+) -> EsResult<()> {
+    parcours_feuilles_nested_avec(
+        obj,
+        nested,
+        f,
+        &mut None::<&mut dyn FnMut(&str, u32) -> EsResult<()>>,
+    )
+}
+
+fn parcours_feuilles_nested_avec<'a>(
+    obj: &'a Map<String, Value>,
+    nested: &BTreeSet<String>,
+    f: &mut impl FnMut(&str, &'a Value, Option<u32>) -> EsResult<()>,
+    cardinal: &mut Option<impl FnMut(&str, u32) -> EsResult<()>>,
+) -> EsResult<()> {
+    fn descend<'a>(
         chemin: &str,
-        valeur: &Value,
-        f: &mut impl FnMut(&str, &Value) -> EsResult<()>,
+        valeur: &'a Value,
+        elem: Option<u32>,
+        nested: &BTreeSet<String>,
+        f: &mut impl FnMut(&str, &'a Value, Option<u32>) -> EsResult<()>,
+        cardinal: &mut Option<impl FnMut(&str, u32) -> EsResult<()>>,
     ) -> EsResult<()> {
+        // Une racine `nested` : ses elements sont numerotes, et c'est ce
+        // numero que porteront toutes les valeurs qui en descendent.
+        if nested.contains(chemin) {
+            let elements: Vec<&Value> = match valeur {
+                Value::Array(a) => a.iter().filter(|v| !v.is_null()).collect(),
+                Value::Null => return Ok(()),
+                v => vec![v],
+            };
+            if let Some(c) = cardinal.as_mut() {
+                c(chemin, elements.len() as u32)?;
+            }
+            for (i, element) in elements.iter().enumerate() {
+                let o = element.as_object().ok_or_else(|| {
+                    EsError::mapper_parsing(format!(
+                        "[{chemin}] est declare [nested] : ses elements doivent etre des objets"
+                    ))
+                })?;
+                for (nom, v) in o {
+                    descend(&joins(chemin, nom), v, Some(i as u32), nested, f, cardinal)?;
+                }
+            }
+            return Ok(());
+        }
+
         match valeur {
             Value::Object(o) => {
                 for (nom, v) in o {
-                    descend(&joins(chemin, nom), v, f)?;
+                    descend(&joins(chemin, nom), v, elem, nested, f, cardinal)?;
                 }
                 Ok(())
             }
@@ -521,17 +639,17 @@ pub fn parcours_feuilles(
                 }
                 for v in a {
                     if !v.is_null() {
-                        descend(chemin, v, f)?;
+                        descend(chemin, v, elem, nested, f, cardinal)?;
                     }
                 }
                 Ok(())
             }
-            v => f(chemin, v),
+            v => f(chemin, v, elem),
         }
     }
 
     for (nom, valeur) in obj {
-        descend(nom, valeur, f)?;
+        descend(nom, valeur, None, nested, f, cardinal)?;
     }
     Ok(())
 }
@@ -612,7 +730,17 @@ pub struct MappedField {
     pub ignore_above: Option<usize>,
     /// L'analyzer a appliquer aux requetes sur ce champ.
     pub analyzer: Analyzer,
+    /// Sous un `nested` : la colonne jumelle qui dit, pour chaque valeur
+    /// indexee ici, de quel element du tableau elle vient. Meme arite, par
+    /// construction — elle est alimentee dans la meme boucle.
+    pub elem: Option<Field>,
 }
+
+/// Prefixe des colonnes internes qui portent l'indice d'element d'un `nested`.
+/// Un champ utilisateur ne peut pas commencer par `_`, donc pas de collision.
+pub const P_ELEM: &str = "_elem.";
+/// Prefixe de la colonne qui compte les elements d'un `nested`, par document.
+pub const P_NELEM: &str = "_nelem.";
 
 /// Les handles tantivy resolus une fois pour toutes a l'ouverture de l'index.
 #[derive(Debug, Clone)]
@@ -627,6 +755,10 @@ pub struct Fields {
     /// Pour une propriete de premier niveau, toutes les cibles a alimenter a
     /// l'indexation : le champ lui-meme **et** ses multi-fields.
     pub targets: BTreeMap<String, Vec<MappedField>>,
+    /// Les racines `nested` declarees.
+    pub nested: BTreeSet<String>,
+    /// Par racine `nested` : le nombre d'elements du document.
+    pub nelem: BTreeMap<String, Field>,
 }
 
 impl Fields {
@@ -636,6 +768,15 @@ impl Fields {
 
     pub fn targets_of(&self, name: &str) -> Option<&[MappedField]> {
         self.targets.get(name).map(Vec::as_slice)
+    }
+
+    /// La racine `nested` dont ce chemin depend, s'il y en a une.
+    pub fn racine_nested(&self, chemin: &str) -> Option<&str> {
+        self.nested
+            .iter()
+            .rev()
+            .find(|r| est_sous_chemin(chemin, r))
+            .map(String::as_str)
     }
 }
 
@@ -654,6 +795,13 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
 
     let mut mapped = BTreeMap::new();
     let mut targets: BTreeMap<String, Vec<MappedField>> = BTreeMap::new();
+    let mut nelem = BTreeMap::new();
+    for racine in &mapping.nested {
+        nelem.insert(
+            racine.clone(),
+            b.add_u64_field(&format!("{P_NELEM}{racine}"), NumericOptions::from(FAST)),
+        );
+    }
 
     for (name, fm) in &mapping.properties {
         let mut cibles = Vec::with_capacity(1 + fm.fields.len());
@@ -667,6 +815,13 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
                 ty: decl.ty,
                 ignore_above: decl.ignore_above,
                 analyzer: decl.analyzer(),
+                elem: mapping
+                    .nested
+                    .iter()
+                    .any(|r| est_sous_chemin(&chemin, r))
+                    .then(|| {
+                        b.add_u64_field(&format!("{P_ELEM}{chemin}"), NumericOptions::from(FAST))
+                    }),
             };
             mapped.insert(chemin, entry);
             cibles.push(entry);
@@ -683,6 +838,8 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
             seq_no,
             mapped,
             targets,
+            nested: mapping.nested.clone(),
+            nelem,
         },
     )
 }

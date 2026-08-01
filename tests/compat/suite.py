@@ -233,6 +233,91 @@ def sous_objets_devines(es):
 
 
 @scenario
+def nested(es):
+    """`nested` garde la correspondance entre sous-champs d'un meme element.
+
+    C'est toute la difference avec un `object` : « une ligne `vis` d'au moins
+    20 » ne doit pas remonter un document qui a une ligne `vis` *et* une ligne
+    de 20, mais jamais les deux ensemble.
+    """
+    es.options(ignore_status=404).indices.delete(index="cmd")
+    es.indices.create(index="cmd", mappings={"properties": {
+        "client": {"type": "keyword"},
+        "lignes": {"type": "nested", "properties": {
+            "ref": {"type": "keyword"},
+            "qte": {"type": "integer"},
+            "promo": {"type": "boolean"},
+        }},
+    }})
+    es.bulk(operations=[
+        {"index": {"_index": "cmd", "_id": "1"}},
+        {"client": "A", "lignes": [{"ref": "vis", "qte": 5, "promo": False},
+                                   {"ref": "ecrou", "qte": 20, "promo": True}]},
+        {"index": {"_index": "cmd", "_id": "2"}},
+        {"client": "B", "lignes": [{"ref": "vis", "qte": 30, "promo": True}]},
+        {"index": {"_index": "cmd", "_id": "3"}},
+        {"client": "C", "lignes": [{"ref": "ecrou", "qte": 1}]},
+    ], refresh=True)
+
+    def hits(query):
+        return sorted(h["_id"] for h in es.search(index="cmd", query=query, size=10)["hits"]["hits"])
+
+    def nest(inner):
+        return {"nested": {"path": "lignes", "query": inner}}
+
+    assert hits(nest({"term": {"lignes.ref": "vis"}})) == ["1", "2"]
+    # Le coeur du sujet : seul le document 2 a une ligne `vis` d'au moins 20.
+    assert hits(nest({"bool": {"must": [{"term": {"lignes.ref": "vis"}},
+                                        {"range": {"lignes.qte": {"gte": 20}}}]}})) == ["2"]
+    # Un element qui *n'est pas* `vis` : le document 1 en a un.
+    assert hits(nest({"bool": {"must": [{"exists": {"field": "lignes.ref"}}],
+                               "must_not": [{"term": {"lignes.ref": "vis"}}]}})) == ["1", "3"]
+    assert hits(nest({"terms": {"lignes.ref": ["ecrou"]}})) == ["1", "3"]
+    assert hits(nest({"term": {"lignes.promo": True}})) == ["1", "2"]
+    # Combinable avec le reste de la requete, et negeable.
+    assert hits({"bool": {"must": [{"term": {"client": "A"}},
+                                   nest({"range": {"lignes.qte": {"gte": 20}}})]}}) == ["1"]
+    assert hits({"bool": {"must_not": [nest({"range": {"lignes.qte": {"gte": 20}}})]}}) == ["3"]
+    # Le mapping rendu porte bien le type.
+    m = es.indices.get_mapping(index="cmd")["cmd"]["mappings"]["properties"]["lignes"]
+    assert m["type"] == "nested" and m["properties"]["qte"]["type"] == "integer"
+    es.indices.delete(index="cmd")
+
+
+@scenario
+def nested_refus_explicites(es):
+    """Ce que `nested` ne sait pas faire doit se dire, pas s'approximer."""
+    es.options(ignore_status=404).indices.delete(index="cmd2")
+    es.indices.create(index="cmd2", mappings={"properties": {
+        "lignes": {"type": "nested", "properties": {
+            "ref": {"type": "keyword"},
+            "note": {"type": "text"},
+        }},
+    }})
+    es.index(index="cmd2", id="1", refresh=True,
+             document={"lignes": [{"ref": "vis", "note": "a serrer"}]})
+
+    def nest(inner):
+        return {"nested": {"path": "lignes", "query": inner}}
+
+    # Un sous-champ de `nested` interroge depuis la racine : ES rend 0 hit en
+    # silence, ferrite le dit (voir docs/compat.md, divergences assumees).
+    refused(lambda: es.search(index="cmd2", query={"term": {"lignes.ref": "vis"}}),
+            contains="ne peut etre interroge que dans une clause [nested]")
+    # Un `text` ne se verifie pas element par element.
+    refused(lambda: es.search(index="cmd2", query=nest({"match": {"lignes.note": "serrer"}})),
+            contains="ne verifie pas un champ [text]")
+    # Un chemin qui n'est pas `nested`, ou un champ hors du chemin.
+    refused(lambda: es.search(index="cmd2", query={"nested": {"path": "autre",
+                                                             "query": {"match_all": {}}}}),
+            contains="n'est pas un champ de type [nested]")
+    refused(lambda: es.search(index="cmd2", query={"nested": {
+        "path": "lignes", "query": {"term": {"lignes.ref": "vis"}}, "inner_hits": {}}}),
+        contains="[inner_hits]")
+    es.indices.delete(index="cmd2")
+
+
+@scenario
 def mapping_dynamique_preserve_l_existant(es):
     """Le point dur : tantivy fige le schema, donc ferrite change de generation
     quand un champ apparait. Les documents deja indexes doivent survivre."""

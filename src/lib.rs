@@ -23,6 +23,7 @@ pub mod dsl;
 pub mod engine;
 pub mod error;
 pub mod mapping;
+pub mod nested;
 pub mod search;
 pub mod util;
 

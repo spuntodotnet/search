@@ -1,8 +1,9 @@
 # `nested` et `join` : par où on les prendrait
 
-> Note de conception. Rien de ce qui suit n'est implémenté — mais rien n'y est
-> supposé non plus : les deux propriétés de tantivy dont ces chemins dépendent
-> sont vérifiées par `tests/spike_nested.rs`, qui tourne avec `cargo test`.
+> Note de conception. **Le chemin A de `nested` est désormais implémenté**
+> (`src/nested.rs`, voir [`compat.md`](compat.md#nested)) ; `join` ne l'est pas
+> encore. Les deux propriétés de tantivy dont ces chemins dépendent sont
+> vérifiées par `tests/spike_nested.rs`, qui tourne avec `cargo test`.
 
 ## Non, il n'y a pas Lucene à réécrire
 
@@ -47,7 +48,7 @@ test contiguite_des_documents_d_un_meme_run ... ok
 La première ouvre un chemin **sans** jointure de bloc. La seconde ouvre le
 chemin de Lucene. Elles ne mènent pas au même produit.
 
-## `nested`, chemin A — des colonnes corrélées (recommandé)
+## `nested`, chemin A — des colonnes corrélées (implémenté)
 
 L'idée : ne pas éclater le document. Un `nested` reste **un** document tantivy ;
 chaque sous-champ devient une colonne multivaluée, et la corrélation entre

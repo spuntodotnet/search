@@ -133,8 +133,9 @@ différemment. ferrite applique désormais les frontières de mots d'Unicode
 | `date` | 🟡 | `date` (millisecondes) indexé + fast. Formats acceptés : `strict_date_optional_time` (ISO-8601, avec ou sans fuseau, date seule) et `epoch_millis`. `format` personnalisé : ❌ |
 | Tableaux de valeurs | ✅ | tout champ accepte une valeur ou un tableau |
 | `null` | ✅ | ignoré à l'indexation, comme chez ES (pas de `null_value`) |
-| Tout autre type (`geo_point`, `nested`, `object`, `join`, `ip`, `binary`…) | ❌ | `object` / `nested` / `join` ne coûtent pas la même chose à supporter : voir [`compat-es7.md`](compat-es7.md#object-nested-join--trois-choses-différentes) |
-| Sous-objet dans un **document** (`{"a": {"b": 1}}`) | ❌ | refus explicite à l'indexation, **y compris dans un tableau** (`{"a": [{"b": 1}]}`) : sans ce refus le champ serait gardé dans `_source` mais absent du mapping, donc introuvable |
+| `object` (sous-objet), déclaré ou deviné | ✅ | indexé par **chemins pointés** (`client.ville`), comme ES. Un objet n'est pas un champ : il n'existe que par ses feuilles. `GET /_mapping` re-niche les chemins. Un tableau d'objets est aplati — comme ES, la correspondance entre sous-champs d'un même élément est perdue (c'est ce que `nested` corrige) |
+| `nested` | 🟡 | voir [la section dédiée](#nested) |
+| Tout autre type (`geo_point`, `join`, `ip`, `binary`…) | ❌ | `join` : voir [`nested-join.md`](nested-join.md) |
 | `analyzer` | 🟡 | sur un champ `text` : `standard` (défaut), `simple`, `whitespace`, `keyword`, `stop` — voir la section dédiée |
 | Multi-fields (`fields`) | ✅ | un seul niveau, comme ES. `titre.keyword` s'interroge et se trie comme un champ à part entière |
 | `ignore_above` | ✅ | sur un `keyword` : au-delà, la valeur reste dans `_source` sans être indexée |
@@ -250,6 +251,29 @@ d'être de la couche de mise en forme dans `src/aggs.rs` :
 4. ES formate les bornes d'un `range` en flottants (`*-100.0`), même sur un champ
    entier, et rend la clé d'un `date_histogram` en entier.
 
+### `nested`
+
+Un `nested` conserve la correspondance entre les sous-champs d'un même élément :
+« une ligne `vis` d'au moins 20 » ne remonte pas un document qui a une ligne
+`vis` **et** une ligne de 20 sans que ce soit la même.
+
+Il n'y a pas de document caché ni de jointure de bloc : chaque champ sous un
+`nested` a une colonne jumelle qui retient, pour chaque valeur, **de quel
+élément** elle vient. La requête interne sert de pré-filtre (postings), puis
+chaque candidat est vérifié élément par élément sur les colonnes. Conception et
+mesures : [`nested-join.md`](nested-join.md), `src/nested.rs`.
+
+| | État | Détail |
+|---|---|---|
+| `{"nested": {"path", "query"}}` | ✅ | `path` doit être un champ déclaré `nested` |
+| Clauses internes | 🟡 | `term`, `terms`, `match` (sur un champ non analysé), `range`, `exists`, `prefix`, `match_all`, `match_none`, et `bool` (`must` / `filter` / `should` + `minimum_should_match` entier / `must_not`) |
+| Champ `text` dans une clause interne | ❌ | les colonnes portent la valeur, pas les termes analysés. Interroger son multi-field `.keyword`, ou sortir la clause du `nested` |
+| `nested` dans un `nested` | ❌ | il faudrait un indice d'élément par niveau |
+| `score_mode` | 🟡 | `none` et `avg` acceptés ; le score est celui de la requête interne évaluée à plat, il n'y a pas de score par élément. Les autres modes sont ❌ |
+| `inner_hits`, `ignore_unmapped` | ❌ | |
+| Champs devinés sous un `nested` | ✅ | le mapping dynamique fonctionne, et la corrélation avec |
+| Tri et agrégations sur un champ `nested` | ❌ | ils porteraient sur les valeurs à plat, donc sur autre chose que ce que la requête a filtré |
+
 ## Erreurs
 
 Format identique à celui d'Elasticsearch :
@@ -317,6 +341,13 @@ pas pour être découverts en production.
 
 8. **`wait_for` vaut `true` pour `refresh`.** Le commit est synchrone, il n'y a
    rien à attendre.
+
+9. **Un sous-champ de `nested` interrogé depuis la racine est une erreur, pas 0
+   résultat.** Chez Elasticsearch, ces valeurs vivent dans des documents cachés :
+   `{"term": {"lignes.ref": "vis"}}` hors d'une clause `nested` ne rend **rien**,
+   en silence — un piège classique. ferrite les indexe sur le document parent, il
+   pourrait donc y répondre, et rendrait alors des documents là où ES n'en rend
+   aucun. Il refuse explicitement, en nommant la clause `nested` attendue.
 
 ## Limites connues (perf, pas fonctionnalité)
 

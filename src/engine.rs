@@ -580,12 +580,37 @@ fn build_doc(
     doc.add_u64(gen.fields.version, version);
     doc.add_u64(gen.fields.seq_no, seq_no);
 
-    mapping::parcours_feuilles(obj, &mut |chemin, value| {
-        let Some(cibles) = gen.fields.targets_of(chemin) else {
-            return Ok(());
+    // Deux passes sur le document : la premiere compte les elements de chaque
+    // `nested`, la seconde indexe les valeurs. Elles pourraient n'en faire
+    // qu'une, mais elles ecrivent toutes deux dans `doc` — et un document JSON
+    // se reparcourt pour rien.
+    let mut cardinaux: Vec<(String, u32)> = Vec::new();
+    let mut valeurs: Vec<(String, &Value, Option<u32>)> = Vec::new();
+    mapping::parcours_nested(
+        obj,
+        &gen.fields.nested,
+        &mut |chemin, value, elem| {
+            valeurs.push((chemin.to_string(), value, elem));
+            Ok(())
+        },
+        &mut |racine, n| {
+            cardinaux.push((racine.to_string(), n));
+            Ok(())
+        },
+    )?;
+
+    for (racine, n) in cardinaux {
+        if let Some(f) = gen.fields.nelem.get(&racine) {
+            doc.add_u64(*f, u64::from(n));
+        }
+    }
+
+    for (chemin, value, elem) in valeurs {
+        let Some(cibles) = gen.fields.targets_of(&chemin) else {
+            continue;
         };
         let values: Vec<&Value> = match value {
-            Value::Null => return Ok(()),
+            Value::Null => continue,
             Value::Array(a) => a.iter().collect(),
             v => vec![v],
         };
@@ -601,7 +626,7 @@ fn build_doc(
                         continue;
                     }
                 }
-                match mapping::coerce(chemin, cible.ty, v)? {
+                match mapping::coerce(&chemin, cible.ty, v)? {
                     TypedValue::Str(s) => doc.add_text(cible.field, s),
                     TypedValue::I64(n) => doc.add_i64(cible.field, n),
                     TypedValue::F64(n) => doc.add_f64(cible.field, n),
@@ -610,10 +635,15 @@ fn build_doc(
                         doc.add_date(cible.field, DateTime::from_timestamp_millis(ms))
                     }
                 }
+                // L'indice d'element est ecrit **exactement** quand une valeur
+                // l'est : les deux colonnes gardent la meme arite, meme si
+                // `ignore_above` en saute une.
+                if let (Some(e), Some(f)) = (elem, cible.elem) {
+                    doc.add_u64(f, u64::from(e));
+                }
             }
         }
-        Ok(())
-    })?;
+    }
     Ok(doc)
 }
 
