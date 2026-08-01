@@ -258,18 +258,19 @@ faits :
   parcourir récursivement le mapping et le document au lieu de leur premier
   niveau, et de re-nicher les chemins dans la réponse `_mapping`. Le reste du
   moteur n'a pas à bouger.
-- **`nested` — un autre moteur.** La sémantique de `nested` (chaque sous-objet
-  interrogé comme une unité, pour que `qte > 10` et `ref = "A"` portent sur *la
-  même* ligne) repose chez Lucene sur des documents cachés et une jointure de
-  bloc (`ToParentBlockJoinQuery`). tantivy n'a pas d'équivalent. C'est un projet,
-  pas une itération — et l'aplatir en `object` donnerait des résultats **faux**
-  sans le dire, ce que ce projet refuse.
-- **`join` — hors périmètre.** Parent/enfant, c'est la même famille de jointures,
-  plus le routage. Rien dans un déploiement mono-conteneur ne le rend
-  indispensable.
+- **`nested` — faisable sans jointure de bloc, en filtre.** tantivy n'a pas
+  l'équivalent du `ToParentBlockJoinQuery` de Lucene, mais il conserve l'ordre
+  des valeurs d'un champ multivalué (mesuré) : la corrélation entre sous-champs
+  peut donc se retrouver colonne par colonne, sans éclater le document. Exact en
+  filtre ; c'est le **scoring à l'intérieur** du `nested` qui resterait hors de
+  portée. Conception détaillée et chiffrage : [`nested-join.md`](nested-join.md).
+- **`join` — plus simple qu'il n'y paraît ici.** Parent/enfant coûte cher à
+  Elasticsearch parce qu'il est distribué ; mono-shard, `has_child` /
+  `has_parent` se ramènent à une requête en deux passes. Voir la même note.
 
-Autrement dit : des documents à sous-objets ordinaires sont un chantier
-identifié ; des mappings `nested` ou `join` sont, eux, un mur.
+Autrement dit : les sous-objets ordinaires sont un petit chantier, `nested` en
+filtre et `join` des chantiers moyens — et aucun des trois ne demande de
+réécrire un moteur de recherche.
 
 > Ce transfert a mis au jour un bug, corrigé dans la même PR : un champ valant
 > `[{…}]` était **accepté en silence** (gardé dans `_source`, absent du mapping,
