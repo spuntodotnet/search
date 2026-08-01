@@ -1,0 +1,95 @@
+name: release
+
+# Une release = un tag sur `main` :
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# Le workflow refuse un tag posé sur un commit qui n'est pas sur `main` — une
+# release publiée depuis une branche de travail serait invérifiable après coup.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Chaque cible est compilée sur un runner de son architecture : pas de
+          # cross-compilation à entretenir, et les runners arm64 sont gratuits
+          # sur un repo public au même titre que les x64.
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # nécessaire pour vérifier l'ascendance du tag
+
+      - name: Le tag doit pointer un commit de main
+        run: |
+          git fetch --no-tags --depth=0 origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME ne pointe pas un commit de main — release annulée"
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # `musl-gcc` : la cible musl donne un binaire statique, qui tourne aussi
+      # bien sur une Alpine que sur une Ubuntu (et dans l'image `scratch`).
+      - name: musl-tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: cargo build --release
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Archive + somme de contrôle
+        run: |
+          bin=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].name')
+          base="$bin-$GITHUB_REF_NAME-${{ matrix.target }}"
+          mkdir -p dist
+          tar -C "target/${{ matrix.target }}/release" -czf "dist/$base.tar.gz" "$bin"
+          (cd dist && sha256sum "$base.tar.gz" > "$base.tar.gz.sha256")
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publier la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            dist/*

@@ -12,14 +12,15 @@ env:
 jobs:
   rust:
     name: fmt + clippy + tests + build release
-    runs-on: [self-hosted, byoc]
+    # Le repo est public : les runners hébergés par GitHub sont gratuits et sans
+    # quota. Plus de runner self-hosted ici — sur un repo public, une PR venue
+    # d'un fork y ferait tourner du code arbitraire sur notre machine.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # `rustup` est préinstallé sur `ubuntu-latest` mais PAS sur un runner
-      # self-hosted : l'appeler directement échouait en « command not found ».
-      # Cette action installe rustup ET la toolchain, donc elle marche des deux
-      # côtés.
+      # Installe rustup ET la toolchain (avec les composants demandés) plutôt
+      # que de dépendre de ce qui est préinstallé sur l'image du runner.
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -40,7 +41,7 @@ jobs:
 
   compat:
     name: harnais de compatibilite (client officiel)
-    runs-on: [self-hosted, byoc]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -62,7 +63,7 @@ jobs:
 
   docker:
     name: image minimale
-    runs-on: [self-hosted, byoc]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
