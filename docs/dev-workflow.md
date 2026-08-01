@@ -6,6 +6,10 @@
 > Tout le reste — implémenter, vérifier, faire avancer la carte, ouvrir la PR —
 > c'est **toi**, l'agent, qui le pilotes en suivant ce fichier.
 
+> Ce fichier dit **quoi lancer** et **quand**. [`../CLAUDE.md`](../CLAUDE.md) dit
+> **comment penser** dans ce dépôt : la méthode, les décisions déjà prises, les
+> pièges déjà rencontrés. À lire en premier dans une session neuve.
+
 ## Contexte de départ (déjà en place sur le worker)
 
 - Branche dédiée déjà créée et checkout : `notion/{pageId}-{slug}`.

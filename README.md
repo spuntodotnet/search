@@ -33,6 +33,9 @@ requêtes, mêmes mappings), et le déploiement devient un détail — un sideca
 conteneur de CI, un binaire embarqué dans une image applicative, un
 environnement de dev qui démarre instantanément.
 
+Pour reprendre le projet — la méthode, les décisions déjà tranchées, les pièges
+déjà payés : [`CLAUDE.md`](CLAUDE.md).
+
 ## Périmètre
 
 Le moteur d'index inversé n'est pas réécrit : `ferrite` s'appuie sur
