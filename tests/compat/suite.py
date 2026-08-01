@@ -354,12 +354,6 @@ def analyzers_refuses(es):
         contains="analyzer")
 
 
-@scenario
-def modification_de_mapping_refusee(es):
-    refused(lambda: es.indices.put_mapping(
-        index=INDEX, properties={"nouveau": {"type": "text"}}))
-
-
 # ---------------------------------------------------------------------------
 # Ingestion
 # ---------------------------------------------------------------------------
@@ -409,11 +403,10 @@ def bulk_statut_par_item(es):
 
 
 @scenario
-def bulk_action_inconnue(es):
+def bulk_metadonnee_inconnue(es):
     refused(lambda: es.bulk(operations=[
-        {"update": {"_index": INDEX, "_id": "1"}},
-        {"doc": {"annee": 1900}},
-    ]), contains="update")
+        {"delete": {"_index": INDEX, "_id": "1", "_routing": "x"}},
+    ]), contains="_routing")
 
 
 @scenario
@@ -436,6 +429,133 @@ def doc_unitaire(es):
 
     manquant = es.options(ignore_status=404).get(index=INDEX, id="10")
     assert manquant["found"] is False
+
+
+@scenario
+def compte_et_mget(es):
+    """`_count` et `_mget` : les deux appels que fait toute application."""
+    assert es.count(index=INDEX)["count"] == 3
+    assert es.count(index=INDEX, query={"term": {"auteur": "Zola"}})["count"] == 1
+
+    r = es.mget(index=INDEX, ids=["1", "3", "inexistant"])
+    assert [d["_id"] for d in r["docs"]] == ["1", "3", "inexistant"]
+    assert r["docs"][0]["found"] is True
+    assert r["docs"][0]["_source"]["auteur"] == "Maupassant"
+    assert r["docs"][2]["found"] is False
+
+    r = es.mget(docs=[{"_index": INDEX, "_id": "2"}])
+    assert r["docs"][0]["_source"]["titre"] == "Bel-Ami"
+    r = es.mget(index=INDEX, ids=["1"], source_includes=["titre"])
+    assert set(r["docs"][0]["_source"]) == {"titre"}
+
+
+@scenario
+def mise_a_jour_partielle(es):
+    """`_update` : fusionner un fragment dans le document existant.
+
+    Sur son propre index : ces scenarios ecrivent, et les scenarios de recherche
+    comptent sur un contenu stable."""
+    idx = "maj"
+    es.options(ignore_status=404).indices.delete(index=idx)
+    es.indices.create(index=idx, mappings={"properties": {
+        "titre": {"type": "text"}, "auteur": {"type": "keyword"},
+        "annee": {"type": "integer"}, "note": {"type": "double"}}})
+    es.index(index=idx, id="1", refresh=True,
+             document={"titre": "Une vie", "auteur": "Maupassant", "annee": 1883})
+
+    r = es.update(index=idx, id="1", doc={"annee": 1884}, refresh=True)
+    assert r["result"] == "updated" and r["_version"] == 2, r
+    doc = es.get(index=idx, id="1")["_source"]
+    # Le champ modifie change, les autres sont conserves.
+    assert doc["annee"] == 1884 and doc["titre"] == "Une vie"
+
+    # Une mise a jour sans effet est un `noop`, sans nouvelle version.
+    r = es.update(index=idx, id="1", doc={"annee": 1884}, refresh=True)
+    assert r["result"] == "noop" and r["_version"] == 2, r
+
+    # Un champ absent du document est ajoute.
+    es.update(index=idx, id="1", doc={"note": 3.5}, refresh=True)
+    assert es.get(index=idx, id="1")["_source"]["note"] == 3.5
+
+    # Document absent : erreur, sauf upsert.
+    refused(lambda: es.update(index=idx, id="2", doc={"annee": 1}), status=404)
+    r = es.update(index=idx, id="2", doc={"annee": 1900},
+                  upsert={"titre": "Neuf", "auteur": "X", "annee": 1900}, refresh=True)
+    assert r["result"] == "created"
+    r = es.update(index=idx, id="3", doc={"titre": "Auto", "auteur": "Y"},
+                  doc_as_upsert=True, refresh=True)
+    assert r["result"] == "created"
+    assert es.get(index=idx, id="3")["_source"]["titre"] == "Auto"
+
+    # Les scripts ne sont pas supportes.
+    refused(lambda: es.update(index=idx, id="1",
+                              script={"source": "ctx._source.annee++"}))
+    es.indices.delete(index=idx)
+
+
+@scenario
+def bulk_update(es):
+    idx = "majbulk"
+    es.options(ignore_status=404).indices.delete(index=idx)
+    es.indices.create(index=idx, mappings={"properties": {
+        "titre": {"type": "text"}, "annee": {"type": "integer"}}})
+    es.index(index=idx, id="1", document={"titre": "avant", "annee": 1880}, refresh=True)
+
+    resp = es.bulk(operations=[
+        {"update": {"_index": idx, "_id": "1"}}, {"doc": {"annee": 1888}},
+        {"update": {"_index": idx, "_id": "2"}},
+        {"doc": {"titre": "Cree par upsert"}, "doc_as_upsert": True},
+    ], refresh=True)
+    assert resp["errors"] is False, resp
+    assert [i["update"]["result"] for i in resp["items"]] == ["updated", "created"]
+    assert es.get(index=idx, id="1")["_source"]["annee"] == 1888
+    assert es.get(index=idx, id="1")["_source"]["titre"] == "avant"
+    es.indices.delete(index=idx)
+
+
+@scenario
+def concurrence_optimiste(es):
+    """`if_seq_no` / `if_primary_term` : ecrire seulement si rien n'a bouge."""
+    idx = "conc"
+    es.options(ignore_status=404).indices.delete(index=idx)
+    es.indices.create(index=idx, mappings={"properties": {"titre": {"type": "text"}}})
+    r = es.index(index=idx, id="1", document={"titre": "A"}, refresh=True)
+    seq, term = r["_seq_no"], r["_primary_term"]
+
+    # Avec les bonnes valeurs, l'ecriture passe.
+    es.index(index=idx, id="1", document={"titre": "B"},
+             if_seq_no=seq, if_primary_term=term, refresh=True)
+    # Avec les anciennes, elle est refusee.
+    refused(lambda: es.index(index=idx, id="1", document={"titre": "C"},
+                             if_seq_no=seq, if_primary_term=term),
+            status=409)
+    assert es.get(index=idx, id="1")["_source"]["titre"] == "B"
+    es.indices.delete(index=idx)
+
+
+@scenario
+def ajout_de_champs_au_mapping(es):
+    """`PUT /{index}/_mapping` : ajouter un champ, pas en changer le type."""
+    es.options(ignore_status=404).indices.delete(index="evolutif")
+    es.indices.create(index="evolutif", mappings={
+        "dynamic": "strict", "properties": {"titre": {"type": "text"}}})
+    es.index(index="evolutif", id="1", document={"titre": "avant"}, refresh=True)
+
+    es.indices.put_mapping(index="evolutif", properties={"couleur": {"type": "keyword"}})
+    assert "couleur" in es.indices.get_mapping(
+        index="evolutif")["evolutif"]["mappings"]["properties"]
+
+    # Le document anterieur survit, et le champ neuf est utilisable.
+    assert es.get(index="evolutif", id="1")["_source"]["titre"] == "avant"
+    es.index(index="evolutif", id="2", document={"titre": "apres", "couleur": "rouge"},
+             refresh=True)
+    assert [h["_id"] for h in es.search(index="evolutif", query={
+        "term": {"couleur": "rouge"}})["hits"]["hits"]] == ["2"]
+
+    # Changer le type d'un champ existant reste refuse.
+    refused(lambda: es.indices.put_mapping(
+        index="evolutif", properties={"titre": {"type": "keyword"}}))
+    es.indices.delete(index="evolutif")
 
 
 @scenario
@@ -668,6 +788,39 @@ def recherche_booleen(es):
 
 
 @scenario
+def recherche_par_motif(es):
+    """`ids`, `prefix`, `wildcard`, `fuzzy` — non analysees, comme chez ES."""
+    assert sorted(ids(es.search(index=INDEX, query={"ids": {"values": ["1", "3"]}}))) == \
+        ["1", "3"]
+    assert sorted(ids(es.search(index=INDEX,
+                                query={"prefix": {"auteur": "Maup"}}))) == ["1", "2"]
+    # `prefix` ne passe pas par l'analyzer : la casse compte sur un keyword.
+    assert ids(es.search(index=INDEX, query={"prefix": {"auteur": "maup"}})) == []
+    assert ids(es.search(index=INDEX, query={"wildcard": {"auteur": "Z*la"}})) == ["3"]
+    assert ids(es.search(index=INDEX, query={"wildcard": {"auteur": "Zol?"}})) == ["3"]
+    # `fuzzy` : une faute de frappe est rattrapee.
+    assert ids(es.search(index=INDEX, query={"fuzzy": {"auteur": "Zolx"}})) == ["3"]
+    assert ids(es.search(index=INDEX,
+                         query={"fuzzy": {"auteur": {"value": "Zoll", "fuzziness": 1}}})) == ["3"]
+
+
+@scenario
+def requetes_composees(es):
+    """`constant_score` et `dis_max`."""
+    r = es.search(index=INDEX, query={
+        "constant_score": {"filter": {"term": {"auteur": "Zola"}}, "boost": 2.0}})
+    assert ids(r) == ["3"]
+    assert r["hits"]["hits"][0]["_score"] == 2.0
+
+    # `dis_max` garde le meilleur score, il ne les additionne pas.
+    seul = es.search(index=INDEX, query={"match": {"resume": "presse"}})
+    combine = es.search(index=INDEX, query={"dis_max": {"queries": [
+        {"match": {"resume": "presse"}}, {"term": {"auteur": "Maupassant"}}]}})
+    assert combine["hits"]["max_score"] >= seul["hits"]["max_score"]
+    assert sorted(ids(combine)) == ["1", "2"]
+
+
+@scenario
 def recherche_bool(es):
     r = es.search(index=INDEX, query={"bool": {
         "must": [{"match": {"titre": "bel ami"}}],
@@ -779,10 +932,14 @@ def clause_de_dsl_inconnue_refusee(es):
     refused(lambda: es.search(index=INDEX,
                               query={"clause_inexistante": {"titre": "x"}}),
             contains="clause_inexistante")
-    refused(lambda: es.search(index=INDEX, query={"wildcard": {"auteur": "Mau*"}}),
-            contains="wildcard")
-    refused(lambda: es.search(index=INDEX, query={"prefix": {"auteur": "Mau"}}),
-            contains="prefix")
+    refused(lambda: es.search(index=INDEX, query={"regexp": {"auteur": "Mau.*"}}),
+            contains="regexp")
+    refused(lambda: es.search(index=INDEX,
+                              query={"query_string": {"query": "titre:bel"}}),
+            contains="query_string")
+    refused(lambda: es.search(index=INDEX, query={"boosting": {
+        "positive": {"match_all": {}}, "negative": {"term": {"auteur": "Zola"}},
+        "negative_boost": 0.5}}), contains="boosting")
 
 
 @scenario
@@ -815,8 +972,6 @@ def fonctionnalites_hors_perimetre_refusees(es):
     refused(lambda: es.search(index=INDEX, query={"match_all": {}},
                               search_after=[1885], sort=[{"annee": "asc"}]),
             contains="search_after")
-    refused(lambda: es.update(index=INDEX, id="1", doc={"annee": 1888}))
-    refused(lambda: es.mget(index=INDEX, ids=["1", "2"]))
     refused(lambda: es.search(index=INDEX, q="titre:bel"), contains="q")
     refused(lambda: es.search(query={"match_all": {}}))
 

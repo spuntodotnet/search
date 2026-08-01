@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;
 
-use ferrite::engine::Catalog;
+use ferrite::engine::{Catalog, WriteOptions};
 use ferrite::mapping::Mapping;
 use serde_json::json;
 
@@ -63,7 +63,7 @@ fn aucune_perte_pendant_les_evolutions_concurrentes() {
                 if i % 10 == 0 {
                     doc[format!("champ_{w}_{i}")] = json!(i as i64);
                 }
-                idx.index_doc(&format!("{w}-{i}"), &doc, false)
+                idx.index_doc(&format!("{w}-{i}"), &doc, WriteOptions::default())
                     .unwrap_or_else(|e| panic!("ecriture {w}-{i} : {e}"));
             }
         }));
@@ -181,9 +181,10 @@ fn ecritures_et_suppressions_concurrentes() {
                 // Les threads se disputent les memes dix identifiants.
                 let id = format!("doc-{}", i % 10);
                 if (t + i) % 4 == 3 {
-                    idx.delete_doc(&id).unwrap();
+                    idx.delete_doc(&id, WriteOptions::default()).unwrap();
                 } else {
-                    idx.index_doc(&id, &json!({"n": i as i64}), false).unwrap();
+                    idx.index_doc(&id, &json!({"n": i as i64}), WriteOptions::default())
+                        .unwrap();
                 }
             }
         }));

@@ -176,6 +176,56 @@ pub async fn search(
     Ok(Json::ok(Value::Object(reponse)))
 }
 
+/// `GET|POST /{index}/_count` — combien de documents correspondent.
+pub async fn count(
+    State(st): State<SharedState>,
+    Path(index): Path<String>,
+    uri: Uri,
+    body: Bytes,
+) -> EsResult<Json> {
+    let idx = st.catalog.get(&index)?;
+    let gen = idx.current();
+    let mut p = Params::parse(&uri);
+    p.opt("preference");
+    if p.opt("q").is_some() {
+        return Err(EsError::unsupported(
+            "ferrite ne supporte pas la recherche par chaine [q] ; utilise le Query DSL",
+        ));
+    }
+    p.done()?;
+
+    let body = parse_body(&body)?;
+    let body_obj = match &body {
+        Value::Null => Map::new(),
+        Value::Object(o) => o.clone(),
+        _ => return Err(EsError::parsing("le corps de [_count] doit etre un objet")),
+    };
+    expect_only(&body_obj, &["query"], "_count")?;
+
+    let query = {
+        let ctx = QueryCtx {
+            fields: &gen.fields,
+            index: &gen.index,
+        };
+        match body_obj.get("query") {
+            Some(v) => build_query(v, &ctx)?,
+            None => Box::new(tantivy::query::AllQuery),
+        }
+    };
+    let total = tokio::task::spawn_blocking(move || {
+        gen.searcher()
+            .search(&query, &tantivy::collector::Count)
+            .map_err(EsError::from)
+    })
+    .await
+    .map_err(|e| EsError::internal(format!("count: {e}")))??;
+
+    Ok(Json::ok(json!({
+        "count": total,
+        "_shards": {"total": 1, "successful": 1, "skipped": 0, "failed": 0},
+    })))
+}
+
 /// Lit un entier positif du corps. Une valeur invalide est refusee plutot que
 /// remplacee par le defaut : `size: -1` doit se voir, pas devenir `10`.
 fn body_usize(obj: &Map<String, Value>, key: &str) -> EsResult<Option<usize>> {

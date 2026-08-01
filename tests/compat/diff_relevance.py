@@ -79,6 +79,26 @@ def requetes(docs):
     # pas de sens, la suite de compat verifie le refus.
     q.append(("match_phrase mot unique", {"match_phrase": {"corps": "ecran"}}, None))
 
+    # --- motifs et identifiants
+    for mot in mots[:6]:
+        q.append((f"prefix corps [{mot[:4]}]", {"prefix": {"marque": mot[:2]}},
+                  [{"prix": "asc"}]))
+    for marque in corpus.MARQUES[:4]:
+        q.append((f"wildcard [{marque}]", {"wildcard": {"marque": f"{marque[:2]}*"}},
+                  [{"prix": "asc"}]))
+        q.append((f"fuzzy [{marque}]", {"fuzzy": {"marque": marque[:-1] + "x"}},
+                  [{"prix": "asc"}]))
+    q.append(("ids", {"ids": {"values": ["1", "5", "9", "42"]}}, [{"prix": "asc"}]))
+    q.append(("constant_score", {"constant_score": {
+        "filter": {"term": {"categorie": "audio"}}, "boost": 3.0}}, None))
+    for _ in range(4):
+        mot = rng.choice(mots)
+        q.append((f"dis_max [{mot}]", {"dis_max": {"queries": [
+            {"match": {"titre": mot}}, {"match": {"corps": mot}}]}}, None))
+        q.append((f"dis_max tie [{mot}]", {"dis_max": {"queries": [
+            {"match": {"titre": mot}}, {"match": {"corps": mot}}],
+            "tie_breaker": 0.4}}, None))
+
     # --- exists
     for champ in ("note", "tags", "corps", "marque"):
         q.append((f"exists [{champ}]", {"exists": {"field": champ}},

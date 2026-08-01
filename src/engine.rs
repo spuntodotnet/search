@@ -26,6 +26,17 @@ const META_FILE: &str = "ferrite.json";
 const INDEX_DIR_PREFIX: &str = "index-";
 const WRITER_HEAP: usize = 50_000_000;
 
+/// Les conditions d'une ecriture.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WriteOptions {
+    /// L'action `create` : conflit si le document existe deja.
+    pub require_absent: bool,
+    /// Controle de concurrence optimiste : l'ecriture n'a lieu que si le
+    /// document est encore dans l'etat observe.
+    pub if_seq_no: Option<u64>,
+    pub if_primary_term: Option<u64>,
+}
+
 /// Ce que devient un document apres ecriture — de quoi remplir la reponse ES.
 #[derive(Debug, Clone, Copy)]
 pub struct WriteOutcome {
@@ -189,7 +200,7 @@ impl FerriteIndex {
         &self,
         id: &str,
         source: &Value,
-        require_absent: bool,
+        opts: WriteOptions,
     ) -> EsResult<WriteOutcome> {
         loop {
             let gen = self.current.read().expect("generation lock");
@@ -206,9 +217,10 @@ impl FerriteIndex {
             let mut docs = self.docs.write().expect("docs lock");
             let existing = docs.get(id).copied();
             let live = existing.filter(|m| !m.deleted);
-            if require_absent && live.is_some() {
+            if opts.require_absent && live.is_some() {
                 return Err(EsError::version_conflict(&self.name, id));
             }
+            verifier_concurrence(&self.name, id, live, &opts)?;
             let version = existing.map_or(1, |m| m.version + 1);
             let seq_no = self.seq_counter.fetch_add(1, Ordering::Relaxed);
 
@@ -243,11 +255,12 @@ impl FerriteIndex {
     /// Supprimer un identifiant deja supprime n'est pas une erreur : ES
     /// repond 404 tout en faisant avancer `_version`. On garde donc une
     /// pierre tombale plutot que d'oublier l'identifiant.
-    pub fn delete_doc(&self, id: &str) -> EsResult<DeleteOutcome> {
+    pub fn delete_doc(&self, id: &str, opts: WriteOptions) -> EsResult<DeleteOutcome> {
         let gen = self.current.read().expect("generation lock");
         let mut docs = self.docs.write().expect("docs lock");
         let existing = docs.get(id).copied();
         let was_live = existing.is_some_and(|m| !m.deleted);
+        verifier_concurrence(&self.name, id, existing.filter(|m| !m.deleted), &opts)?;
 
         if was_live {
             let w = gen.writer.lock().expect("writer lock");
@@ -298,6 +311,104 @@ impl FerriteIndex {
             seq_no: meta.seq_no,
             source,
         }))
+    }
+
+    /// Met a jour un document par fusion partielle (`POST /{index}/_update/{id}`).
+    ///
+    /// `_source` etant conserve, la fusion se fait sur le document existant et
+    /// le resultat est reindexe. `noop` quand la fusion ne change rien, comme
+    /// chez ES.
+    pub fn update_doc(
+        &self,
+        id: &str,
+        partiel: Option<&Value>,
+        upsert: Option<&Value>,
+        doc_as_upsert: bool,
+        opts: WriteOptions,
+    ) -> EsResult<(WriteOutcome, &'static str)> {
+        let actuel = self.get_doc(id)?;
+        match actuel {
+            Some(existant) => {
+                let partiel = partiel.ok_or_else(|| {
+                    EsError::illegal_argument("[_update] : [doc] ou [script] est obligatoire")
+                })?;
+                let mut fusionne = existant.source.clone();
+                fusionner(&mut fusionne, partiel);
+                if fusionne == existant.source {
+                    // ES ne reindexe pas et ne fait pas avancer la version.
+                    return Ok((
+                        WriteOutcome {
+                            version: existant.version,
+                            seq_no: existant.seq_no,
+                            created: false,
+                        },
+                        "noop",
+                    ));
+                }
+                let out = self.index_doc(id, &fusionne, opts)?;
+                Ok((out, "updated"))
+            }
+            None => {
+                // Absent : `upsert` fournit le document initial, ou `doc` fait
+                // office de document initial avec `doc_as_upsert`.
+                let initial = match (upsert, doc_as_upsert, partiel) {
+                    (Some(u), _, _) => u,
+                    (None, true, Some(d)) => d,
+                    _ => {
+                        return Err(EsError::new(
+                            axum::http::StatusCode::NOT_FOUND,
+                            "document_missing_exception",
+                            format!("[{id}]: document missing"),
+                        )
+                        .with("index_uuid", json!(self.uuid))
+                        .with("shard", json!("0"))
+                        .with("index", json!(self.name)))
+                    }
+                };
+                let out = self.index_doc(id, initial, opts)?;
+                Ok((out, "created"))
+            }
+        }
+    }
+
+    /// Les metadonnees d'un identifiant, sans lire le document.
+    pub fn meta_of(&self, id: &str) -> Option<(u64, u64)> {
+        self.docs
+            .read()
+            .expect("docs lock")
+            .get(id)
+            .filter(|m| !m.deleted)
+            .map(|m| (m.version, m.seq_no))
+    }
+
+    /// Ajoute des champs au mapping (`PUT /{index}/_mapping`).
+    ///
+    /// Possible depuis que le schema vit dans des generations : les champs
+    /// existants ne peuvent toujours pas changer de type, comme chez ES.
+    pub fn add_fields(&self, nouveaux: BTreeMap<String, FieldMapping>) -> EsResult<()> {
+        let gen = self.current();
+        let mut a_creer = BTreeMap::new();
+        for (nom, decl) in nouveaux {
+            match gen.mapping.properties.get(&nom) {
+                Some(existant) => {
+                    // Redeclarer a l'identique est licite, changer ne l'est pas.
+                    if existant.ty != decl.ty {
+                        return Err(EsError::illegal_argument(format!(
+                            "mapper [{nom}] cannot be changed from type [{}] to [{}]",
+                            existant.ty.name(),
+                            decl.ty.name()
+                        )));
+                    }
+                }
+                None => {
+                    a_creer.insert(nom, decl);
+                }
+            }
+        }
+        if a_creer.is_empty() {
+            return Ok(());
+        }
+        self.evoluer(a_creer)
     }
 
     /// Les champs du document que le mapping ne connait pas encore.
@@ -386,6 +497,57 @@ impl FerriteIndex {
         // ne la tiendra.
         self.retirees.lock().expect("retirees lock").push(ancienne);
         Ok(())
+    }
+}
+
+/// Refuse l'ecriture si le document n'est plus dans l'etat observe par le
+/// client (`if_seq_no` / `if_primary_term`).
+fn verifier_concurrence(
+    index: &str,
+    id: &str,
+    live: Option<DocMeta>,
+    opts: &WriteOptions,
+) -> EsResult<()> {
+    if opts.if_seq_no.is_none() && opts.if_primary_term.is_none() {
+        return Ok(());
+    }
+    let (attendu_seq, attendu_term) = (
+        opts.if_seq_no.unwrap_or(u64::MAX),
+        opts.if_primary_term.unwrap_or(1),
+    );
+    let actuel = live.map(|m| m.seq_no);
+    if actuel != Some(attendu_seq) || attendu_term != 1 {
+        return Err(EsError::new(
+            axum::http::StatusCode::CONFLICT,
+            "version_conflict_engine_exception",
+            format!(
+                "[{id}]: version conflict, required seqNo [{attendu_seq}], primary term \
+                 [{attendu_term}]. but no document was found"
+            ),
+        )
+        .with("index", json!(index))
+        .with("shard", json!("0")));
+    }
+    Ok(())
+}
+
+/// Fusionne un document partiel dans un document existant, comme le `doc` d'un
+/// `_update` : les objets fusionnent, tout le reste est remplace.
+fn fusionner(cible: &mut Value, partiel: &Value) {
+    match (cible, partiel) {
+        (Value::Object(a), Value::Object(b)) => {
+            for (cle, valeur) in b {
+                match a.get_mut(cle) {
+                    Some(existant) if existant.is_object() && valeur.is_object() => {
+                        fusionner(existant, valeur)
+                    }
+                    _ => {
+                        a.insert(cle.clone(), valeur.clone());
+                    }
+                }
+            }
+        }
+        (cible, autre) => *cible = autre.clone(),
     }
 }
 

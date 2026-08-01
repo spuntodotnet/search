@@ -11,7 +11,7 @@ use serde_json::{json, Map, Value};
 
 use super::search::source_filter;
 use super::{elapsed_ms, parse_body, shards_ok, Json, Params, SharedState};
-use crate::engine::{Catalog, WriteOutcome};
+use crate::engine::{Catalog, WriteOptions, WriteOutcome};
 use crate::error::{EsError, EsResult};
 use crate::util;
 
@@ -66,6 +66,11 @@ async fn write_one(
             )))
         }
     };
+    let opts = WriteOptions {
+        require_absent,
+        if_seq_no: p.number("if_seq_no")?.map(|n| n as u64),
+        if_primary_term: p.number("if_primary_term")?.map(|n| n as u64),
+    };
     p.done()?;
 
     let source = parse_body(&body)?;
@@ -81,7 +86,7 @@ async fn write_one(
         let idx = idx.clone();
         let id = id.clone();
         tokio::task::spawn_blocking(move || {
-            let out = idx.index_doc(&id, &source, require_absent)?;
+            let out = idx.index_doc(&id, &source, opts)?;
             if refresh {
                 idx.refresh()?;
             }
@@ -185,6 +190,11 @@ pub async fn delete_doc(
     let mut p = Params::parse(&uri);
     let refresh = p.refresh()?;
     p.opt("timeout");
+    let opts = WriteOptions {
+        require_absent: false,
+        if_seq_no: p.number("if_seq_no")?.map(|n| n as u64),
+        if_primary_term: p.number("if_primary_term")?.map(|n| n as u64),
+    };
     p.done()?;
 
     let idx = st.catalog.get(&index)?;
@@ -192,7 +202,7 @@ pub async fn delete_doc(
         let idx = idx.clone();
         let id = id.clone();
         tokio::task::spawn_blocking(move || {
-            let out = idx.delete_doc(&id)?;
+            let out = idx.delete_doc(&id, opts)?;
             if refresh {
                 idx.refresh()?;
             }
@@ -226,6 +236,190 @@ pub async fn delete_doc(
     o.insert("_seq_no".into(), json!(outcome.seq_no));
     o.insert("_primary_term".into(), json!(1));
     Ok(Json(status, Value::Object(o)))
+}
+
+/// `POST /{index}/_update/{id}` — mise a jour partielle.
+pub async fn update_doc(
+    State(st): State<SharedState>,
+    Path((index, id)): Path<(String, String)>,
+    uri: Uri,
+    body: Bytes,
+) -> EsResult<Json> {
+    let mut p = Params::parse(&uri);
+    let refresh = p.refresh()?;
+    p.opt("timeout");
+    p.opt("retry_on_conflict");
+    let opts = WriteOptions {
+        require_absent: false,
+        if_seq_no: p.number("if_seq_no")?.map(|n| n as u64),
+        if_primary_term: p.number("if_primary_term")?.map(|n| n as u64),
+    };
+    p.done()?;
+
+    let body = parse_body(&body)?;
+    let obj = body
+        .as_object()
+        .ok_or_else(|| EsError::parsing("le corps de [_update] doit etre un objet"))?;
+    super::expect_only(
+        obj,
+        &["doc", "upsert", "doc_as_upsert", "detect_noop"],
+        "_update",
+    )?;
+    if obj.contains_key("script") {
+        return Err(EsError::unsupported(
+            "ferrite ne supporte pas les scripts dans [_update]",
+        ));
+    }
+    let partiel = obj.get("doc").cloned();
+    let upsert = obj.get("upsert").cloned();
+    let doc_as_upsert = obj
+        .get("doc_as_upsert")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    let idx = st.catalog.get(&index)?;
+    let (outcome, resultat) = {
+        let idx = idx.clone();
+        let id = id.clone();
+        tokio::task::spawn_blocking(move || {
+            let out =
+                idx.update_doc(&id, partiel.as_ref(), upsert.as_ref(), doc_as_upsert, opts)?;
+            if refresh {
+                idx.refresh()?;
+            }
+            Ok::<_, EsError>(out)
+        })
+        .await
+        .map_err(|e| EsError::internal(format!("update: {e}")))??
+    };
+
+    let status = if resultat == "created" {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    let mut o = Map::new();
+    o.insert("_index".into(), json!(index));
+    o.insert("_id".into(), json!(id));
+    o.insert("_version".into(), json!(outcome.version));
+    o.insert("result".into(), json!(resultat));
+    if refresh && resultat != "noop" {
+        o.insert("forced_refresh".into(), json!(true));
+    }
+    o.insert("_shards".into(), shards_ok());
+    o.insert("_seq_no".into(), json!(outcome.seq_no));
+    o.insert("_primary_term".into(), json!(1));
+    Ok(Json(status, Value::Object(o)))
+}
+
+/// `GET|POST /_mget` et `/{index}/_mget` — plusieurs documents d'un coup.
+pub async fn mget(
+    State(st): State<SharedState>,
+    index: Option<Path<String>>,
+    uri: Uri,
+    body: Bytes,
+) -> EsResult<Json> {
+    let mut p = Params::parse(&uri);
+    let filtre_global = source_filter(&mut p)?;
+    p.opt("realtime");
+    p.opt("preference");
+    p.done()?;
+
+    let body = parse_body(&body)?;
+    let obj = body
+        .as_object()
+        .ok_or_else(|| EsError::parsing("le corps de [_mget] doit etre un objet"))?;
+    super::expect_only(obj, &["docs", "ids"], "_mget")?;
+
+    // Deux formes chez ES : une liste d'identifiants, ou une liste de
+    // descripteurs pouvant viser des index differents.
+    let demandes: Vec<(String, String)> = match (obj.get("docs"), obj.get("ids")) {
+        (Some(_), Some(_)) => {
+            return Err(EsError::illegal_argument(
+                "[_mget] : [docs] et [ids] sont exclusifs",
+            ))
+        }
+        (Some(Value::Array(docs)), None) => docs
+            .iter()
+            .map(|d| {
+                let o = d
+                    .as_object()
+                    .ok_or_else(|| EsError::parsing("[_mget.docs] : objets attendus"))?;
+                super::expect_only(o, &["_index", "_id", "_source"], "_mget.docs")?;
+                let idx_nom = o
+                    .get("_index")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or_else(|| index.as_ref().map(|Path(n)| n.clone()))
+                    .ok_or_else(|| {
+                        EsError::illegal_argument("[_mget] : [_index] requis sans index dans l'URL")
+                    })?;
+                let doc_id = o
+                    .get("_id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| EsError::illegal_argument("[_mget] : [_id] est obligatoire"))?;
+                Ok((idx_nom, doc_id.to_string()))
+            })
+            .collect::<EsResult<_>>()?,
+        (None, Some(Value::Array(ids))) => {
+            let Path(idx_nom) = index.as_ref().ok_or_else(|| {
+                EsError::illegal_argument("[_mget.ids] exige un index dans l'URL")
+            })?;
+            ids.iter()
+                .map(|v| {
+                    let doc_id = v.as_str().ok_or_else(|| {
+                        EsError::illegal_argument("[_mget.ids] : chaines attendues")
+                    })?;
+                    Ok((idx_nom.clone(), doc_id.to_string()))
+                })
+                .collect::<EsResult<_>>()?
+        }
+        _ => {
+            return Err(EsError::illegal_argument(
+                "[_mget] : [docs] ou [ids] est obligatoire",
+            ))
+        }
+    };
+
+    let mut sortie = Vec::with_capacity(demandes.len());
+    for (idx_nom, doc_id) in demandes {
+        let idx = match st.catalog.get(&idx_nom) {
+            Ok(i) => i,
+            Err(e) => {
+                // ES rapporte l'erreur par document, sans faire echouer le lot.
+                sortie.push(json!({
+                    "_index": idx_nom,
+                    "_id": doc_id,
+                    "error": e.cause(),
+                }));
+                continue;
+            }
+        };
+        let trouve = {
+            let idx = idx.clone();
+            let doc_id = doc_id.clone();
+            tokio::task::spawn_blocking(move || idx.get_doc(&doc_id))
+                .await
+                .map_err(|e| EsError::internal(format!("mget: {e}")))??
+        };
+        match trouve {
+            None => sortie.push(json!({"_index": idx_nom, "_id": doc_id, "found": false})),
+            Some(res) => {
+                let mut o = Map::new();
+                o.insert("_index".into(), json!(idx_nom));
+                o.insert("_id".into(), json!(doc_id));
+                o.insert("_version".into(), json!(res.version));
+                o.insert("_seq_no".into(), json!(res.seq_no));
+                o.insert("_primary_term".into(), json!(1));
+                o.insert("found".into(), json!(true));
+                if let Some(src) = filtre_global.apply(res.source) {
+                    o.insert("_source".into(), src);
+                }
+                sortie.push(Value::Object(o));
+            }
+        }
+    }
+    Ok(Json::ok(json!({"docs": sortie})))
 }
 
 // ---------------------------------------------------------------------------
@@ -325,7 +519,8 @@ fn run_bulk(
 
         let action = parse_action(&value, default_index, lineno + 1)?;
 
-        // Les actions `index`/`create` sont suivies du document ; `delete` non.
+        // Les actions `index`/`create`/`update` sont suivies d'une ligne ;
+        // `delete` non.
         let source = if action.op == "delete" {
             None
         } else {
@@ -366,15 +561,10 @@ fn parse_action(value: &Value, default_index: Option<&str>, lineno: usize) -> Es
         )));
     }
     let (op, meta) = obj.iter().next().unwrap();
-    if op == "update" {
-        return Err(EsError::unsupported(
-            "ferrite ne supporte pas l'action [update] dans [_bulk] (voir docs/compat.md)",
-        ));
-    }
-    if !matches!(op.as_str(), "index" | "create" | "delete") {
+    if !matches!(op.as_str(), "index" | "create" | "delete" | "update") {
         return Err(EsError::parsing(format!(
             "[_bulk] ligne {lineno} : action inconnue [{op}] ; actions supportees : index, \
-             create, delete"
+             create, delete, update"
         )));
     }
     let meta = meta.as_object().ok_or_else(|| {
@@ -422,11 +612,11 @@ fn execute_action(
 ) -> Value {
     let id = action.id.clone().unwrap_or_else(util::random_uuid);
 
-    let result = (|| -> EsResult<(StatusCode, &'static str, WriteOutcome)> {
+    let result = (|| -> EsResult<(StatusCode, &str, WriteOutcome)> {
         let idx = catalog.get(&action.index)?;
         match action.op.as_str() {
             "delete" => {
-                let out = idx.delete_doc(&id)?;
+                let out = idx.delete_doc(&id, WriteOptions::default())?;
                 Ok((
                     if out.found {
                         StatusCode::OK
@@ -441,6 +631,37 @@ fn execute_action(
                     },
                 ))
             }
+            "update" => {
+                let corps = source
+                    .as_ref()
+                    .ok_or_else(|| EsError::parsing("[_bulk] action [update] sans corps"))?;
+                let o = corps.as_object().ok_or_else(|| {
+                    EsError::parsing("[_bulk] : le corps d'un [update] doit etre un objet")
+                })?;
+                if o.contains_key("script") {
+                    return Err(EsError::unsupported(
+                        "ferrite ne supporte pas les scripts dans [_bulk] [update]",
+                    ));
+                }
+                let (out, resultat) = idx.update_doc(
+                    &id,
+                    o.get("doc"),
+                    o.get("upsert"),
+                    o.get("doc_as_upsert")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    WriteOptions::default(),
+                )?;
+                Ok((
+                    if resultat == "created" {
+                        StatusCode::CREATED
+                    } else {
+                        StatusCode::OK
+                    },
+                    resultat,
+                    out,
+                ))
+            }
             op => {
                 let doc = source.as_ref().ok_or_else(|| {
                     EsError::parsing(format!("[_bulk] action [{op}] sans document"))
@@ -450,7 +671,14 @@ fn execute_action(
                         "le document doit etre un objet JSON",
                     ));
                 }
-                let out = idx.index_doc(&id, doc, op == "create")?;
+                let out = idx.index_doc(
+                    &id,
+                    doc,
+                    WriteOptions {
+                        require_absent: op == "create",
+                        ..WriteOptions::default()
+                    },
+                )?;
                 let status = if out.created {
                     StatusCode::CREATED
                 } else {
