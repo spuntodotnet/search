@@ -15,6 +15,7 @@
 //! - [`api`] : la couche HTTP — routage, parametres, format de reponse et
 //!   d'erreur. Ne contient aucune logique de moteur.
 
+pub mod aggs;
 pub mod api;
 pub mod dismax;
 pub mod dsl;

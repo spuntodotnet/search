@@ -72,6 +72,8 @@ pub async fn search(
             "sort",
             "_source",
             "track_total_hits",
+            "aggs",
+            "aggregations",
         ],
         "_search",
     )?;
@@ -124,8 +126,23 @@ pub async fn search(
         }
     };
 
+    // `aggs` et `aggregations` sont deux noms pour la meme chose chez ES.
+    let aggs = match (body_obj.get("aggs"), body_obj.get("aggregations")) {
+        (Some(_), Some(_)) => {
+            return Err(EsError::illegal_argument(
+                "[aggs] et [aggregations] sont synonymes : n'en fournis qu'un",
+            ))
+        }
+        (Some(a), None) | (None, Some(a)) => {
+            crate::aggs::validate(a, &gen)?;
+            Some(a.clone())
+        }
+        (None, None) => None,
+    };
+
     let req = SearchRequest {
         query,
+        aggs,
         from,
         size,
         sort,
@@ -136,18 +153,27 @@ pub async fn search(
         .await
         .map_err(|e| EsError::internal(format!("recherche: {e}")))??;
 
-    Ok(Json::ok(json!({
-        "took": elapsed_ms(started),
-        "timed_out": false,
-        "_shards": {"total": 1, "successful": 1, "skipped": 0, "failed": 0},
-        "hits": {
+    let mut reponse = Map::new();
+    reponse.insert("took".into(), json!(elapsed_ms(started)));
+    reponse.insert("timed_out".into(), json!(false));
+    reponse.insert(
+        "_shards".into(),
+        json!({"total": 1, "successful": 1, "skipped": 0, "failed": 0}),
+    );
+    reponse.insert(
+        "hits".into(),
+        json!({
             // `total` est un objet {value, relation}, pas un entier : un client
             // type le remarque immediatement.
             "total": {"value": outcome.total, "relation": "eq"},
             "max_score": outcome.max_score.map(round_score),
             "hits": outcome.hits,
-        }
-    })))
+        }),
+    );
+    if let Some(aggs) = outcome.aggregations {
+        reponse.insert("aggregations".into(), aggs);
+    }
+    Ok(Json::ok(Value::Object(reponse)))
 }
 
 /// Lit un entier positif du corps. Une valeur invalide est refusee plutot que

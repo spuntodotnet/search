@@ -744,9 +744,6 @@ def champ_non_mappe_refuse(es):
 @scenario
 def fonctionnalites_hors_perimetre_refusees(es):
     refused(lambda: es.search(index=INDEX, query={"match_all": {}},
-                              aggs={"par_auteur": {"terms": {"field": "auteur"}}}),
-            contains="aggs")
-    refused(lambda: es.search(index=INDEX, query={"match_all": {}},
                               highlight={"fields": {"resume": {}}}),
             contains="highlight")
     refused(lambda: es.search(index=INDEX, query={"match_all": {}},
@@ -756,6 +753,95 @@ def fonctionnalites_hors_perimetre_refusees(es):
     refused(lambda: es.mget(index=INDEX, ids=["1", "2"]))
     refused(lambda: es.search(index=INDEX, q="titre:bel"), contains="q")
     refused(lambda: es.search(query={"match_all": {}}))
+
+
+@scenario
+def agregations(es):
+    """Les facettes : compter, regrouper, calculer — sur les documents qui
+    correspondent, pas sur la page rendue."""
+    r = es.search(index=INDEX, size=0, query={"match_all": {}}, aggs={
+        "par_auteur": {"terms": {"field": "auteur"}},
+        "annee_min": {"min": {"field": "annee"}},
+        "annee_max": {"max": {"field": "annee"}},
+        "note": {"stats": {"field": "note"}},
+    })
+    a = r["aggregations"]
+    # L'agregation porte sur tous les documents, meme avec size=0.
+    assert r["hits"]["total"]["value"] == 3
+    assert r["hits"]["hits"] == []
+    buckets = {b["key"]: b["doc_count"] for b in a["par_auteur"]["buckets"]}
+    assert buckets == {"Maupassant": 2, "Zola": 1}
+    # ES expose toujours ces deux compteurs sur un `terms`.
+    assert a["par_auteur"]["doc_count_error_upper_bound"] == 0
+    assert a["par_auteur"]["sum_other_doc_count"] == 0
+    assert a["annee_min"]["value"] == 1885
+    assert a["annee_max"]["value"] == 1887
+    assert a["note"]["count"] == 3
+    assert a["note"]["min"] == 4.1
+
+    # `size` tronque, et les documents ecartes sont comptes.
+    r = es.search(index=INDEX, size=0, aggs={
+        "f": {"terms": {"field": "auteur", "size": 1}}})
+    assert len(r["aggregations"]["f"]["buckets"]) == 1
+    assert r["aggregations"]["f"]["sum_other_doc_count"] == 1
+
+    # L'agregation suit la requete.
+    r = es.search(index=INDEX, size=0, query={"term": {"auteur": "Zola"}},
+                  aggs={"f": {"terms": {"field": "auteur"}}})
+    assert [b["key"] for b in r["aggregations"]["f"]["buckets"]] == ["Zola"]
+
+    # Sous-agregations.
+    r = es.search(index=INDEX, size=0, aggs={
+        "par_auteur": {"terms": {"field": "auteur"},
+                       "aggs": {"annee_moyenne": {"avg": {"field": "annee"}}}}})
+    b = {x["key"]: x["annee_moyenne"]["value"]
+         for x in r["aggregations"]["par_auteur"]["buckets"]}
+    assert b["Zola"] == 1885 and b["Maupassant"] == 1886
+
+    # Buckets de plages et d'histogramme.
+    r = es.search(index=INDEX, size=0, aggs={
+        "plages": {"range": {"field": "annee", "ranges": [
+            {"to": 1886}, {"from": 1886}]}}})
+    plages = {b["key"]: b["doc_count"] for b in r["aggregations"]["plages"]["buckets"]}
+    assert plages == {"*-1886.0": 2, "1886.0-*": 1}
+
+    # Une metrique de date rend des millisecondes et sa forme lisible.
+    r = es.search(index=INDEX, size=0, aggs={"d": {"min": {"field": "paru"}}})
+    assert r["aggregations"]["d"]["value_as_string"].startswith("1885-03-01T")
+
+
+@scenario
+def agregations_refusees(es):
+    # Agreger sur un `text` n'a pas de sens sans fielddata — ES refuse aussi.
+    refused(lambda: es.search(index=INDEX, size=0,
+                              aggs={"f": {"terms": {"field": "titre"}}}),
+            contains="titre")
+    # Champ inconnu.
+    refused(lambda: es.search(index=INDEX, size=0,
+                              aggs={"f": {"terms": {"field": "inconnu"}}}),
+            contains="inconnu")
+    # Agregation hors perimetre.
+    refused(lambda: es.search(index=INDEX, size=0,
+                              aggs={"f": {"percentiles": {"field": "annee"}}}),
+            contains="percentiles")
+    # Refus assumes, avec la raison.
+    refused(lambda: es.search(index=INDEX, size=0,
+                              aggs={"f": {"cardinality": {"field": "auteur"}}}),
+            contains="cardinality")
+    refused(lambda: es.search(index=INDEX, size=0,
+                              aggs={"f": {"filter": {"term": {"auteur": "Zola"}}}}),
+            contains="filter")
+    # Parametre non supporte : jamais avale en silence.
+    refused(lambda: es.search(index=INDEX, size=0, aggs={
+        "f": {"terms": {"field": "auteur", "include": "Z.*"}}}),
+        contains="include")
+    # Ordonner par une sous-agregation n'est pas supporte.
+    refused(lambda: es.search(index=INDEX, size=0, aggs={
+        "f": {"terms": {"field": "auteur", "order": {"m": "desc"}},
+              "aggs": {"m": {"avg": {"field": "annee"}}}}}))
+    # Une metrique ne porte pas de sous-agregations.
+    refused(lambda: es.search(index=INDEX, size=0, aggs={
+        "m": {"avg": {"field": "annee"}, "aggs": {"x": {"max": {"field": "annee"}}}}}))
 
 
 @scenario
