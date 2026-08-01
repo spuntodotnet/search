@@ -318,6 +318,60 @@ def nested_refus_explicites(es):
 
 
 @scenario
+def join_parent_enfant(es):
+    """`join` : parent et enfant sont deux documents, reunis a la requete."""
+    es.options(ignore_status=404).indices.delete(index="blog")
+    es.indices.create(index="blog", mappings={"properties": {
+        "titre": {"type": "text"},
+        "auteur": {"type": "keyword"},
+        "note": {"type": "integer"},
+        "lien": {"type": "join", "relations": {"article": "commentaire"}},
+    }})
+    for doc_id, doc in [
+        ("a1", {"titre": "le rust au quotidien", "lien": {"name": "article"}}),
+        ("a2", {"titre": "article sans commentaire", "lien": {"name": "article"}}),
+        ("c1", {"titre": "tres bon papier", "auteur": "zoe", "note": 5,
+                "lien": {"name": "commentaire", "parent": "a1"}}),
+        ("c2", {"titre": "bof", "auteur": "max", "note": 2,
+                "lien": {"name": "commentaire", "parent": "a1"}}),
+    ]:
+        es.index(index="blog", id=doc_id, document=doc, refresh=True)
+
+    def hits(query):
+        return sorted(h["_id"] for h in es.search(index="blog", query=query, size=10)["hits"]["hits"])
+
+    assert hits({"has_child": {"type": "commentaire",
+                               "query": {"term": {"auteur": "zoe"}}}}) == ["a1"]
+    assert hits({"has_child": {"type": "commentaire",
+                               "query": {"match_all": {}}}}) == ["a1"]
+    assert hits({"has_parent": {"parent_type": "article",
+                                "query": {"match": {"titre": "rust"}}}}) == ["c1", "c2"]
+    assert hits({"parent_id": {"type": "commentaire", "id": "a1"}}) == ["c1", "c2"]
+    # Le champ `join` se filtre comme un `keyword`, sous son propre nom.
+    assert hits({"term": {"lien": "article"}}) == ["a1", "a2"]
+    assert hits({"bool": {"must": [{"term": {"lien": "article"}}],
+                          "must_not": [{"has_child": {"type": "commentaire",
+                                                      "query": {"match_all": {}}}}]}}) == ["a2"]
+    m = es.indices.get_mapping(index="blog")["blog"]["mappings"]["properties"]["lien"]
+    assert m["type"] == "join" and m["relations"] == {"article": "commentaire"}
+
+    # Ce qui n'a pas de sens est refuse, pas devine.
+    refused(lambda: es.index(index="blog", id="x",
+                             document={"lien": {"name": "commentaire"}}),
+            contains="[parent] est obligatoire")
+    refused(lambda: es.index(index="blog", id="y",
+                             document={"lien": {"name": "inconnu"}}),
+            contains="relation [inconnu] inconnue")
+    refused(lambda: es.search(index="blog", query={"has_child": {
+        "type": "article", "query": {"match_all": {}}}}),
+        contains="n'est pas un enfant")
+    refused(lambda: es.search(index="blog", query={"has_child": {
+        "type": "commentaire", "query": {"match_all": {}}, "score_mode": "max"}}),
+        contains="score_mode")
+    es.indices.delete(index="blog")
+
+
+@scenario
 def mapping_dynamique_preserve_l_existant(es):
     """Le point dur : tantivy fige le schema, donc ferrite change de generation
     quand un champ apparait. Les documents deja indexes doivent survivre."""

@@ -10,10 +10,10 @@ use std::ops::Bound;
 use serde_json::{Map, Value};
 use tantivy::query::{
     AllQuery, BooleanQuery, BoostQuery, ConstScoreQuery, EmptyQuery, ExistsQuery, FuzzyTermQuery,
-    Occur, PhraseQuery, Query, RangeQuery, RegexQuery, TermQuery,
+    Occur, PhraseQuery, Query, RangeQuery, RegexQuery, TermQuery, TermSetQuery,
 };
 use tantivy::schema::IndexRecordOption;
-use tantivy::Index;
+use tantivy::{Index, Searcher, Term};
 
 use crate::analysis::Analyzer;
 use crate::dismax::DisMaxQuery;
@@ -35,14 +35,21 @@ pub struct QueryCtx<'a> {
     /// et ce champ est ce qui distingue « dans une clause `nested` » de
     /// « depuis la racine ».
     pub nested_ouvert: std::cell::RefCell<Vec<String>>,
+    /// Un `searcher` sur la meme generation, pour les clauses qui se resolvent
+    /// en **deux passes** : `has_child` et `has_parent` executent leur requete
+    /// interne a la traduction, materialisent l'ensemble des identifiants
+    /// concernes, et rendent une recherche sur ces identifiants. C'est ce que
+    /// le mono-shard rend possible sans *global ordinals*.
+    pub searcher: &'a Searcher,
 }
 
 impl<'a> QueryCtx<'a> {
-    pub fn new(fields: &'a Fields, index: &'a Index) -> Self {
+    pub fn new(fields: &'a Fields, index: &'a Index, searcher: &'a Searcher) -> Self {
         Self {
             fields,
             index,
             nested_ouvert: std::cell::RefCell::new(Vec::new()),
+            searcher,
         }
     }
 }
@@ -123,10 +130,13 @@ pub fn build_query(v: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         "range" => range_query(body, ctx),
         "bool" => bool_query(body, ctx),
         "nested" => nested_query(body, ctx),
+        "has_child" => join_query(body, ctx, Sens::VersLeParent),
+        "has_parent" => join_query(body, ctx, Sens::VersLEnfant),
+        "parent_id" => parent_id_query(body, ctx),
         other => Err(EsError::parsing(format!(
             "unknown query [{other}] : ferrite supporte [match_all, match_none, match, \
              multi_match, match_phrase, exists, ids, prefix, wildcard, fuzzy, term, terms, \
-             range, bool, constant_score, dis_max, nested]"
+             range, bool, constant_score, dis_max, nested, has_child, has_parent, parent_id]"
         ))),
     }
 }
@@ -1276,4 +1286,244 @@ fn sans_negations(v: &Value) -> Value {
         Value::Array(a) => Value::Array(a.iter().map(sans_negations).collect()),
         autre => autre.clone(),
     }
+}
+
+// ---------------------------------------------------------------------------
+// join : has_child / has_parent / parent_id
+// ---------------------------------------------------------------------------
+
+/// De quel cote de la relation la requete interne s'applique.
+#[derive(Clone, Copy, PartialEq)]
+enum Sens {
+    /// `has_child` : la requete porte sur les enfants, on rend les parents.
+    VersLeParent,
+    /// `has_parent` : la requete porte sur les parents, on rend les enfants.
+    VersLEnfant,
+}
+
+/// `has_child` / `has_parent`, en deux passes.
+///
+/// 1. la requete interne est executee, restreinte a la relation visee ;
+/// 2. les identifiants qui en sortent (celui du parent pour un enfant, le sien
+///    pour un parent) deviennent une recherche sur `_id` ou sur la colonne du
+///    parent.
+///
+/// Exact, et borne par le nombre d'identifiants distincts. Elasticsearch ne
+/// peut pas se le permettre — distribue, il lui faut des *global ordinals* —
+/// mais mono-shard, parent et enfant sont forcement au meme endroit.
+fn join_query(body: &Value, ctx: &QueryCtx, sens: Sens) -> EsResult<Box<dyn Query>> {
+    let nom_clause = if sens == Sens::VersLeParent {
+        "has_child"
+    } else {
+        "has_parent"
+    };
+    let obj = as_object(body, nom_clause)?;
+    let cle_type = if sens == Sens::VersLeParent {
+        "type"
+    } else {
+        "parent_type"
+    };
+    expect_only(
+        obj,
+        &[
+            cle_type,
+            "query",
+            "score_mode",
+            "boost",
+            "inner_hits",
+            "ignore_unmapped",
+            "min_children",
+            "max_children",
+        ],
+        nom_clause,
+    )?;
+    for refuse in [
+        "inner_hits",
+        "ignore_unmapped",
+        "min_children",
+        "max_children",
+    ] {
+        if obj.contains_key(refuse) {
+            return Err(EsError::unsupported(format!(
+                "ferrite ne supporte pas [{refuse}] dans [{nom_clause}]"
+            )));
+        }
+    }
+    if let Some(mode) = obj.get("score_mode").and_then(Value::as_str) {
+        if mode != "none" {
+            return Err(EsError::unsupported(format!(
+                "ferrite ne supporte pas [score_mode: {mode}] dans [{nom_clause}] : la jointure \
+                 rend un score constant (voir docs/compat.md)"
+            )));
+        }
+    }
+
+    let (join, f_nom, f_parent) = infos_join(ctx, nom_clause)?;
+    let relation = obj
+        .get(cle_type)
+        .and_then(Value::as_str)
+        .ok_or_else(|| EsError::parsing(format!("[{nom_clause}] : cle [{cle_type}] manquante")))?;
+    let attendu_enfant = sens == Sens::VersLeParent;
+    let est_enfant = join.parent_de(relation).is_some();
+    if !join.connait(relation) || est_enfant != attendu_enfant {
+        return Err(EsError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            "query_shard_exception",
+            format!(
+                "[{nom_clause}] : [{relation}] n'est pas {} declare dans [{}] ; relations : {:?}",
+                if attendu_enfant {
+                    "un enfant"
+                } else {
+                    "un parent"
+                },
+                join.champ,
+                join.noms()
+            ),
+        ));
+    }
+    let interne = obj
+        .get("query")
+        .ok_or_else(|| EsError::parsing(format!("[{nom_clause}] : cle [query] manquante")))?;
+
+    // Passe 1 : les documents du cote interroge, restreints a la relation.
+    let cible = BooleanQuery::new(vec![
+        (Occur::Must, build_query(interne, ctx)?),
+        (
+            Occur::Must,
+            Box::new(TermQuery::new(
+                Term::from_field_text(f_nom, relation),
+                IndexRecordOption::Basic,
+            )),
+        ),
+    ]);
+
+    // Passe 2 : de ces documents aux identifiants qui les relient.
+    let (lu, vise) = if sens == Sens::VersLeParent {
+        (f_parent, ctx.fields.id) // l'enfant porte l'id du parent
+    } else {
+        (ctx.fields.id, f_parent) // le parent porte le sien
+    };
+    let ids = collecte_termes(ctx, &cible, lu)?;
+    if ids.is_empty() {
+        return Ok(Box::new(EmptyQuery));
+    }
+    let termes: Vec<Term> = ids
+        .iter()
+        .map(|id| Term::from_field_text(vise, id))
+        .collect();
+    let inner: Box<dyn Query> = Box::new(ConstScoreQuery::new(
+        Box::new(TermSetQuery::new(termes)),
+        1.0,
+    ));
+    boost(inner, obj.get("boost"))
+}
+
+/// `{"parent_id": {"type": "ligne", "id": "1"}}` : les enfants d'un parent.
+fn parent_id_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
+    let obj = as_object(body, "parent_id")?;
+    expect_only(
+        obj,
+        &["type", "id", "boost", "ignore_unmapped"],
+        "parent_id",
+    )?;
+    if obj.contains_key("ignore_unmapped") {
+        return Err(EsError::unsupported(
+            "ferrite ne supporte pas [ignore_unmapped] dans [parent_id]",
+        ));
+    }
+    let (join, f_nom, f_parent) = infos_join(ctx, "parent_id")?;
+    let relation = obj
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| EsError::parsing("[parent_id] : cle [type] manquante"))?;
+    if join.parent_de(relation).is_none() {
+        return Err(EsError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            "query_shard_exception",
+            format!(
+                "[parent_id] : [{relation}] n'est pas un enfant declare dans [{}]",
+                join.champ
+            ),
+        ));
+    }
+    let id = match obj.get("id") {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Number(n)) => n.to_string(),
+        _ => return Err(EsError::parsing("[parent_id] : cle [id] manquante")),
+    };
+    let inner: Box<dyn Query> = Box::new(ConstScoreQuery::new(
+        Box::new(BooleanQuery::new(vec![
+            (
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_text(f_nom, relation),
+                    IndexRecordOption::Basic,
+                )) as Box<dyn Query>,
+            ),
+            (
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_text(f_parent, &id),
+                    IndexRecordOption::Basic,
+                )),
+            ),
+        ])),
+        1.0,
+    ));
+    boost(inner, obj.get("boost"))
+}
+
+fn infos_join<'a>(
+    ctx: &'a QueryCtx,
+    clause: &str,
+) -> EsResult<(
+    &'a mapping::Join,
+    tantivy::schema::Field,
+    tantivy::schema::Field,
+)> {
+    match (
+        ctx.fields.join.as_ref(),
+        ctx.fields.join_name,
+        ctx.fields.join_parent,
+    ) {
+        (Some(j), Some(n), Some(p)) => Ok((j, n, p)),
+        _ => Err(EsError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            "query_shard_exception",
+            format!("[{clause}] : cet index n'a pas de champ [join]"),
+        )),
+    }
+}
+
+/// Les valeurs distinctes d'une colonne `keyword`, pour les documents qui
+/// correspondent a `q`.
+fn collecte_termes(
+    ctx: &QueryCtx,
+    q: &dyn Query,
+    champ: tantivy::schema::Field,
+) -> EsResult<Vec<String>> {
+    use std::collections::BTreeSet;
+    let nom = ctx.searcher.schema().get_field_name(champ).to_string();
+    let mut out = BTreeSet::new();
+    let poids = q.weight(tantivy::query::EnableScoring::disabled_from_searcher(
+        ctx.searcher,
+    ))?;
+    for reader in ctx.searcher.segment_readers() {
+        let Ok(Some(col)) = reader.fast_fields().str(&nom) else {
+            continue;
+        };
+        let mut docset = poids.scorer(reader, 1.0)?;
+        let mut buf = String::new();
+        let mut doc = docset.doc();
+        while doc != tantivy::TERMINATED {
+            for ord in col.term_ords(doc) {
+                buf.clear();
+                if col.ord_to_str(ord, &mut buf).unwrap_or(false) {
+                    out.insert(buf.clone());
+                }
+            }
+            doc = docset.advance();
+        }
+    }
+    Ok(out.into_iter().collect())
 }

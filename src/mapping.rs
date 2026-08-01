@@ -201,6 +201,104 @@ impl Dynamic {
     }
 }
 
+/// Le champ `join` d'un index : un seul, et ses relations parent -> enfants.
+///
+/// ferrite etant mono-shard, parent et enfant sont forcement au meme endroit :
+/// la jointure n'a besoin ni de routage ni de *global ordinals*, seulement de
+/// deux colonnes (le nom de la relation, l'identifiant du parent).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Join {
+    /// Le nom du champ (`lien`).
+    pub champ: String,
+    /// `parent -> enfants`.
+    pub relations: BTreeMap<String, Vec<String>>,
+}
+
+impl Join {
+    /// Le parent declare pour ce nom de relation, s'il s'agit d'un enfant.
+    pub fn parent_de(&self, nom: &str) -> Option<&str> {
+        self.relations
+            .iter()
+            .find(|(_, enfants)| enfants.iter().any(|e| e == nom))
+            .map(|(p, _)| p.as_str())
+    }
+
+    pub fn connait(&self, nom: &str) -> bool {
+        self.relations.contains_key(nom) || self.parent_de(nom).is_some()
+    }
+
+    pub fn noms(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = self.relations.keys().map(String::as_str).collect();
+        for enfants in self.relations.values() {
+            out.extend(enfants.iter().map(String::as_str));
+        }
+        out
+    }
+
+    fn to_json(&self) -> Value {
+        let relations: Map<String, Value> = self
+            .relations
+            .iter()
+            .map(|(p, enfants)| {
+                let v = if enfants.len() == 1 {
+                    json!(enfants[0])
+                } else {
+                    json!(enfants)
+                };
+                (p.clone(), v)
+            })
+            .collect();
+        json!({"type": "join", "eager_global_ordinals": true, "relations": relations})
+    }
+
+    fn parse(champ: &str, obj: &Map<String, Value>) -> EsResult<Self> {
+        for cle in obj.keys() {
+            if !matches!(cle.as_str(), "type" | "relations" | "eager_global_ordinals") {
+                return Err(EsError::unsupported(format!(
+                    "ferrite ne supporte pas [{cle}] sur un champ [join] ([{champ}])"
+                )));
+            }
+        }
+        let relations = obj
+            .get("relations")
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                EsError::mapper_parsing(format!("[{champ}] : un [join] declare ses [relations]"))
+            })?;
+        let mut out = BTreeMap::new();
+        for (parent, enfants) in relations {
+            let enfants = match enfants {
+                Value::String(s) => vec![s.clone()],
+                Value::Array(a) => a
+                    .iter()
+                    .map(|v| {
+                        v.as_str().map(str::to_string).ok_or_else(|| {
+                            EsError::mapper_parsing(format!(
+                                "[{champ}.relations.{parent}] : noms d'enfants attendus"
+                            ))
+                        })
+                    })
+                    .collect::<EsResult<Vec<_>>>()?,
+                _ => {
+                    return Err(EsError::mapper_parsing(format!(
+                        "[{champ}.relations.{parent}] : une chaine ou un tableau est attendu"
+                    )))
+                }
+            };
+            out.insert(parent.clone(), enfants);
+        }
+        if out.is_empty() {
+            return Err(EsError::mapper_parsing(format!(
+                "[{champ}] : un [join] sans relation n'a pas d'objet"
+            )));
+        }
+        Ok(Self {
+            champ: champ.to_string(),
+            relations: out,
+        })
+    }
+}
+
 /// Le mapping d'un index. Ordonne par nom, comme le rend ES.
 ///
 /// Les sous-objets n'ont pas de representation propre : ils sont **aplatis en
@@ -218,6 +316,8 @@ pub struct Mapping {
     /// appartient, ce qui permet de retrouver la correspondance qu'un `object`
     /// perd. Voir [`crate::nested`].
     pub nested: BTreeSet<String>,
+    /// Le champ `join`, s'il y en a un. ES n'en autorise qu'un par index.
+    pub join: Option<Join>,
     pub dynamic: Dynamic,
 }
 
@@ -232,6 +332,9 @@ impl Mapping {
         let mut props = Map::new();
         for (chemin, fm) in &self.properties {
             niche(&mut props, chemin, fm.to_json());
+        }
+        if let Some(j) = &self.join {
+            props.insert(j.champ.clone(), j.to_json());
         }
         for racine in &self.nested {
             if let Some(o) = pointe_mut(&mut props, racine).and_then(Value::as_object_mut) {
@@ -257,6 +360,7 @@ impl Mapping {
 
         let mut properties = BTreeMap::new();
         let mut nested = BTreeSet::new();
+        let mut join = None;
         let mut dynamic = Dynamic::default();
         for (key, val) in obj {
             match key.as_str() {
@@ -265,6 +369,15 @@ impl Mapping {
                         EsError::mapper_parsing("[mappings.properties] doit etre un objet")
                     })?;
                     for (name, spec) in props {
+                        if spec.get("type").and_then(Value::as_str) == Some("join") {
+                            if join.is_some() {
+                                return Err(EsError::mapper_parsing(
+                                    "un index n'accepte qu'un seul champ [join]",
+                                ));
+                            }
+                            join = Some(Join::parse(name, as_obj(spec, name)?)?);
+                            continue;
+                        }
                         parse_propriete(name, spec, &mut properties, &mut nested)?;
                     }
                 }
@@ -288,6 +401,7 @@ impl Mapping {
         Ok(Self {
             properties,
             nested,
+            join,
             dynamic,
         })
     }
@@ -397,6 +511,11 @@ fn conflit_de_chemin(chemin: &str, dans: &BTreeMap<String, FieldMapping>) -> EsR
         }
     }
     Ok(())
+}
+
+fn as_obj<'a>(v: &'a Value, quoi: &str) -> EsResult<&'a Map<String, Value>> {
+    v.as_object()
+        .ok_or_else(|| EsError::mapper_parsing(format!("[{quoi}] doit etre un objet")))
 }
 
 /// `chemin` est-il sous `racine` (strictement) ?
@@ -741,6 +860,8 @@ pub struct MappedField {
 pub const P_ELEM: &str = "_elem.";
 /// Prefixe de la colonne qui compte les elements d'un `nested`, par document.
 pub const P_NELEM: &str = "_nelem.";
+/// La colonne qui porte l'identifiant du parent, pour un document enfant.
+pub const F_JOIN_PARENT: &str = "_join_parent";
 
 /// Les handles tantivy resolus une fois pour toutes a l'ouverture de l'index.
 #[derive(Debug, Clone)]
@@ -759,6 +880,12 @@ pub struct Fields {
     pub nested: BTreeSet<String>,
     /// Par racine `nested` : le nombre d'elements du document.
     pub nelem: BTreeMap<String, Field>,
+    /// Le champ `join` declare, et ses deux colonnes : le nom de la relation
+    /// (interrogeable comme un `keyword`, sous le nom du champ) et
+    /// l'identifiant du parent.
+    pub join: Option<Join>,
+    pub join_name: Option<Field>,
+    pub join_parent: Option<Field>,
 }
 
 impl Fields {
@@ -793,9 +920,34 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
     let version = b.add_u64_field(F_VERSION, FAST | STORED);
     let seq_no = b.add_u64_field(F_SEQ_NO, FAST | STORED);
 
-    let mut mapped = BTreeMap::new();
+    let mut mapped: BTreeMap<String, MappedField> = BTreeMap::new();
     let mut targets: BTreeMap<String, Vec<MappedField>> = BTreeMap::new();
     let mut nelem = BTreeMap::new();
+    let (mut join_name, mut join_parent) = (None, None);
+    if let Some(j) = &mapping.join {
+        let f = add_field(&mut b, &j.champ, FieldType::Keyword, Analyzer::default());
+        // Interrogeable comme un `keyword` sous son propre nom — c'est ce que
+        // fait ES : `{"term": {"lien": "article"}}` filtre sur la relation.
+        // Present dans `mapped` (donc dans les requetes) mais pas dans
+        // `targets` : sa valeur ne s'indexe pas comme un champ ordinaire.
+        mapped.insert(
+            j.champ.clone(),
+            MappedField {
+                field: f,
+                ty: FieldType::Keyword,
+                ignore_above: None,
+                analyzer: Analyzer::default(),
+                elem: None,
+            },
+        );
+        join_name = Some(f);
+        join_parent = Some(add_field(
+            &mut b,
+            F_JOIN_PARENT,
+            FieldType::Keyword,
+            Analyzer::default(),
+        ));
+    }
     for racine in &mapping.nested {
         nelem.insert(
             racine.clone(),
@@ -840,6 +992,9 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
             targets,
             nested: mapping.nested.clone(),
             nelem,
+            join: mapping.join.clone(),
+            join_name,
+            join_parent,
         },
     )
 }

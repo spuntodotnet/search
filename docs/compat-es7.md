@@ -25,11 +25,10 @@ Donc, sur ce que ferrite sait faire : **les résultats sont les mêmes, et c'est
 3 à 4 fois plus rapide**. Les mêmes chiffres contre un ES 8.15.0 donnent le
 même verdict (x3,8 en latence, x2 en débit).
 
-**Ce qui bloque n'est donc pas là.** C'est que des documents contenant des
-sous-objets (`{"client": {"ville": "Lyon"}}`) sont refusés à l'indexation : sur
-un index qui en contient, il n'y a rien à comparer parce qu'il n'y a rien à
-indexer. Tout le reste de ce fichier détaille ce point et ce qu'il faudrait pour
-le lever.
+**Et les documents imbriqués passent désormais** : `object`, `nested` et `join`
+sont supportés (voir [`compat.md`](compat.md#nested)), chacun vérifié contre un
+vrai 7.10.2 — 15 comparaisons sur 15 pour `object` et pour `join`, 15 sur 16
+pour `nested` (la 16ᵉ est un refus explicite là où ES rend 0 hit en silence).
 
 ---
 

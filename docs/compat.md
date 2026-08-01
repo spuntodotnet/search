@@ -135,7 +135,8 @@ différemment. ferrite applique désormais les frontières de mots d'Unicode
 | `null` | ✅ | ignoré à l'indexation, comme chez ES (pas de `null_value`) |
 | `object` (sous-objet), déclaré ou deviné | ✅ | indexé par **chemins pointés** (`client.ville`), comme ES. Un objet n'est pas un champ : il n'existe que par ses feuilles. `GET /_mapping` re-niche les chemins. Un tableau d'objets est aplati — comme ES, la correspondance entre sous-champs d'un même élément est perdue (c'est ce que `nested` corrige) |
 | `nested` | 🟡 | voir [la section dédiée](#nested) |
-| Tout autre type (`geo_point`, `join`, `ip`, `binary`…) | ❌ | `join` : voir [`nested-join.md`](nested-join.md) |
+| `join` (parent/enfant) | 🟡 | voir [la section dédiée](#join-parentenfant) |
+| Tout autre type (`geo_point`, `ip`, `binary`…) | ❌ | |
 | `analyzer` | 🟡 | sur un champ `text` : `standard` (défaut), `simple`, `whitespace`, `keyword`, `stop` — voir la section dédiée |
 | Multi-fields (`fields`) | ✅ | un seul niveau, comme ES. `titre.keyword` s'interroge et se trie comme un champ à part entière |
 | `ignore_above` | ✅ | sur un `keyword` : au-delà, la valeur reste dans `_source` sans être indexée |
@@ -273,6 +274,25 @@ mesures : [`nested-join.md`](nested-join.md), `src/nested.rs`.
 | `inner_hits`, `ignore_unmapped` | ❌ | |
 | Champs devinés sous un `nested` | ✅ | le mapping dynamique fonctionne, et la corrélation avec |
 | Tri et agrégations sur un champ `nested` | ❌ | ils porteraient sur les valeurs à plat, donc sur autre chose que ce que la requête a filtré |
+
+### `join` (parent/enfant)
+
+Parent et enfant sont deux documents distincts, réunis à la requête.
+`has_child` / `has_parent` s'évaluent en **deux passes** : la requête interne est
+exécutée, les identifiants qui en sortent deviennent une recherche sur `_id` (ou
+sur la colonne du parent). Exact, et borné par le nombre d'identifiants
+distincts. Elasticsearch a besoin de *global ordinals* pour ça parce qu'il est
+distribué ; mono-shard, parent et enfant sont forcément au même endroit.
+
+| | État | Détail |
+|---|---|---|
+| `{"type": "join", "relations": {...}}` | ✅ | un seul champ `join` par index, plusieurs relations et plusieurs enfants par parent |
+| Indexation | ✅ | `"lien": "article"` ou `{"name": "commentaire", "parent": "a1"}`. Un enfant sans `parent`, un parent avec, ou une relation non déclarée : refus explicite |
+| `has_child`, `has_parent` | 🟡 | avec n'importe quelle requête interne. `score_mode` : `none` seulement (la jointure rend un score constant) |
+| `parent_id` | ✅ | |
+| `{"term": {"lien": "article"}}` | ✅ | le champ `join` se filtre comme un `keyword`, sous son propre nom, comme chez ES |
+| `routing` | 🟡 | accepté et sans objet : il n'y a qu'un shard, donc rien à co-localiser. C'est **une contrainte d'ES en moins** |
+| `inner_hits`, `min_children`, `max_children`, `ignore_unmapped` | ❌ | |
 
 ## Erreurs
 

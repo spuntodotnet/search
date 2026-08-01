@@ -1,9 +1,10 @@
 # `nested` et `join` : par où on les prendrait
 
-> Note de conception. **Le chemin A de `nested` est désormais implémenté**
-> (`src/nested.rs`, voir [`compat.md`](compat.md#nested)) ; `join` ne l'est pas
-> encore. Les deux propriétés de tantivy dont ces chemins dépendent sont
-> vérifiées par `tests/spike_nested.rs`, qui tourne avec `cargo test`.
+> Note de conception, **désormais suivie d'effet** : le chemin A de `nested`
+> (`src/nested.rs`) et `join` (`src/dsl.rs`) sont implémentés — voir
+> [`compat.md`](compat.md#nested). Seul le chemin B reste théorique. Les deux
+> propriétés de tantivy dont ces chemins dépendent sont vérifiées par
+> `tests/spike_nested.rs`, qui tourne avec `cargo test`.
 
 ## Non, il n'y a pas Lucene à réécrire
 
@@ -106,7 +107,7 @@ relatif des documents.
 
 À réserver au jour où le scoring intra-`nested` est vraiment demandé.
 
-## `join` — plus simple qu'il n'y paraît, parce que ferrite est mono-nœud
+## `join` — plus simple qu'il n'y paraît, parce que ferrite est mono-nœud (implémenté)
 
 Parent et enfant sont des documents distincts, réunis à la requête.
 `has_child` / `has_parent` s'implémentent en deux passes :
@@ -122,8 +123,11 @@ forcément au même endroit. `score_mode` (`max`, `sum`, `avg`, `none`) s'agrèg
 dans la même passe.
 
 Le vrai coût de `join` n'est pas la requête, c'est le champ `join` lui-même :
-un type de champ à part, des relations déclarées dans le mapping, un `routing`
-obligatoire à l'indexation des enfants, et l'`_id` du parent à valider.
+un type de champ à part, des relations déclarées dans le mapping, et l'`_id` du
+parent à valider. Le `routing`, lui, a disparu du problème — mono-shard, il n'y
+a rien à co-localiser. **Mesuré : 15 comparaisons sur 15 identiques à un ES
+7.10.2**, `has_child`, `has_parent`, `parent_id`, filtre sur le champ `join`,
+négation, et les refus (relation inconnue, enfant sans parent) compris.
 
 ## Les ordres de grandeur
 

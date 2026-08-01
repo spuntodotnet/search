@@ -444,6 +444,15 @@ impl FerriteIndex {
             if gen.fields.targets_of(chemin).is_some() {
                 return Ok(());
             }
+            // Le champ `join` est declare, jamais devine.
+            if gen
+                .fields
+                .join
+                .as_ref()
+                .is_some_and(|j| chemin == j.champ || mapping::est_sous_chemin(chemin, &j.champ))
+            {
+                return Ok(());
+            }
             match gen.mapping.dynamic {
                 Dynamic::Strict => Err(EsError::strict_mapping(&self.name, chemin)),
                 Dynamic::False => Ok(()),
@@ -580,12 +589,80 @@ fn build_doc(
     doc.add_u64(gen.fields.version, version);
     doc.add_u64(gen.fields.seq_no, seq_no);
 
+    // Le champ `join` n'est pas un champ ordinaire : sa valeur decrit la place
+    // du document dans la relation, pas une donnee a indexer telle quelle.
+    if let (Some(j), Some(f_nom)) = (&gen.fields.join, gen.fields.join_name) {
+        if let Some(v) = obj.get(&j.champ) {
+            let (nom, parent) = match v {
+                Value::String(s) => (s.as_str(), None),
+                Value::Object(o) => {
+                    for cle in o.keys() {
+                        if cle != "name" && cle != "parent" {
+                            return Err(EsError::mapper_parsing(format!(
+                                "[{}] : cle [{cle}] inconnue dans un champ [join]",
+                                j.champ
+                            )));
+                        }
+                    }
+                    let nom = o.get("name").and_then(Value::as_str).ok_or_else(|| {
+                        EsError::mapper_parsing(format!("[{}] : cle [name] manquante", j.champ))
+                    })?;
+                    (nom, o.get("parent").and_then(Value::as_str))
+                }
+                _ => {
+                    return Err(EsError::mapper_parsing(format!(
+                        "[{}] : un [join] attend une chaine ou {{name, parent}}",
+                        j.champ
+                    )))
+                }
+            };
+            if !j.connait(nom) {
+                return Err(EsError::illegal_argument(format!(
+                    "[{}] : relation [{nom}] inconnue ; declarees : {:?}",
+                    j.champ,
+                    j.noms()
+                )));
+            }
+            match (j.parent_de(nom), parent) {
+                (Some(_), None) => {
+                    return Err(EsError::illegal_argument(format!(
+                        "[{}] : [{nom}] est un enfant, son [parent] est obligatoire",
+                        j.champ
+                    )))
+                }
+                (None, Some(_)) => {
+                    return Err(EsError::illegal_argument(format!(
+                        "[{}] : [{nom}] est un parent, il n'a pas de [parent]",
+                        j.champ
+                    )))
+                }
+                _ => {}
+            }
+            doc.add_text(f_nom, nom);
+            if let (Some(p), Some(f_parent)) = (parent, gen.fields.join_parent) {
+                doc.add_text(f_parent, p);
+            }
+        }
+    }
+
     // Deux passes sur le document : la premiere compte les elements de chaque
     // `nested`, la seconde indexe les valeurs. Elles pourraient n'en faire
     // qu'une, mais elles ecrivent toutes deux dans `doc` — et un document JSON
     // se reparcourt pour rien.
     let mut cardinaux: Vec<(String, u32)> = Vec::new();
     let mut valeurs: Vec<(String, &Value, Option<u32>)> = Vec::new();
+    let sans_join: serde_json::Map<String, Value>;
+    let obj = match &gen.fields.join {
+        Some(j) if obj.contains_key(&j.champ) => {
+            sans_join = obj
+                .iter()
+                .filter(|(k, _)| *k != &j.champ)
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            &sans_join
+        }
+        _ => obj,
+    };
     mapping::parcours_nested(
         obj,
         &gen.fields.nested,

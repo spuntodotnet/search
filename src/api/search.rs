@@ -116,7 +116,8 @@ pub async fn search(
     };
 
     let query = {
-        let ctx = QueryCtx::new(&gen.fields, &gen.index);
+        let searcher = gen.searcher();
+        let ctx = QueryCtx::new(&gen.fields, &gen.index, &searcher);
         match body_obj.get("query") {
             Some(v) => build_query(v, &ctx)?,
             None => Box::new(tantivy::query::AllQuery),
@@ -200,7 +201,8 @@ pub async fn count(
     expect_only(&body_obj, &["query"], "_count")?;
 
     let query = {
-        let ctx = QueryCtx::new(&gen.fields, &gen.index);
+        let searcher = gen.searcher();
+        let ctx = QueryCtx::new(&gen.fields, &gen.index, &searcher);
         match body_obj.get("query") {
             Some(v) => build_query(v, &ctx)?,
             None => Box::new(tantivy::query::AllQuery),
