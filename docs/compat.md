@@ -133,7 +133,7 @@ différemment. ferrite applique désormais les frontières de mots d'Unicode
 | `date` | 🟡 | `date` (millisecondes) indexé + fast. Formats acceptés : `strict_date_optional_time` (ISO-8601, avec ou sans fuseau, date seule) et `epoch_millis`. `format` personnalisé : ❌ |
 | Tableaux de valeurs | ✅ | tout champ accepte une valeur ou un tableau |
 | `null` | ✅ | ignoré à l'indexation, comme chez ES (pas de `null_value`) |
-| Tout autre type (`geo_point`, `nested`, `object`, `ip`, `binary`…) | ❌ | |
+| Tout autre type (`geo_point`, `nested`, `object`, `join`, `ip`, `binary`…) | ❌ | `object` / `nested` / `join` ne coûtent pas la même chose à supporter : voir [`compat-es7.md`](compat-es7.md#object-nested-join--trois-choses-différentes) |
 | Sous-objet dans un **document** (`{"a": {"b": 1}}`) | ❌ | refus explicite à l'indexation, **y compris dans un tableau** (`{"a": [{"b": 1}]}`) : sans ce refus le champ serait gardé dans `_source` mais absent du mapping, donc introuvable |
 | `analyzer` | 🟡 | sur un champ `text` : `standard` (défaut), `simple`, `whitespace`, `keyword`, `stop` — voir la section dédiée |
 | Multi-fields (`fields`) | ✅ | un seul niveau, comme ES. `titre.keyword` s'interroge et se trie comme un champ à part entière |

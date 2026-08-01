@@ -36,7 +36,7 @@ Toutes depuis la **racine** du repo.
 | `python3 tests/compat/diff_aggs.py` | Compare les **agrégations** à celles d'un vrai ES, champ par champ |
 | `python3 tests/compat/diff_analyzers.py` | Compare les **analyzers** à ceux d'un vrai ES, token par token |
 | `python3 tests/compat/probe_es7.py [URL]` | Exerce le serveur avec le client officiel **7.x** (code écrit pour un ES 7) : ce qu'un projet resté en 7.10.2 peut brancher tel quel — voir [`compat-es7.md`](compat-es7.md) |
-| `python3 tests/compat/diff_es7.py [ferrite] [es7]` | Rejoue les **index, documents et requêtes** d'une instance **7.x** sur ferrite : ce qui s'héberge, ce qui se transfère, ce qui rend les mêmes résultats. Ne lit que l'instance (`--sans-ecriture` pour n'y rien écrire du tout) |
+| `python3 tests/compat/diff_es7.py [ferrite] [es7]` | Rejoue les **index, documents et requêtes** d'une instance **7.x** sur ferrite : ce qui s'héberge, ce qui se transfère, ce qui rend les mêmes résultats. Ne lit que l'instance (`--sans-ecriture` pour n'y rien écrire du tout ; `--inventaire URL` pour se contenter de lister les types de champ qu'elle utilise) |
 | `./tests/compat/measure_container.sh [tag]` | Ne construit rien, mesure une image déjà buildée : taille, RSS au repos, temps de démarrage |
 | `docker build -t ferrite .` | Image minimale (`scratch` + binaire statique musl) |
 

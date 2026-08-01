@@ -42,6 +42,12 @@ FERRITE = next((a for a in sys.argv[1:] if not a.startswith("-")), "http://local
 ES = next((a for a in sys.argv[1:] if not a.startswith("-")
            and a != FERRITE), "http://localhost:9201")
 SANS_ECRITURE = "--sans-ecriture" in sys.argv
+# `--inventaire` ne demande qu'une URL : celle de l'instance a inventorier.
+INVENTAIRE = "--inventaire" in sys.argv
+if INVENTAIRE and len(sys.argv) == 2:
+    FERRITE, ES = None, "http://localhost:9200"
+elif INVENTAIRE:
+    ES = FERRITE
 
 INDEX_CORPUS = "compat_es7"
 PREFIXE_MIGRE = "migre_"
@@ -114,6 +120,61 @@ def raison(exc):
         if isinstance(err, str):
             return err[:220]
     return str(exc)[:220]
+
+
+# ---------------------------------------------------------------------------
+# Inventaire : ce que l'instance utilise, sans juger
+# ---------------------------------------------------------------------------
+
+
+def parcours_mapping(props, prefixe=""):
+    """Rend (chemin, declaration) pour chaque champ, sous-objets compris."""
+    for nom, decl in sorted((props or {}).items()):
+        chemin = prefixe + nom
+        yield chemin, decl
+        yield from parcours_mapping(decl.get("properties"), chemin + ".")
+        for sub, sub_decl in sorted((decl.get("fields") or {}).items()):
+            yield f"{chemin}.{sub}", sub_decl
+
+
+def inventaire(es):
+    """Quels types de champ l'instance utilise-t-elle, et combien de fois ?
+
+    Purement descriptif : le verdict, lui, se prouve en rejouant le schema sur
+    ferrite (phase 1). Ne demande qu'une URL, ne fait que lire — c'est la
+    commande a passer sur une instance qu'on n'a pas le droit de toucher.
+    """
+    titre(f"Inventaire des mappings de {ES}")
+    types, structures = {}, {}
+    exemples = {}
+    for index in indices_applicatifs(es):
+        props = es.indices.get_mapping(index=index)[index]["mappings"].get("properties", {})
+        for chemin, decl in parcours_mapping(props):
+            if "properties" in decl and decl.get("type") != "nested":
+                cle = "object (sous-objet)"
+            elif decl.get("type") == "nested":
+                cle = "nested"
+            elif decl.get("type") == "join":
+                cle = "join (parent/enfant)"
+            else:
+                cle = decl.get("type", "?")
+            cible = structures if " " in cle or cle == "nested" else types
+            cible[cle] = cible.get(cle, 0) + 1
+            exemples.setdefault(cle, f"{index}:{chemin}")
+
+    if not types and not structures:
+        print("  aucun index applicatif")
+        return
+    for titre_bloc, table in (("structures", structures), ("champs simples", types)):
+        if not table:
+            continue
+        print(f"  {titre_bloc} :")
+        for cle, n in sorted(table.items(), key=lambda kv: -kv[1]):
+            print(f"    {n:>5}  {cle:<22} ex. {exemples[cle]}")
+    print("\n  Les trois structures ne coutent pas la meme chose a reprendre :")
+    print("    object  ES l'aplatit lui-meme en chemins pointes (`client.ville`)")
+    print("    nested  chaque sous-objet est un document cache + une jointure de bloc")
+    print("    join    des documents distincts reunis par une jointure a la requete")
 
 
 def aplatis(settings):
@@ -405,8 +466,13 @@ def phase_forme(ferrite, es):
 
 
 def main():
-    ferrite = Elasticsearch(FERRITE, timeout=60)
     es = Elasticsearch(ES, timeout=60)
+    if INVENTAIRE:
+        # Mode lecture pure : ferrite n'a meme pas besoin de tourner.
+        inventaire(es)
+        return 0
+
+    ferrite = Elasticsearch(FERRITE, timeout=60)
     v = es.info()["version"]["number"]
     print(f"== ferrite {FERRITE} — Elasticsearch {v} {ES}")
     if not v.startswith("7."):

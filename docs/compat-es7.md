@@ -13,6 +13,12 @@ Le point dur n'est donc pas la version : c'est le périmètre de ferrite.
 un `format` de date ou un objet. En revanche, sur un corpus identique,
 ferrite rend **les mêmes documents dans le même ordre** que l'instance 7.10.2.
 
+Si les documents ont des sous-objets, la suite dépend de **lequel** des trois
+mécanismes d'Elasticsearch est en jeu — `object`, `nested` ou `join` : le
+premier est un chantier cadré, les deux autres sont un mur. Voir
+[la section dédiée](#object-nested-join--trois-choses-différentes), et
+`diff_es7.py --inventaire` pour le savoir sur une instance donnée.
+
 Les deux moitiés de ce fichier traitent les deux questions séparément, parce
 qu'elles ne se corrigent pas au même endroit.
 
@@ -211,6 +217,59 @@ entrer dans ferrite, ce qui n'est plus « le code client ne change pas ».
 
 À vérifier en premier sur l'instance : est-ce que les documents ont des
 sous-objets ? Si oui, la migration demande une transformation, pas un transfert.
+
+### `object`, `nested`, `join` : trois choses différentes
+
+Elasticsearch a trois façons de représenter « un objet dans un document », et
+elles ne coûtent pas du tout la même chose à reprendre. Mesuré des deux côtés :
+
+| Ce que le mapping déclare | ES 7.10.2 | ferrite |
+|---|---|---|
+| sous-objet implicite (`{"fournisseur": {"nom": …}}`, sans mapping) | mapping `fournisseur.properties.nom`, requête `term fournisseur.nom` | refus explicite à l'indexation |
+| sous-objet déclaré (`"fournisseur": {"properties": {…}}`) | accepté | `ferrite ne supporte pas les champs objet/imbriques` |
+| `"type": "object"` | accepté | `ferrite ne supporte pas le type de champ [object]` |
+| `"type": "nested"` + requête `nested` | accepté | `ferrite ne supporte pas le type de champ [nested]` |
+| `"type": "join"` + `has_child` / `has_parent` | accepté | `ferrite ne supporte pas le type de champ [join]` |
+| champ déjà aplati (`fournisseur_nom`) | accepté | **accepté** |
+
+Pour savoir lequel des trois est en jeu sur une instance — et combien de fois —
+sans rien y écrire ni même lancer ferrite :
+
+```bash
+python3 tests/compat/diff_es7.py --inventaire http://mon-es:9200
+```
+
+```
+  structures :
+      3  object (sous-objet)    ex. blog:auteur
+      1  join (parent/enfant)   ex. blog:lien
+      1  nested                 ex. commandes:lignes
+```
+
+**Ce que chacun demanderait à ferrite**, pour que l'arbitrage se fasse sur des
+faits :
+
+- **`object` — faisable, et pas énorme.** Elasticsearch n'invente rien ici : un
+  sous-objet *est* un ensemble de chemins pointés (`client.ville`), et c'est
+  ainsi qu'il l'indexe. Or ferrite indexe **déjà** par chemin pointé : ses
+  multi-fields (`titre.keyword`) sont des champs tantivy à part entière, et tout
+  le Query DSL, les tris et les agrégations résolvent un champ par son chemin
+  (`Fields.mapped`, une table `chemin → champ`). Le support demande donc de
+  parcourir récursivement le mapping et le document au lieu de leur premier
+  niveau, et de re-nicher les chemins dans la réponse `_mapping`. Le reste du
+  moteur n'a pas à bouger.
+- **`nested` — un autre moteur.** La sémantique de `nested` (chaque sous-objet
+  interrogé comme une unité, pour que `qte > 10` et `ref = "A"` portent sur *la
+  même* ligne) repose chez Lucene sur des documents cachés et une jointure de
+  bloc (`ToParentBlockJoinQuery`). tantivy n'a pas d'équivalent. C'est un projet,
+  pas une itération — et l'aplatir en `object` donnerait des résultats **faux**
+  sans le dire, ce que ce projet refuse.
+- **`join` — hors périmètre.** Parent/enfant, c'est la même famille de jointures,
+  plus le routage. Rien dans un déploiement mono-conteneur ne le rend
+  indispensable.
+
+Autrement dit : des documents à sous-objets ordinaires sont un chantier
+identifié ; des mappings `nested` ou `join` sont, eux, un mur.
 
 > Ce transfert a mis au jour un bug, corrigé dans la même PR : un champ valant
 > `[{…}]` était **accepté en silence** (gardé dans `_source`, absent du mapping,
