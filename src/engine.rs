@@ -752,13 +752,44 @@ fn stored_source(doc: &TantivyDocument, fields: &Fields) -> EsResult<Value> {
     serde_json::from_str(&raw).map_err(|e| EsError::internal(format!("_source illisible: {e}")))
 }
 
+/// Une modification du registre d'alias, telle que `POST /_aliases` la decrit.
+#[derive(Debug, Clone)]
+pub enum ActionAlias {
+    Ajouter {
+        index: String,
+        alias: String,
+        attache: crate::alias::Attache,
+    },
+    Retirer {
+        index: String,
+        alias: String,
+    },
+}
+
 pub struct Catalog {
     root: PathBuf,
     pub cluster_name: String,
     pub node_name: String,
     pub cluster_uuid: String,
     indices: RwLock<HashMap<String, Arc<FerriteIndex>>>,
+    /// `alias -> index -> attache`, persiste dans `_aliases.json`.
+    aliases: RwLock<crate::alias::Registre>,
+    /// Les reglages de cluster, sous leurs deux durees de vie : `persistent`
+    /// survit au redemarrage, `transient` non. C'est la distinction d'ES, et
+    /// elle compte — un reglage destructif pose « pour cette fois » ne doit pas
+    /// se retrouver actif au redemarrage suivant.
+    persistants: RwLock<BTreeMap<String, Value>>,
+    transitoires: RwLock<BTreeMap<String, Value>>,
 }
+
+/// Le fichier des reglages persistants, a la racine des donnees.
+const REGLAGES_FILE: &str = "_cluster.json";
+
+/// Les reglages de cluster que ferrite reconnait.
+///
+/// Le reste est refuse comme chez ES (`not recognized`) : accepter un reglage
+/// sans l'appliquer est exactement l'echec silencieux que le projet interdit.
+pub const REGLAGES_CONNUS: &[&str] = &["action.destructive_requires_name"];
 
 impl Catalog {
     /// Ouvre (ou cree) le repertoire de donnees et rouvre les index presents.
@@ -772,6 +803,9 @@ impl Catalog {
             node_name,
             cluster_uuid: util::random_uuid(),
             indices: RwLock::new(HashMap::new()),
+            aliases: RwLock::new(crate::alias::Registre::new()),
+            persistants: RwLock::new(lire_reglages(&root)),
+            transitoires: RwLock::new(BTreeMap::new()),
         });
 
         let entries = fs::read_dir(&root)
@@ -789,7 +823,228 @@ impl Catalog {
                 .expect("catalog lock")
                 .insert(name, Arc::new(idx));
         }
+
+        // Un alias qui designe un index disparu n'a plus de sens : on le laisse
+        // tomber a l'ouverture plutot que de rendre 404 a chaque recherche.
+        let mut registre = crate::alias::charger(&root);
+        {
+            let indices = catalog.indices.read().expect("catalog lock");
+            for cibles in registre.values_mut() {
+                cibles.retain(|nom, _| indices.contains_key(nom));
+            }
+        }
+        registre.retain(|_, cibles| !cibles.is_empty());
+        *catalog.aliases.write().expect("alias lock") = registre;
         Ok(catalog)
+    }
+
+    // -----------------------------------------------------------------------
+    // Reglages de cluster
+    // -----------------------------------------------------------------------
+
+    /// `action.destructive_requires_name` : faut-il nommer chaque index a
+    /// supprimer ?
+    ///
+    /// `true` par defaut, comme Elasticsearch **depuis la 8.0** — une purge
+    /// ecrite `DELETE /audits-2026.07.*` est donc refusee tant que le reglage
+    /// n'a pas ete bascule, exactement comme sur un vrai ES 8. C'est le
+    /// contraire d'une commodite : un projet qui purge par motif l'a forcement
+    /// bascule chez lui, et ferrite doit refuser la ou ES refuse, sinon la
+    /// premiere difference de comportement serait une suppression de donnees.
+    pub fn destructive_requires_name(&self) -> bool {
+        let lire = |m: &BTreeMap<String, Value>| -> Option<bool> {
+            match m.get("action.destructive_requires_name")? {
+                Value::Bool(b) => Some(*b),
+                Value::String(s) => s.parse().ok(),
+                _ => None,
+            }
+        };
+        // `transient` l'emporte sur `persistent`, comme chez ES.
+        lire(&self.transitoires.read().expect("reglages lock"))
+            .or_else(|| lire(&self.persistants.read().expect("reglages lock")))
+            .unwrap_or(true)
+    }
+
+    /// Les reglages poses, sous la forme `(persistants, transitoires)`.
+    pub fn reglages(&self) -> (BTreeMap<String, Value>, BTreeMap<String, Value>) {
+        (
+            self.persistants.read().expect("reglages lock").clone(),
+            self.transitoires.read().expect("reglages lock").clone(),
+        )
+    }
+
+    /// Pose (ou efface, sur `null`) des reglages. Rend ce que l'appel a change,
+    /// comme le fait la reponse d'ES.
+    pub fn poser_reglages(
+        &self,
+        persistants: &BTreeMap<String, Value>,
+        transitoires: &BTreeMap<String, Value>,
+    ) -> EsResult<()> {
+        for (portee, m) in [("persistent", persistants), ("transient", transitoires)] {
+            for cle in m.keys() {
+                if !REGLAGES_CONNUS.contains(&cle.as_str()) {
+                    return Err(EsError::illegal_argument(format!(
+                        "{portee} setting [{cle}], not recognized"
+                    )));
+                }
+            }
+        }
+        {
+            let mut p = self.persistants.write().expect("reglages lock");
+            appliquer(&mut p, persistants);
+            ecrire_reglages(&self.root, &p)?;
+        }
+        let mut t = self.transitoires.write().expect("reglages lock");
+        appliquer(&mut t, transitoires);
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Alias
+    // -----------------------------------------------------------------------
+
+    pub fn aliases(&self) -> crate::alias::Registre {
+        self.aliases.read().expect("alias lock").clone()
+    }
+
+    pub fn est_alias(&self, nom: &str) -> bool {
+        self.aliases.read().expect("alias lock").contains_key(nom)
+    }
+
+    /// Les index designes par un alias, tries par nom.
+    ///
+    /// Le verrou des alias est relache avant celui du catalogue : partout
+    /// ailleurs l'ordre est catalogue puis alias, et deux ordres opposes sont
+    /// exactement ce qui bloque un jour a deux heures du matin.
+    pub fn cibles_alias(&self, alias: &str) -> Option<Vec<Arc<FerriteIndex>>> {
+        let noms: Vec<String> = {
+            let registre = self.aliases.read().expect("alias lock");
+            registre.get(alias)?.keys().cloned().collect()
+        };
+        let indices = self.indices.read().expect("catalog lock");
+        Some(
+            noms.iter()
+                .filter_map(|n| indices.get(n).cloned())
+                .collect(),
+        )
+    }
+
+    /// L'index vers lequel un alias dirige les **ecritures**.
+    ///
+    /// Un seul index : evident. Plusieurs : il faut qu'un `is_write_index`
+    /// tranche, sinon ES refuse — et ferrite aussi, parce que choisir a sa
+    /// place ecrirait silencieusement au mauvais endroit.
+    pub fn index_d_ecriture(&self, alias: &str) -> EsResult<String> {
+        let registre = self.aliases.read().expect("alias lock");
+        let cibles = registre
+            .get(alias)
+            .ok_or_else(|| EsError::index_not_found(alias))?;
+        let designes: Vec<&String> = cibles
+            .iter()
+            .filter(|(_, a)| a.is_write_index == Some(true))
+            .map(|(n, _)| n)
+            .collect();
+        if designes.len() > 1 {
+            return Err(EsError::illegal_argument(format!(
+                "alias [{alias}] has more than one write index [{}]",
+                designes
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )));
+        }
+        if let Some(n) = designes.first() {
+            return Ok((*n).clone());
+        }
+        let ouverts: Vec<&String> = cibles
+            .iter()
+            .filter(|(_, a)| a.is_write_index != Some(false))
+            .map(|(n, _)| n)
+            .collect();
+        match ouverts.len() {
+            1 => Ok(ouverts[0].clone()),
+            _ => Err(EsError::illegal_argument(format!(
+                "no write index is defined for alias [{alias}]. The write index may be explicitly \
+                 disabled using is_write_index=false or the alias points to multiple indices \
+                 without one being designated as a write index"
+            ))),
+        }
+    }
+
+    /// Applique un lot de modifications d'alias — tout ou rien, comme le
+    /// `POST /_aliases` d'ES.
+    pub fn modifier_alias(&self, actions: &[ActionAlias]) -> EsResult<()> {
+        let indices = self.indices.read().expect("catalog lock");
+        let mut registre = self.aliases.write().expect("alias lock");
+        let mut suivant = registre.clone();
+
+        for action in actions {
+            match action {
+                ActionAlias::Ajouter {
+                    index,
+                    alias,
+                    attache,
+                } => {
+                    if !indices.contains_key(index) {
+                        return Err(EsError::index_not_found(index));
+                    }
+                    // Un alias ne peut pas porter le nom d'un index : la
+                    // resolution ne saurait plus lequel des deux designer.
+                    if indices.contains_key(alias.as_str()) {
+                        return Err(EsError::illegal_argument(format!(
+                            "an index or data stream exists with the same name as the alias \
+                             [{alias}]"
+                        )));
+                    }
+                    suivant
+                        .entry(alias.clone())
+                        .or_default()
+                        .insert(index.clone(), attache.clone());
+                }
+                ActionAlias::Retirer { index, alias } => {
+                    let vide = match suivant.get_mut(alias) {
+                        None => {
+                            return Err(EsError::new(
+                                axum::http::StatusCode::NOT_FOUND,
+                                "aliases_not_found_exception",
+                                format!("aliases [{alias}] missing"),
+                            ))
+                        }
+                        Some(cibles) => {
+                            if cibles.remove(index).is_none() {
+                                return Err(EsError::new(
+                                    axum::http::StatusCode::NOT_FOUND,
+                                    "aliases_not_found_exception",
+                                    format!("aliases [{alias}] missing"),
+                                ));
+                            }
+                            cibles.is_empty()
+                        }
+                    };
+                    if vide {
+                        suivant.remove(alias);
+                    }
+                }
+            }
+        }
+
+        crate::alias::enregistrer(&self.root, &suivant)?;
+        *registre = suivant;
+        Ok(())
+    }
+
+    /// Retire un index de tous les alias qui le designent.
+    fn purger_alias(&self, index: &str) {
+        let mut registre = self.aliases.write().expect("alias lock");
+        let mut change = false;
+        for cibles in registre.values_mut() {
+            change |= cibles.remove(index).is_some();
+        }
+        if change {
+            registre.retain(|_, cibles| !cibles.is_empty());
+            let _ = crate::alias::enregistrer(&self.root, &registre);
+        }
     }
 
     pub fn get(&self, name: &str) -> EsResult<Arc<FerriteIndex>> {
@@ -844,8 +1099,23 @@ impl Catalog {
         v
     }
 
+    /// L'index portant exactement ce nom, sans validation ni resolution
+    /// d'alias. Le socle de [`crate::selection`].
+    pub fn brut(&self, nom: &str) -> Option<Arc<FerriteIndex>> {
+        self.indices.read().expect("catalog lock").get(nom).cloned()
+    }
+
     pub fn create(&self, name: &str, mapping: Mapping) -> EsResult<Arc<FerriteIndex>> {
         validate_index_name(name)?;
+        if self.est_alias(name) {
+            return Err(EsError::new(
+                axum::http::StatusCode::BAD_REQUEST,
+                "invalid_index_name_exception",
+                format!("Invalid index name [{name}], already exists as alias"),
+            )
+            .with("index_uuid", json!("_na_"))
+            .with("index", json!(name)));
+        }
         let mut guard = self.indices.write().expect("catalog lock");
         if let Some(existing) = guard.get(name) {
             return Err(EsError::index_already_exists(name, &existing.uuid));
@@ -880,12 +1150,16 @@ impl Catalog {
     }
 
     pub fn delete(&self, name: &str) -> EsResult<()> {
-        let mut guard = self.indices.write().expect("catalog lock");
-        let Some(idx) = guard.remove(name) else {
-            return Err(EsError::index_not_found(name));
+        let dir = {
+            let mut guard = self.indices.write().expect("catalog lock");
+            let Some(idx) = guard.remove(name) else {
+                return Err(EsError::index_not_found(name));
+            };
+            idx.dir.clone()
         };
-        let dir = idx.dir.clone();
-        drop(idx);
+        // Un alias qui ne designerait plus que des index disparus rendrait 404
+        // a la premiere recherche : il part avec l'index.
+        self.purger_alias(name);
         fs::remove_dir_all(&dir)
             .map_err(|e| EsError::internal(format!("suppression de {dir:?}: {e}")))?;
         Ok(())
@@ -992,6 +1266,33 @@ fn ecrire_meta(dir: &Path, uuid: &str, created_at: i64, gen: &Generation) -> EsR
         .map_err(|e| EsError::internal(format!("ecriture du mapping: {e}")))?;
     fs::rename(&tmp, dir.join(META_FILE))
         .map_err(|e| EsError::internal(format!("bascule du mapping: {e}")))?;
+    Ok(())
+}
+
+/// `null` efface un reglage, comme chez ES ; toute autre valeur le pose.
+fn appliquer(cible: &mut BTreeMap<String, Value>, demande: &BTreeMap<String, Value>) {
+    for (cle, valeur) in demande {
+        if valeur.is_null() {
+            cible.remove(cle);
+        } else {
+            cible.insert(cle.clone(), valeur.clone());
+        }
+    }
+}
+
+fn lire_reglages(racine: &Path) -> BTreeMap<String, Value> {
+    let Ok(raw) = fs::read(racine.join(REGLAGES_FILE)) else {
+        return BTreeMap::new();
+    };
+    serde_json::from_slice::<BTreeMap<String, Value>>(&raw).unwrap_or_default()
+}
+
+fn ecrire_reglages(racine: &Path, reglages: &BTreeMap<String, Value>) -> EsResult<()> {
+    let tmp = racine.join(format!("{REGLAGES_FILE}.tmp"));
+    fs::write(&tmp, serde_json::to_vec_pretty(reglages).unwrap())
+        .map_err(|e| EsError::internal(format!("ecriture des reglages: {e}")))?;
+    fs::rename(&tmp, racine.join(REGLAGES_FILE))
+        .map_err(|e| EsError::internal(format!("bascule des reglages: {e}")))?;
     Ok(())
 }
 
@@ -1132,12 +1433,6 @@ pub fn validate_index_name(name: &str) -> EsResult<()> {
     }
     if name == "." || name == ".." {
         return invalid("must not be '.' or '..'");
-    }
-    if name.contains('*') || name.contains(',') {
-        return Err(EsError::unsupported(format!(
-            "ferrite ne supporte pas les motifs ni les listes d'index (recu [{name}]) : nomme un \
-             index unique"
-        )));
     }
     if name.starts_with('_') {
         return invalid("must not start with '_'.");

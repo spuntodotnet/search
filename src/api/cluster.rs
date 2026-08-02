@@ -38,6 +38,130 @@ pub async fn root(State(st): State<SharedState>, uri: Uri) -> EsResult<Json> {
     })))
 }
 
+/// `GET /_cluster/settings`
+pub async fn settings_get(State(st): State<SharedState>, uri: Uri) -> EsResult<Json> {
+    let mut p = Params::parse(&uri);
+    p.opt("master_timeout");
+    p.opt("timeout");
+    p.opt("flat_settings");
+    p.opt("include_defaults");
+    p.done()?;
+    let (persistants, transitoires) = st.catalog.reglages();
+    Ok(Json::ok(json!({
+        "persistent": arborescence(&persistants),
+        "transient": arborescence(&transitoires),
+    })))
+}
+
+/// `PUT /_cluster/settings`
+///
+/// Seul `action.destructive_requires_name` est reconnu ; tout le reste est
+/// refuse avec le message d'ES (`not recognized`). Un reglage accepte sans etre
+/// applique serait pire qu'un refus : le client croirait avoir change quelque
+/// chose.
+pub async fn settings_put(
+    State(st): State<SharedState>,
+    uri: Uri,
+    body: axum::body::Bytes,
+) -> EsResult<Json> {
+    let mut p = Params::parse(&uri);
+    p.opt("master_timeout");
+    p.opt("timeout");
+    p.opt("flat_settings");
+    p.done()?;
+
+    let body = super::parse_body(&body)?;
+    let obj = body
+        .as_object()
+        .ok_or_else(|| EsError::parsing("le corps de [_cluster/settings] doit etre un objet"))?;
+    super::expect_only(obj, &["persistent", "transient"], "_cluster/settings")?;
+
+    let lire = |cle: &str| -> EsResult<std::collections::BTreeMap<String, Value>> {
+        match obj.get(cle) {
+            None | Some(Value::Null) => Ok(Default::default()),
+            Some(v) => {
+                let mut plat = std::collections::BTreeMap::new();
+                aplatir(v, String::new(), &mut plat)?;
+                Ok(plat)
+            }
+        }
+    };
+    let persistants = lire("persistent")?;
+    let transitoires = lire("transient")?;
+    st.catalog.poser_reglages(&persistants, &transitoires)?;
+
+    // ES ne rend que ce que **cet appel** a change.
+    Ok(Json::ok(json!({
+        "acknowledged": true,
+        "persistent": arborescence(&sans_null(&persistants)),
+        "transient": arborescence(&sans_null(&transitoires)),
+    })))
+}
+
+fn sans_null(
+    m: &std::collections::BTreeMap<String, Value>,
+) -> std::collections::BTreeMap<String, Value> {
+    m.iter()
+        .filter(|(_, v)| !v.is_null())
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
+/// Aplatit `{"action": {"destructive_requires_name": false}}` en
+/// `{"action.destructive_requires_name": false}` : ES accepte les deux
+/// ecritures, indifferemment.
+fn aplatir(
+    v: &Value,
+    prefixe: String,
+    out: &mut std::collections::BTreeMap<String, Value>,
+) -> EsResult<()> {
+    match v {
+        Value::Object(o) => {
+            for (cle, valeur) in o {
+                let chemin = if prefixe.is_empty() {
+                    cle.clone()
+                } else {
+                    format!("{prefixe}.{cle}")
+                };
+                aplatir(valeur, chemin, out)?;
+            }
+            Ok(())
+        }
+        autre => {
+            if prefixe.is_empty() {
+                return Err(EsError::parsing(
+                    "[_cluster/settings] : un objet de reglages est attendu",
+                ));
+            }
+            out.insert(prefixe, autre.clone());
+            Ok(())
+        }
+    }
+}
+
+/// Le chemin de retour : `{"action.x": v}` redevient `{"action": {"x": v}}`.
+/// ES rend les valeurs en **chaines**, quel que soit leur type d'entree.
+fn arborescence(m: &std::collections::BTreeMap<String, Value>) -> Value {
+    let mut racine = serde_json::Map::new();
+    for (cle, valeur) in m {
+        let segments: Vec<&str> = cle.split('.').collect();
+        let mut courant = &mut racine;
+        for segment in &segments[..segments.len() - 1] {
+            courant = courant
+                .entry(segment.to_string())
+                .or_insert_with(|| Value::Object(serde_json::Map::new()))
+                .as_object_mut()
+                .expect("noeud de reglage");
+        }
+        let texte = match valeur {
+            Value::String(s) => s.clone(),
+            autre => autre.to_string(),
+        };
+        courant.insert(segments[segments.len() - 1].to_string(), json!(texte));
+    }
+    Value::Object(racine)
+}
+
 fn build_date() -> &'static str {
     // Fixe : ferrite n'a pas de date de build a l'execution, et aucun client ne
     // s'en sert pour negocier.
@@ -62,8 +186,8 @@ pub async fn health_index(
     p.opt("wait_for_status");
     p.opt("timeout");
     p.done()?;
-    st.catalog.get(&index)?;
-    Ok(Json::ok(health_body(&st, 1)))
+    let vises = crate::selection::resoudre(&st.catalog, &index, &Default::default())?;
+    Ok(Json::ok(health_body(&st, vises.len())))
 }
 
 fn health_body(st: &SharedState, shards: usize) -> Value {
@@ -128,15 +252,17 @@ async fn cat_indices_inner(st: SharedState, uri: Uri, only: Option<String>) -> E
     let mut p = Params::parse(&uri);
     let format = p.opt("format");
     let verbose = p.flag("v", false)?;
+    let opts = super::selection_options(&mut p)?;
     p.done()?;
 
+    // `_cat/indices/{expr}` accepte une expression : un motif qui ne trouve
+    // rien rend une liste vide, pas un 404.
+    let vises = match &only {
+        Some(expr) => crate::selection::resoudre(&st.catalog, expr, &opts)?,
+        None => st.catalog.list(),
+    };
     let mut rows = Vec::new();
-    for idx in st.catalog.list() {
-        if let Some(name) = &only {
-            if &idx.name != name {
-                continue;
-            }
-        }
+    for idx in vises {
         rows.push(json!({
             "health": "green",
             "status": "open",
@@ -151,11 +277,8 @@ async fn cat_indices_inner(st: SharedState, uri: Uri, only: Option<String>) -> E
             "dataset.size": human_bytes(idx.store_size()),
         }));
     }
-    if let Some(name) = &only {
-        if rows.is_empty() {
-            return Err(EsError::index_not_found(name));
-        }
-    }
+    // La resolution a deja tranche : un nom concret absent a rendu 404, un
+    // motif sans correspondance rend une liste vide — comme chez ES.
     Ok(cat_response(&rows, format.as_deref(), verbose))
 }
 

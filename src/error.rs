@@ -25,6 +25,21 @@ pub struct EsError {
     /// Champs supplementaires poses a cote de `type`/`reason`, comme le fait ES
     /// (`index`, `resource.type`, ...).
     pub extra: Vec<(String, Value)>,
+    /// Les `root_cause[]` a rendre, quand ils ne sont pas l'erreur elle-meme.
+    ///
+    /// ES **groupe** les echecs de shard sous une erreur unique, mais garde
+    /// dans `root_cause` la cause de chacun : c'est ce qui permet a un client de
+    /// dire quel index a echoue et pourquoi.
+    /// (Boxee : rare, et `EsError` voyage dans tous les `Result` du serveur.)
+    pub racines: Option<Box<Vec<Value>>>,
+    /// Le champ absent de **ce** mapping, quand c'est la cause de l'erreur.
+    ///
+    /// Sur un index unique, c'est une erreur (regle du projet : un champ
+    /// inconnu n'est pas 0 resultat). Sur une recherche multi-index, c'est une
+    /// information : si un **autre** index vise connait ce champ, ce n'est plus
+    /// une faute de frappe, seulement un mapping heterogene — la clause devient
+    /// alors « ne correspond a rien » pour cet index-la, comme chez ES.
+    pub champ_inconnu: Option<Box<str>>,
 }
 
 impl EsError {
@@ -34,11 +49,26 @@ impl EsError {
             ty: ty.to_string(),
             reason: reason.into(),
             extra: Vec::new(),
+            racines: None,
+            champ_inconnu: None,
         }
     }
 
     pub fn with(mut self, key: &str, value: Value) -> Self {
         self.extra.push((key.to_string(), value));
+        self
+    }
+
+    /// Remplace les `root_cause[]` par les causes fournies.
+    pub fn avec_racines(mut self, racines: Vec<Value>) -> Self {
+        self.racines = Some(Box::new(racines));
+        self
+    }
+
+    /// Marque une erreur comme « champ absent de ce mapping » (voir
+    /// [`EsError::champ_inconnu`]).
+    pub fn sur_champ_inconnu(mut self, champ: &str) -> Self {
+        self.champ_inconnu = Some(champ.into());
         self
     }
 
@@ -140,7 +170,11 @@ impl EsError {
     pub fn body(&self) -> Value {
         let mut err = self.cause();
         if let Value::Object(o) = &mut err {
-            o.insert("root_cause".into(), json!([self.cause()]));
+            let racines = match &self.racines {
+                Some(r) => Value::Array((**r).clone()),
+                None => json!([self.cause()]),
+            };
+            o.insert("root_cause".into(), racines);
         }
         json!({ "error": err, "status": self.status.as_u16() })
     }

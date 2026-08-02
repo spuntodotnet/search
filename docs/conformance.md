@@ -30,10 +30,10 @@ lancé contre un **vrai Elasticsearch 7.10.2**, où il doit être quasi tout ver
 
 | | ferrite | ES 7.10.2 |
 |---|---|---|
-| réussis | **44** | **537** |
-| refusés explicitement (hors périmètre) | 333 | 0 |
-| sautés (borne de version, fonctionnalité du runner) | 97 | 103 |
-| **échecs** | **169** | **3** |
+| réussis | **65** | **537** |
+| refusés explicitement (hors périmètre) | 324 | 0 |
+| sautés (borne de version, fonctionnalité du runner) | 98 | 103 |
+| **échecs** | **156** | **3** |
 | | | sur 643 cas |
 
 Les 3 échecs côté ES sont ES lui-même (`distance_feature` sur `date` et
@@ -54,8 +54,8 @@ répond « je ne sais pas faire », ce qui est le contrat ; **« échec »** veu
 qu'il répond autre chose qu'Elasticsearch. Seuls les seconds sont des écarts.
 
 Le premier passage donnait 24 réussis et 218 échecs. Il en est ressorti **deux
-manques francs**, tous deux corrigés depuis — c'est ce qui fait passer le compte
-à 44 réussis et 169 échecs :
+manques francs**, tous deux corrigés depuis — c'est ce qui a fait passer le
+compte à 44 réussis et 169 échecs :
 
 | Combien | Ce que c'était | Corrigé |
 |---|---|---|
@@ -63,13 +63,30 @@ manques francs**, tous deux corrigés depuis — c'est ce qui fait passer le com
 | **34** | `Invalid index name [_refresh]`, `[_all]`, `[_mapping]` | ✅ `POST /_refresh`, `GET /_mapping`, et `_all` / `*` sur les routes administratives |
 | **3** | `{"type": "object"}` sans `properties` refusé | ✅ accepté, l'objet ne déclare rien et ses champs viendront des documents |
 
-Ce qui reste dans les 169 :
+Le support des **expressions d'index et des alias** a ensuite fait bouger le
+compte une seconde fois, à 65 réussis et 156 échecs. Le mouvement est plus
+grand que ces chiffres ne le laissent voir : 159 cas ont quitté la colonne
+« refusé ». Ils n'y étaient que parce que ferrite refusait la **route** avant
+d'arriver au vrai sujet — un `POST /_search` sans index était refusé d'emblée,
+donc la centaine de cas d'agrégation qui l'utilisent ne mesurait rien.
+Maintenant qu'ils vont au bout, 29 passent et le reste montre ce qui manquait
+vraiment derrière.
+
+Un de ces retours en arrière a valu correctif : `rest_total_hits_as_int` était
+refusé comme un **paramètre inconnu**, alors qu'ES le connaît. Il est désormais
+refusé pour ce qu'il est (`not_implemented_in_ferrite_exception`), ce qui rend
+son refus lisible côté client — et rend au passage 100 cas d'agrégation à la
+colonne « refusé », où ils sont chez eux.
+
+Ce qui reste dans les 156 :
 
 | Combien | Ce que c'est | Verdict |
 |---|---|---|
 | **~40** | `unknown query [intervals]`, `unrecognized parameter: [version]`… | des refus **réels**, mais dont le type d'erreur imite celui d'Elasticsearch (`parsing_exception`) au lieu de porter le marqueur `not_implemented_in_ferrite_exception`. Compter juste demanderait de mentir sur le type ; on préfère la fidélité et une colonne moins flatteuse |
 | **~18** | `include_type_name`, `_type` attendu dans la réponse | la suite est celle de la 7.10 ; ces cas testent ce que la **8.x a supprimé**. Un vrai ES 8 y échoue aussi |
+| **12** | `indices.get` | bloqués sur `_close` dans leur **mise en place**, pas sur ce qu'ils mesurent |
 | **7** | `_close` / `_open` | hors périmètre déclaré |
+| **6** | `indices.delete` sur un motif ou sur un alias | ferrite suit la 8.x : `action.destructive_requires_name` vaut `true` et `DELETE /{alias}` est refusé. La suite est celle de la **7.10**, où le réglage valait `false` — un vrai ES 8 échoue au même endroit |
 | reste | `collapse`, `docvalue_fields`, `stored_fields`, agrégations non supportées, `scroll`… | hors périmètre déclaré, voir [`compat.md`](compat.md) |
 
 ## Ce que le runner ne fait pas

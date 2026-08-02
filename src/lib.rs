@@ -10,12 +10,15 @@
 //!   ni HTTP ni le stockage.
 //! - [`engine`] : le catalogue d'index, l'ecriture, la lecture, la persistance.
 //!   Ne connait pas HTTP.
+//! - [`alias`] et [`selection`] : les noms sous lesquels une requete designe des
+//!   index — alias, listes, motifs — et leur resolution en index concrets.
 //! - [`search`] : l'execution d'une recherche et la mise en forme du resultat au
 //!   format ES.
 //! - [`api`] : la couche HTTP — routage, parametres, format de reponse et
 //!   d'erreur. Ne contient aucune logique de moteur.
 
 pub mod aggs;
+pub mod alias;
 pub mod analysis;
 pub mod api;
 pub mod dateformat;
@@ -26,6 +29,7 @@ pub mod error;
 pub mod mapping;
 pub mod nested;
 pub mod search;
+pub mod selection;
 pub mod stemmer;
 pub mod util;
 

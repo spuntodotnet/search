@@ -3,6 +3,7 @@
 //! Aucune logique de moteur ici — elle vit dans [`crate::engine`],
 //! [`crate::dsl`] et [`crate::search`].
 
+pub mod aliases;
 pub mod cluster;
 pub mod docs;
 pub mod indices;
@@ -51,6 +52,10 @@ pub fn router(state: SharedState) -> Router {
     Router::new()
         .route("/", get(cluster::root))
         .route("/_cluster/health", get(cluster::health))
+        .route(
+            "/_cluster/settings",
+            get(cluster::settings_get).put(cluster::settings_put),
+        )
         .route("/_cluster/health/{index}", get(cluster::health_index))
         .route("/_cat/health", get(cluster::cat_health))
         .route("/_cat/indices", get(cluster::cat_indices))
@@ -108,6 +113,7 @@ pub fn router(state: SharedState) -> Router {
             "/{index}/_create/{id}",
             put(docs::create_doc).post(docs::create_doc),
         )
+        .route("/_count", get(search::count_all).post(search::count_all))
         .route("/{index}/_count", get(search::count).post(search::count))
         .route("/{index}/_update/{id}", post(docs::update_doc))
         .route(
@@ -135,11 +141,28 @@ pub fn router(state: SharedState) -> Router {
             post(unsupported_route).get(unsupported_route),
         )
         .route("/_msearch", post(unsupported_route).get(unsupported_route))
+        // Les alias : un nom stable au-dessus d'index qui changent.
+        .route("/_aliases", post(aliases::actions))
+        .route("/_alias", get(aliases::lister_tout))
+        .route(
+            "/_alias/{nom}",
+            get(aliases::lister_par_alias).head(aliases::exister),
+        )
+        .route("/{index}/_alias", get(aliases::lister_par_index))
         .route(
             "/{index}/_alias/{nom}",
-            put(unsupported_route).post(unsupported_route),
+            put(aliases::poser)
+                .post(aliases::poser)
+                .delete(aliases::retirer)
+                .get(aliases::lister)
+                .head(aliases::exister_dans),
         )
-        .route("/_aliases", post(unsupported_route))
+        .route(
+            "/{index}/_aliases/{nom}",
+            put(aliases::poser)
+                .post(aliases::poser)
+                .delete(aliases::retirer),
+        )
         .fallback(no_handler)
         .layer(axum::middleware::from_fn(elastic_headers))
         .with_state(state)
@@ -381,6 +404,48 @@ pub fn expect_only(
         }
     }
     Ok(())
+}
+
+/// Les tolerances de resolution d'une expression d'index, lues dans la query
+/// string sous les noms d'Elasticsearch.
+///
+/// `expand_wildcards` merite un mot : ferrite n'a ni index fermes ni index
+/// caches, donc `open`, `hidden` et `all` designent tous la meme chose. Un
+/// client qui demande **uniquement** `closed` ne vise donc aucun index, et
+/// c'est ce qu'on lui rend — plutot que de lui donner les index ouverts, ce qui
+/// serait un resultat faux. `none` (« ne developpe pas les motifs ») est refuse
+/// : le traiter comme un nom litteral rendrait `index_not_found` sur un nom que
+/// le client n'a jamais ecrit.
+pub fn selection_options(p: &mut Params) -> EsResult<crate::selection::Options> {
+    let defaut = crate::selection::Options::default();
+    let ignore_unavailable = p.flag("ignore_unavailable", defaut.ignore_unavailable)?;
+    let allow_no_indices = p.flag("allow_no_indices", defaut.allow_no_indices)?;
+    let expansion = match p.list("expand_wildcards") {
+        None => true,
+        Some(valeurs) => {
+            for v in &valeurs {
+                if !matches!(v.as_str(), "open" | "closed" | "hidden" | "all" | "none") {
+                    return Err(EsError::illegal_argument(format!(
+                        "No enum constant IndicesOptions.WildcardStates.{}",
+                        v.to_uppercase()
+                    )));
+                }
+                if v == "none" {
+                    return Err(EsError::unsupported(
+                        "ferrite ne supporte pas [expand_wildcards=none] : un motif non developpe \
+                         serait cherche comme un nom d'index litteral, et rendrait une erreur sur \
+                         un nom que personne n'a ecrit",
+                    ));
+                }
+            }
+            valeurs.iter().any(|v| v == "open" || v == "all")
+        }
+    };
+    Ok(crate::selection::Options {
+        ignore_unavailable,
+        allow_no_indices,
+        expansion,
+    })
 }
 
 /// `_shards` d'une reponse d'ecriture : un shard, zero replique, toujours vert.
