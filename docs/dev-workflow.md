@@ -75,9 +75,9 @@ Deux comparateurs, qui ne cherchent pas la même chose :
 
 | Script | Ce qu'il compare |
 |---|---|
-| `tests/compat/diff_against_es.py` | la **forme** des réponses — champ par champ, sur une quarantaine d'appels, après neutralisation des valeurs qui ne peuvent pas coïncider (durées, uuid, scores) |
+| `tests/compat/diff_against_es.py` | la **forme** des réponses — champ par champ, sur 46 appels, après neutralisation des valeurs qui ne peuvent pas coïncider (durées, uuid, scores, `_scroll_id`). Le `scroll` y est comparé sur son **déroulé complet** : mêmes pages, mêmes documents, même fin |
 | `tests/compat/diff_relevance.py` | la **pertinence** — même corpus de 600 documents des deux côtés, ~115 requêtes générées, et pour chacune : même total, mêmes documents, **même ordre** |
-| `tests/compat/diff_aggs.py` | les **agrégations** — 34 requêtes, comparaison du JSON champ par champ, clés comprises |
+| `tests/compat/diff_aggs.py` | les **agrégations** — 45 requêtes, comparaison du JSON champ par champ, clés comprises (dont 11 sur l'agrégation `filter`, que ferrite exécute lui-même) |
 | `tests/compat/diff_analyzers.py` | les **analyzers** — chaque analyzer intégré confronté à son homonyme d'ES sur 28 textes, token par token |
 | `tests/compat/diff_motifs.py` | les **motifs** — 101 motifs posés aux deux serveurs sur un corpus construit pour eux : la syntaxe de `regexp` est celle de Lucene, pas celle du moteur qui l'exécute, et les deux divergent là où personne ne regarde (`\d`, `^`, `@`, `case_insensitive`) |
 | `tests/compat/diff_multi_index.py` | les **expressions d'index** et le multi-index — `es.search(index=["a","b"])`, `logs-*`, `_all`, exclusions, alias, `is_write_index`, purge en `DELETE /logs-2026.07.*` : total, ordre des `(_index, _id)`, `_shards`, agrégations fusionnées, statut et type d'erreur |

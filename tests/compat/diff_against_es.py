@@ -46,6 +46,9 @@ DOCS = [
 # et leur type, pas leur valeur.
 VOLATILE = {
     "took", "cluster_uuid", "uuid", "index_uuid", "_score", "max_score",
+    # L'identifiant de scroll est opaque : ES y encode ses shards, ferrite y met
+    # le sien. Ce qui doit coincider, c'est ce qu'il permet de derouler.
+    "_scroll_id",
     "build_hash", "build_date", "cluster_name", "name", "creation_date",
     "store.size", "pri.store.size", "dataset.size", "docs.deleted",
     "_seq_no", "_primary_term", "_shards", "forced_refresh", "version",
@@ -194,6 +197,34 @@ class Runner:
         self.both("search size=0", lambda c: c.search(
             index=INDEX, query={"match_all": {}}, size=0))
 
+        # scroll : ce qui compte n'est pas la forme d'une page, c'est le
+        # deroule complet — memes documents, memes pages, meme fin.
+        def deroule(client, **extra):
+            r = client.search(index=INDEX, scroll="1m", size=2,
+                              query={"match_all": {}}, sort=["_doc"], **extra)
+            pages = [[h["_id"] for h in r["hits"]["hits"]]]
+            totaux = [r["hits"]["total"]["value"]]
+            premiere = {k: v for k, v in r.items() if k not in ("hits", "took")}
+            sid = r["_scroll_id"]
+            for _ in range(6):
+                r = client.scroll(scroll_id=sid, scroll="1m")
+                sid = r["_scroll_id"]
+                pages.append([h["_id"] for h in r["hits"]["hits"]])
+                totaux.append(r["hits"]["total"]["value"])
+                if not r["hits"]["hits"]:
+                    break
+            fin = dict(client.clear_scroll(scroll_id=sid))
+            return {"pages": pages, "totaux": totaux, "clear": fin,
+                    "premiere_reponse": premiere}
+
+        self.both("scroll : deroule complet", deroule)
+        self.both("scroll : agregations sur la premiere page seulement",
+                  lambda c: deroule(c, aggs={"a": {"terms": {"field": "auteur"}}}))
+        self.both("scroll : from refuse", lambda c: c.search(
+            index=INDEX, scroll="1m", from_=1, size=1, query={"match_all": {}}))
+        self.both("scroll : duree sans unite refusee", lambda c: c.search(
+            index=INDEX, scroll="1", query={"match_all": {}}))
+
         self.both("get doc", lambda c: c.get(index=INDEX, id="3"))
         self.both("get doc absent", lambda c: c.options(ignore_status=404).get(
             index=INDEX, id="404"))
@@ -222,8 +253,16 @@ class Runner:
             index=INDEX, mappings=MAPPINGS))
         self.both("search clause inconnue", lambda c: c.search(
             index=INDEX, query={"clause_inexistante": {"titre": "x"}}))
+        # Un champ que le mapping ne connait pas : `allow_unmapped_fields` vaut
+        # `true` des deux cotes, la clause ne correspond donc a rien.
         self.both("search champ non mappe", lambda c: c.search(
             index=INDEX, query={"term": {"champ_inconnu": "x"}}))
+        self.both("search must_not exists sur champ non mappe", lambda c: c.search(
+            index=INDEX, sort=[{"annee": "asc"}], query={"bool": {
+                "must_not": [{"exists": {"field": "champ_inconnu"}}]}}))
+        self.both("search should avec un champ non mappe", lambda c: c.search(
+            index=INDEX, query={"bool": {"should": [
+                {"term": {"champ_inconnu": "x"}}, {"term": {"auteur": "Zola"}}]}}))
 
         for client in (self.ferrite, self.es):
             client.options(ignore_status=404).indices.delete(index=INDEX)

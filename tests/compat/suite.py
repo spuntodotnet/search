@@ -407,8 +407,11 @@ def dynamic_false_et_strict(es):
     assert es.get(index="dynfalse", id="1")["_source"]["note"] == 5
     assert "note" not in es.indices.get_mapping(
         index="dynfalse")["dynfalse"]["mappings"]["properties"]
-    refused(lambda: es.search(index="dynfalse", query={"term": {"note": 5}}),
-            contains="note")
+    # Non mappe, donc non interrogeable : la clause ne correspond a rien, comme
+    # chez ES (`index.query.parse.allow_unmapped_fields`).
+    assert es.search(index="dynfalse", query={"term": {"note": 5}},
+                     )["hits"]["total"]["value"] == 0
+    assert ids(es.search(index="dynfalse", query={"match": {"titre": "bel"}})) == ["1"]
     es.indices.delete(index="dynfalse")
 
     # `strict` : le document est refuse.
@@ -1347,8 +1350,9 @@ def recherche_exists(es):
              document={"titre": "Note nulle", "note": None})
     assert "41" not in ids(es.search(index=INDEX, query={"exists": {"field": "note"}},
                                      size=100))
-    refused(lambda: es.search(index=INDEX, query={"exists": {"field": "inconnu"}}),
-            contains="inconnu")
+    # Sur un champ que le mapping ne connait pas : 0 document, comme chez ES.
+    assert es.search(index=INDEX, query={"exists": {"field": "inconnu"}},
+                     )["hits"]["total"]["value"] == 0
     for doc_id in ("40", "41"):
         es.delete(index=INDEX, id=doc_id, refresh=True)
 
@@ -1504,6 +1508,154 @@ def pagination_profonde_refusee(es):
                               from_=10000, size=10))
 
 
+# ---------------------------------------------------------------------------
+# scroll — la pagination par contexte fige, celle des exports
+# ---------------------------------------------------------------------------
+
+SCROLL_INDEX = "compat_scroll"
+
+
+def _index_de_scroll(es, n=250):
+    """Un index dedie, assez gros pour que l'export tienne en plusieurs pages."""
+    es.options(ignore_status=404).indices.delete(index=SCROLL_INDEX)
+    es.indices.create(index=SCROLL_INDEX, mappings={"properties": {
+        "rang": {"type": "integer"}, "groupe": {"type": "keyword"}}})
+    operations = []
+    for i in range(n):
+        operations.append({"index": {"_index": SCROLL_INDEX, "_id": str(i)}})
+        operations.append({"rang": i, "groupe": f"g{i % 5}"})
+    es.bulk(operations=operations, refresh=True)
+    return n
+
+
+@scenario
+def scroll_page_par_page(es):
+    """Le cycle complet : ouvrir, derouler, fermer."""
+    total = _index_de_scroll(es)
+    r = es.search(index=SCROLL_INDEX, scroll="1m", size=100,
+                  query={"match_all": {}}, sort=["_doc"])
+    assert r["_scroll_id"], "pas de _scroll_id sur la premiere reponse"
+    assert r["hits"]["total"]["value"] == total
+    vus = ids(r)
+    assert len(vus) == 100
+
+    sid = r["_scroll_id"]
+    while True:
+        r = es.scroll(scroll_id=sid, scroll="1m")
+        sid = r["_scroll_id"]
+        # Le total ne bouge pas d'une page a l'autre, comme chez ES.
+        assert r["hits"]["total"]["value"] == total
+        if not r["hits"]["hits"]:
+            break
+        vus += ids(r)
+
+    # Chaque document une fois, et une seule.
+    assert len(vus) == total, f"{len(vus)} documents rendus pour {total}"
+    assert len(set(vus)) == total, "un document a ete rendu deux fois"
+    liberes = es.clear_scroll(scroll_id=sid)
+    assert liberes["succeeded"] and liberes["num_freed"] == 1
+    # Ferme, le contexte n'existe plus : 404, et la cause nommee — c'est a ca
+    # qu'un client reconnait « ton scroll a expire », pas a « requete invalide ».
+    err = refused(lambda: es.scroll(scroll_id=sid, scroll="1m"), status=404,
+                  contains="all shards failed")
+    assert err["root_cause"][0]["type"] == "search_context_missing_exception"
+    assert "No search context found" in err["root_cause"][0]["reason"]
+
+
+@scenario
+def export_complet_par_helpers_scan(es):
+    """Le juge de paix de la carte : `helpers.scan`, le code que tout export
+    ecrit (dont `devbox timemachine export`), sans une ligne de changement.
+
+    Il ouvre un scroll avec `sort=_doc`, deroule jusqu'a la page vide, verifie
+    `_shards` a chaque page, puis appelle `clear_scroll`."""
+    from elasticsearch import helpers
+
+    total = _index_de_scroll(es)
+    vus = [d["_id"] for d in helpers.scan(
+        es, index=SCROLL_INDEX, query={"query": {"match_all": {}}},
+        scroll="1m", size=64)]
+    assert len(vus) == total and len(set(vus)) == total, len(vus)
+
+    # Avec une requete qui ne prend qu'une partie des documents.
+    partiel = [d["_source"]["rang"] for d in helpers.scan(
+        es, index=SCROLL_INDEX, query={"query": {"term": {"groupe": "g3"}}},
+        scroll="1m", size=10)]
+    assert sorted(partiel) == [i for i in range(total) if i % 5 == 3]
+
+
+@scenario
+def scroll_fige_l_index(es):
+    """La promesse de `scroll` : ce qui est ecrit pendant l'export ne s'y
+    invite pas, et rien de ce qui existait ne se perd.
+
+    C'est le seul point vraiment delicat de la fonctionnalite : sans un
+    instantane retenu, un commit pendant l'export renumerote les segments et les
+    documents deja reperes ne sont plus les memes."""
+    total = _index_de_scroll(es, 40)
+    r = es.search(index=SCROLL_INDEX, scroll="1m", size=10,
+                  query={"match_all": {}}, sort=["_doc"])
+    vus, sid = ids(r), r["_scroll_id"]
+
+    # 20 documents de plus, visibles pour toute recherche neuve.
+    operations = []
+    for i in range(1000, 1020):
+        operations.append({"index": {"_index": SCROLL_INDEX, "_id": str(i)}})
+        operations.append({"rang": i, "groupe": "tardif"})
+    es.bulk(operations=operations, refresh=True)
+    assert es.search(index=SCROLL_INDEX, size=0,
+                     query={"match_all": {}})["hits"]["total"]["value"] == total + 20
+
+    while True:
+        r = es.scroll(scroll_id=sid, scroll="1m")
+        sid = r["_scroll_id"]
+        if not r["hits"]["hits"]:
+            break
+        vus += ids(r)
+    es.clear_scroll(scroll_id=sid)
+
+    assert len(vus) == total and len(set(vus)) == total, len(vus)
+    assert not any(int(i) >= 1000 for i in vus), "un document ecrit pendant le scroll est apparu"
+
+
+@scenario
+def scroll_agregations_sur_la_premiere_page(es):
+    """Les agregations portent sur tout le resultat, et ne sont rendues qu'une
+    fois — comme chez ES, qui ne les recalcule pas a chaque page."""
+    _index_de_scroll(es, 50)
+    r = es.search(index=SCROLL_INDEX, scroll="1m", size=10,
+                  query={"match_all": {}}, sort=["_doc"],
+                  aggs={"par_groupe": {"terms": {"field": "groupe"}}})
+    buckets = {b["key"]: b["doc_count"] for b in r["aggregations"]["par_groupe"]["buckets"]}
+    assert buckets == {f"g{i}": 10 for i in range(5)}, buckets
+    suite = es.scroll(scroll_id=r["_scroll_id"], scroll="1m")
+    assert "aggregations" not in suite
+    es.clear_scroll(scroll_id=r["_scroll_id"])
+
+
+@scenario
+def scroll_refus_explicites(es):
+    """Ce que scroll ne peut pas faire doit se dire."""
+    # `from` dans un contexte de scroll : ES le refuse, ferrite aussi.
+    refused(lambda: es.search(index=INDEX, scroll="1m", from_=2, size=1,
+                              query={"match_all": {}}),
+            contains="from")
+    # Une duree sans unite est le piege classique (`scroll=1`).
+    refused(lambda: es.search(index=INDEX, scroll="1", query={"match_all": {}}),
+            contains="unit is missing")
+    refused(lambda: es.search(index=INDEX, scroll="2d", query={"match_all": {}}),
+            contains="too large")
+    # Un identifiant qui n'a jamais existe : 404, pas 500.
+    err = refused(lambda: es.scroll(scroll_id="jamais_ouvert", scroll="1m"),
+                  status=404)
+    assert err["root_cause"][0]["type"] == "search_context_missing_exception"
+    # Fermer deux fois n'est pas une erreur : c'est le cas normal d'un client
+    # qui nettoie apres une interruption.
+    r = es.search(index=INDEX, scroll="1m", size=1, query={"match_all": {}})
+    assert es.clear_scroll(scroll_id=r["_scroll_id"])["num_freed"] == 1
+    assert es.clear_scroll(scroll_id=r["_scroll_id"])["num_freed"] == 0
+
+
 @scenario
 def taille_invalide_refusee(es):
     """`size: -1` doit se voir, pas retomber en silence sur le defaut."""
@@ -1557,14 +1709,53 @@ def parametre_de_clause_non_supporte_refuse(es):
 
 
 @scenario
-def champ_non_mappe_refuse(es):
-    """Divergence assumee : ES renvoie 0 hit, ferrite refuse.
+def champ_non_mappe_ne_correspond_a_rien(es):
+    """Un champ absent du mapping ne correspond a rien, comme chez ES.
 
-    Sans mapping dynamique, interroger un champ inconnu est une erreur du
-    client ; repondre « 0 resultat » serait un resultat faux presente comme
-    complet."""
-    refused(lambda: es.search(index=INDEX, query={"term": {"inconnu": "x"}}),
+    Le cas reel qui l'a impose : un filtre pose sur **chaque** recherche
+    (`archiveAt`, jamais renseigne tant qu'aucune commande n'est archivee).
+    Faire echouer la recherche entiere rendait l'application inutilisable
+    jusqu'a ce qu'un premier document porte le champ ; ES, lui, repond 0.
+
+    C'est le reglage `index.query.parse.allow_unmapped_fields` d'ES, avec son
+    defaut (`true`)."""
+    r = es.search(index=INDEX, query={"term": {"inconnu": "x"}})
+    assert r["hits"]["total"]["value"] == 0
+    r = es.search(index=INDEX, query={"exists": {"field": "archiveAt"}})
+    assert r["hits"]["total"]["value"] == 0
+    # La negation d'une clause qui ne correspond a rien correspond a tout.
+    r = es.search(index=INDEX, query={
+        "bool": {"must_not": [{"exists": {"field": "archiveAt"}}]}})
+    assert r["hits"]["total"]["value"] == 3
+    # Et les clauses qui l'entourent continuent de compter.
+    r = es.search(index=INDEX, query={"bool": {"should": [
+        {"term": {"inconnu": "x"}}, {"term": {"auteur": "Zola"}}]}})
+    assert ids(r) == ["3"]
+
+
+@scenario
+def champ_non_mappe_refuse_en_strict(es):
+    """Le mode strict de ferrite reste disponible, sous le nom d'ES.
+
+    `allow_unmapped_fields: false` : interroger un champ inconnu redevient une
+    erreur, ce qui attrape les fautes de frappe. C'est ce que ferrite faisait
+    pour tous les index avant d'apprendre le reglage."""
+    strict = "compat_strict"
+    es.options(ignore_status=404).indices.delete(index=strict)
+    es.indices.create(index=strict,
+                      settings={"index.query.parse.allow_unmapped_fields": False},
+                      mappings={"properties": {"auteur": {"type": "keyword"}}})
+    reglages = es.indices.get_settings(index=strict)
+    assert reglages[strict]["settings"]["index"]["query"]["parse"][
+        "allow_unmapped_fields"] == "false"
+    refused(lambda: es.search(index=strict, query={"term": {"inconnu": "x"}}),
             contains="inconnu")
+    # Le reglage ne se change pas a chaud, et ferrite le dit plutot que de
+    # laisser croire que la demande a ete prise en compte.
+    refused(lambda: es.indices.put_settings(
+        index=strict, settings={"index.query.parse.allow_unmapped_fields": True}),
+        contains="_settings")
+    es.indices.delete(index=strict)
 
 
 @scenario
@@ -1634,6 +1825,93 @@ def agregations(es):
 
 
 @scenario
+def agregation_filter(es):
+    """Compter un sous-ensemble sans faire une requete de plus : c'est ce dont
+    se servent les compteurs de filtres rapides d'une interface."""
+    r = es.search(index=INDEX, size=0, aggs={
+        "recents": {"filter": {"range": {"annee": {"gte": 1886}}}},
+        "de_zola": {"filter": {"term": {"auteur": "Zola"}}},
+        "aucun": {"filter": {"term": {"auteur": "Personne"}}},
+    })
+    a = r["aggregations"]
+    assert a["recents"] == {"doc_count": 1}, a["recents"]
+    assert a["de_zola"] == {"doc_count": 1}
+    assert a["aucun"] == {"doc_count": 0}
+
+    # Avec des sous-agregations : elles portent sur le croisement.
+    r = es.search(index=INDEX, size=0, aggs={"anciens": {
+        "filter": {"range": {"annee": {"lt": 1887}}},
+        "aggs": {"par_auteur": {"terms": {"field": "auteur"}},
+                 "note_moyenne": {"avg": {"field": "note"}}}}})
+    a = r["aggregations"]["anciens"]
+    assert a["doc_count"] == 2
+    assert {b["key"]: b["doc_count"] for b in a["par_auteur"]["buckets"]} == \
+        {"Maupassant": 1, "Zola": 1}
+    assert round(a["note_moyenne"]["value"], 2) == 4.45
+
+    # Le filtre se croise avec la requete de la recherche, pas a la place.
+    r = es.search(index=INDEX, size=0, query={"term": {"auteur": "Maupassant"}},
+                  aggs={"recents": {"filter": {"range": {"annee": {"gte": 1886}}}}})
+    assert r["aggregations"]["recents"]["doc_count"] == 1
+
+    # Un `filter` dans un `filter` : le croisement se poursuit.
+    r = es.search(index=INDEX, size=0, aggs={"a": {
+        "filter": {"match_all": {}},
+        "aggs": {"b": {"filter": {"term": {"auteur": "Zola"}}}}}})
+    assert r["aggregations"]["a"] == {"doc_count": 3, "b": {"doc_count": 1}}
+
+
+@scenario
+def compteurs_de_filtres_rapides(es):
+    """Le cas reel qui a motive tout ca : une recherche de commandes qui pose,
+    a **chaque** appel, un filtre sur un champ jamais renseigne et cinq
+    compteurs en agregations `filter`.
+
+    Rien ici n'est artificiel : c'est la forme exacte de la requete d'un
+    service de livraison branche sur ferrite, sur un jeu ou aucune commande
+    n'est archivee (donc `archiveAt` n'est jamais mappe)."""
+    commandes = "compat_commandes"
+    es.options(ignore_status=404).indices.delete(index=commandes)
+    es.indices.create(index=commandes, mappings={"properties": {
+        "reference": {"type": "keyword"},
+        "statut": {"type": "keyword"},
+        "enlevementPrevu": {"type": "date"},
+        "livraisonPrevue": {"type": "date"},
+    }})
+    etats = ["pending", "pending", "shipped", "failed", "delivered"]
+    operations = []
+    for i, statut in enumerate(etats):
+        operations.append({"index": {"_index": commandes, "_id": str(i)}})
+        operations.append({"reference": f"CMD-{i}", "statut": statut,
+                           "enlevementPrevu": "2026-07-01T08:00:00Z",
+                           "livraisonPrevue": "2026-07-02T08:00:00Z"})
+    es.bulk(operations=operations, refresh=True)
+
+    limite = "2026-07-01T12:00:00Z"
+    r = es.search(index=commandes, size=10, query={"bool": {
+        # Le filtre pose sur chaque recherche : « pas encore archivee ».
+        "must_not": [{"exists": {"field": "archiveAt"}}],
+        "must": [{"match_all": {}}],
+    }}, aggs={
+        "pending": {"filter": {"term": {"statut": "pending"}}},
+        "late": {"filter": {"bool": {
+            "must": [{"range": {"livraisonPrevue": {"lt": limite}}}],
+            "must_not": [{"term": {"statut": "delivered"}}]}}},
+        "latePickup": {"filter": {"bool": {
+            "must": [{"range": {"enlevementPrevu": {"lt": limite}}}],
+            "must_not": [{"terms": {"statut": ["shipped", "delivered"]}}]}}},
+        "failed": {"filter": {"term": {"statut": "failed"}}},
+        "active": {"filter": {"bool": {
+            "must_not": [{"terms": {"statut": ["delivered", "failed"]}}]}}},
+    })
+    assert r["hits"]["total"]["value"] == 5
+    compteurs = {k: v["doc_count"] for k, v in r["aggregations"].items()}
+    assert compteurs == {"pending": 2, "late": 0, "latePickup": 3,
+                         "failed": 1, "active": 3}, compteurs
+    es.indices.delete(index=commandes)
+
+
+@scenario
 def agregations_refusees(es):
     # Agreger sur un `text` n'a pas de sens sans fielddata — ES refuse aussi.
     refused(lambda: es.search(index=INDEX, size=0,
@@ -1651,9 +1929,12 @@ def agregations_refusees(es):
     refused(lambda: es.search(index=INDEX, size=0,
                               aggs={"f": {"cardinality": {"field": "auteur"}}}),
             contains="cardinality")
-    refused(lambda: es.search(index=INDEX, size=0,
-                              aggs={"f": {"filter": {"term": {"auteur": "Zola"}}}}),
-            contains="filter")
+    # `filter` est supportee au premier niveau ; sous une agregation de
+    # buckets, elle exigerait de rejouer sa requete bucket par bucket.
+    refused(lambda: es.search(index=INDEX, size=0, aggs={
+        "pa": {"terms": {"field": "auteur"},
+               "aggs": {"f": {"filter": {"term": {"auteur": "Zola"}}}}}}),
+        contains="filter")
     # Parametre non supporte : jamais avale en silence.
     refused(lambda: es.search(index=INDEX, size=0, aggs={
         "f": {"terms": {"field": "auteur", "include": "Z.*"}}}),
@@ -1808,7 +2089,8 @@ def main():
             print(f"[ echec] {name}")
             print("".join("        " + l for l in
                           traceback.format_exc().splitlines(keepends=True)))
-    es.options(ignore_status=404).indices.delete(index=INDEX)
+    for index in (INDEX, SCROLL_INDEX):
+        es.options(ignore_status=404).indices.delete(index=index)
 
     print()
     total = len(RESULTS)
