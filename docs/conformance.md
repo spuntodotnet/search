@@ -30,10 +30,10 @@ lancé contre un **vrai Elasticsearch 7.10.2**, où il doit être quasi tout ver
 
 | | ferrite | ES 7.10.2 |
 |---|---|---|
-| réussis | **65** | **537** |
-| refusés explicitement (hors périmètre) | 324 | 0 |
+| réussis | **66** | **537** |
+| refusés explicitement (hors périmètre) | 325 | 0 |
 | sautés (borne de version, fonctionnalité du runner) | 98 | 103 |
-| **échecs** | **156** | **3** |
+| **échecs** | **154** | **3** |
 | | | sur 643 cas |
 
 Les 3 échecs côté ES sont ES lui-même (`distance_feature` sur `date` et
@@ -78,7 +78,17 @@ refusé pour ce qu'il est (`not_implemented_in_ferrite_exception`), ce qui rend
 son refus lisible côté client — et rend au passage 100 cas d'agrégation à la
 colonne « refusé », où ils sont chez eux.
 
-Ce qui reste dans les 156 :
+`scroll`, l'agrégation `filter` et les champs non mappés ont fait bouger le
+compte une troisième fois, à **66 réussis et 154 échecs**. Le mouvement est
+petit, et c'est instructif : la suite REST de la 7.10 n'exerce le `scroll` que
+dans un seul cas (`field collapsing and scroll`, qui bute d'abord sur
+`collapse`), et l'écrasante majorité de ses cas d'agrégation sont déjà dans la
+colonne « refusé » pour d'autres raisons. Une fonctionnalité peut être décisive
+pour un vrai projet — celle-ci débloque tout export d'index — sans faire bouger
+un compteur global. C'est pour ça que ce fichier n'est pas la seule mesure du
+dépôt.
+
+Ce qui reste dans les 154 :
 
 | Combien | Ce que c'est | Verdict |
 |---|---|---|
@@ -87,7 +97,7 @@ Ce qui reste dans les 156 :
 | **12** | `indices.get` | bloqués sur `_close` dans leur **mise en place**, pas sur ce qu'ils mesurent |
 | **7** | `_close` / `_open` | hors périmètre déclaré |
 | **6** | `indices.delete` sur un motif ou sur un alias | ferrite suit la 8.x : `action.destructive_requires_name` vaut `true` et `DELETE /{alias}` est refusé. La suite est celle de la **7.10**, où le réglage valait `false` — un vrai ES 8 échoue au même endroit |
-| reste | `collapse`, `docvalue_fields`, `stored_fields`, agrégations non supportées, `scroll`… | hors périmètre déclaré, voir [`compat.md`](compat.md) |
+| reste | `collapse`, `docvalue_fields`, `stored_fields`, agrégations non supportées… | hors périmètre déclaré, voir [`compat.md`](compat.md) |
 
 ## Ce que le runner ne fait pas
 

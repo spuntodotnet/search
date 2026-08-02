@@ -22,12 +22,12 @@ Version d'API annoncée : **Elasticsearch 8.15.0** (`version.number`,
 
 | | ferrite | ES 7.10.2 (validation du runner) |
 |---|---|---|
-| réussis | 65 | 537 |
-| refusés explicitement (hors périmètre) | 324 | 0 |
+| réussis | 66 | 537 |
+| refusés explicitement (hors périmètre) | 325 | 0 |
 | sautés (version, fonctionnalité du runner) | 98 | 103 |
-| **échecs** | **156** | 3 |
+| **échecs** | **154** | 3 |
 
-Les 156 échecs sont l'inventaire des écarts qui restent — les plus gros sont
+Les 154 échecs sont l'inventaire des écarts qui restent — les plus gros sont
 listés dans [`conformance.md`](conformance.md). C'est la mesure la moins
 complaisante du projet : les cas viennent d'Elastic, pas de nous.
 
