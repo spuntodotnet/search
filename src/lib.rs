@@ -26,6 +26,7 @@ pub mod error;
 pub mod mapping;
 pub mod nested;
 pub mod search;
+pub mod stemmer;
 pub mod util;
 
 /// Version d'Elasticsearch annoncee par ferrite.

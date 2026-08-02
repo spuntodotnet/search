@@ -115,20 +115,27 @@ Chaque analyzer intégré est comparé **token par token** à son homonyme d'ES 
 | `whitespace` | ✅ identique |
 | `keyword` | ✅ identique |
 | `stop` | ✅ identique |
-| `french`, `english`, `snowball` et les autres analyzers de langue | ❌ **refus assumé** |
+| `english` | ✅ **identique à ES sur les 28 textes** — Porter porté depuis Lucene (`src/stemmer.rs`), filtre possessif compris |
+| `french` | ❌ le stemmer est fidèle, c'est la **liste de mots vides** qui diverge encore (5 textes sur 28) |
+| `snowball` et les autres analyzers de langue | ❌ **refus assumé** |
 | Analyzers sur mesure (`settings.analysis`) | ✅ | voir ci-dessous |
 
-**Pourquoi les analyzers de langue sont refusés.** Ils reposent sur un stemmer,
-et celui de tantivy (Snowball) n'est pas celui de Lucene (stemmer *léger* pour
-le français, Porter pour l'anglais). Mesuré sur les mêmes 28 textes : **17
-donnent des termes différents en `french`, 19 en `english`**. Par exemple
-« Horla » devient `horl` chez tantivy et `horla` chez ES, « mineurs » `mineur`
-contre `mineu`, « arriviste » `arriv` contre `arivist`.
+**Les stemmers de Lucene sont portés** (`src/stemmer.rs`) : le stemmer Porter
+pour l'anglais, le stemmer léger de Savoy pour le français. Celui de tantivy
+(Snowball) n'est celui d'aucun des deux — c'est ce qui donnait, avant ce
+portage, **19 textes divergents sur 28 en `english` et 17 en `french`**.
 
-Porter le nom d'ES en indexant autre chose changerait silencieusement le
-comportement d'un mapping existant — précisément ce que ce projet refuse. Les
-supporter demande de porter les stemmers de Lucene, ce qui mérite sa propre
-itération.
+`english` est désormais **identique à ES sur les 28 textes** : Porter (validé en
+plus sur les 66 exemples de l'article de Porter lui-même), filtre possessif
+(`Peter's` → `Peter`), mots vides et ordre des filtres de `EnglishAnalyzer`.
+
+`french` reste **refusé**, et la raison a changé de nature : son stemmer et son
+filtre d'élision sont fidèles, mais sa **liste de mots vides** ne l'est pas
+encore. Mesuré : 5 textes divergents sur 28, tous de cette seule cause. Celle
+d'Elasticsearch n'est ni la liste Snowball (qui garde `est`) ni l'ancienne liste
+de Lucene (elle retire `ceci`, `cette`, `avec`, `sans`, `ils`) — l'établir
+demande de la relever mot à mot. Livrer `french` avec une liste approchante
+changerait silencieusement les termes indexés, ce que ce projet refuse.
 
 **Les analyzers sur mesure**, eux, sont supportés — un mapping venu d'une
 instance réelle en déclare presque toujours un, et le plus souvent avec des

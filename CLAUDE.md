@@ -112,10 +112,11 @@ bouger**, pas après.
 - **`join` est plus simple ici que chez Elastic.** Mono-shard, parent et enfant
   sont forcément au même endroit : pas de *global ordinals*, pas de `routing`
   obligatoire. Deux passes suffisent.
-- **Les analyzers de langue sont refusés**, pas approximés : le stemmer de
-  tantivy n'est pas celui de Lucene (17 textes sur 28 donnent des termes
-  différents en `french`). Les supporter demande de porter les stemmers de
-  Lucene — c'est le dernier gros morceau. Les analyzers **sur mesure**
+- **Les stemmers de Lucene sont portés** dans `src/stemmer.rs`, parce que celui
+  de tantivy (Snowball) n'est celui d'aucun des deux : `english` est identique à
+  ES sur les 28 textes, `french` reste refusé pour sa seule liste de mots vides.
+  Un analyzer n'est **jamais** livré sous le nom d'ES tant qu'il n'est pas
+  mesuré identique. Les analyzers **sur mesure**
   (`settings.analysis`), eux, sont supportés : ils se composent de briques que
   ferrite reproduit à l'identique (`standard`, `lowercase`, `asciifolding`,
   `stop`).
@@ -151,12 +152,10 @@ bouger**, pas après.
 
 ## Où va le projet
 
-En rejouant une migration complète depuis une instance 7.10.2
-(`tests/compat/diff_es7.py`), il ne reste qu'un refus qui change vraiment les
-**résultats** plutôt que la forme : les **analyzers de langue** (`french`,
-`english`). Les supporter demande de porter les stemmers de Lucene — le
-`FrenchLightStemmer` et le `PorterStemmer`, plus le filtre `elision` — c'est le
-dernier gros morceau.
+Le seul refus qui change encore les **résultats** plutôt que la forme :
+l'analyzer **`french`**, et il ne tient plus qu'à sa liste de mots vides — le
+stemmer et l'élision sont fidèles. La relever mot à mot contre un vrai ES est un
+travail court et entièrement mesurable (`diff_analyzers.py`).
 
 Ensuite, par ordre de gêne pour un projet réel : `scroll` / `helpers.scan`,
 `rest_total_hits_as_int`, `_msearch`, `_stats`, les alias et les templates.

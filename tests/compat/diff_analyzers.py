@@ -21,9 +21,7 @@ from elasticsearch import ApiError, Elasticsearch
 FERRITE = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:9200"
 ES = sys.argv[2] if len(sys.argv) > 2 else "http://localhost:9201"
 
-# Les analyzers de langue sont refuses par ferrite (le stemmer de tantivy n'est
-# pas celui de Lucene) : voir docs/compat.md. La suite de compat verifie le refus.
-ANALYZERS = ["standard", "simple", "whitespace", "keyword", "stop"]
+ANALYZERS = ["standard", "simple", "whitespace", "keyword", "stop", "english"]
 
 # Du francais courant, avec ce qui fait trebucher : elisions, accents, traits
 # d'union, chiffres, pluriels irreguliers, majuscules.

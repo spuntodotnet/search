@@ -536,9 +536,12 @@ def analyzers(es):
 
 @scenario
 def analyzers_refuses(es):
-    """Les analyzers de langue portent le nom d'ES mais pas son stemmer :
-    les accepter changerait silencieusement les termes indexes."""
-    for nom in ("french", "english", "snowball"):
+    """`english` est desormais identique a ES (Porter porte a l'identique) ;
+    `french` reste refuse tant que sa liste de mots vides differe."""
+    assert [t["token"] for t in es.indices.analyze(
+        analyzer="english", text="The running dogs run quickly")["tokens"]] == [
+        "run", "dog", "run", "quickli"]
+    for nom in ("french", "snowball"):
         refused(lambda n=nom: es.indices.create(
             index="an", mappings={"properties": {"t": {"type": "text", "analyzer": n}}}),
             contains=nom)

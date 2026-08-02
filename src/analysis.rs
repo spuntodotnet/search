@@ -32,6 +32,10 @@ pub enum Analyzer {
     Keyword,
     /// `standard` + mots vides anglais.
     Stop,
+    /// `standard` + elision + minuscules + mots vides + stemmer leger.
+    French,
+    /// `standard` + possessif + minuscules + mots vides + Porter.
+    English,
     /// Un analyzer declare dans `settings.analysis`, par sa position dans la
     /// liste triee de l'index.
     Custom(u16),
@@ -45,6 +49,8 @@ impl Analyzer {
             "whitespace" => Self::Whitespace,
             "keyword" => Self::Keyword,
             "stop" => Self::Stop,
+            "french" => Self::French,
+            "english" => Self::English,
             _ => return None,
         })
     }
@@ -57,6 +63,8 @@ impl Analyzer {
             Self::Whitespace => "whitespace".into(),
             Self::Keyword => "keyword".into(),
             Self::Stop => "stop".into(),
+            Self::French => "french".into(),
+            Self::English => "english".into(),
             Self::Custom(i) => analysis
                 .sur_mesure
                 .get(i as usize)
@@ -76,6 +84,8 @@ impl Analyzer {
             Self::Whitespace => "fr_whitespace".into(),
             Self::Keyword => "fr_keyword".into(),
             Self::Stop => "fr_stop".into(),
+            Self::French => "fr_french".into(),
+            Self::English => "fr_english".into(),
             Self::Custom(i) => nom_interne(i),
         }
     }
@@ -101,6 +111,29 @@ impl Analyzer {
                 .filter(LowerCaser)
                 .filter(StopWordFilter::new(Language::English).unwrap())
                 .build(),
+            // L'ordre est celui de `FrenchAnalyzer` chez Lucene : l'elision
+            // agit **avant** les minuscules (elle est insensible a la casse),
+            // et le stemmer en dernier.
+            Self::French => TextAnalyzer::builder(StandardTokenizer)
+                .filter(RemoveLongFilter::limit(MAX_TOKEN_LEN))
+                .filter(Reecrit(elision))
+                .filter(LowerCaser)
+                .filter(StopWordFilter::remove(
+                    MOTS_VIDES_FR.iter().map(|s| (*s).to_string()),
+                ))
+                .filter(Reecrit(french_light))
+                .build(),
+            // `EnglishAnalyzer` : le possessif avant les minuscules, Porter en
+            // dernier.
+            Self::English => TextAnalyzer::builder(StandardTokenizer)
+                .filter(RemoveLongFilter::limit(MAX_TOKEN_LEN))
+                .filter(Reecrit(possessif))
+                .filter(LowerCaser)
+                .filter(StopWordFilter::remove(
+                    MOTS_VIDES_EN.iter().map(|s| (*s).to_string()),
+                ))
+                .filter(Reecrit(porter))
+                .build(),
         }
     }
 }
@@ -113,6 +146,8 @@ pub fn register_all(manager: &TokenizerManager) {
         Analyzer::Whitespace,
         Analyzer::Keyword,
         Analyzer::Stop,
+        Analyzer::French,
+        Analyzer::English,
     ] {
         manager.register(&a.tokenizer(), a.build());
     }
@@ -121,9 +156,18 @@ pub fn register_all(manager: &TokenizerManager) {
 /// Les analyzers d'ES que ferrite refuse **volontairement**, avec la raison.
 fn refus_explicite(nom: &str) -> Option<&'static str> {
     match nom {
-        "french" | "english" | "german" | "spanish" | "italian" | "portuguese" | "dutch"
-        | "russian" | "swedish" | "norwegian" | "danish" | "finnish" | "hungarian" | "romanian"
-        | "turkish" | "snowball" => Some(
+        "french" => Some(
+            "le stemmer, lui, est desormais fidele : `crate::stemmer::french_light` porte le \
+             `FrenchLightStemFilter` de Lucene et l'elision est en place. Ce qui diverge encore \
+             est la **liste de mots vides** — mesure sur 28 textes : 5 divergences, toutes de \
+             cette seule cause. Celle d'ES n'est ni la liste Snowball (elle garde `est`) ni \
+             l'ancienne liste de Lucene (elle retire `ceci`, `cette`, `avec`, `sans`, `ils`), et \
+             l'etablir demande de la relever mot a mot. Livrer `french` avec une liste \
+             approchante changerait silencieusement les termes indexes",
+        ),
+        "german" | "spanish" | "italian" | "portuguese" | "dutch" | "russian" | "swedish"
+        | "norwegian" | "danish" | "finnish" | "hungarian" | "romanian" | "turkish"
+        | "snowball" => Some(
             "les analyzers de langue reposent sur un stemmer, et celui de tantivy (Snowball) \
              n'est pas celui de Lucene (stemmer leger pour le francais, Porter pour l'anglais) : \
              les termes produits different. Mesure sur 28 textes : 17 donnent des termes \
@@ -151,8 +195,8 @@ pub fn parse_declaration(nom: &str, champ: &str, analysis: &Analysis) -> EsResul
     Analyzer::parse(nom).ok_or_else(|| {
         EsError::unsupported(format!(
             "ferrite ne supporte pas l'analyzer [{nom}] (champ [{champ}]) ; analyzers \
-             integres : standard, simple, whitespace, keyword, stop, et ceux declares dans \
-             [settings.analysis]"
+             integres : standard, simple, whitespace, keyword, stop, french, english, et ceux \
+             declares dans [settings.analysis]"
         ))
     })
 }
@@ -761,3 +805,119 @@ mod tests_analysis {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Analyzers de langue
+// ---------------------------------------------------------------------------
+
+/// Un filtre qui reecrit chaque token par une fonction.
+///
+/// C'est la brique commune a l'elision, au possessif anglais et aux stemmers :
+/// tous se ramenent a « ce token devient celui-la ».
+#[derive(Clone)]
+pub struct Reecrit(fn(&str) -> Option<String>);
+
+impl tantivy::tokenizer::TokenFilter for Reecrit {
+    type Tokenizer<T: tantivy::tokenizer::Tokenizer> = ReecritFilter<T>;
+
+    fn transform<T: tantivy::tokenizer::Tokenizer>(self, tokenizer: T) -> ReecritFilter<T> {
+        ReecritFilter {
+            tokenizer,
+            f: self.0,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct ReecritFilter<T> {
+    tokenizer: T,
+    f: fn(&str) -> Option<String>,
+}
+
+impl<T: tantivy::tokenizer::Tokenizer> tantivy::tokenizer::Tokenizer for ReecritFilter<T> {
+    type TokenStream<'a> = ReecritStream<T::TokenStream<'a>>;
+
+    fn token_stream<'a>(&'a mut self, text: &'a str) -> Self::TokenStream<'a> {
+        ReecritStream {
+            tail: self.tokenizer.token_stream(text),
+            f: self.f,
+        }
+    }
+}
+
+pub struct ReecritStream<T> {
+    tail: T,
+    f: fn(&str) -> Option<String>,
+}
+
+impl<T: tantivy::tokenizer::TokenStream> tantivy::tokenizer::TokenStream for ReecritStream<T> {
+    fn advance(&mut self) -> bool {
+        if !self.tail.advance() {
+            return false;
+        }
+        if let Some(nouveau) = (self.f)(&self.tail.token().text) {
+            self.tail.token_mut().text = nouveau;
+        }
+        true
+    }
+
+    fn token(&self) -> &tantivy::tokenizer::Token {
+        self.tail.token()
+    }
+
+    fn token_mut(&mut self) -> &mut tantivy::tokenizer::Token {
+        self.tail.token_mut()
+    }
+}
+
+/// Les articles elides que Lucene retire en tete de token (`FrenchAnalyzer`).
+const ELISIONS: &[&str] = &[
+    "l", "m", "t", "qu", "n", "s", "j", "d", "c", "jusqu", "quoiqu", "lorsqu", "puisqu",
+];
+
+/// `l'ascension` -> `ascension`. Applique avant la mise en minuscules, donc
+/// insensible a la casse, comme chez Lucene.
+fn elision(t: &str) -> Option<String> {
+    let (avant, apres) = t.split_once(['\'', '\u{2019}'])?;
+    let avant = avant.to_lowercase();
+    ELISIONS
+        .contains(&avant.as_str())
+        .then(|| apres.to_string())
+}
+
+/// `Peter's` -> `Peter`. Comme `EnglishPossessiveFilter`, avant les minuscules.
+fn possessif(t: &str) -> Option<String> {
+    let c: Vec<char> = t.chars().collect();
+    let n = c.len();
+    if n >= 3 && matches!(c[n - 2], '\'' | '\u{2019}' | '\u{FF07}') && matches!(c[n - 1], 's' | 'S')
+    {
+        return Some(c[..n - 2].iter().collect());
+    }
+    None
+}
+
+fn porter(t: &str) -> Option<String> {
+    Some(crate::stemmer::porter(t))
+}
+
+fn french_light(t: &str) -> Option<String> {
+    Some(crate::stemmer::french_light(t))
+}
+
+/// Les mots vides francais de Lucene (`french_stop.txt`, la liste de Snowball).
+const MOTS_VIDES_FR: &[&str] = &[
+    "au", "aux", "avec", "ce", "ces", "dans", "de", "des", "du", "elle", "en", "et", "eux", "il",
+    "je", "la", "le", "les", "leur", "lui", "ma", "mais", "me", "même", "mes", "moi", "mon", "ne",
+    "nos", "notre", "nous", "on", "ou", "par", "pas", "pour", "qu", "que", "qui", "sa", "se",
+    "ses", "son", "sur", "ta", "te", "tes", "toi", "ton", "tu", "un", "une", "vos", "votre",
+    "vous", "c", "d", "j", "l", "à", "m", "n", "s", "t", "y", "été", "étée", "étées", "étés",
+    "étant", "étante", "étants", "étantes", "suis", "es", "est", "sommes", "êtes", "sont", "serai",
+    "seras", "sera", "serons", "serez", "seront", "serais", "serait", "serions", "seriez",
+    "seraient", "étais", "était", "étions", "étiez", "étaient", "fus", "fut", "fûmes", "fûtes",
+    "furent", "sois", "soit", "soyons", "soyez", "soient", "fusse", "fusses", "fût", "fussions",
+    "fussiez", "fussent", "ayant", "ayante", "ayantes", "ayants", "eu", "eue", "eues", "eus", "ai",
+    "as", "avons", "avez", "ont", "aurai", "auras", "aura", "aurons", "aurez", "auront", "aurais",
+    "aurait", "aurions", "auriez", "auraient", "avais", "avait", "avions", "aviez", "avaient",
+    "eut", "eûmes", "eûtes", "eurent", "aie", "aies", "ait", "ayons", "ayez", "aient", "eusse",
+    "eusses", "eût", "eussions", "eussiez", "eussent",
+];
