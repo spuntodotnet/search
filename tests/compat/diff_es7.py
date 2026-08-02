@@ -251,14 +251,23 @@ def rejoue_le_schema(ferrite, definition, cible):
              if k.split(".")[1] in REGLAGES_PRIVES}
     public = {k: v for k, v in plat.items() if k not in prive}
 
+    # `analysis` est le seul reglage qui change ce qui est indexe : une
+    # migration reelle le garde et jette le reste (allocation, refresh...).
+    analysis = definition.get("settings", {}).get("index", {}).get("analysis")
     essais = [
         ("tel quel", {"settings": plat, "mappings": mappings}, []),
         ("sans les reglages prives",
          {"settings": public, "mappings": mappings},
          [f"settings {k}" for k in sorted(prive)]),
-        ("mappings seuls", {"mappings": mappings},
-         [f"settings {k}" for k in sorted(plat)]),
     ]
+    if analysis:
+        essais.append((
+            "settings.analysis seul",
+            {"settings": {"analysis": analysis}, "mappings": mappings},
+            [f"settings {k}" for k in sorted(plat) if not k.startswith("index.analysis")],
+        ))
+    essais.append(("mappings seuls", {"mappings": mappings},
+                   [f"settings {k}" for k in sorted(plat)]))
 
     refus = []
     for etape, corps, abandonne in essais:
