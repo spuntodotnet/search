@@ -11,6 +11,9 @@ use ferrite::engine::Catalog;
 /// visibles au plus tard apres ce delai.
 const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
+/// A quelle frequence les contextes de `scroll` expires sont oublies.
+const PURGE_SCROLL_INTERVAL: Duration = Duration::from_secs(30);
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bind: SocketAddr = env_or("FERRITE_BIND", "0.0.0.0:9200").parse()?;
@@ -19,9 +22,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let node_name = env_or("FERRITE_NODE_NAME", "ferrite-0");
 
     let catalog = Catalog::open(data_dir.clone(), cluster_name, node_name)?;
+    let scrolls = Arc::new(ferrite::scroll::Registre::default());
     let state = Arc::new(AppState {
         catalog: catalog.clone(),
         started: Instant::now(),
+        scrolls: scrolls.clone(),
     });
 
     {
@@ -32,6 +37,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ticker.tick().await;
                 let catalog = catalog.clone();
                 let _ = tokio::task::spawn_blocking(move || catalog.refresh_dirty()).await;
+            }
+        });
+    }
+
+    {
+        // Un contexte de `scroll` retient un instantane de l'index : un client
+        // qui disparait sans appeler `DELETE /_search/scroll` ne doit pas
+        // pouvoir en garder un ouvert pour toujours.
+        let scrolls = scrolls.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(PURGE_SCROLL_INTERVAL);
+            loop {
+                ticker.tick().await;
+                scrolls.purger();
             }
         });
     }

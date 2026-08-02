@@ -28,6 +28,8 @@ use crate::error::{EsError, EsResult};
 pub struct AppState {
     pub catalog: Arc<Catalog>,
     pub started: Instant,
+    /// Les contextes de `scroll` ouverts (voir [`crate::scroll`]).
+    pub scrolls: crate::scroll::RegistrePartage,
 }
 
 pub type SharedState = Arc<AppState>;
@@ -64,6 +66,20 @@ pub fn router(state: SharedState) -> Router {
         .route("/_nodes/{spec}", get(cluster::nodes_spec))
         .route("/_bulk", post(docs::bulk).put(docs::bulk))
         .route("/_search", post(search::search_all).get(search::search_all))
+        // `scroll` : la pagination par contexte fige. C'est ce dont se sert
+        // `helpers.scan` du client officiel, donc tout export d'index.
+        .route(
+            "/_search/scroll",
+            post(search::scroll_suivant)
+                .get(search::scroll_suivant)
+                .delete(search::scroll_effacer),
+        )
+        .route(
+            "/_search/scroll/{scroll_id}",
+            post(search::scroll_suivant_par_url)
+                .get(search::scroll_suivant_par_url)
+                .delete(search::scroll_effacer_par_url),
+        )
         .route(
             "/{index}",
             put(indices::create)
@@ -136,6 +152,15 @@ pub fn router(state: SharedState) -> Router {
             post(unsupported_route).get(unsupported_route),
         )
         .route("/_reindex", post(unsupported_route))
+        // Le seul reglage d'index que ferrite exploite se pose a la creation :
+        // le dire vaut mieux qu'un « no handler » qui laisserait croire a une
+        // faute d'URL.
+        .route(
+            "/{index}/_settings",
+            put(reglages_non_modifiables)
+                .post(reglages_non_modifiables)
+                .get(indices::get_settings),
+        )
         .route(
             "/{index}/_msearch",
             post(unsupported_route).get(unsupported_route),
@@ -175,6 +200,20 @@ async fn unsupported_route(uri: Uri) -> EsError {
         "ferrite n'implemente pas la route [{}] dans cette version (voir docs/compat.md)",
         uri.path()
     ))
+}
+
+/// `PUT /{index}/_settings` : ferrite n'a pas de reglage modifiable a chaud.
+///
+/// Le seul reglage qu'il exploite — `index.query.parse.allow_unmapped_fields` —
+/// se pose a la creation de l'index. Le changer ensuite demanderait de
+/// reconstruire la generation courante, et un client qui croit l'avoir change
+/// alors qu'il n'en est rien chercherait longtemps.
+async fn reglages_non_modifiables() -> EsError {
+    EsError::unsupported(
+        "ferrite ne supporte pas [PUT /{index}/_settings] : le seul reglage qu'il exploite, \
+         [index.query.parse.allow_unmapped_fields], se pose dans [settings] a la creation de \
+         l'index (voir docs/compat.md)",
+    )
 }
 
 /// Le 400 d'ES pour une route inconnue, au format exact (une chaine, pas un

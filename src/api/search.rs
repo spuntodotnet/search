@@ -12,7 +12,11 @@ use crate::dsl::{build_query, QueryCtx};
 use crate::engine::Generation;
 use crate::error::{EsError, EsResult};
 use crate::mapping::FieldKind;
-use crate::search::{execute, round_score, Cible, SearchRequest, SortKey, SortSpec, SourceFilter};
+use crate::scroll;
+use crate::search::{
+    balayer, execute, rendre_page, round_score, Cible, SearchRequest, SortKey, SortSpec,
+    SourceFilter,
+};
 use crate::selection::resoudre;
 use crate::MAX_RESULT_WINDOW;
 
@@ -37,6 +41,12 @@ pub async fn search(
 
     let mut p = Params::parse(&uri);
     let opts = selection_options(&mut p)?;
+    // `?scroll=1m` : la duree de vie du contexte a ouvrir. Sa presence change la
+    // nature de l'appel — plus une page, mais le debut d'un balayage.
+    let keep_alive = match p.opt("scroll") {
+        Some(v) => Some(scroll::duree(&v, "scroll")?),
+        None => None,
+    };
     let param_from = p.number("from")?;
     let param_size = p.number("size")?;
     let param_sort = p.list("sort");
@@ -106,6 +116,16 @@ pub async fn search(
         None => body_usize(&body_obj, "size")?.unwrap_or(DEFAULT_SIZE),
     };
 
+    // `from` n'a pas de sens dans un scroll : le contexte avance tout seul, et
+    // sauter des documents ferait perdre en silence ceux d'avant. ES le refuse,
+    // avec ce type d'erreur et ce message.
+    if keep_alive.is_some() && from != 0 {
+        return Err(EsError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            "action_request_validation_exception",
+            "Validation Failed: 1: using [from] is not allowed in a scroll context;",
+        ));
+    }
     if from + size > MAX_RESULT_WINDOW {
         return Err(EsError::illegal_argument(format!(
             "Result window is too large, from + size must be less than or equal to: \
@@ -164,14 +184,16 @@ pub async fn search(
             }
             Err(e) => return Err(e),
         };
-        let query = {
-            let searcher = gen.searcher();
-            let ctx = QueryCtx::new(&gen.fields, &gen.index, &searcher)
-                .avec_champs_ailleurs(&champs_connus);
-            match body_obj.get("query") {
-                Some(v) => build_query(v, &ctx),
-                None => Ok(Box::new(tantivy::query::AllQuery) as Box<dyn tantivy::query::Query>),
-            }
+        // Le meme contexte de traduction sert a la requete et aux requetes
+        // internes des agregations [filter] : toutes doivent etre construites
+        // dans **cette** generation, leurs `Field` n'ont de sens que la.
+        let searcher = gen.searcher();
+        let ctx = QueryCtx::new(&gen.fields, &gen.index, &searcher)
+            .avec_champs_ailleurs(&champs_connus)
+            .selon_le_mapping(&gen.mapping);
+        let query = match body_obj.get("query") {
+            Some(v) => build_query(v, &ctx),
+            None => Ok(Box::new(tantivy::query::AllQuery) as Box<dyn tantivy::query::Query>),
         };
         let query = match query {
             Ok(q) => q,
@@ -186,13 +208,13 @@ pub async fn search(
         };
         // Meme raisonnement pour les agregations : un index qui ne mappe pas le
         // champ agrege n'a aucune valeur a y verser.
-        let agrege = match &aggs {
-            None => false,
-            Some(a) => match crate::aggs::validate(a, &gen) {
-                Ok(()) => true,
+        let (agrege, filtres) = match &aggs {
+            None => (false, crate::aggs::Filtres::default()),
+            Some(a) => match crate::aggs::validate(a, &gen, &ctx) {
+                Ok(filtres) => (true, filtres),
                 Err(e) if e.champ_inconnu.is_some() => {
                     agg_ignore.get_or_insert(e);
-                    false
+                    (false, crate::aggs::Filtres::default())
                 }
                 Err(e) => return Err(e),
             },
@@ -206,6 +228,7 @@ pub async fn search(
             query,
             sort,
             agrege,
+            filtres,
         });
     }
 
@@ -233,10 +256,84 @@ pub async fn search(
         source,
     };
 
+    // Avec `?scroll=`, la recherche ne rend pas une page : elle ouvre un
+    // contexte. Tout est balaye et ordonne une fois, la premiere tranche part
+    // au client, le reste attend son `_scroll_id`.
+    if let Some(keep_alive) = keep_alive {
+        // Les pages suivantes rendent le meme `_shards` que la premiere : le
+        // contexte en garde donc une copie.
+        let echecs_du_scroll = echecs.clone();
+        let (page, contexte, aggregations, total, max_score) =
+            tokio::task::spawn_blocking(move || -> EsResult<_> {
+                let b = balayer(cibles, &req)?;
+                let fin = req.size.min(b.hits.len());
+                let page =
+                    rendre_page(&b.cibles, &b.hits[..fin], &req.source, b.trie, b.avec_score)?;
+                let (total, max_score) = (b.total, b.max_score);
+                let contexte = crate::scroll::Contexte {
+                    cibles: b.cibles,
+                    hits: b.hits,
+                    total,
+                    max_score,
+                    source: req.source.clone(),
+                    trie: b.trie,
+                    avec_score: b.avec_score,
+                    taille: req.size,
+                    position: fin,
+                    nb_index,
+                    echecs: echecs_du_scroll.clone(),
+                    expire: std::time::Instant::now(),
+                };
+                Ok((page, contexte, b.aggregations, total, max_score))
+            })
+            .await
+            .map_err(|e| EsError::internal(format!("recherche: {e}")))??;
+
+        let id = st.scrolls.ouvrir(contexte, keep_alive)?;
+        let mut reponse = reponse_de_page(started, nb_index, echecs, total, max_score, page);
+        if let Some(aggs) = aggregations {
+            reponse.insert("aggregations".into(), aggs);
+        }
+        // `_scroll_id` d'abord : c'est l'ordre d'ES, et un humain qui lit la
+        // reponse a la console cherche ca en premier.
+        let mut avec_id = Map::new();
+        avec_id.insert("_scroll_id".into(), json!(id));
+        avec_id.extend(reponse);
+        return Ok(Json::ok(Value::Object(avec_id)));
+    }
+
     let outcome = tokio::task::spawn_blocking(move || execute(&cibles, &req))
         .await
         .map_err(|e| EsError::internal(format!("recherche: {e}")))??;
 
+    let mut reponse = reponse_de_page(
+        started,
+        nb_index,
+        echecs,
+        outcome.total,
+        outcome.max_score,
+        outcome.hits,
+    );
+    if let Some(aggs) = outcome.aggregations {
+        reponse.insert("aggregations".into(), aggs);
+    }
+    Ok(Json::ok(Value::Object(reponse)))
+}
+
+/// Le corps commun d'une reponse de recherche : `took`, `_shards`, `hits`.
+///
+/// Une page de `scroll` a exactement la meme forme qu'une reponse de `_search`,
+/// `_scroll_id` en plus — y compris le `_shards` de la recherche d'origine, que
+/// les clients relisent a chaque page (`helpers.scan` s'arrete si un shard a
+/// echoue).
+fn reponse_de_page(
+    started: Instant,
+    nb_index: usize,
+    echecs: Vec<Value>,
+    total: usize,
+    max_score: Option<f32>,
+    hits: Vec<Value>,
+) -> Map<String, Value> {
     let mut reponse = Map::new();
     reponse.insert("took".into(), json!(elapsed_ms(started)));
     reponse.insert("timed_out".into(), json!(false));
@@ -256,15 +353,160 @@ pub async fn search(
         json!({
             // `total` est un objet {value, relation}, pas un entier : un client
             // type le remarque immediatement.
-            "total": {"value": outcome.total, "relation": "eq"},
-            "max_score": outcome.max_score.map(round_score),
-            "hits": outcome.hits,
+            "total": {"value": total, "relation": "eq"},
+            "max_score": max_score.map(round_score),
+            "hits": hits,
         }),
     );
-    if let Some(aggs) = outcome.aggregations {
-        reponse.insert("aggregations".into(), aggs);
+    reponse
+}
+
+/// `POST|GET /_search/scroll` — la page suivante d'un contexte ouvert.
+pub async fn scroll_suivant(
+    State(st): State<SharedState>,
+    uri: Uri,
+    body: Bytes,
+) -> EsResult<Json> {
+    scroll_avec_id(st, None, uri, body).await
+}
+
+/// `POST|GET /_search/scroll/{scroll_id}` — la forme heritee, ou l'identifiant
+/// est dans l'URL. Des scripts de 2016 s'en servent encore.
+pub async fn scroll_suivant_par_url(
+    State(st): State<SharedState>,
+    Path(id): Path<String>,
+    uri: Uri,
+    body: Bytes,
+) -> EsResult<Json> {
+    scroll_avec_id(st, Some(id), uri, body).await
+}
+
+async fn scroll_avec_id(
+    st: SharedState,
+    id_url: Option<String>,
+    uri: Uri,
+    body: Bytes,
+) -> EsResult<Json> {
+    let started = Instant::now();
+    let mut p = Params::parse(&uri);
+    let mut keep_alive = match p.opt("scroll") {
+        Some(v) => Some(scroll::duree(&v, "scroll")?),
+        None => None,
+    };
+    let mut ids: Vec<String> = p.opt("scroll_id").into_iter().collect();
+    p.done()?;
+
+    let body = parse_body(&body)?;
+    if let Value::Object(obj) = &body {
+        expect_only(obj, &["scroll_id", "scroll"], "_search/scroll")?;
+        if let Some(v) = obj.get("scroll") {
+            let v = v
+                .as_str()
+                .ok_or_else(|| EsError::illegal_argument("[scroll] : chaine attendue"))?;
+            keep_alive = Some(scroll::duree(v, "scroll")?);
+        }
+        if let Some(v) = obj.get("scroll_id") {
+            ids.extend(scroll::ids_du_corps(v, "scroll_id")?);
+        }
+    } else if !matches!(body, Value::Null) {
+        return Err(EsError::parsing(
+            "le corps de [_search/scroll] doit etre un objet",
+        ));
     }
+    if let Some(id) = id_url {
+        ids.push(id);
+    }
+    // Plusieurs identifiants sur une lecture ne veulent rien dire : ES ne sait
+    // pas non plus lequel poursuivre.
+    let id = match ids.len() {
+        1 => ids.remove(0),
+        0 => {
+            return Err(EsError::illegal_argument(
+                "[scroll_id] est obligatoire sur [_search/scroll]",
+            ))
+        }
+        n => {
+            return Err(EsError::illegal_argument(format!(
+                "[_search/scroll] : un seul [scroll_id] a la fois ({n} fournis)"
+            )))
+        }
+    };
+
+    let suite = st.scrolls.avancer(&id, keep_alive)?;
+    let (nb_index, echecs) = (suite.nb_index, suite.echecs.clone());
+    let (total, max_score) = (suite.total, suite.max_score);
+    let hits = tokio::task::spawn_blocking(move || {
+        rendre_page(
+            &suite.cibles,
+            &suite.hits,
+            &suite.source,
+            suite.trie,
+            suite.avec_score,
+        )
+    })
+    .await
+    .map_err(|e| EsError::internal(format!("scroll: {e}")))??;
+
+    let mut reponse = Map::new();
+    reponse.insert("_scroll_id".into(), json!(id));
+    reponse.extend(reponse_de_page(
+        started, nb_index, echecs, total, max_score, hits,
+    ));
     Ok(Json::ok(Value::Object(reponse)))
+}
+
+/// `DELETE /_search/scroll` — rendre les contextes avant leur expiration.
+///
+/// Un client bien eleve (dont `helpers.scan`) appelle ca a la fin de son
+/// export : chaque contexte retient un instantane de l'index.
+pub async fn scroll_effacer(
+    State(st): State<SharedState>,
+    uri: Uri,
+    body: Bytes,
+) -> EsResult<Json> {
+    effacer_avec_id(st, None, uri, body).await
+}
+
+/// `DELETE /_search/scroll/{scroll_id}` — la forme heritee.
+pub async fn scroll_effacer_par_url(
+    State(st): State<SharedState>,
+    Path(id): Path<String>,
+    uri: Uri,
+    body: Bytes,
+) -> EsResult<Json> {
+    effacer_avec_id(st, Some(id), uri, body).await
+}
+
+async fn effacer_avec_id(
+    st: SharedState,
+    id_url: Option<String>,
+    uri: Uri,
+    body: Bytes,
+) -> EsResult<Json> {
+    let mut p = Params::parse(&uri);
+    let mut ids: Vec<String> = p.list("scroll_id").unwrap_or_default();
+    p.done()?;
+
+    let body = parse_body(&body)?;
+    if let Value::Object(obj) = &body {
+        expect_only(obj, &["scroll_id"], "DELETE /_search/scroll")?;
+        if let Some(v) = obj.get("scroll_id") {
+            ids.extend(scroll::ids_du_corps(v, "scroll_id")?);
+        }
+    }
+    if let Some(id) = id_url {
+        ids.extend(id.split(',').map(str::trim).map(str::to_string));
+    }
+    if ids.is_empty() {
+        return Err(EsError::illegal_argument(
+            "[scroll_id] est obligatoire sur [DELETE /_search/scroll]",
+        ));
+    }
+    let liberes = st.scrolls.fermer(&ids);
+    // ES rend `succeeded: true` meme quand l'identifiant n'existait plus :
+    // fermer deux fois n'est pas une erreur, c'est le cas normal d'un client
+    // qui nettoie apres une interruption.
+    Ok(Json::ok(json!({"succeeded": true, "num_freed": liberes})))
 }
 
 /// `GET|POST /_count` — sans index dans l'URL, ES compte partout.
@@ -310,7 +552,8 @@ pub async fn count(
         let query = {
             let searcher = gen.searcher();
             let ctx = QueryCtx::new(&gen.fields, &gen.index, &searcher)
-                .avec_champs_ailleurs(&champs_connus);
+                .avec_champs_ailleurs(&champs_connus)
+                .selon_le_mapping(&gen.mapping);
             match body_obj.get("query") {
                 Some(v) => build_query(v, &ctx),
                 None => Ok(Box::new(tantivy::query::AllQuery) as Box<dyn tantivy::query::Query>),

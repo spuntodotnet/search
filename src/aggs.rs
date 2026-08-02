@@ -111,16 +111,37 @@ fn refus_explicite(agg: &str) -> Option<&'static str> {
              distinctes annoncees la ou ES en compte 598), y compris sous le seuil ou ES est \
              exact — le nombre rendu ne serait pas celui d'ES"
         }
-        "filter" => {
-            "l'agregation [filter] de tantivy prend une chaine de requete dans sa propre \
-             syntaxe, pas une requete du Query DSL : la traduction serait approximative"
-        }
         _ => return None,
     })
 }
 
-/// Verifie une demande d'agregations de bout en bout.
-pub fn validate(aggs: &Value, gen: &Generation) -> EsResult<()> {
+/// Les requetes internes des agregations `filter`, rangees par **chemin**
+/// d'agregation (`etats>en_retard`).
+///
+/// Elles sont construites dans la generation de l'index, comme la requete
+/// principale : leurs `Field` n'ont de sens que la. Elles voyagent donc avec la
+/// cible, pas avec la demande.
+pub type Filtres = HashMap<String, Box<dyn Query>>;
+
+/// Le separateur des chemins d'agregation.
+const SEP: char = '>';
+
+/// Verifie une demande d'agregations de bout en bout, et construit au passage
+/// les requetes des agregations `filter`.
+pub fn validate(aggs: &Value, gen: &Generation, ctx: &crate::dsl::QueryCtx) -> EsResult<Filtres> {
+    let mut filtres = Filtres::default();
+    validate_niveau(aggs, gen, ctx, "", true, &mut filtres)?;
+    Ok(filtres)
+}
+
+fn validate_niveau(
+    aggs: &Value,
+    gen: &Generation,
+    ctx: &crate::dsl::QueryCtx,
+    chemin: &str,
+    filtre_possible: bool,
+    filtres: &mut Filtres,
+) -> EsResult<()> {
     let obj = aggs
         .as_object()
         .ok_or_else(|| EsError::parsing("[aggs] doit etre un objet"))?;
@@ -128,12 +149,25 @@ pub fn validate(aggs: &Value, gen: &Generation) -> EsResult<()> {
         return Err(EsError::illegal_argument("[aggs] ne peut pas etre vide"));
     }
     for (nom, corps) in obj {
-        validate_une(nom, corps, gen)?;
+        let sous_chemin = if chemin.is_empty() {
+            nom.clone()
+        } else {
+            format!("{chemin}{SEP}{nom}")
+        };
+        validate_une(nom, &sous_chemin, corps, gen, ctx, filtre_possible, filtres)?;
     }
     Ok(())
 }
 
-fn validate_une(nom: &str, corps: &Value, gen: &Generation) -> EsResult<()> {
+fn validate_une(
+    nom: &str,
+    chemin: &str,
+    corps: &Value,
+    gen: &Generation,
+    ctx: &crate::dsl::QueryCtx,
+    filtre_possible: bool,
+    filtres: &mut Filtres,
+) -> EsResult<()> {
     let obj = corps
         .as_object()
         .ok_or_else(|| EsError::parsing(format!("[aggs.{nom}] doit etre un objet")))?;
@@ -164,6 +198,27 @@ fn validate_une(nom: &str, corps: &Value, gen: &Generation) -> EsResult<()> {
              (voir docs/compat.md)"
         )));
     }
+
+    // `filter` n'est pas une agregation de tantivy : c'est ferrite qui
+    // l'execute, en croisant la requete de la recherche avec celle du filtre
+    // (voir `run`). Sa requete se construit donc ici, dans la generation de
+    // l'index, et se range sous le chemin de l'agregation.
+    if type_agg == "filter" {
+        if !filtre_possible {
+            return Err(EsError::unsupported(format!(
+                "ferrite ne supporte l'agregation [filter] (ici [aggs.{nom}]) qu'au premier \
+                 niveau, ou sous une autre [filter] : sous une agregation de buckets, elle \
+                 exigerait de re-executer sa requete bucket par bucket (voir docs/compat.md)"
+            )));
+        }
+        let filtre = crate::dsl::build_query(corps_agg, ctx)?;
+        filtres.insert(chemin.to_string(), filtre);
+        if let Some(sous) = sous {
+            validate_niveau(sous, gen, ctx, chemin, true, filtres)?;
+        }
+        return Ok(());
+    }
+
     let params = allowed(type_agg).ok_or_else(|| {
         EsError::unsupported(format!(
             "ferrite ne supporte pas l'agregation [{type_agg}] (dans [aggs.{nom}]) ; \
@@ -208,7 +263,7 @@ fn validate_une(nom: &str, corps: &Value, gen: &Generation) -> EsResult<()> {
                  sous-agregations (ce n'est pas une agregation de buckets)"
             )));
         }
-        validate(sous, gen)?;
+        validate_niveau(sous, gen, ctx, chemin, false, filtres)?;
     }
     Ok(())
 }
@@ -293,6 +348,8 @@ pub struct Part<'a> {
     pub gen: &'a Generation,
     pub searcher: &'a Searcher,
     pub query: &'a dyn Query,
+    /// Les requetes des agregations `filter`, construites pour **cet** index.
+    pub filtres: &'a Filtres,
 }
 
 /// Execute les agregations sur un ou plusieurs index et rend le resultat au
@@ -306,6 +363,113 @@ pub struct Part<'a> {
 /// tantivy), on les fusionne, et on ne finalise qu'une fois — exactement la
 /// mecanique qu'ES applique entre ses shards.
 pub fn run(parts: &[Part<'_>], aggs: &Value) -> EsResult<Value> {
+    executer(parts, aggs, "")
+}
+
+/// Le type declare d'une agregation (`terms`, `filter`, ...).
+fn type_de(corps: &Value) -> Option<&str> {
+    corps.as_object()?.keys().find_map(|c| match c.as_str() {
+        "aggs" | "aggregations" => None,
+        autre => Some(autre),
+    })
+}
+
+/// Execute un niveau d'agregations : les `filter` a part, tout le reste en un
+/// seul passage tantivy.
+///
+/// `filter` n'existe pas cote tantivy sous une forme utilisable — la sienne
+/// prend une chaine dans **sa** syntaxe de requete, pas une requete du Query
+/// DSL. Mais elle n'a rien de mysterieux : compter les documents qui
+/// correspondent a la fois a la recherche et au filtre, c'est executer
+/// l'intersection des deux requetes. C'est exactement ce qu'on fait ici, avec
+/// la requete que le Query DSL de ferrite a deja traduite — donc sans
+/// approximation, et avec toutes les clauses que ferrite sait traduire.
+/// Les sous-agregations, elles, tournent sur cette requete croisee : c'est la
+/// meme definition que chez Elasticsearch.
+fn executer(parts: &[Part<'_>], aggs: &Value, chemin: &str) -> EsResult<Value> {
+    let Some(obj) = aggs.as_object() else {
+        return Ok(Value::Object(Map::new()));
+    };
+    let natives: Map<String, Value> = obj
+        .iter()
+        .filter(|(_, corps)| type_de(corps) != Some("filter"))
+        .map(|(nom, corps)| (nom.clone(), corps.clone()))
+        .collect();
+    let natives = if natives.is_empty() {
+        Map::new()
+    } else {
+        match run_natif(parts, &Value::Object(natives))? {
+            Value::Object(o) => o,
+            _ => Map::new(),
+        }
+    };
+
+    // L'ordre de la reponse est celui de la demande, comme chez ES.
+    let mut out = Map::new();
+    for (nom, corps) in obj {
+        if type_de(corps) == Some("filter") {
+            let sous_chemin = if chemin.is_empty() {
+                nom.clone()
+            } else {
+                format!("{chemin}{SEP}{nom}")
+            };
+            out.insert(nom.clone(), executer_filtre(parts, corps, &sous_chemin)?);
+        } else if let Some(v) = natives.get(nom) {
+            out.insert(nom.clone(), v.clone());
+        }
+    }
+    Ok(Value::Object(out))
+}
+
+/// Une agregation `filter` : le compte des documents qui correspondent aux deux
+/// requetes, puis ses sous-agregations sur ce meme croisement.
+fn executer_filtre(parts: &[Part<'_>], corps: &Value, chemin: &str) -> EsResult<Value> {
+    let sous = corps
+        .get("aggs")
+        .or_else(|| corps.get("aggregations"))
+        .cloned();
+
+    let mut doc_count = 0usize;
+    let mut croisees: Vec<Box<dyn Query>> = Vec::with_capacity(parts.len());
+    for part in parts {
+        let filtre = part.filtres.get(chemin).ok_or_else(|| {
+            EsError::internal(format!(
+                "agregation [filter] [{chemin}] : requete manquante"
+            ))
+        })?;
+        let croisee: Box<dyn Query> = Box::new(tantivy::query::BooleanQuery::new(vec![
+            (tantivy::query::Occur::Must, part.query.box_clone()),
+            (tantivy::query::Occur::Must, filtre.box_clone()),
+        ]));
+        doc_count += part
+            .searcher
+            .search(&croisee, &tantivy::collector::Count)
+            .map_err(|e| EsError::illegal_argument(format!("agregation [filter] : {e}")))?;
+        croisees.push(croisee);
+    }
+
+    let mut out = Map::new();
+    out.insert("doc_count".into(), json!(doc_count));
+    if let Some(sous) = sous {
+        let sous_parts: Vec<Part<'_>> = parts
+            .iter()
+            .zip(&croisees)
+            .map(|(p, q)| Part {
+                gen: p.gen,
+                searcher: p.searcher,
+                query: &**q,
+                filtres: p.filtres,
+            })
+            .collect();
+        if let Value::Object(o) = executer(&sous_parts, &sous, chemin)? {
+            out.extend(o);
+        }
+    }
+    Ok(Value::Object(out))
+}
+
+/// Les agregations que tantivy execute lui-meme, en un seul passage.
+fn run_natif(parts: &[Part<'_>], aggs: &Value) -> EsResult<Value> {
     let Some(premiere) = parts.first() else {
         return Ok(Value::Object(Map::new()));
     };

@@ -32,6 +32,7 @@ pub mod error;
 pub mod mapping;
 pub mod nested;
 pub mod regexp;
+pub mod scroll;
 pub mod search;
 pub mod selection;
 pub mod stemmer;

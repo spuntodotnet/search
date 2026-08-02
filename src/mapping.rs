@@ -320,7 +320,7 @@ impl Join {
 /// champ imbrique sans rien connaitre des objets : `Fields.mapped` est deja une
 /// table `chemin -> champ`. Le nichage n'existe que dans la reponse
 /// `GET /{index}/_mapping`, ou [`Mapping::to_json`] le reconstruit.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Mapping {
     pub properties: BTreeMap<String, FieldMapping>,
     /// Les chemins declares `type: nested`. Un `nested` s'indexe comme un objet
@@ -339,6 +339,29 @@ pub struct Mapping {
     /// rendus par `_mapping` : leur place est dans `_settings`.
     pub analysis: crate::analysis::Analysis,
     pub dynamic: Dynamic,
+    /// `index.query.parse.allow_unmapped_fields` — le reglage d'Elasticsearch,
+    /// avec **son** defaut (`true`).
+    ///
+    /// A `true`, une clause qui cite un champ absent du mapping ne correspond a
+    /// rien, comme chez ES : c'est ce qui permet a un filtre pose sur chaque
+    /// recherche (`archiveAt`) de fonctionner avant que le premier document ne
+    /// porte le champ. A `false`, c'est une erreur explicite — le comportement
+    /// que ferrite avait toujours eu, et qui attrape les fautes de frappe.
+    pub allow_unmapped_fields: bool,
+}
+
+impl Default for Mapping {
+    fn default() -> Self {
+        Self {
+            properties: BTreeMap::new(),
+            nested: BTreeSet::new(),
+            objets_vides: BTreeSet::new(),
+            join: None,
+            analysis: crate::analysis::Analysis::default(),
+            dynamic: Dynamic::default(),
+            allow_unmapped_fields: true,
+        }
+    }
 }
 
 impl Mapping {
@@ -444,6 +467,7 @@ impl Mapping {
             join,
             analysis: declares.clone(),
             dynamic,
+            ..Self::default()
         })
     }
 }
