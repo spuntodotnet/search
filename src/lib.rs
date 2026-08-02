@@ -25,6 +25,7 @@ pub mod alias;
 pub mod analysis;
 pub mod api;
 pub mod dateformat;
+pub mod datemath;
 pub mod dismax;
 pub mod dsl;
 pub mod engine;

@@ -94,11 +94,12 @@ développement, pas de CI).
 
 | Commande | La question à laquelle elle répond |
 |---|---|
-| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**82/82**, dont l'export par `helpers.scan`) |
+| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**83/83**, dont l'export par `helpers.scan` et le date math) |
 | `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (167/168, 0 écart réel) |
 | `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (45/46 ; le seul écart est `_cluster/health`, toujours vert par choix) |
 | `tests/compat/diff_aggs.py` | les mêmes agrégations ? (45/45, `filter` comprise) |
 | `tests/compat/diff_analyzers.py` | les mêmes tokens ? (7 analyzers, 210 textes, tous identiques) |
+| `tests/compat/diff_datemath.py` | les mêmes documents sur une **borne de date** — `now`, `now-1d/d`, `2026-03-15\|\|+1M`, et l'arrondi selon le côté de la borne ? (276/276, messages d'erreur compris ; 45/276 avant le chantier) |
 | `tests/compat/diff_motifs.py` | les mêmes documents sur un **motif** — `regexp`, `wildcard`, `prefix`, `match_phrase_prefix` ? (101/101) |
 | `tests/compat/diff_multi_index.py` | `index=["a","b"]`, `logs-*`, les alias : **les mêmes index visés, fusionnés pareil** ? (87/87, 0 écart, plus aucune divergence assumée ; `--calibrer` : 87/87 contre deux ES) |
 | `tests/compat/releve_mots_vides.py` | quelle est **vraiment** la liste de mots vides d'un analyzer d'ES ? |
@@ -168,6 +169,14 @@ bouger**, pas après.
   chaque document sort une fois et une seule, la Nième page ne coûte pas N
   recherches, et ce qui est écrit pendant l'export ne s'y invite pas. Le prix est
   la mémoire du contexte, d'où le `keep_alive` et la purge.
+- **Une borne de date est une expression, et elle s'arrondit par son côté.**
+  `{"lt": "now"}` se résout côté serveur ; `{"lte": "2026-03-15"}` couvre la
+  journée entière alors que `{"lt": "2026-03-15"}` s'arrête à minuit. Les deux
+  moitiés viennent du même endroit ([`src/datemath.rs`](src/datemath.rs)) parce
+  qu'elles sont le même geste : résoudre une borne **en sachant de quel côté
+  elle est**. La seconde moitié n'était dans aucune demande — c'est la mesure
+  contre ES qui l'a trouvée, et c'est elle qui rendait des résultats faux en
+  silence, là où `now` échouait au moins bruyamment.
 - **L'agrégation `filter` est exécutée par ferrite.** Celle de tantivy prend une
   chaîne dans sa propre syntaxe de requête — inutilisable. Mais son sens est une
   intersection de requêtes, et le Query DSL de ferrite sait déjà traduire la
@@ -208,6 +217,11 @@ bouger**, pas après.
   champ que rien n'a encore mappé, n'est pas une faute — et le 400 rendait
   l'application inutilisable. Quand un écart avec ES est un choix, il faut aussi
   se demander **ce qui arrive à celui qui ne l'a pas fait**.
+- **Une fonctionnalité manquante peut en cacher une fausse.** La demande disait
+  « `now` échoue en 400 ». La mesure a montré qu'à côté, `lte: "2026-03-15"`
+  rendait **moins de documents qu'ES** sans rien dire : ferrite lisait la date
+  comme minuit là où ES couvre la journée. Le 400 se voit, l'autre non. Quand un
+  client signale un trou, mesurer **tout le voisinage** de ce trou.
 - **Un `curl` de vérification qui n'utilise pas le même texte que le test ne
   vérifie rien.** Une chasse au bug d'analyzer s'est terminée sur un faux
   positif : `match edition` ne trouvait pas `l'édition` — ce que fait aussi ES,
@@ -228,10 +242,15 @@ L'export d'un index par `helpers.scan` (donc une sauvegarde, donc un
 `timemachine export`) passe maintenant, et une application qui compte ses
 filtres rapides en agrégations `filter` sur chaque appel aussi.
 
+Un tableau de bord qui filtre sur `now` (« en retard », « livré aujourd'hui »,
+« ce mois-ci ») se branche aussi : le date math est résolu côté serveur, et une
+borne de date est arrondie du bon côté.
+
 Ce qui reste, par ordre de gêne pour un projet réel : `rest_total_hits_as_int`,
 `_msearch`, `_stats`, les templates, `PUT /{index}/_settings`, l'agrégation
-`filters` (la sœur plurielle de `filter`), les alias **filtrés** (`filter`,
-refusé explicitement), et les analyzers des autres langues.
+`filters` (la sœur plurielle de `filter`), `time_zone` sur un `range` (refusé
+explicitement), les alias **filtrés** (`filter`, refusé explicitement), et les
+analyzers des autres langues.
 
 ## Ton, et forme des livrables
 

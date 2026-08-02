@@ -186,7 +186,7 @@ différemment. ferrite applique désormais les frontières de mots d'Unicode
 | `byte`, `short`, `integer`, `long` | ✅ | `i64` indexé + fast. Les bornes du type sont vérifiées à l'indexation |
 | `float`, `double` | ✅ | `f64` indexé + fast |
 | `boolean` | ✅ | `bool` indexé + fast |
-| `date` | 🟡 | `date` (millisecondes) indexé + fast. **`format` supporté** : motifs Java (`yyyy`, `yy`, `MM`, `dd`, `HH`, `hh`, `mm`, `ss`, `SSS`, `a`, `Z`, texte entre apostrophes), alternatives `\|\|`, et les noms prédéfinis courants (`strict_date_optional_time`, `epoch_millis`, `epoch_second`, `date`, `date_time`, `basic_date`…). Le format sert à lire (indexation, bornes d'un `range`) **et** à rendre (`*_as_string`). Une lettre non traduite (`G`, `w`, `e`…) est refusée explicitement plutôt qu'ignorée |
+| `date` | 🟡 | `date` (millisecondes) indexé + fast. **`format` supporté** : motifs Java (`yyyy`, `yy`, `MM`, `dd`, `HH`, `hh`, `mm`, `ss`, `SSS`, `a`, `Z`, texte entre apostrophes), alternatives `\|\|`, et les noms prédéfinis courants (`strict_date_optional_time`, `epoch_millis`, `epoch_second`, `date`, `date_time`, `basic_date`…). Le format sert à lire (indexation, bornes d'un `range`, ancre d'une expression de date math) **et** à rendre (`*_as_string`). Une lettre non traduite (`G`, `w`, `e`…) est refusée explicitement plutôt qu'ignorée |
 | Tableaux de valeurs | ✅ | tout champ accepte une valeur ou un tableau |
 | `null` | ✅ | ignoré à l'indexation, comme chez ES (pas de `null_value`) |
 | `object` (sous-objet), déclaré ou deviné | ✅ | indexé par **chemins pointés** (`client.ville`), comme ES. Un objet n'est pas un champ : il n'existe que par ses feuilles. `GET /_mapping` re-niche les chemins. Un tableau d'objets est aplati — comme ES, la correspondance entre sous-champs d'un même élément est perdue (c'est ce que `nested` corrige) |
@@ -376,7 +376,7 @@ suppression de données.
 | `match_phrase` | 🟡 | les termes dans l'ordre, adjacents. `boost`. `slop` : ❌ (voir les divergences) |
 | `match_phrase_prefix` | 🟡 | les termes dans l'ordre, le dernier n'étant qu'un début de mot. `query`, `max_expansions` (défaut 50, comme ES), `boost`. Sur un champ `keyword`, refusée avec le message d'ES (« Can only use phrase prefix queries on text fields »). `slop`, `analyzer`, `zero_terms_query` : ❌ |
 | `exists` | ✅ | sur tous les types, y compris `text`. Un champ absent, `null`, ou un tableau vide compte comme absent, comme chez ES |
-| `term` | ✅ | forme courte et forme `{value, boost}`. `case_insensitive` ❌ |
+| `term` | ✅ | forme courte et forme `{value, boost}`. Sur un champ `date`, la valeur désigne la **période** qu'elle couvre, pas un instant, et le date math y est accepté (comme chez ES). `case_insensitive` ❌ |
 | `ids` | ✅ | `values`, `boost` |
 | `prefix` | 🟡 | non analysée comme chez ES. `case_insensitive` (repliement ASCII, comme ES). `rewrite` : ❌ |
 | `wildcard` | 🟡 | `*`, `?`, et `\` qui échappe le caractère suivant. `case_insensitive`. `rewrite` : ❌ |
@@ -384,8 +384,8 @@ suppression de données.
 | `fuzzy` | 🟡 | `fuzziness` (`AUTO` ou distance entière), `transpositions`, `boost`. `prefix_length` / `max_expansions` / `rewrite` : ❌ |
 | `constant_score` | ✅ | `filter`, `boost` |
 | `dis_max` | ✅ | `queries`, `tie_breaker`, `boost` — voir [`src/dismax.rs`](../src/dismax.rs) |
-| `terms` | 🟡 | liste de valeurs, score constant comme chez ES. Les *terms lookup* sont ❌ |
-| `range` | 🟡 | `gte`, `gt`, `lte`, `lt`, `boost`, sur `keyword` / numérique / `date` / `boolean`. Sur un champ `text` : ❌. `format`, `time_zone`, `relation` : ❌ |
+| `terms` | 🟡 | liste de valeurs, score constant comme chez ES. Sur un champ `date`, chaque valeur est une période, comme dans `term`. Les *terms lookup* sont ❌ |
+| `range` | 🟡 | `gte`, `gt`, `lte`, `lt`, `boost`, sur `keyword` / numérique / `date` / `boolean`. Sur un champ `date`, les bornes acceptent le **date math** (`now`, `now-1d/d`, `2026-03-15\|\|+1M`) et sont **arrondies selon leur côté** — voir [la section dédiée](#date-math-et-arrondi-des-bornes). `format` (lecture des bornes) ✅. Sur un champ `text` : ❌. `time_zone`, `relation` : ❌ |
 | `bool` | 🟡 | `must`, `should`, `filter`, `must_not`, `boost`, et `minimum_should_match` **sous forme entière** (les pourcentages et expressions sont ❌). `filter` ne contribue pas au score. Un `bool` qui n'a que des `must_not` matche tous les autres documents, comme chez ES |
 | `query_string`, `simple_query_string`, `function_score`, `boosting`, `intervals`, `terms_set`, `script`… | ❌ | `parsing_exception: unknown query [...]` |
 
@@ -414,6 +414,37 @@ acceptés partout ; `pretty` est implémenté (indentation de la réponse).
 
 **Tout paramètre de query string non reconnu est refusé** avec
 `request [...] contains unrecognized parameter: [...]`, comme chez ES.
+
+### Date math et arrondi des bornes
+
+Une borne de date d'une requête n'est pas une date : c'est une expression que le
+serveur résout, et qu'il **arrondit selon le côté de la borne**. Les deux moitiés
+comptent autant l'une que l'autre — la première parce que sans elle un filtre
+`{"range": {"fin": {"lt": "now"}}}` échoue en 400, la seconde parce que sans elle
+il rend *moins de documents* qu'ES sans que rien ne le signale.
+
+Tout ce qui suit est mesuré contre un ES 8.15.0
+([`tests/compat/diff_datemath.py`](../tests/compat/diff_datemath.py),
+**276/276 bornes identiques**, messages d'erreur compris).
+
+| Forme | État | Détail |
+|---|---|---|
+| `now` | ✅ | résolu **une fois par recherche**, comme ES sur son nœud coordinateur : deux bornes de la même requête parlent du même instant |
+| `now±<n><unité>` | ✅ | unités `y`, `M`, `w`, `d`, `h` et `H`, `m`, `s`. `+1M` sur le 31 janvier donne le 28 février (le jour est ramené au dernier du mois), comme Java |
+| `now/<unité>` | ✅ | arrondi ; `/w` arrondit au **lundi**. Sous une borne haute (`gt`, `lte`), chaque `/` rend le **dernier instant** de la période (`2026-03-15\|\|/M` sous `lte` = 31 mars 23:59:59.999) |
+| `<ancre>\|\|<opérations>` | ✅ | l'ancre est lue avec le `format` du champ (ou celui de la requête), et toujours **arrondie vers le bas**, même sous un `lte` |
+| date partielle (`2026-03-15`, `2026-03`, `2026-03-15T12`) | ✅ | les champs d'heure absents sont remplis au maximum sous une borne haute (`lte: "2026-03-15"` couvre la journée), les champs de **date** absents restent au minimum (`2026-03` → le 1er, pas le 31) |
+| `format` sur `range` | ✅ | remplace le format du champ pour **lire les bornes** ; il ne s'applique pas à `now` |
+| dans `term`, `terms`, `match`, et sous un `nested` | ✅ | une date y désigne la période qu'elle couvre : `{"term": {"d": "2026-03-15"}}` rend toute la journée, comme chez ES |
+| à l'indexation | ❌ | `{"d": "now"}` est refusé, comme chez ES : le document porterait une date qui dépend de l'instant où il a été écrit |
+| `time_zone` | ❌ | il déplace les arrondis, donc les résultats ; l'accepter sans l'appliquer rendrait les mauvais documents en silence |
+
+Une expression malformée est refusée avec **le message d'ES, mot pour mot**
+(`unit [q] not supported for date math [-1q]`, `truncated date math [/]`,
+`operator not supported for date math [1d]`, `For input string: "…"`). ES les
+rend sous un `search_phase_execution_exception` « all shards failed » dont la
+`root_cause` porte ce texte ; ferrite rend l'erreur directement, sans cet
+empilement.
 
 ## Agrégations
 

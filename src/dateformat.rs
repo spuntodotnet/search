@@ -18,7 +18,7 @@
 
 use serde_json::Value;
 use time::format_description::{self, OwnedFormatItem};
-use time::{Date, OffsetDateTime, PrimitiveDateTime};
+use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time};
 
 use crate::error::{EsError, EsResult};
 
@@ -39,8 +39,19 @@ enum Forme {
         heure: bool,
         /// Et un decalage explicite ?
         offset: bool,
+        /// Ce qu'il reste de la periode que le motif ne sait pas exprimer, en
+        /// millisecondes — voir [`DateFormat::lit_avec_residu`].
+        residu: i64,
     },
 }
+
+/// Le residu d'une date qui s'arrete a la seconde, a la minute, a l'heure, au
+/// jour : ce qu'il faut ajouter pour obtenir le **dernier** instant couvert.
+const RESIDU_MS: i64 = 0;
+const RESIDU_SECONDE: i64 = 999;
+const RESIDU_MINUTE: i64 = 59_999;
+const RESIDU_HEURE: i64 = 3_599_999;
+const RESIDU_JOUR: i64 = 86_399_999;
 
 #[derive(Debug, Clone)]
 pub struct DateFormat {
@@ -81,6 +92,23 @@ impl DateFormat {
 
     /// Lit une valeur JSON en millisecondes depuis l'epoch.
     pub fn lit(&self, champ: &str, v: &Value) -> EsResult<i64> {
+        self.lit_champ(champ, v).map(|(ms, _)| ms)
+    }
+
+    /// Comme [`DateFormat::lit`], plus le **residu** de la valeur lue.
+    ///
+    /// Une date est un instant, mais une date ecrite couvre souvent une periode :
+    /// `2026-03-15` designe une journee entiere. ES le sait, et une borne haute
+    /// (`lte`, `gt`) prend le **dernier** instant de cette periode — sinon
+    /// `lte: "2026-03-15"` perdrait tout ce qui s'est passe apres minuit
+    /// (mesure contre ES 8.15). Le residu est cette largeur, en millisecondes :
+    /// les champs d'heure absents remplis au maximum, les champs de date absents
+    /// laisses au minimum (`2026-03` -> le 1er a 23:59:59.999, pas le 31).
+    pub fn lit_avec_residu(&self, v: &Value) -> EsResult<(i64, i64)> {
+        self.lit_champ("", v)
+    }
+
+    fn lit_champ(&self, champ: &str, v: &Value) -> EsResult<(i64, i64)> {
         match v {
             // Un nombre n'est un timestamp que si le format le prevoit. Avec
             // `format: "yyyy-MM-dd"`, ES refuse `1614852000000` — l'accepter
@@ -91,8 +119,12 @@ impl DateFormat {
                 })?;
                 for forme in &self.formes {
                     match forme {
-                        Forme::EpochSecond => return Ok((brut * 1000.0) as i64),
-                        Forme::EpochMillis | Forme::DateOptionalTime => return Ok(brut as i64),
+                        Forme::EpochSecond => {
+                            return Ok(((brut * 1000.0) as i64, RESIDU_SECONDE));
+                        }
+                        Forme::EpochMillis | Forme::DateOptionalTime => {
+                            return Ok((brut as i64, RESIDU_MS));
+                        }
                         Forme::Motif { .. } => continue,
                     }
                 }
@@ -105,8 +137,8 @@ impl DateFormat {
             Value::String(s) => {
                 let s = s.trim();
                 for forme in &self.formes {
-                    if let Some(ms) = forme.lit(s) {
-                        return Ok(ms);
+                    if let Some(lu) = forme.lit(s) {
+                        return Ok(lu);
                     }
                 }
                 Err(EsError::mapper_parsing(format!(
@@ -154,30 +186,33 @@ impl Forme {
         traduis(motif, nom)
     }
 
-    fn lit(&self, s: &str) -> Option<i64> {
+    /// La date lue, et le residu de sa periode (voir
+    /// [`DateFormat::lit_avec_residu`]).
+    fn lit(&self, s: &str) -> Option<(i64, i64)> {
         match self {
-            Self::EpochMillis => s.parse::<i64>().ok(),
-            Self::EpochSecond => s.parse::<i64>().ok().map(|n| n * 1000),
+            Self::EpochMillis => s.parse::<i64>().ok().map(|n| (n, RESIDU_MS)),
+            Self::EpochSecond => s.parse::<i64>().ok().map(|n| (n * 1000, RESIDU_SECONDE)),
             Self::DateOptionalTime => lit_iso(s),
             Self::Motif {
                 items,
                 heure,
                 offset,
-                ..
+                residu,
             } => {
-                if *offset {
-                    return OffsetDateTime::parse(s, items)
+                let ms = if *offset {
+                    OffsetDateTime::parse(s, items)
                         .ok()
-                        .map(|dt| (dt.unix_timestamp_nanos() / 1_000_000) as i64);
-                }
-                if *heure {
-                    return PrimitiveDateTime::parse(s, items)
+                        .map(|dt| (dt.unix_timestamp_nanos() / 1_000_000) as i64)
+                } else if *heure {
+                    PrimitiveDateTime::parse(s, items)
                         .ok()
-                        .map(|dt| (dt.assume_utc().unix_timestamp_nanos() / 1_000_000) as i64);
-                }
-                Date::parse(s, items)
-                    .ok()
-                    .map(|d| d.midnight().assume_utc().unix_timestamp() * 1000)
+                        .map(|dt| (dt.assume_utc().unix_timestamp_nanos() / 1_000_000) as i64)
+                } else {
+                    Date::parse(s, items)
+                        .ok()
+                        .map(|d| d.midnight().assume_utc().unix_timestamp() * 1000)
+                };
+                ms.map(|ms| (ms, *residu))
             }
         }
     }
@@ -199,23 +234,121 @@ impl Forme {
 }
 
 /// ISO-8601 tolerant : c'est le `strict_date_optional_time` d'ES.
-fn lit_iso(s: &str) -> Option<i64> {
-    use time::format_description::well_known::Rfc3339;
-    if let Ok(dt) = OffsetDateTime::parse(s, &Rfc3339) {
-        return Some((dt.unix_timestamp_nanos() / 1_000_000) as i64);
+///
+/// Ecrit a la main plutot que delegue au crate `time`, parce qu'il faut savoir
+/// **jusqu'ou** la date etait precise : `2026-03-15T12` couvre une heure,
+/// `2026-03-15` une journee, et une borne haute prend le dernier instant de
+/// cette periode (voir [`DateFormat::lit_avec_residu`]). Un parseur qui rend un
+/// instant a perdu cette information.
+///
+/// Strict comme celui d'ES : chaque champ a sa largeur (`2026-3-5` est refuse).
+///
+/// Un entier en chaine (`"1614852000000"`) n'est **pas** de son ressort : c'est
+/// `epoch_millis`, une autre alternative du format par defaut. Les confondre
+/// ferait lire `"2026"` comme 2,026 secondes apres 1970 (mesure : ES y lit
+/// l'annee 2026).
+fn lit_iso(s: &str) -> Option<(i64, i64)> {
+    // Le decalage final, s'il y en a un. Le chercher apres le `T` seulement :
+    // les `-` d'une date ne sont pas des signes.
+    let (corps, decalage_min) = coupe_decalage(s)?;
+    let (date, heure) = match corps.split_once('T') {
+        Some((d, h)) if !h.is_empty() => (d, Some(h)),
+        Some(_) => return None,
+        None => (corps, None),
+    };
+
+    let mut champs = date.split('-');
+    let annee: i32 = nombre(champs.next()?, 4)?;
+    let mois: u8 = match champs.next() {
+        Some(m) => nombre(m, 2)?,
+        None => 1,
+    };
+    let jour: u8 = match champs.next() {
+        Some(j) => nombre(j, 2)?,
+        None => 1,
+    };
+    if champs.next().is_some() {
+        return None;
     }
-    let naive = time::macros::format_description!(
-        "[year]-[month]-[day]T[hour]:[minute]:[second][optional [.[subsecond]]]"
-    );
-    if let Ok(dt) = PrimitiveDateTime::parse(s, naive) {
-        return Some((dt.assume_utc().unix_timestamp_nanos() / 1_000_000) as i64);
+
+    let (mut h, mut min, mut sec, mut milli) = (0u8, 0u8, 0u8, 0u32);
+    let mut residu = RESIDU_JOUR;
+    if let Some(heure) = heure {
+        let mut champs = heure.split(':');
+        h = nombre(champs.next()?, 2)?;
+        residu = RESIDU_HEURE;
+        if let Some(m) = champs.next() {
+            min = nombre(m, 2)?;
+            residu = RESIDU_MINUTE;
+        }
+        if let Some(s) = champs.next() {
+            let (entier, fraction) = match s.split_once('.') {
+                Some((e, f)) => (e, Some(f)),
+                None => (s, None),
+            };
+            sec = nombre(entier, 2)?;
+            residu = RESIDU_SECONDE;
+            if let Some(f) = fraction {
+                if f.is_empty() || f.len() > 9 || !f.bytes().all(|b| b.is_ascii_digit()) {
+                    return None;
+                }
+                // Les chiffres au-dela de la milliseconde sont tronques, comme
+                // le fait tantivy, qui indexe les dates a la milliseconde.
+                let mut millis: u32 = 0;
+                for (i, c) in f.chars().take(3).enumerate() {
+                    millis += c.to_digit(10)? * 10u32.pow(2 - i as u32);
+                }
+                milli = millis;
+                residu = RESIDU_MS;
+            }
+        }
+        if champs.next().is_some() {
+            return None;
+        }
     }
-    let jour = time::macros::format_description!("[year]-[month]-[day]");
-    if let Ok(d) = Date::parse(s, jour) {
-        return Some(d.midnight().assume_utc().unix_timestamp() * 1000);
+
+    let date = Date::from_calendar_date(annee, Month::try_from(mois).ok()?, jour).ok()?;
+    let t = Time::from_hms_milli(h, min, sec, u16::try_from(milli).ok()?).ok()?;
+    let ms = (PrimitiveDateTime::new(date, t)
+        .assume_utc()
+        .unix_timestamp_nanos()
+        / 1_000_000) as i64
+        - i64::from(decalage_min) * 60_000;
+    Some((ms, residu))
+}
+
+/// Detache un `Z` ou un `+HH:mm` final, et rend le decalage en minutes.
+fn coupe_decalage(s: &str) -> Option<(&str, i32)> {
+    if let Some(corps) = s.strip_suffix('Z') {
+        return Some((corps, 0));
     }
-    // ES accepte aussi un entier en chaine sous `epoch_millis`.
-    s.parse::<i64>().ok()
+    // Une partie horaire ne contient ni `+` ni `-` : le premier des deux apres
+    // le `T` ouvre forcement le decalage.
+    let Some(pos_t) = s.find('T') else {
+        return Some((s, 0));
+    };
+    let Some(pos) = s[pos_t..].find(['+', '-']).map(|p| p + pos_t) else {
+        return Some((s, 0));
+    };
+    let signe = if s.as_bytes()[pos] == b'-' { -1 } else { 1 };
+    let brut = &s[pos + 1..];
+    let (hh, mm) = match brut.len() {
+        2 => (brut, "00"),
+        4 => (&brut[..2], &brut[2..]),
+        5 if brut.as_bytes()[2] == b':' => (&brut[..2], &brut[3..]),
+        _ => return None,
+    };
+    let h: i32 = nombre(hh, 2)?;
+    let m: i32 = nombre(mm, 2)?;
+    Some((&s[..pos], signe * (h * 60 + m)))
+}
+
+/// Un champ de date, de largeur imposee (le `strict_` d'ES) et sans signe.
+fn nombre<T: std::str::FromStr>(s: &str, largeur: usize) -> Option<T> {
+    if s.len() != largeur || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    s.parse().ok()
 }
 
 /// Traduit un motif Java vers la description du crate `time`.
@@ -226,6 +359,9 @@ fn traduis(motif: &str, nom_origine: &str) -> EsResult<Forme> {
     let mut sortie = String::new();
     let mut heure = false;
     let mut offset = false;
+    // La plus fine unite d'heure que le motif exprime : ce qu'il ne dit pas est
+    // le residu de la periode (`yyyy-MM-dd` couvre une journee).
+    let mut residu = RESIDU_JOUR;
     let octets: Vec<char> = motif.chars().collect();
     let mut i = 0;
     while i < octets.len() {
@@ -262,22 +398,32 @@ fn traduis(motif: &str, nom_origine: &str) -> EsResult<Forme> {
             "dd" => "[day]",
             "HH" => {
                 heure = true;
+                residu = residu.min(RESIDU_HEURE);
                 "[hour]"
             }
             "hh" => {
                 heure = true;
+                residu = residu.min(RESIDU_HEURE);
                 "[hour repr:12]"
             }
             "mm" => {
                 heure = true;
+                residu = residu.min(RESIDU_MINUTE);
                 "[minute]"
             }
             "ss" => {
                 heure = true;
+                residu = residu.min(RESIDU_SECONDE);
                 "[second]"
             }
-            "SSS" => "[subsecond digits:3]",
-            "S" => "[subsecond digits:1]",
+            "SSS" => {
+                residu = RESIDU_MS;
+                "[subsecond digits:3]"
+            }
+            "S" => {
+                residu = RESIDU_MS;
+                "[subsecond digits:1]"
+            }
             "a" => "[period]",
             "Z" | "ZZ" | "X" | "XX" | "XXX" => {
                 offset = true;
@@ -305,6 +451,7 @@ fn traduis(motif: &str, nom_origine: &str) -> EsResult<Forme> {
         items: vec![items],
         heure,
         offset,
+        residu,
     })
 }
 

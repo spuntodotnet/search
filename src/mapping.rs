@@ -999,6 +999,18 @@ impl Fields {
         self.formats.get(chemin)
     }
 
+    /// Le format de date d'un champ, ou celui d'ES par defaut.
+    ///
+    /// Une borne de requete a toujours besoin d'un format : c'est lui qui lit
+    /// l'ancre d'une expression `2026-03-15||+1d` et qui dit quelle periode
+    /// couvre une date partielle.
+    pub fn format_ou_defaut(&self, chemin: &str) -> &DateFormat {
+        match self.formats.get(chemin) {
+            Some(f) => f,
+            None => format_par_defaut(),
+        }
+    }
+
     /// La racine `nested` dont ce chemin depend, s'il y en a une.
     pub fn racine_nested(&self, chemin: &str) -> Option<&str> {
         self.nested
@@ -1252,44 +1264,19 @@ pub fn coerce_avec(
     }
 }
 
-/// `strict_date_optional_time || epoch_millis`, le format par defaut d'ES.
-/// La lecture d'une date sans `format` declare : celui d'ES par defaut.
-fn parse_date(field: &str, v: &Value) -> EsResult<i64> {
-    use time::format_description::well_known::Rfc3339;
-    use time::macros::format_description;
-    use time::{Date, OffsetDateTime, PrimitiveDateTime};
+/// `strict_date_optional_time||epoch_millis`, le format par defaut d'ES.
+///
+/// Un champ `date` sans `format` declare est lu par ce format-la, et par le
+/// meme code que les autres : il y a eu deux lecteurs ISO dans ce fichier et
+/// dans [`crate::dateformat`], et deux lecteurs finissent toujours par diverger
+/// — celui-ci n'acceptait ni `2026-03` ni `2026-03-15T12`, qu'ES accepte.
+pub fn format_par_defaut() -> &'static DateFormat {
+    static DEFAUT: std::sync::LazyLock<DateFormat> = std::sync::LazyLock::new(DateFormat::default);
+    &DEFAUT
+}
 
-    match v {
-        Value::Number(n) => n.as_i64().ok_or_else(|| {
-            EsError::mapper_parsing(format!("[{field}] : date epoch_millis {n} invalide"))
-        }),
-        Value::String(s) => {
-            let s = s.trim();
-            if let Ok(dt) = OffsetDateTime::parse(s, &Rfc3339) {
-                return Ok((dt.unix_timestamp_nanos() / 1_000_000) as i64);
-            }
-            let naive = format_description!(
-                "[year]-[month]-[day]T[hour]:[minute]:[second][optional [.[subsecond]]]"
-            );
-            if let Ok(dt) = PrimitiveDateTime::parse(s, naive) {
-                return Ok((dt.assume_utc().unix_timestamp_nanos() / 1_000_000) as i64);
-            }
-            let day = format_description!("[year]-[month]-[day]");
-            if let Ok(d) = Date::parse(s, day) {
-                return Ok(d.midnight().assume_utc().unix_timestamp() * 1000);
-            }
-            if let Ok(ms) = s.parse::<i64>() {
-                return Ok(ms);
-            }
-            Err(EsError::mapper_parsing(format!(
-                "failed to parse date field [{field}] with value [{s}] : formats acceptes = \
-                 strict_date_optional_time, epoch_millis"
-            )))
-        }
-        _ => Err(EsError::mapper_parsing(format!(
-            "failed to parse date field [{field}] : valeur {v} invalide"
-        ))),
-    }
+fn parse_date(field: &str, v: &Value) -> EsResult<i64> {
+    format_par_defaut().lit(field, v)
 }
 
 #[cfg(test)]

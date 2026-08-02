@@ -750,6 +750,81 @@ def format_de_date(es):
 
 
 @scenario
+def date_math(es):
+    """Une borne de date est une **expression** resolue par le serveur (`now`,
+    `now-1d/d`, `2026-03-15||+1M`), et son arrondi depend du cote de la borne.
+
+    C'est ce que fait le filtre « en retard » de n'importe quel tableau de bord
+    (`{"range": {"fin": {"lt": "now"}}}`), et c'est aussi ce qui distingue
+    `lte: "2026-03-15"` (toute la journee) de `lt: "2026-03-15"` (jusqu'a
+    minuit)."""
+    import datetime
+
+    def iso(delta):
+        t = datetime.datetime.now(datetime.timezone.utc) + delta
+        return t.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+    es.options(ignore_status=404).indices.delete(index="dm")
+    es.indices.create(index="dm", mappings={"properties": {
+        "fin": {"type": "date"},
+        "ref": {"type": "keyword"},
+    }})
+    es.bulk(operations=[
+        {"index": {"_index": "dm", "_id": "hier"}},
+        {"fin": iso(datetime.timedelta(days=-1)), "ref": "hier"},
+        {"index": {"_index": "dm", "_id": "demain"}},
+        {"fin": iso(datetime.timedelta(days=1)), "ref": "demain"},
+        {"index": {"_index": "dm", "_id": "minuit"}},
+        {"fin": "2026-03-15T00:00:00.000Z", "ref": "minuit"},
+        {"index": {"_index": "dm", "_id": "midi"}},
+        {"fin": "2026-03-15T12:00:00.000Z", "ref": "midi"},
+        {"index": {"_index": "dm", "_id": "veille"}},
+        {"fin": "2026-03-14T23:59:59.999Z", "ref": "veille"},
+    ], refresh=True)
+
+    def hits(query):
+        return sorted(h["_id"] for h in es.search(index="dm", query=query)["hits"]["hits"])
+
+    # Le filtre KPI : ce qui est deja passe.
+    assert hits({"range": {"fin": {"lt": "now"}}}) == ["hier", "midi", "minuit", "veille"]
+    assert hits({"range": {"fin": {"gt": "now"}}}) == ["demain"]
+    assert hits({"range": {"fin": {"gte": "now-2d", "lt": "now"}}}) == ["hier"]
+    # Les operations et l'arrondi.
+    assert hits({"range": {"fin": {"gte": "now/d", "lt": "now/d+1d"}}}) == []
+    assert hits({"range": {"fin": {"gte": "now-2d", "lte": "now+2d"}}}) == ["demain", "hier"]
+    # Une ancre explicite suivie d'operations.
+    assert hits({"range": {"fin": {"gte": "2026-03-15||/d",
+                                   "lte": "2026-03-15||/d"}}}) == ["midi", "minuit"]
+    assert hits({"range": {"fin": {"lt": "2026-03-14||+1d"}}}) == ["veille"]
+    # L'arrondi selon la borne, sans date math : `lte` couvre la journee.
+    assert hits({"range": {"fin": {"lte": "2026-03-15"}}}) == ["midi", "minuit", "veille"]
+    assert hits({"range": {"fin": {"lt": "2026-03-15"}}}) == ["veille"]
+    # Hors d'un `range`, une date designe la periode qu'elle couvre.
+    assert hits({"term": {"fin": "2026-03-15"}}) == ["midi", "minuit"]
+    assert hits({"term": {"fin": "2026-03-15T12:00:00.000Z"}}) == ["midi"]
+    # Le `format` de la requete remplace celui du champ pour lire les bornes.
+    assert hits({"range": {"fin": {"lte": "15/03/2026",
+                                   "format": "dd/MM/yyyy"}}}) == ["midi", "minuit", "veille"]
+    # Une expression malformee est refusee avec le message d'ES, jamais prise
+    # pour une date litterale. (ES rend ce meme texte dans `root_cause[0]`,
+    # sous un `search_phase_execution_exception` que ferrite n'empile pas.)
+    refused(lambda: es.search(index="dm", query={"range": {"fin": {"lt": "now-1q"}}}),
+            contains="unit [q] not supported for date math")
+    refused(lambda: es.search(index="dm", query={"range": {"fin": {"lt": "now/"}}}),
+            contains="truncated date math")
+    refused(lambda: es.search(index="dm", query={"range": {"fin": {"lt": "NOW"}}}),
+            contains="failed to parse date field [NOW]")
+    # `time_zone` n'est pas supporte : il change l'arrondi, donc les resultats.
+    refused(lambda: es.search(index="dm", query={"range": {"fin": {"lt": "now/d",
+                                                                   "time_zone": "+02:00"}}}),
+            contains="time_zone")
+    # A l'indexation, `now` reste une date invalide — comme chez ES.
+    refused(lambda: es.index(index="dm", id="x", document={"fin": "now", "ref": "x"}),
+            contains="failed to parse date field")
+    es.indices.delete(index="dm")
+
+
+@scenario
 def routes_sans_index(es):
     """`_refresh`, `_mapping`, `_search` et `_count` sans index portent sur
     tous, comme chez ES."""
