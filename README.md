@@ -14,9 +14,9 @@ répondre à des requêtes `bool` + `terms` + un tri.
 
 |  | Elasticsearch | ferrite |
 |---|---|---|
-| Image | ~1,3 Go | **7,9 Mo** (`scratch`) |
-| RSS au repos | > 1 Go | **3,4 Mo** |
-| Démarrage | 30-60 s | **215 ms** (`docker run` → premier `GET /` servi) |
+| Image | ~1,3 Go | **8,2 Mo** (`scratch`) |
+| RSS au repos | > 1 Go | **3,6 Mo** |
+| Démarrage | 30-60 s | **225 ms** (`docker run` → premier `GET /` servi) |
 | Runtime | JVM + tuning heap | un binaire statique |
 | Latence de recherche (médiane / p95) | 4,90 / 7,00 ms | **1,41 / 1,98 ms** |
 | Débit (8 requêtes en vol) | 779 req/s | **1 172 req/s** |
@@ -111,9 +111,9 @@ conditions.
 
 | | Elasticsearch 8.15.0 | ferrite 0.3.0 |
 |---|---|---|
-| Image | 638 Mo | **7,9 Mo** |
-| Mémoire au repos | 1,02 Gio | **3,4 Mo** (RSS) |
-| Démarrage (`docker run` → premier `GET /` servi) | 22,9 s | **215 ms** (l'essentiel est la création du conteneur par Docker) |
+| Image | 638 Mo | **8,2 Mo** |
+| Mémoire au repos | 1,02 Gio | **3,6 Mo** (RSS) |
+| Démarrage (`docker run` → premier `GET /` servi) | 22,9 s | **225 ms** (l'essentiel est la création du conteneur par Docker) |
 
 L'image finale est un `scratch` qui ne contient que le binaire statique.
 
