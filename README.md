@@ -55,9 +55,9 @@ réel est la **couche de compatibilité** au-dessus.
 - **Mappings** : types de base, multi-fields (`.keyword`), analyzers
   déclaratifs, `_source`, mapping dynamique.
 - **Recherche** : le noyau du Query DSL (`bool`, `match`, `match_phrase`,
-  `match_phrase_prefix`, `term(s)`, `range`, `exists`, `prefix`, `wildcard`,
-  `regexp`, `nested`…), `sort`, `from`/`size`, `scroll` (donc `helpers.scan`),
-  filtrage de `_source`.
+  `match_phrase_prefix`, `term(s)`, `range` avec le **date math** (`now`),
+  `exists`, `prefix`, `wildcard`, `regexp`, `nested`…), `sort`, `from`/`size`,
+  `scroll` (donc `helpers.scan`), filtrage de `_source`.
 - **Agrégations** : métriques + `terms` / `date_histogram` / `range` /
   `histogram` / `filter`, avec sous-agrégations.
 - **Mono-nœud assumé** : les routes de cluster (`_cluster/health`, `_cat/*`,
@@ -155,6 +155,13 @@ La recherche porte sur **une expression d'index**, comme chez ES :
 rétention par index quotidien s'écrit `DELETE /logs-2026.07.*` — refusée par
 défaut, comme sur un ES 8, tant que `action.destructive_requires_name` n'a pas
 été basculé.
+
+Les **bornes de date** d'une requête sont des expressions, comme chez ES :
+`{"range": {"fin": {"lt": "now"}}}` — le filtre « en retard » de n'importe quel
+tableau de bord — est résolu côté serveur, `now-1d/d` et `2026-03-15||+1M` aussi.
+Et une borne est arrondie **du côté où elle est** : `lte: "2026-03-15"` couvre la
+journée entière, `lt: "2026-03-15"` s'arrête à minuit. 276 bornes mesurées
+identiques à ES 8.15 (`tests/compat/diff_datemath.py`).
 
 L'**export d'un index** marche avec le code que tout le monde écrit :
 `helpers.scan` du client officiel, donc `?scroll=1m` et `/_search/scroll`. Le

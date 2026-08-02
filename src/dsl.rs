@@ -16,6 +16,8 @@ use tantivy::schema::IndexRecordOption;
 use tantivy::{Index, Searcher, Term};
 
 use crate::analysis::Analyzer;
+use crate::dateformat::DateFormat;
+use crate::datemath::{self, Arrondi};
 use crate::dismax::DisMaxQuery;
 use crate::error::{EsError, EsResult};
 use crate::mapping::{self, FieldKind, Fields, MappedField, TypedValue};
@@ -51,6 +53,13 @@ pub struct QueryCtx<'a> {
     /// entier ferait perdre les documents que les *autres* clauses d'un `bool`
     /// auraient trouves.
     pub champs_ailleurs: &'a std::collections::BTreeSet<String>,
+    /// L'instant que `now` designe dans cette requete.
+    ///
+    /// Pris **une fois** par recherche, comme ES le fait sur son noeud
+    /// coordinateur : sans ca, deux bornes de la meme requete (`gte: "now/d"`,
+    /// `lt: "now"`) ne parleraient pas du meme instant, et un document indexe
+    /// entre les deux pourrait tomber hors de l'intervalle qui le contient.
+    pub maintenant: i64,
     /// `index.query.parse.allow_unmapped_fields` de l'index interroge.
     ///
     /// A `true` (le defaut d'ES), une clause sur un champ que le mapping ne
@@ -71,10 +80,18 @@ impl<'a> QueryCtx<'a> {
             nested_ouvert: std::cell::RefCell::new(Vec::new()),
             searcher,
             champs_ailleurs: &AUCUN_AUTRE_CHAMP,
+            maintenant: crate::datemath::maintenant(),
             // Le defaut d'Elasticsearch. Le reglage de l'index le resserre, via
             // [`QueryCtx::selon_le_mapping`].
             champs_inconnus_toleres: true,
         }
+    }
+
+    /// L'instant que `now` designe : le meme pour tous les index d'une meme
+    /// recherche (voir [`QueryCtx::maintenant`]).
+    pub fn avec_maintenant(mut self, maintenant: i64) -> Self {
+        self.maintenant = maintenant;
+        self
     }
 
     /// Les champs qu'un autre index de la meme recherche connait.
@@ -286,6 +303,7 @@ fn field_match(
         }
         // Sur un champ non analyse, `match` se comporte comme `term` (ES fait
         // pareil : l'analyzer d'un keyword est `keyword`).
+        FieldKind::Date => periode_date(field_name, field, value, ctx)?,
         _ => {
             let tv = mapping::coerce_avec(field_name, ty, value, ctx.fields.format_de(field_name))?;
             Box::new(TermQuery::new(tv.to_term(field), IndexRecordOption::Basic))
@@ -731,6 +749,12 @@ fn term_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         v => (v.clone(), None),
     };
 
+    if ty.kind() == FieldKind::Date {
+        return boost(
+            periode_date(field_name, field, &value, ctx)?,
+            boost_value.as_ref(),
+        );
+    }
     let tv = mapping::coerce_avec(field_name, ty, &value, ctx.fields.format_de(field_name))?;
     let record = if ty.kind() == FieldKind::Text {
         IndexRecordOption::WithFreqs
@@ -741,6 +765,27 @@ fn term_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         Box::new(TermQuery::new(tv.to_term(field), record)),
         boost_value.as_ref(),
     )
+}
+
+/// Ce qu'une valeur de date designe hors d'un `range` (`term`, `terms`,
+/// `match`) : la **periode** qu'elle couvre, pas un instant.
+///
+/// `{"term": {"d": "2026-03-15"}}` rend chez ES tous les documents du 15 mars,
+/// pas seulement ceux de minuit pile (mesure). Le date math y est accepte de la
+/// meme facon : `{"term": {"d": "now/d"}}`, c'est « aujourd'hui ».
+fn periode_date(
+    field_name: &str,
+    field: tantivy::schema::Field,
+    v: &Value,
+    ctx: &QueryCtx,
+) -> EsResult<Box<dyn Query>> {
+    let format = ctx.fields.format_ou_defaut(field_name);
+    let bas = datemath::borne(v, format, ctx.maintenant, Arrondi::Bas)?;
+    let haut = datemath::borne(v, format, ctx.maintenant, Arrondi::Haut)?;
+    Ok(Box::new(RangeQuery::new(
+        Bound::Included(TypedValue::Date(bas).to_term(field)),
+        Bound::Included(TypedValue::Date(haut).to_term(field)),
+    )))
 }
 
 fn terms_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
@@ -771,6 +816,9 @@ fn terms_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     let clauses: Vec<(Occur, Box<dyn Query>)> = list
         .iter()
         .map(|v| {
+            if ty.kind() == FieldKind::Date {
+                return Ok((Occur::Should, periode_date(field_name, field, v, ctx)?));
+            }
             let tv = mapping::coerce_avec(field_name, ty, v, ctx.fields.format_de(field_name))?;
             let q: Box<dyn Query> =
                 Box::new(TermQuery::new(tv.to_term(field), IndexRecordOption::Basic));
@@ -786,12 +834,37 @@ fn terms_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     boost(inner, boost_value.as_ref())
 }
 
+/// Le `format` d'une clause, s'il en fournit un : chez ES il remplace celui du
+/// mapping pour **lire les bornes** d'une requete, et lui seul (une reponse
+/// reste rendue au format du champ).
+///
+/// Il ne s'applique pas a `now` : `now` n'est pas une date ecrite.
+fn format_de_requete<'a>(
+    v: Option<&Value>,
+    champ: &str,
+    ctx: &'a QueryCtx,
+) -> EsResult<std::borrow::Cow<'a, DateFormat>> {
+    match v {
+        None | Some(Value::Null) => Ok(std::borrow::Cow::Borrowed(
+            ctx.fields.format_ou_defaut(champ),
+        )),
+        Some(Value::String(s)) => Ok(std::borrow::Cow::Owned(DateFormat::parse(s)?)),
+        Some(autre) => Err(EsError::illegal_argument(format!(
+            "[format] sur [{champ}] : une chaine est attendue, pas {autre}"
+        ))),
+    }
+}
+
 fn range_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     let obj = as_object(body, "range")?;
     let (field_name, spec) = single_key(obj, "range")?;
     let MappedField { field, ty, .. } = ctx.field(field_name, "range")?;
     let spec = as_object(spec, "range")?;
-    expect_only(spec, &["gte", "gt", "lte", "lt", "boost"], "range")?;
+    expect_only(
+        spec,
+        &["gte", "gt", "lte", "lt", "boost", "format"],
+        "range",
+    )?;
 
     if ty.kind() == FieldKind::Text {
         return Err(EsError::unsupported(format!(
@@ -799,10 +872,24 @@ fn range_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
              utilise un champ [keyword]"
         )));
     }
+    let format = format_de_requete(spec.get("format"), field_name, ctx)?;
 
     let to_term = |key: &str| -> EsResult<Option<tantivy::Term>> {
         match spec.get(key) {
             None | Some(Value::Null) => Ok(None),
+            // Sur une date, la borne n'est pas une valeur mais une
+            // **expression** (`now-1d/d`), et une date moins precise que la
+            // milliseconde couvre une periode : `gte` et `lt` en prennent le
+            // premier instant, `gt` et `lte` le dernier (voir
+            // [`crate::datemath`], tout y est mesure contre ES).
+            Some(v) if ty.kind() == FieldKind::Date => {
+                let arrondi = match key {
+                    "gte" | "lt" => Arrondi::Bas,
+                    _ => Arrondi::Haut,
+                };
+                let ms = datemath::borne(v, format.as_ref(), ctx.maintenant, arrondi)?;
+                Ok(Some(TypedValue::Date(ms).to_term(field)))
+            }
             Some(v) => Ok(Some(
                 mapping::coerce_avec(field_name, ty, v, ctx.fields.format_de(field_name))?
                     .to_term(field),
@@ -1388,6 +1475,16 @@ fn clause_nested(v: &Value, ctx: &QueryCtx, racine: &str) -> EsResult<Clause> {
                 v => v.clone(),
             };
             let mf = champ_nested(ctx, champ, racine, name)?;
+            // Sur une date, `term` designe une periode, pas un instant : c'est
+            // un intervalle, comme a la racine (voir [`periode_date`]).
+            if mf.ty.kind() == FieldKind::Date {
+                let (bas, haut) = periode_nested(ctx, champ, &valeur)?;
+                return Ok(Clause::Champ {
+                    chemin: champ.to_string(),
+                    champ: mf,
+                    predicat: Predicat::Intervalle(bas, haut),
+                });
+            }
             Ok(Clause::Champ {
                 chemin: champ.to_string(),
                 champ: mf,
@@ -1401,6 +1498,22 @@ fn clause_nested(v: &Value, ctx: &QueryCtx, racine: &str) -> EsResult<Clause> {
                 .as_array()
                 .ok_or_else(|| EsError::parsing("[terms] attend un tableau"))?;
             let mf = champ_nested(ctx, champ, racine, "terms")?;
+            // Chaque date est une periode : l'ensemble devient une union
+            // d'intervalles, pas un ensemble de valeurs.
+            if mf.ty.kind() == FieldKind::Date {
+                let clauses = liste
+                    .iter()
+                    .map(|v| {
+                        let (bas, haut) = periode_nested(ctx, champ, v)?;
+                        Ok(Clause::Champ {
+                            chemin: champ.to_string(),
+                            champ: mf,
+                            predicat: Predicat::Intervalle(bas, haut),
+                        })
+                    })
+                    .collect::<EsResult<Vec<_>>>()?;
+                return Ok(Clause::Ou(clauses, 1));
+            }
             let vals = liste
                 .iter()
                 .map(|v| valeur_de(ctx, champ, mf, v))
@@ -1419,6 +1532,20 @@ fn clause_nested(v: &Value, ctx: &QueryCtx, racine: &str) -> EsResult<Clause> {
             let borne = |cle: &str| -> EsResult<Option<Valeur>> {
                 match spec.get(cle) {
                     None | Some(Value::Null) => Ok(None),
+                    Some(v) if mf.ty.kind() == FieldKind::Date => {
+                        let sens = if cle == "gte" || cle == "lt" {
+                            Arrondi::Bas
+                        } else {
+                            Arrondi::Haut
+                        };
+                        let format = ctx.fields.format_ou_defaut(champ);
+                        Ok(Some(Valeur::I64(datemath::borne(
+                            v,
+                            format,
+                            ctx.maintenant,
+                            sens,
+                        )?)))
+                    }
                     Some(v) => Ok(Some(valeur_de(ctx, champ, mf, v)?)),
                 }
             };
@@ -1568,6 +1695,22 @@ fn champ_nested(ctx: &QueryCtx, champ: &str, racine: &str, clause: &str) -> EsRe
         )));
     }
     Ok(mf)
+}
+
+/// La periode qu'une date designe, en bornes de [`Valeur`] (voir
+/// [`periode_date`], sa jumelle a la racine).
+fn periode_nested(
+    ctx: &QueryCtx,
+    champ: &str,
+    v: &Value,
+) -> EsResult<(Bound<Valeur>, Bound<Valeur>)> {
+    let format = ctx.fields.format_ou_defaut(champ);
+    let bas = datemath::borne(v, format, ctx.maintenant, Arrondi::Bas)?;
+    let haut = datemath::borne(v, format, ctx.maintenant, Arrondi::Haut)?;
+    Ok((
+        Bound::Included(Valeur::I64(bas)),
+        Bound::Included(Valeur::I64(haut)),
+    ))
 }
 
 /// Convertit une valeur JSON au type du champ, puis en [`Valeur`] comparable.

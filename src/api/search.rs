@@ -162,6 +162,10 @@ pub async fn search(
     // Les index qui n'ont pas pu repondre, au format `_shards.failures` d'ES.
     let mut echecs: Vec<Value> = Vec::new();
     let nb_index = generations.len();
+    // `now` est resolu une fois pour toute la recherche, comme ES le fait sur
+    // son noeud coordinateur : les index vises doivent tous repondre a la meme
+    // question.
+    let maintenant = crate::datemath::maintenant();
 
     for (nom, uuid, gen) in generations {
         let sort = match param_sort.as_ref() {
@@ -190,6 +194,7 @@ pub async fn search(
         let searcher = gen.searcher();
         let ctx = QueryCtx::new(&gen.fields, &gen.index, &searcher)
             .avec_champs_ailleurs(&champs_connus)
+            .avec_maintenant(maintenant)
             .selon_le_mapping(&gen.mapping);
         let query = match body_obj.get("query") {
             Some(v) => build_query(v, &ctx),
@@ -547,12 +552,14 @@ pub async fn count(
     let champs_connus = union_des_champs(&generations);
     let mut prets: Vec<(std::sync::Arc<Generation>, Box<dyn tantivy::query::Query>)> = Vec::new();
     let mut ignore: Option<EsError> = None;
+    let maintenant = crate::datemath::maintenant();
     for (_, _, gen) in &generations {
         let gen = gen.clone();
         let query = {
             let searcher = gen.searcher();
             let ctx = QueryCtx::new(&gen.fields, &gen.index, &searcher)
                 .avec_champs_ailleurs(&champs_connus)
+                .avec_maintenant(maintenant)
                 .selon_le_mapping(&gen.mapping);
             match body_obj.get("query") {
                 Some(v) => build_query(v, &ctx),
