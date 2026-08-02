@@ -8,22 +8,23 @@ Une commande répond aux deux, sur vos serveurs, sans installer de client :
 python3 tests/compat/bench_vs_es.py http://ferrite:9200 http://mon-es:9200
 ```
 
-Mesuré contre l'instance 7.10.2 de référence (600 documents, 138 requêtes) :
+Mesuré contre l'instance 7.10.2 de référence (600 documents, 168 requêtes) :
 
 ```
                                   ferrite  Elasticsearch
-indexation (s)                       0.03           0.26   x9.6
-latence mediane (ms)                 1.41           4.90   x3.5
-latence p95 (ms)                     1.98           7.00   x3.5
-debit (8 en vol, req/s)              1172            779    x1.5
+indexation (s)                       0.04           0.28   x6.3
+latence mediane (ms)                 1.54           5.58   x3.6
+latence p95 (ms)                     4.33           9.69   x2.2
+debit (8 en vol, req/s)               581            372    x1.6
 
-resultats : 137/138 requetes identiques (memes documents, meme ordre)
+resultats : 166/168 requetes identiques (memes documents, meme ordre)
             1 memes documents, ordre different  (des ex aequo — voir plus bas)
+            1 ecart reel                        (`\w` — voir plus bas)
 ```
 
 Donc, sur ce que ferrite sait faire : **les résultats sont les mêmes, et c'est
 3 à 4 fois plus rapide**. Les mêmes chiffres contre un ES 8.15.0 donnent le
-même verdict (x3,8 en latence, x2 en débit).
+même verdict (x4,0 en latence, x1,8 en débit).
 
 **Et les documents imbriqués passent désormais** : `object`, `nested` et `join`
 sont supportés (voir [`compat.md`](compat.md#nested)), chacun vérifié contre un
@@ -114,6 +115,7 @@ fonctionnera aussi bien contre un Elasticsearch 8 que contre ferrite.
 | lecture de `hit["_type"]`, `réponse["_type"]` | champ **absent** | champ **absent** | le champ n'existe plus ; supprimer ces lectures |
 | `es.search(doc_type="_doc", …)` → `/{index}/_doc/_search` | ⚠️ voir ci-dessous | ⚠️ voir ci-dessous | retirer `doc_type` des appels de recherche |
 | `es.count(doc_type="_doc", …)` → `/{index}/_doc/_count` | ⚠️ idem | ⚠️ idem | idem |
+| `regexp` avec `\d`, `\w`, `\s` (et leurs négations) | classe prédéfinie (**mesuré** : `\w+` rend 600 documents) | classe prédéfinie | en 7.10 (Lucene 8) le backslash n'échappait que le caractère suivant : `\w` y valait la lettre `w`, et rendait 0 document. Un motif écrit pour une 7.x **change de sens** en migrant — à grepper avant |
 
 ### ⚠️ Le piège à connaître avant de brancher quoi que ce soit
 
@@ -209,25 +211,35 @@ corpus des deux côtés, et `--sans-ecriture` la désactive. Il est donc utilisa
 tel quel contre une instance qui compte : ce qu'il rapporte, ce sont **vos**
 index, pas ceux d'un exemple.
 
-## Les requêtes : identiques (137/138)
+## Les requêtes : identiques (166/168), à un `\w` près
 
 C'est le résultat qui rassure, et c'est le cœur du sujet.
 
-Même corpus de 600 documents des deux côtés, les **138 requêtes** de
-`diff_relevance.py` (`match`, `multi_match`, `match_phrase`, `bool`, `dis_max`,
-`term(s)`, `range`, `exists`, `prefix`, `fuzzy`, `constant_score`, tris)
-rejouées sur les deux serveurs :
+Même corpus de 600 documents des deux côtés, les **168 requêtes** de
+`diff_relevance.py` (`match`, `multi_match`, `match_phrase`,
+`match_phrase_prefix`, `bool`, `dis_max`, `term(s)`, `range`, `exists`,
+`prefix`, `wildcard`, `regexp`, `fuzzy`, `constant_score`, tris) rejouées sur
+les deux serveurs :
 
 ```
-  137/138 requetes : memes documents, meme ordre qu'ES 7.10.2
-  1/138 : ordre permute uniquement entre ex aequo d'ES 7
-  0/138 refusees par ferrite, 0/138 ecarts reels
+  166/168 requetes : memes documents, meme ordre qu'ES 7.10.2
+  1/168 : ordre permute uniquement entre ex aequo d'ES 7
+  0/168 refusees par ferrite, 1/168 ecarts reels
+  [ecart] regexp [\w+] — total ferrite=600 / ES 7=0
 ```
 
-**Zéro écart réel.** Le seul déplacement porte sur deux documents auxquels
-Elasticsearch attribue lui-même le même score. C'est exactement le résultat que
-donne la même batterie contre un ES **8.15.0** : la fidélité de ferrite ne se
-dégrade pas quand la référence est une 7.10.2.
+**Un seul écart, et c'est une différence de version, pas un manque de ferrite.**
+`\w` (« un caractère de mot ») n'existe pas dans la syntaxe d'expression
+régulière de Lucene 8 : ES 7.10.2 y lit le backslash comme un échappement, donc
+la lettre `w`, et ne trouve rien. Lucene 9 — celui d'ES 8.x, la version que
+ferrite annonce — en a fait une classe prédéfinie. ferrite répond donc comme
+l'ES 8.15.0 qu'il prétend être, et un motif `\d` ou `\w` écrit pour une 7.x
+change de sens en migrant : c'est un coût de migration 7→8, à grepper avant.
+
+Le seul autre déplacement porte sur deux documents auxquels Elasticsearch
+attribue lui-même le même score. C'est le même résultat que la même batterie
+contre un ES **8.15.0** (167/168, zéro écart réel) : la fidélité de ferrite ne
+se dégrade pas quand la référence est une 7.10.2.
 
 ## Les documents : seulement s'ils sont plats
 

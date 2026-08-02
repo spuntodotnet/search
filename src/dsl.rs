@@ -159,10 +159,12 @@ fn build_une(v: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         "match" => match_query(body, ctx),
         "multi_match" => multi_match_query(body, ctx),
         "match_phrase" => match_phrase_query(body, ctx),
+        "match_phrase_prefix" => match_phrase_prefix_query(body, ctx),
         "exists" => exists_query(body, ctx),
         "ids" => ids_query(body, ctx),
         "prefix" => prefix_query(body, ctx),
         "wildcard" => wildcard_query(body, ctx),
+        "regexp" => regexp_query(body, ctx),
         "fuzzy" => fuzzy_query(body, ctx),
         "constant_score" => constant_score_query(body, ctx),
         "dis_max" => dis_max_query(body, ctx),
@@ -176,8 +178,9 @@ fn build_une(v: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         "parent_id" => parent_id_query(body, ctx),
         other => Err(EsError::parsing(format!(
             "unknown query [{other}] : ferrite supporte [match_all, match_none, match, \
-             multi_match, match_phrase, exists, ids, prefix, wildcard, fuzzy, term, terms, \
-             range, bool, constant_score, dis_max, nested, has_child, has_parent, parent_id]"
+             multi_match, match_phrase, match_phrase_prefix, exists, ids, prefix, wildcard, \
+             regexp, fuzzy, term, terms, range, bool, constant_score, dis_max, nested, \
+             has_child, has_parent, parent_id]"
         ))),
     }
 }
@@ -282,19 +285,19 @@ fn query_text(field_name: &str, value: &Value, clause: &str) -> EsResult<String>
 /// `deux un trois` matche a `slop=2` chez Elasticsearch, et seulement a
 /// `slop=3` chez tantivy. Accepter le parametre rendrait donc **moins de
 /// documents** qu'ES sur la meme requete, sans que rien ne le signale.
-fn read_slop(value: Option<&Value>) -> EsResult<u32> {
+fn read_slop(value: Option<&Value>, clause: &str) -> EsResult<u32> {
     let Some(value) = value else { return Ok(0) };
     let n = value
         .as_u64()
         .and_then(|n| u32::try_from(n).ok())
         .ok_or_else(|| EsError::illegal_argument("[slop] : entier positif attendu"))?;
     if n > 0 {
-        return Err(EsError::unsupported(
-            "ferrite ne supporte pas [slop] dans [match_phrase] : tantivy et Lucene comptent les \
+        return Err(EsError::unsupported(format!(
+            "ferrite ne supporte pas [slop] dans [{clause}] : tantivy et Lucene comptent les \
              deplacements differemment au-dela de deux termes, et le resultat differerait de \
              celui d'Elasticsearch sans que rien ne le signale (voir docs/compat.md). La phrase \
-             exacte (slop absent ou 0) est supportee.",
-        ));
+             exacte (slop absent ou 0) est supportee."
+        )));
     }
     Ok(0)
 }
@@ -432,7 +435,7 @@ fn match_phrase_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> 
             })?;
             (
                 q.clone(),
-                read_slop(o.get("slop"))?,
+                read_slop(o.get("slop"), "match_phrase")?,
                 o.get("boost").cloned(),
             )
         }
@@ -474,6 +477,187 @@ fn match_phrase_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> 
         }
     };
     boost(inner, boost_value.as_ref())
+}
+
+/// `match_phrase_prefix` : les termes dans cet ordre, le dernier n'etant qu'un
+/// debut de mot.
+///
+/// C'est la clause d'une barre de recherche qui complete pendant la frappe :
+/// `"reduction de bru"` doit trouver `reduction de bruit` avant meme que le mot
+/// soit fini.
+fn match_phrase_prefix_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
+    let obj = as_object(body, "match_phrase_prefix")?;
+    let (field_name, spec) = single_key(obj, "match_phrase_prefix")?;
+    let MappedField {
+        field,
+        ty,
+        analyzer,
+        ..
+    } = ctx.field(field_name, "match_phrase_prefix")?;
+
+    let (value, max_expansions, boost_value) = match spec {
+        Value::Object(o) => {
+            expect_only(
+                o,
+                &["query", "slop", "boost", "max_expansions", "analyzer"],
+                "match_phrase_prefix",
+            )?;
+            if o.contains_key("analyzer") {
+                return Err(EsError::unsupported(
+                    "ferrite ne supporte pas [analyzer] dans [match_phrase_prefix] : la chaine \
+                     est analysee avec l'analyzer du champ",
+                ));
+            }
+            read_slop(o.get("slop"), "match_phrase_prefix")?;
+            let q = o.get("query").ok_or_else(|| {
+                EsError::parsing(format!(
+                    "[match_phrase_prefix] sur [{field_name}] : cle [query] manquante"
+                ))
+            })?;
+            let max = match o.get("max_expansions") {
+                None => 50,
+                Some(v) => v
+                    .as_u64()
+                    .and_then(|n| u32::try_from(n).ok())
+                    .filter(|n| *n > 0)
+                    .ok_or_else(|| {
+                        EsError::illegal_argument("[max_expansions] : entier positif attendu")
+                    })?,
+            };
+            (q.clone(), max, o.get("boost").cloned())
+        }
+        v => (v.clone(), 50, None),
+    };
+
+    let inner: Box<dyn Query> = match ty.kind() {
+        FieldKind::Text => {
+            let tokens = ctx.analyze(
+                &query_text(field_name, &value, "match_phrase_prefix")?,
+                analyzer,
+            )?;
+            match tokens.len() {
+                0 => Box::new(EmptyQuery),
+                // Un seul terme : il n'y a plus de phrase, et Lucene reecrit
+                // alors la clause en **disjonction des termes developpes**,
+                // chacun score comme un `term` ordinaire. Mesure faite contre
+                // ES 8.15 : `match_phrase_prefix [audit]` y rend exactement le
+                // score de `match [audit]`. tantivy, lui, donnerait un score
+                // constant a ce cas — memes documents, mais dans un ordre qui
+                // n'est plus celui d'un moteur de recherche.
+                1 => {
+                    let clauses: Vec<(Occur, Box<dyn Query>)> =
+                        termes_avec_prefixe(ctx, field, &tokens[0].1, max_expansions)?
+                            .into_iter()
+                            .map(|t| {
+                                let q: Box<dyn Query> = Box::new(TermQuery::new(
+                                    tantivy::Term::from_field_text(field, &t),
+                                    IndexRecordOption::WithFreqs,
+                                ));
+                                (Occur::Should, q)
+                            })
+                            .collect();
+                    if clauses.is_empty() {
+                        Box::new(EmptyQuery)
+                    } else {
+                        Box::new(BooleanQuery::new(clauses))
+                    }
+                }
+                // Plusieurs termes : une phrase dont le dernier mot est
+                // developpe. `PhrasePrefixQuery` de tantivy sait la resoudre,
+                // mais **ne la score pas** : son poids BM25 ignore le terme
+                // developpe, et rend un score constant (mesure : 1.0 partout,
+                // la ou ES classe). Un moteur de recherche qui ne classe pas
+                // la clause d'une barre de recherche ne sert a rien, donc le
+                // developpement est fait ici : une phrase par terme trouve,
+                // scorees comme des phrases — ce qui redonne exactement le
+                // score d'ES quand le prefixe ne developpe qu'un terme.
+                _ => {
+                    let (dernier_pos, dernier) = tokens.last().expect("au moins deux termes");
+                    let debut: Vec<(usize, tantivy::Term)> = tokens[..tokens.len() - 1]
+                        .iter()
+                        .map(|(pos, t)| (*pos, tantivy::Term::from_field_text(field, t)))
+                        .collect();
+                    let clauses: Vec<(Occur, Box<dyn Query>)> =
+                        termes_avec_prefixe(ctx, field, dernier, max_expansions)?
+                            .into_iter()
+                            .map(|t| {
+                                let mut termes = debut.clone();
+                                termes.push((
+                                    *dernier_pos,
+                                    tantivy::Term::from_field_text(field, &t),
+                                ));
+                                let q: Box<dyn Query> =
+                                    Box::new(PhraseQuery::new_with_offset(termes));
+                                (Occur::Should, q)
+                            })
+                            .collect();
+                    if clauses.is_empty() {
+                        Box::new(EmptyQuery)
+                    } else {
+                        Box::new(BooleanQuery::new(clauses))
+                    }
+                }
+            }
+        }
+        // Une phrase suppose des positions, qu'un champ non analyse n'a pas.
+        // ES refuse ici, avec ce message : ferrite le reprend mot pour mot,
+        // pour qu'un client ne voie pas la difference.
+        _ => {
+            return Err(EsError::new(
+                axum::http::StatusCode::BAD_REQUEST,
+                "query_shard_exception",
+                format!(
+                    "failed to create query: Can only use phrase prefix queries on text fields - \
+                     not on [{field_name}] which is of type [{}]",
+                    ty.name()
+                ),
+            ))
+        }
+    };
+    boost(inner, boost_value.as_ref())
+}
+
+/// Les termes indexes qui commencent par ce prefixe, dans l'ordre du
+/// dictionnaire et bornes par `max`.
+///
+/// C'est le developpement que fait Lucene avant de scorer : le prendre au
+/// dictionnaire de termes, segment par segment, coute le parcours d'une plage
+/// et rien de plus.
+fn termes_avec_prefixe(
+    ctx: &QueryCtx,
+    field: tantivy::schema::Field,
+    prefixe: &str,
+    max: u32,
+) -> EsResult<Vec<String>> {
+    let mut trouves = std::collections::BTreeSet::new();
+    for segment in ctx.searcher.segment_readers() {
+        let inverse = segment
+            .inverted_index(field)
+            .map_err(|e| EsError::internal(format!("index inverse illisible : {e}")))?;
+        let mut flux = inverse
+            .terms()
+            .range()
+            .ge(prefixe.as_bytes())
+            .into_stream()
+            .map_err(|e| EsError::internal(format!("dictionnaire de termes illisible : {e}")))?;
+        let mut pris = 0u32;
+        while flux.advance() {
+            let Ok(terme) = std::str::from_utf8(flux.key()) else {
+                continue;
+            };
+            if !terme.starts_with(prefixe) {
+                break;
+            }
+            trouves.insert(terme.to_string());
+            pris += 1;
+            // Chaque segment est trie : ses `max` premiers termes suffisent a
+            // contenir les `max` premiers de leur union.
+            if pris >= max {
+                break;
+            }
+        }
+    }
+    Ok(trouves.into_iter().take(max as usize).collect())
 }
 
 /// `exists` : les documents qui ont au moins une valeur pour ce champ.
@@ -809,9 +993,13 @@ fn prefix_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     let obj = as_object(body, "prefix")?;
     let (champ, valeur, boost_value) =
         valeur_et_boost(obj, "prefix", &["case_insensitive", "rewrite"])?;
-    refuser_insensible(obj, "prefix")?;
+    refuser_rewrite(obj, "prefix")?;
+    let insensible = lire_insensible(obj, "prefix")?;
     let field = champ_de_motif(ctx, champ, "prefix")?;
-    let motif = format!("{}.*", regex_echappe(&valeur));
+    let motif = format!(
+        "(?s){}(?s:.*)",
+        crate::regexp::litteral(&valeur, insensible)
+    );
     let q = RegexQuery::from_pattern(&motif, field)
         .map_err(|e| EsError::illegal_argument(format!("[prefix] : {e}")))?;
     boost(
@@ -820,7 +1008,8 @@ fn prefix_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     )
 }
 
-/// `wildcard` : `*` remplace n'importe quelle suite, `?` un seul caractere.
+/// `wildcard` : `*` remplace n'importe quelle suite, `?` un seul caractere, et
+/// `\` echappe le caractere suivant.
 fn wildcard_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     let obj = as_object(body, "wildcard")?;
     let (champ, valeur, boost_value) = valeur_et_boost(
@@ -828,19 +1017,73 @@ fn wildcard_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         "wildcard",
         &["case_insensitive", "rewrite", "wildcard"],
     )?;
-    refuser_insensible(obj, "wildcard")?;
+    refuser_rewrite(obj, "wildcard")?;
+    let insensible = lire_insensible(obj, "wildcard")?;
     let field = champ_de_motif(ctx, champ, "wildcard")?;
 
-    let mut motif = String::new();
-    for c in valeur.chars() {
-        match c {
-            '*' => motif.push_str(".*"),
-            '?' => motif.push('.'),
-            autre => motif.push_str(&regex_echappe(&autre.to_string())),
-        }
-    }
+    let motif = format!("(?s){}", crate::regexp::joker(&valeur, insensible));
     let q = RegexQuery::from_pattern(&motif, field)
         .map_err(|e| EsError::illegal_argument(format!("[wildcard] : {e}")))?;
+    boost(
+        Box::new(ConstScoreQuery::new(Box::new(q), 1.0)),
+        boost_value.as_ref(),
+    )
+}
+
+/// `regexp` : le motif est confronte aux **termes** indexes, ancre des deux
+/// cotes.
+///
+/// C'est la clause qu'un service ecrit pour ses filtres « contient / commence
+/// par / finit par », souvent insensibles a la casse. La syntaxe est celle de
+/// Lucene, pas celle du crate `regex` : elle est traduite par [`crate::regexp`],
+/// qui refuse ce qu'un automate ne sait pas construire plutot que de le prendre
+/// pour un litteral (voir le module pour le detail des divergences).
+fn regexp_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
+    let obj = as_object(body, "regexp")?;
+    let (champ, valeur, boost_value) = valeur_et_boost(
+        obj,
+        "regexp",
+        &[
+            "case_insensitive",
+            "flags",
+            "rewrite",
+            "max_determinized_states",
+        ],
+    )?;
+    refuser_rewrite(obj, "regexp")?;
+    let insensible = lire_insensible(obj, "regexp")?;
+    let spec = single_key(obj, "regexp")?.1;
+    let params = spec.as_object();
+
+    // `max_determinized_states` borne la taille de l'automate chez Lucene.
+    // tantivy a sa propre borne, mais elle ne compte pas la meme chose :
+    // l'accepter en le laissant sans effet serait promettre une protection qui
+    // n'existe pas.
+    if params.is_some_and(|o| o.contains_key("max_determinized_states")) {
+        return Err(EsError::unsupported(
+            "ferrite ne supporte pas [max_determinized_states] dans [regexp] : tantivy borne \
+             l'automate autrement, et accepter le parametre sans l'appliquer promettrait une \
+             protection qui n'existe pas",
+        ));
+    }
+    let flags = match params.and_then(|o| o.get("flags")) {
+        None => crate::regexp::Flags::default(),
+        Some(Value::String(s)) => crate::regexp::Flags::lire(s)?,
+        Some(_) => {
+            return Err(EsError::illegal_argument(
+                "[regexp] : [flags] attend une chaine (par exemple \"COMPLEMENT|INTERVAL\")",
+            ))
+        }
+    };
+
+    let field = champ_de_motif(ctx, champ, "regexp")?;
+    let motif = crate::regexp::vers_regex(&valeur, flags, insensible)?;
+    let q = RegexQuery::from_pattern(&motif, field).map_err(|e| {
+        EsError::illegal_argument(format!(
+            "[regexp] : motif [{valeur}] refuse par l'automate : {e}"
+        ))
+    })?;
+    // ES rend un score constant sur une requete multi-termes reecrite.
     boost(
         Box::new(ConstScoreQuery::new(Box::new(q), 1.0)),
         boost_value.as_ref(),
@@ -908,34 +1151,30 @@ fn fuzziness_auto(terme: &str) -> u8 {
     }
 }
 
-fn refuser_insensible(obj: &Map<String, Value>, clause: &str) -> EsResult<()> {
+/// `case_insensitive` : le repliement de casse **ASCII** d'Elasticsearch.
+fn lire_insensible(obj: &Map<String, Value>, clause: &str) -> EsResult<bool> {
     let (_, spec) = single_key(obj, clause)?;
-    if spec
-        .as_object()
-        .is_some_and(|o| o.contains_key("case_insensitive"))
-    {
-        return Err(EsError::unsupported(format!(
-            "ferrite ne supporte pas [case_insensitive] dans [{clause}]"
-        )));
+    match spec.as_object().and_then(|o| o.get("case_insensitive")) {
+        None => Ok(false),
+        Some(Value::Bool(b)) => Ok(*b),
+        Some(_) => Err(EsError::illegal_argument(format!(
+            "[{clause}] : [case_insensitive] attend un booleen"
+        ))),
     }
+}
+
+/// `rewrite` choisit la strategie de reecriture d'une requete multi-termes chez
+/// Lucene, et avec elle le mode de scoring. ferrite n'en a qu'une (score
+/// constant) : l'accepter sans effet changerait les scores en silence.
+fn refuser_rewrite(obj: &Map<String, Value>, clause: &str) -> EsResult<()> {
+    let (_, spec) = single_key(obj, clause)?;
     if spec.as_object().is_some_and(|o| o.contains_key("rewrite")) {
         return Err(EsError::unsupported(format!(
-            "ferrite ne supporte pas [rewrite] dans [{clause}]"
+            "ferrite ne supporte pas [rewrite] dans [{clause}] : il ne reecrit une requete \
+             multi-termes que d'une facon, a score constant"
         )));
     }
     Ok(())
-}
-
-/// Echappe ce qui a un sens dans une expression reguliere.
-fn regex_echappe(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        if "\\.+*?()|[]{}^$".contains(c) {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out
 }
 
 /// `constant_score` : le filtre decide, le score est fixe.

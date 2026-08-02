@@ -39,6 +39,7 @@ Toutes depuis la **racine** du repo.
 | `python3 tests/compat/diff_relevance.py` | Compare les **résultats et leur ordre** à ceux d'un vrai ES, sur 600 documents |
 | `python3 tests/compat/diff_aggs.py` | Compare les **agrégations** à celles d'un vrai ES, champ par champ |
 | `python3 tests/compat/diff_analyzers.py` | Compare les **analyzers** à ceux d'un vrai ES, token par token |
+| `python3 tests/compat/diff_motifs.py` | Compare les **motifs** — `regexp`, `wildcard`, `prefix`, `match_phrase_prefix` — sur un corpus fait pour les pièges de la syntaxe de Lucene (casse, accents, caractères spéciaux) |
 | `python3 tests/compat/diff_multi_index.py [ferrite] [es]` | Compare la **résolution des noms d'index** — listes, motifs, `_all`, exclusions, alias — et la **fusion multi-index** des résultats et des agrégations. `--calibrer [es_a] [es_b]` fait tourner la même batterie contre deux Elasticsearch, parce qu'une batterie qui modifie l'état du serveur ne peut pas s'étalonner contre un seul |
 | `python3 tests/compat/probe_es7.py [URL]` | Exerce le serveur avec le client officiel **7.x** (code écrit pour un ES 7) : ce qu'un projet resté en 7.10.2 peut brancher tel quel — voir [`compat-es7.md`](compat-es7.md) |
 | `python3 tests/compat/diff_es7.py [ferrite] [es7]` | Rejoue les **index, documents et requêtes** d'une instance **7.x** sur ferrite : ce qui s'héberge, ce qui se transfère, ce qui rend les mêmes résultats. Ne lit que l'instance (`--sans-ecriture` pour n'y rien écrire du tout ; `--inventaire URL` pour se contenter de lister les types de champ qu'elle utilise) |
@@ -78,6 +79,7 @@ Deux comparateurs, qui ne cherchent pas la même chose :
 | `tests/compat/diff_relevance.py` | la **pertinence** — même corpus de 600 documents des deux côtés, ~115 requêtes générées, et pour chacune : même total, mêmes documents, **même ordre** |
 | `tests/compat/diff_aggs.py` | les **agrégations** — 34 requêtes, comparaison du JSON champ par champ, clés comprises |
 | `tests/compat/diff_analyzers.py` | les **analyzers** — chaque analyzer intégré confronté à son homonyme d'ES sur 28 textes, token par token |
+| `tests/compat/diff_motifs.py` | les **motifs** — 101 motifs posés aux deux serveurs sur un corpus construit pour eux : la syntaxe de `regexp` est celle de Lucene, pas celle du moteur qui l'exécute, et les deux divergent là où personne ne regarde (`\d`, `^`, `@`, `case_insensitive`) |
 | `tests/compat/diff_multi_index.py` | les **expressions d'index** et le multi-index — `es.search(index=["a","b"])`, `logs-*`, `_all`, exclusions, alias, `is_write_index`, purge en `DELETE /logs-2026.07.*` : total, ordre des `(_index, _id)`, `_shards`, agrégations fusionnées, statut et type d'erreur |
 | `tests/compat/probe_es7.py` | ce qu'un **client 7.x** obtient — le même fichier se lance contre ferrite, contre un `elasticsearch:7.10.2` et contre un `elasticsearch:8.15.0`, ce qui sépare « ferrite est incomplet » de « la 8 a supprimé ça » |
 | `tests/compat/bench_vs_es.py` | le **prix** de ces résultats — indexation, latence médiane et p95, débit à 8 requêtes en vol, mesurés sur les deux serveurs avec la même batterie |

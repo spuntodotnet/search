@@ -343,6 +343,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tantivy",
+ "tantivy-fst",
  "time",
  "tokio",
  "unicode-segmentation",
