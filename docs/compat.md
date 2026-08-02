@@ -338,18 +338,20 @@ suppression de données.
 | `match` | 🟡 | `query`, `operator` (`or` / `and`), `boost`. Sur un champ non analysé, se comporte comme `term`. `fuzziness`, `minimum_should_match`, `analyzer`, `zero_terms_query`, `prefix_length` : ❌ |
 | `multi_match` | 🟡 | `query`, `fields` (**obligatoire**, avec la pondération `champ^3`), `type` `best_fields` (défaut) et `most_fields`, `operator`, `tie_breaker`, `boost`. `cross_fields`, `phrase`, `phrase_prefix`, `bool_prefix` et les motifs de champ (`tit*`) : ❌ |
 | `match_phrase` | 🟡 | les termes dans l'ordre, adjacents. `boost`. `slop` : ❌ (voir les divergences) |
+| `match_phrase_prefix` | 🟡 | les termes dans l'ordre, le dernier n'étant qu'un début de mot. `query`, `max_expansions` (défaut 50, comme ES), `boost`. Sur un champ `keyword`, refusée avec le message d'ES (« Can only use phrase prefix queries on text fields »). `slop`, `analyzer`, `zero_terms_query` : ❌ |
 | `exists` | ✅ | sur tous les types, y compris `text`. Un champ absent, `null`, ou un tableau vide compte comme absent, comme chez ES |
 | `term` | ✅ | forme courte et forme `{value, boost}`. `case_insensitive` ❌ |
 | `ids` | ✅ | `values`, `boost` |
-| `prefix` | 🟡 | non analysée comme chez ES. `case_insensitive` / `rewrite` : ❌ |
-| `wildcard` | 🟡 | `*` et `?`. `case_insensitive` / `rewrite` : ❌ |
+| `prefix` | 🟡 | non analysée comme chez ES. `case_insensitive` (repliement ASCII, comme ES). `rewrite` : ❌ |
+| `wildcard` | 🟡 | `*`, `?`, et `\` qui échappe le caractère suivant. `case_insensitive`. `rewrite` : ❌ |
+| `regexp` | 🟡 | syntaxe **Lucene**, ancrée des deux côtés (voir les divergences). `value`, `flags`, `case_insensitive`, `boost`. Opérateurs `~` (complément), `&` (intersection), `<n-m>` (intervalle) et `#` (langage vide) : ❌, explicitement. `rewrite` / `max_determinized_states` : ❌ |
 | `fuzzy` | 🟡 | `fuzziness` (`AUTO` ou distance entière), `transpositions`, `boost`. `prefix_length` / `max_expansions` / `rewrite` : ❌ |
 | `constant_score` | ✅ | `filter`, `boost` |
 | `dis_max` | ✅ | `queries`, `tie_breaker`, `boost` — voir [`src/dismax.rs`](../src/dismax.rs) |
 | `terms` | 🟡 | liste de valeurs, score constant comme chez ES. Les *terms lookup* sont ❌ |
 | `range` | 🟡 | `gte`, `gt`, `lte`, `lt`, `boost`, sur `keyword` / numérique / `date` / `boolean`. Sur un champ `text` : ❌. `format`, `time_zone`, `relation` : ❌ |
 | `bool` | 🟡 | `must`, `should`, `filter`, `must_not`, `boost`, et `minimum_should_match` **sous forme entière** (les pourcentages et expressions sont ❌). `filter` ne contribue pas au score. Un `bool` qui n'a que des `must_not` matche tous les autres documents, comme chez ES |
-| `query_string`, `simple_query_string`, `regexp`, `nested`, `function_score`, `boosting`, `match_phrase_prefix`, `terms_set`, `script`… | ❌ | `parsing_exception: unknown query [...]` |
+| `query_string`, `simple_query_string`, `function_score`, `boosting`, `intervals`, `terms_set`, `script`… | ❌ | `parsing_exception: unknown query [...]` |
 
 ### Corps et paramètres de `_search`
 
@@ -495,7 +497,27 @@ pas pour être découverts en production.
    même requête, sans que rien ne le signale. La phrase exacte (`slop` absent ou
    `0`) est vérifiée identique à ES.
 
-3. **`best_fields` n'utilise pas le `DisjunctionMaxQuery` de tantivy.**
+3. **Quatre opérateurs de `regexp` sont refusés, pas ignorés.** La syntaxe de
+   `regexp` est celle de Lucene ; ferrite la traduit vers celle du crate `regex`
+   ([`src/regexp.rs`](../src/regexp.rs)), qui construit un automate incapable de
+   complément (`~`), d'intersection (`&`), d'intervalle numérique (`<1-100>`) et
+   de langage vide (`#`). Les prendre pour des caractères littéraux — ce que
+   ferait un passage direct du motif — rendrait **d'autres documents** qu'ES sans
+   que rien ne le signale : ils sont donc refusés explicitement. Le paramètre
+   `flags` d'ES les désactive (`"flags": "NONE"`), et ils redeviennent alors des
+   caractères littéraux des deux côtés.
+
+   Tout le reste est traduit et **mesuré identique** à ES 8.15 par
+   [`tests/compat/diff_motifs.py`](../tests/compat/diff_motifs.py), y compris ce
+   que la ressemblance des deux syntaxes fait rater : le motif est ancré des deux
+   côtés (`^` et `$` ne sont pas des ancres mais des caractères), `@` veut dire
+   « n'importe quelle chaîne » (le piège du motif d'adresse e-mail), `"abc"` est
+   une chaîne littérale, les classes prédéfinies (`\d`, `\w`, `\s`…) sont
+   **ASCII** là où celles de `regex` sont Unicode, et `case_insensitive` ne
+   replie que l'ASCII, et seulement les caractères isolés — `[d-e]` n'y matche
+   pas `D`, chez ES comme ici.
+
+4. **`best_fields` n'utilise pas le `DisjunctionMaxQuery` de tantivy.**
    Dans tantivy 0.26 cette requête rend la **somme** des scores et non leur
    maximum, quel que soit le `tie_breaker` (le combineur est court-circuité par
    une spécialisation interne, et le constructeur correct est `pub(crate)`).
@@ -505,28 +527,28 @@ pas pour être découverts en production.
    recalculant que le score. Un test unitaire verrouille « max, pas somme » pour
    qu'une montée de version ne puisse pas dégrader la pertinence en silence.
 
-4. **Analyse du texte.** Les champs `text` utilisent le tokenizer `default` de
+5. **Analyse du texte.** Les champs `text` utilisent le tokenizer `default` de
    tantivy (découpe sur les non-alphanumériques + minuscules + rejet des tokens
    de plus de 40 caractères). Très proche de l'analyzer `standard` d'ES pour du
    texte latin, mais ce n'est pas la même implémentation : sur de l'unicode
    exotique ou du CJK, les tokens peuvent différer.
 
-5. **Les scores ne sont pas identiques à ceux d'ES.** Même formule (BM25), mais
+6. **Les scores ne sont pas identiques à ceux d'ES.** Même formule (BM25), mais
    statistiques d'index et normalisation de longueur différentes. L'*ordre* des
    résultats est comparé à celui d'ES par `tests/compat/diff_against_es.py` ;
    les valeurs absolues, non.
 
-6. **`_shards.total` vaut 1** (un shard, zéro réplique) là où un ES par défaut
+7. **`_shards.total` vaut 1** (un shard, zéro réplique) là où un ES par défaut
    annonce 2 dans les réponses d'écriture. En recherche multi-index, il vaut le
    **nombre d'index visés** : un index = un shard, et c'est ce que compte ES.
 
-7. **`_cluster/health` est toujours `green`.** C'est le comportement voulu pour
+8. **`_cluster/health` est toujours `green`.** C'est le comportement voulu pour
    un mono-nœud : il n'y a pas de réplique à assigner.
 
-8. **`wait_for` vaut `true` pour `refresh`.** Le commit est synchrone, il n'y a
+9. **`wait_for` vaut `true` pour `refresh`.** Le commit est synchrone, il n'y a
    rien à attendre.
 
-9. **Un sous-champ de `nested` interrogé depuis la racine est une erreur, pas 0
+10. **Un sous-champ de `nested` interrogé depuis la racine est une erreur, pas 0
    résultat.** Chez Elasticsearch, ces valeurs vivent dans des documents cachés :
    `{"term": {"lignes.ref": "vis"}}` hors d'une clause `nested` ne rend **rien**,
    en silence — un piège classique. ferrite les indexe sur le document parent, il

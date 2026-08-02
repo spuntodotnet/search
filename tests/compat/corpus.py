@@ -153,6 +153,20 @@ def requetes(docs):
     # pas de sens, la suite de compat verifie le refus.
     q.append(("match_phrase mot unique", {"match_phrase": {"corps": "ecran"}}, None))
 
+    # --- match_phrase_prefix : la barre de recherche pendant la frappe
+    for phrase in phrases[:8]:
+        # Le dernier mot ampute : c'est le cas d'usage, et c'est celui qui
+        # classe (le score d'un prefixe developpe n'est pas constant).
+        tronquee = phrase[:-2]
+        q.append((f"match_phrase_prefix [{tronquee}]",
+                  {"match_phrase_prefix": {"corps": tronquee}}, None))
+    for mot in mots[:6]:
+        q.append((f"match_phrase_prefix un terme [{mot[:4]}]",
+                  {"match_phrase_prefix": {"corps": mot[:4]}}, None))
+    q.append(("match_phrase_prefix max_expansions",
+              {"match_phrase_prefix": {"corps": {"query": "reduction de bru",
+                                                 "max_expansions": 3}}}, None))
+
     # --- motifs et identifiants
     for mot in mots[:6]:
         q.append((f"prefix corps [{mot[:4]}]", {"prefix": {"marque": mot[:2]}},
@@ -162,6 +176,19 @@ def requetes(docs):
                   [{"prix": "asc"}]))
         q.append((f"fuzzy [{marque}]", {"fuzzy": {"marque": marque[:-1] + "x"}},
                   [{"prix": "asc"}]))
+        # `regexp` : les filtres « contient / commence par / finit par » d'un
+        # service, insensibles a la casse comme on les ecrit en vrai.
+        q.append((f"regexp contient [{marque}]",
+                  {"regexp": {"marque": f".*{marque[1:3]}.*"}}, [{"prix": "asc"}]))
+        q.append((f"regexp insensible [{marque}]",
+                  {"regexp": {"marque": {"value": f".*{marque[1:3].upper()}.*",
+                                         "case_insensitive": True}}}, [{"prix": "asc"}]))
+    for motif in ("[A-Z][a-z]+", "S(ony|amsung)", ".*e[lr].*", "[A-Za-z]{4,6}",
+                  "\\w+", "A.*|B.*"):
+        q.append((f"regexp [{motif}]", {"regexp": {"marque": motif}}, [{"prix": "asc"}]))
+    q.append(("regexp categorie insensible",
+              {"regexp": {"categorie": {"value": "AUDI.", "case_insensitive": True}}},
+              [{"prix": "asc"}]))
     q.append(("ids", {"ids": {"values": ["1", "5", "9", "42"]}}, [{"prix": "asc"}]))
     q.append(("constant_score", {"constant_score": {
         "filter": {"term": {"categorie": "audio"}}, "boost": 3.0}}, None))

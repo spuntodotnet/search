@@ -1240,6 +1240,84 @@ def recherche_match_phrase(es):
 
 
 @scenario
+def recherche_match_phrase_prefix(es):
+    """La clause d'une barre de recherche qui complete pendant la frappe."""
+    # Le dernier mot n'est qu'un debut : la phrase doit quand meme matcher.
+    assert ids(es.search(index=INDEX, query={
+        "match_phrase_prefix": {"resume": "la presse paris"}})) == ["2"]
+    assert ids(es.search(index=INDEX, query={
+        "match_phrase_prefix": {"resume": "greve des min"}})) == ["3"]
+    # Un seul terme : c'est un prefixe sur le terme analyse.
+    assert ids(es.search(index=INDEX, query={
+        "match_phrase_prefix": {"resume": "parisien"}})) == ["2"]
+    # L'ordre compte, comme dans `match_phrase`.
+    assert ids(es.search(index=INDEX, query={
+        "match_phrase_prefix": {"resume": "parisienne pre"}})) == []
+    # Le prefixe vide ramene la phrase entiere.
+    assert ids(es.search(index=INDEX, query={
+        "match_phrase_prefix": {"resume": {"query": "la presse", "max_expansions": 5}}})) == ["2"]
+    # Sur un `keyword`, ES refuse — il n'y a pas de positions.
+    refused(lambda: es.search(index=INDEX, query={
+        "match_phrase_prefix": {"auteur": "Maup"}}),
+        contains="Can only use phrase prefix queries on text fields")
+    # Meme raison que pour `match_phrase` : `slop` est refuse.
+    refused(lambda: es.search(index=INDEX, query={
+        "match_phrase_prefix": {"resume": {"query": "la presse", "slop": 2}}}),
+        contains="slop")
+
+
+@scenario
+def recherche_regexp(es):
+    """`regexp` : la clause des filtres « contient / commence par / finit par ».
+
+    La syntaxe est celle de **Lucene**, pas celle du crate `regex` : ce
+    scenario exerce les endroits ou les deux divergent, chacun mesure contre un
+    vrai ES 8.15 (voir `tests/compat/diff_motifs.py`).
+    """
+    def refs(motif, **kw):
+        v = {"value": motif, **kw}
+        return sorted(ids(es.search(index=INDEX, size=50,
+                                    query={"regexp": {"auteur": v}})))
+
+    assert refs("Maupassant") == ["1", "2"]
+    # Le motif est ancre des deux cotes : « contient » s'ecrit `.*x.*`.
+    assert refs("passant") == []
+    assert refs(".*passant.*") == ["1", "2"]
+    assert refs("Z.*") == ["3"]
+    assert refs(".*ola") == ["3"]
+    assert refs("(Zola|Maupassant)") == ["1", "2", "3"]
+    assert refs("[MZ].*") == ["1", "2", "3"]
+    assert refs("Maup[a-z]{4}nt") == ["1", "2"]
+    # `case_insensitive` replie l'ASCII, comme chez ES.
+    assert refs("zola") == []
+    assert refs("zola", case_insensitive=True) == ["3"]
+    assert refs(".*OLA", case_insensitive=True) == ["3"]
+    # Les classes predefinies existent, sur l'alphabet ASCII.
+    assert refs("\\w+") == ["1", "2", "3"]
+    assert refs("\\d+") == []
+    # `^` et `$` ne sont pas des ancres chez Lucene : ce sont des caracteres.
+    assert refs("^Zola$") == []
+
+    # Ce que ferrite refuse, il le dit — plutot que de prendre l'operateur pour
+    # un caractere litteral et de rendre d'autres documents qu'ES.
+    for motif, mot in (("~Zola", "~"), ("Zola&Zola", "&"), ("<1-100>", "<n-m>")):
+        refused(lambda m=motif: es.search(index=INDEX,
+                                          query={"regexp": {"auteur": m}}), contains=mot)
+    # Desactives par `flags`, ils redeviennent des caracteres litteraux.
+    assert ids(es.search(index=INDEX, query={"regexp": {
+        "auteur": {"value": "Zola~", "flags": "NONE"}}})) == []
+    # Une lettre echappee qui n'est pas une classe predefinie est refusee,
+    # comme chez Lucene.
+    refused(lambda: es.search(index=INDEX, query={
+        "regexp": {"auteur": "Zol\\a"}}), contains="invalid character class")
+    refused(lambda: es.search(index=INDEX, query={
+        "regexp": {"auteur": {"value": "Zola", "rewrite": "constant_score"}}}),
+        contains="rewrite")
+    # Un motif malforme est refuse, pas silencieusement vide.
+    refused(lambda: es.search(index=INDEX, query={"regexp": {"auteur": "Zol("}}))
+
+
+@scenario
 def match_phrase_slop_refuse(es):
     """`slop` est refuse : tantivy et Lucene ne le comptent pas pareil au-dela
     de deux termes, et ferrite rendrait moins de documents qu'ES en silence."""
@@ -1459,8 +1537,6 @@ def clause_de_dsl_inconnue_refusee(es):
     refused(lambda: es.search(index=INDEX,
                               query={"clause_inexistante": {"titre": "x"}}),
             contains="clause_inexistante")
-    refused(lambda: es.search(index=INDEX, query={"regexp": {"auteur": "Mau.*"}}),
-            contains="regexp")
     refused(lambda: es.search(index=INDEX,
                               query={"query_string": {"query": "titre:bel"}}),
             contains="query_string")
@@ -1668,6 +1744,53 @@ def route_inconnue_refusee(es):
     # Un motif multi-index, lui, est resolu : il ne trouve rien, sans erreur.
     r = es.search(index="fantome_absolu_*", query={"match_all": {}})
     assert r["hits"]["total"]["value"] == 0
+
+
+@scenario
+def purge_totale_du_script_d_init(es):
+    """`DELETE /*` : ce que fait un script d'initialisation avant de repartir.
+
+    **Ce scenario doit rester le dernier** : il supprime tous les index du
+    serveur, y compris celui de la suite. Il est ici parce que c'est
+    exactement ce qu'un projet ecrit en tete de son script d'init, et que
+    l'interdiction par defaut d'ES 8 le casse tel quel : la seule preuve utile
+    est de le faire aboutir en basculant le reglage, pas de le contourner.
+    """
+    for nom in ("init_a", "init_b"):
+        es.options(ignore_status=404).indices.delete(index=nom)
+        es.indices.create(index=nom)
+
+    # Par defaut, ES 8 refuse — ferrite aussi, avec le meme message.
+    refused(lambda: es.indices.delete(index="*"),
+            contains="Wildcard expressions or all indices are not allowed")
+    refused(lambda: es.indices.delete(index="_all"),
+            contains="Wildcard expressions or all indices are not allowed")
+
+    # Le reglage se pose a plat ou en arborescence : ES accepte les deux.
+    resp = es.cluster.put_settings(persistent={"action": {"destructive_requires_name": False}})
+    assert resp["acknowledged"] is True
+    lu = es.cluster.get_settings()["persistent"]["action"]["destructive_requires_name"]
+    assert lu in ("false", False), lu
+
+    # Et le script d'init passe.
+    es.indices.delete(index="*")
+    assert es.indices.get(index="*") == {}, "il ne devait plus rester d'index"
+
+    # `transient` l'emporte sur `persistent`, comme chez ES.
+    es.cluster.put_settings(transient={"action.destructive_requires_name": True})
+    es.indices.create(index="init_c")
+    refused(lambda: es.indices.delete(index="init_*"),
+            contains="Wildcard expressions or all indices are not allowed")
+    es.cluster.put_settings(transient={"action.destructive_requires_name": None})
+    es.indices.delete(index="init_*")
+
+    # Remis dans l'etat par defaut, et un reglage inconnu reste refuse.
+    es.cluster.put_settings(persistent={"action.destructive_requires_name": None})
+    assert es.cluster.get_settings()["persistent"] == {}
+    refused(lambda: es.cluster.put_settings(persistent={"indices.recovery.max_bytes_per_sec": "50mb"}),
+            contains="not recognized")
+    refused(lambda: es.indices.delete(index="*"),
+            contains="Wildcard expressions or all indices are not allowed")
 
 
 # ---------------------------------------------------------------------------

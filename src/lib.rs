@@ -8,6 +8,9 @@
 //!   tantivy veut un schema fige), donc il vit seul.
 //! - [`dsl`] : la traduction Query DSL -> [`tantivy::query::Query`]. Ne connait
 //!   ni HTTP ni le stockage.
+//! - [`regexp`] : la syntaxe d'expression reguliere de Lucene, traduite vers
+//!   celle du crate `regex`. Elles se ressemblent assez pour qu'on croie pouvoir
+//!   passer le motif tel quel, et divergent sur des caracteres courants.
 //! - [`engine`] : le catalogue d'index, l'ecriture, la lecture, la persistance.
 //!   Ne connait pas HTTP.
 //! - [`alias`] et [`selection`] : les noms sous lesquels une requete designe des
@@ -28,6 +31,7 @@ pub mod engine;
 pub mod error;
 pub mod mapping;
 pub mod nested;
+pub mod regexp;
 pub mod search;
 pub mod selection;
 pub mod stemmer;

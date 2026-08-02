@@ -55,7 +55,8 @@ réel est la **couche de compatibilité** au-dessus.
 - **Mappings** : types de base, multi-fields (`.keyword`), analyzers
   déclaratifs, `_source`, mapping dynamique.
 - **Recherche** : le noyau du Query DSL (`bool`, `match`, `match_phrase`,
-  `term(s)`, `range`, `exists`, `prefix`, `nested`…), `sort`, `from`/`size`,
+  `match_phrase_prefix`, `term(s)`, `range`, `exists`, `prefix`, `wildcard`,
+  `regexp`, `nested`…), `sort`, `from`/`size`,
   `search_after`, `highlight`, filtrage de `_source`.
 - **Agrégations** : métriques + `terms` / `date_histogram` / `range` /
   `filters`, avec sous-agrégations.
@@ -121,12 +122,12 @@ L'image finale est un `scratch` qui ne contient que le binaire statique.
 
 **Ce qui marche** : un client Elasticsearch officiel non modifié crée un index
 avec un mapping explicite, indexe des documents via `_bulk`, et les retrouve via
-`_search` — `match`, `multi_match`, `match_phrase`, `term`, `terms`, `range`,
-`exists`, `ids`, `prefix`, `wildcard`, `fuzzy`, `bool`, `constant_score`,
-`dis_max`, `match_all` — avec scoring BM25, `from`/`size`, tri, filtrage de
+`_search` — `match`, `multi_match`, `match_phrase`, `match_phrase_prefix`,
+`term`, `terms`, `range`, `exists`, `ids`, `prefix`, `wildcard`, `regexp`,
+`fuzzy`, `bool`, `constant_score`, `dis_max`, `match_all` — avec scoring BM25, `from`/`size`, tri, filtrage de
 `_source`, et le format de réponse exact d'ES.
 
-Sur un corpus de 600 documents et 138 requêtes, ferrite et un vrai
+Sur un corpus de 600 documents et 168 requêtes, ferrite et un vrai
 Elasticsearch 8.15 renvoient **les mêmes documents dans le même ordre**
 (`tests/compat/diff_relevance.py`).
 

@@ -94,15 +94,16 @@ développement, pas de CI).
 
 | Commande | La question à laquelle elle répond |
 |---|---|
-| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**71/71**) |
-| `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (137/138, 0 écart réel) |
+| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**74/74**) |
+| `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (167/168, 0 écart réel) |
 | `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (39/40) |
 | `tests/compat/diff_aggs.py` | les mêmes agrégations ? (34/34) |
 | `tests/compat/diff_analyzers.py` | les mêmes tokens ? (7 analyzers, 210 textes, tous identiques) |
+| `tests/compat/diff_motifs.py` | les mêmes documents sur un **motif** — `regexp`, `wildcard`, `prefix`, `match_phrase_prefix` ? (101/101) |
 | `tests/compat/diff_multi_index.py` | `index=["a","b"]`, `logs-*`, les alias : **les mêmes index visés, fusionnés pareil** ? (86/87, 0 écart ; `--calibrer` : 87/87 contre deux ES) |
 | `tests/compat/releve_mots_vides.py` | quelle est **vraiment** la liste de mots vides d'un analyzer d'ES ? |
 | `tests/compat/conformance_es.py` | que dit la suite de tests **d'Elastic** ? (65 réussis, 324 refus explicites, 156 échecs / 643) |
-| `tests/compat/bench_vs_es.py` | mêmes résultats, **et à quel prix** ? (×3,5 en latence, ×9 en indexation) |
+| `tests/compat/bench_vs_es.py` | mêmes résultats, **et à quel prix** ? (×3,6 en latence, ×6 en indexation) |
 | `tests/compat/probe_es7.py` | un **client** 7.x peut-il se brancher ? |
 | `tests/compat/diff_es7.py` | une **instance** 7.x peut-elle être reprise ? `--inventaire` liste ses types de champ |
 
@@ -130,6 +131,16 @@ bouger**, pas après.
   (`settings.analysis`), eux, sont supportés : ils se composent de briques que
   ferrite reproduit à l'identique (`standard`, `lowercase`, `asciifolding`,
   `stop`).
+- **La syntaxe de `regexp` est traduite, jamais transmise telle quelle**
+  ([`src/regexp.rs`](src/regexp.rs)). Celle de Lucene et celle du crate `regex`
+  se ressemblent assez pour qu'on croie pouvoir passer le motif directement, et
+  divergent là où personne ne regarde : `^` et `$` ne sont pas des ancres, `@`
+  veut dire « n'importe quelle chaîne », `\w` s'arrête à l'ASCII,
+  `case_insensitive` ne replie que les caractères isolés (`[d-e]` ne matche pas
+  `D`). Aucune de ces règles n'était devinable — `\d` valait encore la lettre
+  `d` chez Lucene 8 — et toutes viennent d'une mesure contre un vrai ES 8.15.
+  Les quatre opérateurs qu'un automate de `regex` ne sait pas construire (`~`,
+  `&`, `<n-m>`, `#`) sont refusés explicitement, jamais pris pour des littéraux.
 - **Une expression d'index se résout à un seul endroit** ([`src/selection.rs`](src/selection.rs)) :
   `a,b`, `logs-*`, `_all`, `-exclusion`, alias. Toutes les routes passent par
   là, donc un motif veut dire la même chose partout. Le multi-index s'exécute
@@ -168,6 +179,13 @@ bouger**, pas après.
 - **Un conteneur ES qui vient de démarrer ment.** Un `diff_relevance` à 81/138
   s'est révélé être un ES 8.15 encore en train de se stabiliser. Re-mesurer
   avant de diagnostiquer.
+- **La documentation d'un moteur décrit rarement sa version.** La syntaxe
+  `regexp` a été écrite d'après ce que Lucene faisait — et `\d` y valait la
+  lettre `d`. C'est vrai jusqu'à Lucene 8 ; Lucene 9 (donc ES 8.x) en a fait
+  « un chiffre ». Une sonde de vingt lignes contre le conteneur de référence a
+  retourné la règle en une minute, là où la lecture donnait une réponse fausse
+  avec assurance. Même histoire pour `case_insensitive`, qui ne replie **pas**
+  les plages (`[d-e]` ne matche pas `D`), ce qu'aucune documentation ne dit.
 - **Un `curl` de vérification qui n'utilise pas le même texte que le test ne
   vérifie rien.** Une chasse au bug d'analyzer s'est terminée sur un faux
   positif : `match edition` ne trouvait pas `l'édition` — ce que fait aussi ES,
@@ -179,7 +197,10 @@ bouger**, pas après.
 Une migration depuis une instance 7.10.2 se reprend maintenant **entière** sur
 l'index d'exemple, et un projet qui découpe ses données en plusieurs index —
 catalogues séparés, index quotidiens derrière un alias — se branche sans
-changer son code.
+changer son code. Les filtres « contient / commence par / finit par » d'un
+service (`regexp`, `case_insensitive`), l'autocomplétion (`match_phrase_prefix`)
+et le `DELETE /*` d'un script d'init (sous `PUT /_cluster/settings`) passent
+aussi tels quels.
 
 Ce qui reste, par ordre de gêne pour un projet réel : `scroll` /
 `helpers.scan`, `rest_total_hits_as_int`, `_msearch`, `_stats`, les templates,

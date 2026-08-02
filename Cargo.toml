@@ -18,6 +18,10 @@ time = { version = "0.3", features = ["formatting", "parsing", "macros", "large-
 [dev-dependencies]
 # Les tests de concurrence pilotent le moteur directement.
 tantivy = "0.26"
+# L'automate que tantivy compile derriere `RegexQuery` : les tests de traduction
+# des motifs Lucene s'en servent pour verifier ce que le motif traduit accepte
+# vraiment, plutot que sa forme.
+tantivy-fst = "0.5"
 
 [profile.release]
 opt-level = 3
