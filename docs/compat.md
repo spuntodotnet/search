@@ -17,6 +17,20 @@ précisément « Elasticsearch sait faire, ferrite pas encore ».
 Version d'API annoncée : **Elasticsearch 8.15.0** (`version.number`,
 `_nodes`). Toutes les réponses portent `X-elastic-product: Elasticsearch`.
 
+**La suite de conformance d'Elasticsearch elle-même** (`tests/compat/conformance_es.py`,
+643 cas de la 7.10.2 — la dernière version Apache 2.0) donne l'état d'ensemble :
+
+| | ferrite | ES 7.10.2 (validation du runner) |
+|---|---|---|
+| réussis | 44 | 537 |
+| refusés explicitement (hors périmètre) | 333 | 0 |
+| sautés (version, fonctionnalité du runner) | 97 | 103 |
+| **échecs** | **169** | 3 |
+
+Les 169 échecs sont l'inventaire des écarts qui restent — les plus gros sont
+listés dans [`conformance.md`](conformance.md). C'est la mesure la moins
+complaisante du projet : les cas viennent d'Elastic, pas de nous.
+
 ---
 
 ## Poignée de main et cluster
@@ -35,6 +49,8 @@ Version d'API annoncée : **Elasticsearch 8.15.0** (`version.number`,
 
 | | État | Détail |
 |---|---|---|
+| Création à l'écriture | ✅ | indexer dans un index absent le **crée**, comme ES (`action.auto_create_index`) : `index`, `create`, `update`, et le `_bulk`. La lecture, la recherche et la suppression rendent toujours 404 |
+| `POST /_refresh`, `GET /_mapping`, `_all` / `*` sur ces routes | ✅ | les formes sans index portent sur tous les index. La **recherche** continue de refuser les motifs : y répondre demanderait de fusionner des mappings différents |
 | `PUT /{index}` | 🟡 | `mappings` est **optionnel** (les champs viendront des documents). `settings` limité à `number_of_shards` / `number_of_replicas` (acceptés, sans effet : ferrite est mono-shard). `aliases` doit être vide |
 | `DELETE /{index}` | ✅ | `ignore_unavailable` honoré |
 | `HEAD /{index}` | ✅ | |
@@ -44,7 +60,7 @@ Version d'API annoncée : **Elasticsearch 8.15.0** (`version.number`,
 | `POST /{index}/_refresh` | ✅ | |
 | `POST\|GET /_analyze`, `/{index}/_analyze` | 🟡 | `text` (chaîne ou liste), `analyzer`, `field`. `tokenizer` / `filter` / `char_filter` explicites : ❌ |
 | Mapping dynamique | ✅ | `dynamic` : `true` (défaut), `false`, `strict`. `runtime` ❌. Voir plus bas |
-| Alias, templates, ILM, `_settings`, `_close`, `_open` | ❌ | |
+| Alias, templates, ILM, `_settings`, `_stats`, `_close`, `_open` | ❌ | |
 
 ### Mapping dynamique
 
@@ -90,7 +106,8 @@ remplacées ne sont effacées que lorsque plus aucune recherche ne les tient.
 ### Analyzers
 
 Chaque analyzer intégré est comparé **token par token** à son homonyme d'ES sur
-28 textes français et anglais (`tests/compat/diff_analyzers.py`).
+**210 textes** français et anglais (`tests/compat/diff_analyzers.py`) : des
+phrases, et surtout un vocabulaire qui balaie les familles de suffixes.
 
 | Analyzer | État |
 |---|---|
@@ -99,20 +116,56 @@ Chaque analyzer intégré est comparé **token par token** à son homonyme d'ES 
 | `whitespace` | ✅ identique |
 | `keyword` | ✅ identique |
 | `stop` | ✅ identique |
-| `french`, `english`, `snowball` et les autres analyzers de langue | ❌ **refus assumé** |
-| Analyzers sur mesure (`settings.analysis`) | ❌ |
+| `english` | ✅ identique — Porter porté depuis Lucene, filtre possessif compris |
+| `french` | ✅ identique — stemmer léger de Savoy, élision, mots vides relevés |
+| `german`, `spanish`, `snowball` et les autres langues | ❌ leur stemmer n'est pas porté |
+| Analyzers sur mesure (`settings.analysis`) | ✅ | voir ci-dessous |
 
-**Pourquoi les analyzers de langue sont refusés.** Ils reposent sur un stemmer,
-et celui de tantivy (Snowball) n'est pas celui de Lucene (stemmer *léger* pour
-le français, Porter pour l'anglais). Mesuré sur les mêmes 28 textes : **17
-donnent des termes différents en `french`, 19 en `english`**. Par exemple
-« Horla » devient `horl` chez tantivy et `horla` chez ES, « mineurs » `mineur`
-contre `mineu`, « arriviste » `arriv` contre `arivist`.
+**Les stemmers de Lucene sont portés** (`src/stemmer.rs`) : le stemmer Porter
+pour l'anglais, le stemmer léger de Savoy pour le français. Celui de tantivy
+(Snowball) n'est celui d'aucun des deux — c'est ce qui donnait, avant ce
+portage, **19 textes divergents sur 28 en `english` et 17 en `french`**.
 
-Porter le nom d'ES en indexant autre chose changerait silencieusement le
-comportement d'un mapping existant — précisément ce que ce projet refuse. Les
-supporter demande de porter les stemmers de Lucene, ce qui mérite sa propre
-itération.
+**Les deux sont désormais identiques à ES sur les 210 textes.** `english` :
+Porter (validé en plus sur les 66 exemples de l'article de Porter lui-même),
+filtre possessif (`Peter's` → `Peter`), mots vides et ordre des filtres de
+`EnglishAnalyzer`. `french` : stemmer léger de Savoy, élision (`l'ascension` →
+`ascension`), et une liste de mots vides **relevée mot à mot** sur un vrai ES
+(`tests/compat/releve_mots_vides.py`) — elle n'est ni celle de Snowball (qui
+garde `est`) ni l'ancienne de Lucene (elle retire `ceci`, `cette`, `avec`,
+`sans`, `ils`), donc la deviner n'était pas une option.
+
+Les autres langues (`german`, `spanish`, `snowball`…) restent refusées : leur
+stemmer n'est pas porté, et livrer sous le nom d'ES un analyzer qui indexe
+autre chose changerait silencieusement les résultats d'un mapping existant.
+
+**Les analyzers sur mesure**, eux, sont supportés — un mapping venu d'une
+instance réelle en déclare presque toujours un, et le plus souvent avec des
+briques que ferrite a :
+
+```json
+"analysis": {
+  "analyzer": {"fr_produit": {"type": "custom", "tokenizer": "standard",
+                              "filter": ["lowercase", "asciifolding"]}},
+  "filter":   {"mes_vides":  {"type": "stop", "stopwords": ["le", "la"]}}
+}
+```
+
+| | État | Détail |
+|---|---|---|
+| `analysis.analyzer` de type `custom` | ✅ | `tokenizer` + liste de `filter` |
+| Tokenizers | 🟡 | `standard`, `whitespace`, `keyword`, `letter`, `lowercase`. Les tokenizers définis dans `analysis.tokenizer` (n-grams, `pattern`…) : ❌ |
+| Filtres | 🟡 | `lowercase`, `asciifolding`, `stop` (liste explicite ou `_english_`). Tout filtre à base de stemmer : ❌, pour la même raison que les analyzers de langue |
+| `char_filter` | ❌ | |
+| Un analyzer de type autre que `custom` (`french`, `standard` paramétré…) | ❌ | |
+
+Le nom déclaré est celui que rend `_mapping`, et un analyzer sur mesure n'existe
+que dans son index — `_analyze` sans index ne connaît que les intégrés.
+
+**À savoir sur l'élision.** `standard` garde `l'édition` en **un seul terme**,
+des deux côtés : c'est le filtre `elision` de l'analyzer `french` qui le
+couperait, et il n'est pas encore là. Chercher `edition` ne trouve donc pas
+`l'édition` — chez ES non plus, avec le même analyzer.
 
 **Ce que la comparaison a corrigé au passage.** `standard` — l'analyzer **par
 défaut** — découpait `l'ascension` en `l` et `ascension`, là où ES garde
@@ -130,14 +183,17 @@ différemment. ferrite applique désormais les frontières de mots d'Unicode
 | `byte`, `short`, `integer`, `long` | ✅ | `i64` indexé + fast. Les bornes du type sont vérifiées à l'indexation |
 | `float`, `double` | ✅ | `f64` indexé + fast |
 | `boolean` | ✅ | `bool` indexé + fast |
-| `date` | 🟡 | `date` (millisecondes) indexé + fast. Formats acceptés : `strict_date_optional_time` (ISO-8601, avec ou sans fuseau, date seule) et `epoch_millis`. `format` personnalisé : ❌ |
+| `date` | 🟡 | `date` (millisecondes) indexé + fast. **`format` supporté** : motifs Java (`yyyy`, `yy`, `MM`, `dd`, `HH`, `hh`, `mm`, `ss`, `SSS`, `a`, `Z`, texte entre apostrophes), alternatives `\|\|`, et les noms prédéfinis courants (`strict_date_optional_time`, `epoch_millis`, `epoch_second`, `date`, `date_time`, `basic_date`…). Le format sert à lire (indexation, bornes d'un `range`) **et** à rendre (`*_as_string`). Une lettre non traduite (`G`, `w`, `e`…) est refusée explicitement plutôt qu'ignorée |
 | Tableaux de valeurs | ✅ | tout champ accepte une valeur ou un tableau |
 | `null` | ✅ | ignoré à l'indexation, comme chez ES (pas de `null_value`) |
-| Tout autre type (`geo_point`, `nested`, `object`, `ip`, `binary`…) | ❌ | |
+| `object` (sous-objet), déclaré ou deviné | ✅ | indexé par **chemins pointés** (`client.ville`), comme ES. Un objet n'est pas un champ : il n'existe que par ses feuilles. `GET /_mapping` re-niche les chemins. Un tableau d'objets est aplati — comme ES, la correspondance entre sous-champs d'un même élément est perdue (c'est ce que `nested` corrige) |
+| `nested` | 🟡 | voir [la section dédiée](#nested) |
+| `join` (parent/enfant) | 🟡 | voir [la section dédiée](#join-parentenfant) |
+| Tout autre type (`geo_point`, `ip`, `binary`…) | ❌ | |
 | `analyzer` | 🟡 | sur un champ `text` : `standard` (défaut), `simple`, `whitespace`, `keyword`, `stop` — voir la section dédiée |
 | Multi-fields (`fields`) | ✅ | un seul niveau, comme ES. `titre.keyword` s'interroge et se trie comme un champ à part entière |
 | `ignore_above` | ✅ | sur un `keyword` : au-delà, la valeur reste dans `_source` sans être indexée |
-| Autres paramètres de champ (`index`, `format`, `null_value`, `doc_values`…) | ❌ | acceptés : `type`, `analyzer`, `fields`, `ignore_above` |
+| Autres paramètres de champ (`index`, `null_value`, `doc_values`…) | ❌ | acceptés : `type`, `analyzer`, `fields`, `ignore_above`, `format` |
 | Noms de champ pointés (`a.b`) ou préfixés `_` | ❌ | |
 
 ## Ingestion
@@ -207,6 +263,7 @@ avec une erreur qui dit pourquoi.
 | `aggs` / `aggregations` | 🟡 | voir la section dédiée |
 | `highlight`, `search_after`, `scroll`, PIT, `collapse`, `knn`, `explain`, `fields`, `post_filter`, `min_score`, `suggest`, `rescore`, `track_scores`, `q` | ❌ | |
 | `ignore_unavailable`, `allow_no_indices`, `expand_wildcards`, `routing`, `filter_path`, `typed_keys` | ❌ | ils n'ont de sens qu'avec des motifs multi-index ou changent la forme de la réponse |
+| `rest_total_hits_as_int` | ❌ | il change la forme de `hits.total` (nombre au lieu d'objet). Accepté par ES 8, refusé ici : du code venu de la 6.x/7.x s'en sert encore, voir [`compat-es7.md`](compat-es7.md) |
 | `_msearch`, `_search/template`, `_explain`, `_validate` | ❌ | |
 
 Les paramètres purement cosmétiques `pretty`, `human` et `error_trace` sont
@@ -247,6 +304,48 @@ d'être de la couche de mise en forme dans `src/aggs.rs` :
    frontière, la sélection pourrait encore différer ;
 4. ES formate les bornes d'un `range` en flottants (`*-100.0`), même sur un champ
    entier, et rend la clé d'un `date_histogram` en entier.
+
+### `nested`
+
+Un `nested` conserve la correspondance entre les sous-champs d'un même élément :
+« une ligne `vis` d'au moins 20 » ne remonte pas un document qui a une ligne
+`vis` **et** une ligne de 20 sans que ce soit la même.
+
+Il n'y a pas de document caché ni de jointure de bloc : chaque champ sous un
+`nested` a une colonne jumelle qui retient, pour chaque valeur, **de quel
+élément** elle vient. La requête interne sert de pré-filtre (postings), puis
+chaque candidat est vérifié élément par élément sur les colonnes. Conception et
+mesures : [`nested-join.md`](nested-join.md), `src/nested.rs`.
+
+| | État | Détail |
+|---|---|---|
+| `{"nested": {"path", "query"}}` | ✅ | `path` doit être un champ déclaré `nested` |
+| Clauses internes | 🟡 | `term`, `terms`, `match` (sur un champ non analysé), `range`, `exists`, `prefix`, `match_all`, `match_none`, et `bool` (`must` / `filter` / `should` + `minimum_should_match` entier / `must_not`) |
+| Champ `text` dans une clause interne | ❌ | les colonnes portent la valeur, pas les termes analysés. Interroger son multi-field `.keyword`, ou sortir la clause du `nested` |
+| `nested` dans un `nested` | ❌ | il faudrait un indice d'élément par niveau |
+| `score_mode` | 🟡 | `none` et `avg` acceptés ; le score est celui de la requête interne évaluée à plat, il n'y a pas de score par élément. Les autres modes sont ❌ |
+| `inner_hits`, `ignore_unmapped` | ❌ | |
+| Champs devinés sous un `nested` | ✅ | le mapping dynamique fonctionne, et la corrélation avec |
+| Tri et agrégations sur un champ `nested` | ❌ | ils porteraient sur les valeurs à plat, donc sur autre chose que ce que la requête a filtré |
+
+### `join` (parent/enfant)
+
+Parent et enfant sont deux documents distincts, réunis à la requête.
+`has_child` / `has_parent` s'évaluent en **deux passes** : la requête interne est
+exécutée, les identifiants qui en sortent deviennent une recherche sur `_id` (ou
+sur la colonne du parent). Exact, et borné par le nombre d'identifiants
+distincts. Elasticsearch a besoin de *global ordinals* pour ça parce qu'il est
+distribué ; mono-shard, parent et enfant sont forcément au même endroit.
+
+| | État | Détail |
+|---|---|---|
+| `{"type": "join", "relations": {...}}` | ✅ | un seul champ `join` par index, plusieurs relations et plusieurs enfants par parent |
+| Indexation | ✅ | `"lien": "article"` ou `{"name": "commentaire", "parent": "a1"}`. Un enfant sans `parent`, un parent avec, ou une relation non déclarée : refus explicite |
+| `has_child`, `has_parent` | 🟡 | avec n'importe quelle requête interne. `score_mode` : `none` seulement (la jointure rend un score constant) |
+| `parent_id` | ✅ | |
+| `{"term": {"lien": "article"}}` | ✅ | le champ `join` se filtre comme un `keyword`, sous son propre nom, comme chez ES |
+| `routing` | 🟡 | accepté et sans objet : il n'y a qu'un shard, donc rien à co-localiser. C'est **une contrainte d'ES en moins** |
+| `inner_hits`, `min_children`, `max_children`, `ignore_unmapped` | ❌ | |
 
 ## Erreurs
 
@@ -315,6 +414,13 @@ pas pour être découverts en production.
 
 8. **`wait_for` vaut `true` pour `refresh`.** Le commit est synchrone, il n'y a
    rien à attendre.
+
+9. **Un sous-champ de `nested` interrogé depuis la racine est une erreur, pas 0
+   résultat.** Chez Elasticsearch, ces valeurs vivent dans des documents cachés :
+   `{"term": {"lignes.ref": "vis"}}` hors d'une clause `nested` ne rend **rien**,
+   en silence — un piège classique. ferrite les indexe sur le document parent, il
+   pourrait donc y répondre, et rendrait alors des documents là où ES n'en rend
+   aucun. Il refuse explicitement, en nommant la clause `nested` attendue.
 
 ## Limites connues (perf, pas fonctionnalité)
 

@@ -6,6 +6,10 @@
 > Tout le reste — implémenter, vérifier, faire avancer la carte, ouvrir la PR —
 > c'est **toi**, l'agent, qui le pilotes en suivant ce fichier.
 
+> Ce fichier dit **quoi lancer** et **quand**. [`../CLAUDE.md`](../CLAUDE.md) dit
+> **comment penser** dans ce dépôt : la méthode, les décisions déjà prises, les
+> pièges déjà rencontrés. À lire en premier dans une session neuve.
+
 ## Contexte de départ (déjà en place sur le worker)
 
 - Branche dédiée déjà créée et checkout : `notion/{pageId}-{slug}`.
@@ -35,6 +39,10 @@ Toutes depuis la **racine** du repo.
 | `python3 tests/compat/diff_relevance.py` | Compare les **résultats et leur ordre** à ceux d'un vrai ES, sur 600 documents |
 | `python3 tests/compat/diff_aggs.py` | Compare les **agrégations** à celles d'un vrai ES, champ par champ |
 | `python3 tests/compat/diff_analyzers.py` | Compare les **analyzers** à ceux d'un vrai ES, token par token |
+| `python3 tests/compat/probe_es7.py [URL]` | Exerce le serveur avec le client officiel **7.x** (code écrit pour un ES 7) : ce qu'un projet resté en 7.10.2 peut brancher tel quel — voir [`compat-es7.md`](compat-es7.md) |
+| `python3 tests/compat/diff_es7.py [ferrite] [es7]` | Rejoue les **index, documents et requêtes** d'une instance **7.x** sur ferrite : ce qui s'héberge, ce qui se transfère, ce qui rend les mêmes résultats. Ne lit que l'instance (`--sans-ecriture` pour n'y rien écrire du tout ; `--inventaire URL` pour se contenter de lister les types de champ qu'elle utilise) |
+| `python3 tests/compat/bench_vs_es.py [ferrite] [es]` | **Le banc** : mêmes documents et mêmes requêtes des deux côtés, puis indexation, latence, débit — et le compte des requêtes qui rendent le même résultat. Sans client Elasticsearch (HTTP brut), donc utilisable contre un ES 7.x comme 8.x |
+| `python3 tests/compat/conformance_es.py [URL]` | Rejoue la **suite de conformance REST d'Elasticsearch lui-même** (7.10.2, Apache 2.0, téléchargée à la demande dans `.es-rest-spec/`). Les cas ne viennent pas de nous : c'est ce qui attrape ce qu'on ne sait pas qu'on ignore |
 | `./tests/compat/measure_container.sh [tag]` | Ne construit rien, mesure une image déjà buildée : taille, RSS au repos, temps de démarrage |
 | `docker build -t ferrite .` | Image minimale (`scratch` + binaire statique musl) |
 
@@ -69,6 +77,10 @@ Deux comparateurs, qui ne cherchent pas la même chose :
 | `tests/compat/diff_relevance.py` | la **pertinence** — même corpus de 600 documents des deux côtés, ~115 requêtes générées, et pour chacune : même total, mêmes documents, **même ordre** |
 | `tests/compat/diff_aggs.py` | les **agrégations** — 34 requêtes, comparaison du JSON champ par champ, clés comprises |
 | `tests/compat/diff_analyzers.py` | les **analyzers** — chaque analyzer intégré confronté à son homonyme d'ES sur 28 textes, token par token |
+| `tests/compat/probe_es7.py` | ce qu'un **client 7.x** obtient — le même fichier se lance contre ferrite, contre un `elasticsearch:7.10.2` et contre un `elasticsearch:8.15.0`, ce qui sépare « ferrite est incomplet » de « la 8 a supprimé ça » |
+| `tests/compat/bench_vs_es.py` | le **prix** de ces résultats — indexation, latence médiane et p95, débit à 8 requêtes en vol, mesurés sur les deux serveurs avec la même batterie |
+| `tests/compat/conformance_es.py` | les tests d'**Elastic**, pas les nôtres — 643 cas de la suite REST officielle. Se valide en le lançant contre un vrai ES 7.10.2, où il doit être quasi tout vert (537/643, 3 échecs côté ES) |
+| `tests/compat/diff_es7.py` | ce qu'une **instance 7.x** peut céder à ferrite — ses index (rejoués), ses documents (`scan` + `bulk`), ses requêtes (même corpus, même ordre attendu) |
 
 Le second est celui qui compte pour un moteur de recherche : l'ordre des
 résultats est précisément ce qu'un test écrit à la main ne sait pas vérifier,

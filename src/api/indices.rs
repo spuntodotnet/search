@@ -53,16 +53,23 @@ pub async fn create(
             ));
         }
     }
+    let mut declares = crate::analysis::Analysis::default();
     if let Some(settings) = obj.get("settings") {
+        // `analysis` est extrait avant la verification : c'est la seule section
+        // de `settings` que ferrite exploite vraiment.
+        if let Some(a) = section_analysis(settings) {
+            declares = crate::analysis::Analysis::parse(a)?;
+        }
         check_settings(settings)?;
     }
 
     // Sans `mappings`, l'index part vide et se remplit par mapping dynamique,
     // comme chez ES.
-    let mapping = match obj.get("mappings") {
-        Some(m) => Mapping::parse(m)?,
+    let mut mapping = match obj.get("mappings") {
+        Some(m) => Mapping::parse_avec(m, &declares)?,
         None => Mapping::default(),
     };
+    mapping.analysis = declares;
 
     st.catalog.create(&index, mapping)?;
     Ok(Json::ok(json!({
@@ -72,10 +79,39 @@ pub async fn create(
     })))
 }
 
+/// `settings.analysis`, sous ses deux ecritures (`{"analysis": …}` ou
+/// `{"index": {"analysis": …}}`).
+fn section_analysis(settings: &Value) -> Option<&Value> {
+    let o = settings.as_object()?;
+    o.get("analysis")
+        .or_else(|| o.get("index")?.as_object()?.get("analysis"))
+}
+
 fn check_settings(settings: &Value) -> EsResult<()> {
     let obj = settings
         .as_object()
         .ok_or_else(|| EsError::parsing("[settings] doit etre un objet"))?;
+    // `analysis` est traite ailleurs (il est exploite, lui).
+    let obj: serde_json::Map<String, Value> = obj
+        .iter()
+        .filter(|(k, _)| k.as_str() != "analysis")
+        .map(|(k, v)| {
+            if k == "index" {
+                let sans = v.as_object().map(|o| {
+                    Value::Object(
+                        o.iter()
+                            .filter(|(k2, _)| k2.as_str() != "analysis")
+                            .map(|(k2, v2)| (k2.clone(), v2.clone()))
+                            .collect(),
+                    )
+                });
+                (k.clone(), sans.unwrap_or_else(|| v.clone()))
+            } else {
+                (k.clone(), v.clone())
+            }
+        })
+        .collect();
+    let obj = &obj;
     // Forme imbriquee : {"index": {...}}
     let mut flat: Vec<(String, &Value)> = Vec::new();
     for (k, v) in obj {
@@ -162,10 +198,40 @@ pub async fn get_mapping(
     uri: Uri,
 ) -> EsResult<Json> {
     Params::parse(&uri).done()?;
-    let idx = st.catalog.get(&index)?;
-    Ok(Json::ok(json!({
-        index.as_str(): {"mappings": idx.mapping().to_json()}
-    })))
+    let mut out = serde_json::Map::new();
+    for idx in cibles(&st, &index)? {
+        out.insert(
+            idx.name.clone(),
+            json!({"mappings": idx.mapping().to_json()}),
+        );
+    }
+    Ok(Json::ok(Value::Object(out)))
+}
+
+/// `GET /_mapping` — tous les index, comme `_all`.
+pub async fn get_mapping_all(State(st): State<SharedState>, uri: Uri) -> EsResult<Json> {
+    get_mapping(State(st), Path("_all".to_string()), uri).await
+}
+
+/// `POST /_refresh` — tous les index.
+pub async fn refresh_all(State(st): State<SharedState>, uri: Uri) -> EsResult<Json> {
+    refresh(State(st), Path("_all".to_string()), uri).await
+}
+
+/// Les index vises par un nom de route.
+///
+/// `_all` et `*` designent tous les index — c'est ce qu'attendent les routes
+/// administratives (`_refresh`, `_mapping`). La **recherche**, elle, continue
+/// de refuser les motifs : y repondre demanderait de fusionner des resultats
+/// venus de mappings differents, et c'est la que se cachent les resultats faux.
+fn cibles(
+    st: &SharedState,
+    nom: &str,
+) -> EsResult<Vec<std::sync::Arc<crate::engine::FerriteIndex>>> {
+    if nom == "_all" || nom == "*" {
+        return Ok(st.catalog.list());
+    }
+    Ok(vec![st.catalog.get(nom)?])
 }
 
 /// `PUT /{index}/_mapping` — ajoute des champs au mapping.
@@ -249,7 +315,16 @@ pub async fn analyze(
                 Some(Path(nom_index)) => Some(st.catalog.get(nom_index)?.current()),
                 None => None,
             };
-            (crate::analysis::parse_declaration(nom, "_analyze")?, gen)
+            // Un analyzer sur mesure n'existe que dans son index : `_analyze`
+            // sans index ne connait que les analyzers integres.
+            let declares = gen
+                .as_ref()
+                .map(|g| g.mapping.analysis.clone())
+                .unwrap_or_default();
+            (
+                crate::analysis::parse_declaration(nom, "_analyze", &declares)?,
+                gen,
+            )
         }
         (None, Some(f)) => {
             let Path(nom_index) = index.as_ref().ok_or_else(|| {
@@ -301,9 +376,14 @@ pub async fn refresh(
     uri: Uri,
 ) -> EsResult<Json> {
     Params::parse(&uri).done()?;
-    let idx = st.catalog.get(&index)?;
-    tokio::task::spawn_blocking(move || idx.refresh())
-        .await
-        .map_err(|e| EsError::internal(format!("refresh: {e}")))??;
+    let index = cibles(&st, &index)?;
+    tokio::task::spawn_blocking(move || {
+        for idx in index {
+            idx.refresh()?;
+        }
+        Ok::<_, EsError>(())
+    })
+    .await
+    .map_err(|e| EsError::internal(format!("refresh: {e}")))??;
     Ok(Json::ok(json!({"_shards": super::shards_ok()})))
 }

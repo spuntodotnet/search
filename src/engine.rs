@@ -438,30 +438,35 @@ impl FerriteIndex {
             .ok_or_else(|| EsError::mapper_parsing("le document doit etre un objet JSON"))?;
 
         let mut nouveaux: BTreeMap<String, FieldMapping> = BTreeMap::new();
-        for (name, value) in obj {
-            if gen.fields.targets_of(name).is_some() {
-                continue;
+        // Le document est parcouru en profondeur : un sous-objet ne cree pas de
+        // champ pour lui-meme, seulement pour ses feuilles (`client.ville`).
+        mapping::parcours_feuilles(obj, &mut |chemin, valeur| {
+            if gen.fields.targets_of(chemin).is_some() {
+                return Ok(());
+            }
+            // Le champ `join` est declare, jamais devine.
+            if gen
+                .fields
+                .join
+                .as_ref()
+                .is_some_and(|j| chemin == j.champ || mapping::est_sous_chemin(chemin, &j.champ))
+            {
+                return Ok(());
             }
             match gen.mapping.dynamic {
-                Dynamic::Strict => return Err(EsError::strict_mapping(&self.name, name)),
-                Dynamic::False => continue,
+                Dynamic::Strict => Err(EsError::strict_mapping(&self.name, chemin)),
+                Dynamic::False => Ok(()),
                 Dynamic::True => {
-                    if value.is_object() {
-                        return Err(EsError::unsupported(format!(
-                            "ferrite ne supporte pas les champs objet/imbriques : [{name}] dans \
-                             l'index [{}]",
-                            self.name
-                        )));
-                    }
-                    validate_dynamic_field_name(name)?;
+                    validate_dynamic_field_name(chemin)?;
                     // Une valeur nulle ou un tableau vide ne cree pas de champ,
                     // comme chez ES : le type reste inconnu.
-                    if let Some(fm) = mapping::infer(value) {
-                        nouveaux.insert(name.clone(), fm);
+                    if let Some(fm) = mapping::infer(valeur) {
+                        nouveaux.insert(chemin.to_string(), fm);
                     }
+                    Ok(())
                 }
             }
-        }
+        })?;
         Ok((!nouveaux.is_empty()).then_some(nouveaux))
     }
 
@@ -584,8 +589,101 @@ fn build_doc(
     doc.add_u64(gen.fields.version, version);
     doc.add_u64(gen.fields.seq_no, seq_no);
 
-    for (name, value) in obj {
-        let Some(cibles) = gen.fields.targets_of(name) else {
+    // Le champ `join` n'est pas un champ ordinaire : sa valeur decrit la place
+    // du document dans la relation, pas une donnee a indexer telle quelle.
+    if let (Some(j), Some(f_nom)) = (&gen.fields.join, gen.fields.join_name) {
+        if let Some(v) = obj.get(&j.champ) {
+            let (nom, parent) = match v {
+                Value::String(s) => (s.as_str(), None),
+                Value::Object(o) => {
+                    for cle in o.keys() {
+                        if cle != "name" && cle != "parent" {
+                            return Err(EsError::mapper_parsing(format!(
+                                "[{}] : cle [{cle}] inconnue dans un champ [join]",
+                                j.champ
+                            )));
+                        }
+                    }
+                    let nom = o.get("name").and_then(Value::as_str).ok_or_else(|| {
+                        EsError::mapper_parsing(format!("[{}] : cle [name] manquante", j.champ))
+                    })?;
+                    (nom, o.get("parent").and_then(Value::as_str))
+                }
+                _ => {
+                    return Err(EsError::mapper_parsing(format!(
+                        "[{}] : un [join] attend une chaine ou {{name, parent}}",
+                        j.champ
+                    )))
+                }
+            };
+            if !j.connait(nom) {
+                return Err(EsError::illegal_argument(format!(
+                    "[{}] : relation [{nom}] inconnue ; declarees : {:?}",
+                    j.champ,
+                    j.noms()
+                )));
+            }
+            match (j.parent_de(nom), parent) {
+                (Some(_), None) => {
+                    return Err(EsError::illegal_argument(format!(
+                        "[{}] : [{nom}] est un enfant, son [parent] est obligatoire",
+                        j.champ
+                    )))
+                }
+                (None, Some(_)) => {
+                    return Err(EsError::illegal_argument(format!(
+                        "[{}] : [{nom}] est un parent, il n'a pas de [parent]",
+                        j.champ
+                    )))
+                }
+                _ => {}
+            }
+            doc.add_text(f_nom, nom);
+            if let (Some(p), Some(f_parent)) = (parent, gen.fields.join_parent) {
+                doc.add_text(f_parent, p);
+            }
+        }
+    }
+
+    // Deux passes sur le document : la premiere compte les elements de chaque
+    // `nested`, la seconde indexe les valeurs. Elles pourraient n'en faire
+    // qu'une, mais elles ecrivent toutes deux dans `doc` — et un document JSON
+    // se reparcourt pour rien.
+    let mut cardinaux: Vec<(String, u32)> = Vec::new();
+    let mut valeurs: Vec<(String, &Value, Option<u32>)> = Vec::new();
+    let sans_join: serde_json::Map<String, Value>;
+    let obj = match &gen.fields.join {
+        Some(j) if obj.contains_key(&j.champ) => {
+            sans_join = obj
+                .iter()
+                .filter(|(k, _)| *k != &j.champ)
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            &sans_join
+        }
+        _ => obj,
+    };
+    mapping::parcours_nested(
+        obj,
+        &gen.fields.nested,
+        &mut |chemin, value, elem| {
+            valeurs.push((chemin.to_string(), value, elem));
+            Ok(())
+        },
+        &mut |racine, n| {
+            cardinaux.push((racine.to_string(), n));
+            Ok(())
+        },
+    )?;
+
+    for (racine, n) in cardinaux {
+        if let Some(f) = gen.fields.nelem.get(&racine) {
+            doc.add_u64(*f, u64::from(n));
+        }
+    }
+
+    for (chemin, value, elem) in valeurs {
+        let Some(cibles) = gen.fields.targets_of(&chemin) else {
             continue;
         };
         let values: Vec<&Value> = match value {
@@ -605,7 +703,8 @@ fn build_doc(
                         continue;
                     }
                 }
-                match mapping::coerce(name, cible.ty, v)? {
+                let format = gen.fields.format_de(&chemin);
+                match mapping::coerce_avec(&chemin, cible.ty, v, format)? {
                     TypedValue::Str(s) => doc.add_text(cible.field, s),
                     TypedValue::I64(n) => doc.add_i64(cible.field, n),
                     TypedValue::F64(n) => doc.add_f64(cible.field, n),
@@ -614,6 +713,12 @@ fn build_doc(
                         doc.add_date(cible.field, DateTime::from_timestamp_millis(ms))
                     }
                 }
+                // L'indice d'element est ecrit **exactement** quand une valeur
+                // l'est : les deux colonnes gardent la meme arite, meme si
+                // `ignore_above` en saute une.
+                if let (Some(e), Some(f)) = (elem, cible.elem) {
+                    doc.add_u64(f, u64::from(e));
+                }
             }
         }
     }
@@ -621,16 +726,19 @@ fn build_doc(
 }
 
 /// Un champ devine ne doit pas pouvoir entrer en collision avec les champs
-/// internes, ni introduire un chemin pointe.
+/// internes du schema.
 fn validate_dynamic_field_name(name: &str) -> EsResult<()> {
     if name.starts_with('_') {
         return Err(EsError::mapper_parsing(format!(
             "[{name}] : les noms de champ commencant par [_] sont reserves"
         )));
     }
-    if name.contains('.') {
-        return Err(EsError::unsupported(format!(
-            "ferrite ne supporte pas les noms de champ pointes (champ [{name}])"
+    // Un chemin pointe est licite — il vient d'un sous-objet, ou d'une cle que
+    // le document ecrit deja a plat (`{"client.ville": ...}`), qu'Elasticsearch
+    // traite comme un chemin. Un segment vide, lui, ne l'est pas.
+    if name.split('.').any(str::is_empty) {
+        return Err(EsError::mapper_parsing(format!(
+            "[{name}] : chemin de champ invalide"
         )));
     }
     Ok(())
@@ -694,6 +802,26 @@ impl Catalog {
             .get(name)
             .cloned()
             .ok_or_else(|| EsError::index_not_found(name))
+    }
+
+    /// L'index, cree a la volee s'il n'existe pas encore.
+    ///
+    /// C'est le comportement d'Elasticsearch a l'ecriture
+    /// (`action.auto_create_index`, actif par defaut) : indexer dans un index
+    /// absent le cree, avec un mapping vide que les documents rempliront. La
+    /// lecture, elle, ne cree rien — `GET` et `_search` rendent toujours 404.
+    pub fn get_or_create(&self, name: &str) -> EsResult<Arc<FerriteIndex>> {
+        match self.get(name) {
+            Ok(idx) => Ok(idx),
+            Err(e) if e.ty == "index_not_found_exception" => {
+                match self.create(name, Mapping::default()) {
+                    Ok(idx) => Ok(idx),
+                    // Un autre appel a gagne la course : son index fait l'affaire.
+                    Err(_) => self.get(name),
+                }
+            }
+            Err(e) => Err(e),
+        }
     }
 
     pub fn exists(&self, name: &str) -> bool {
@@ -793,6 +921,7 @@ fn construire_generation(
     let (schema, fields) = mapping::build_schema(&mapping);
     let index = Index::create_in_dir(&gen_dir, schema)?;
     crate::analysis::register_all(index.tokenizers());
+    mapping.analysis.register(index.tokenizers());
     let writer: IndexWriter = index.writer_with_num_threads(1, WRITER_HEAP)?;
     let reader: IndexReader = index
         .reader_builder()
@@ -853,6 +982,10 @@ fn ecrire_meta(dir: &Path, uuid: &str, created_at: i64, gen: &Generation) -> EsR
         "ferrite_version": crate::FERRITE_VERSION,
         "generation": gen.seq,
         "mappings": gen.mapping.to_json(),
+        // `_mapping` ne rend pas les analyzers : ils vivent dans les settings.
+        // Il faut donc les persister a part, sinon un redemarrage perdrait le
+        // nom que les champs citent.
+        "analysis": gen.mapping.analysis.to_json(),
     });
     let tmp = dir.join(format!("{META_FILE}.tmp"));
     fs::write(&tmp, serde_json::to_vec_pretty(&meta).unwrap())
@@ -871,12 +1004,17 @@ fn open_index(dir: &Path, name: &str) -> EsResult<FerriteIndex> {
     let uuid = meta["uuid"].as_str().unwrap_or_default().to_string();
     let created_at = meta["created_at"].as_i64().unwrap_or_else(util::now_millis);
     let seq = meta["generation"].as_u64().unwrap_or(0);
-    let mapping = Mapping::parse(&meta["mappings"])?;
+    let declares = match meta.get("analysis") {
+        Some(a) if !a.is_null() => crate::analysis::Analysis::parse(a)?,
+        _ => crate::analysis::Analysis::default(),
+    };
+    let mapping = Mapping::parse_avec(&meta["mappings"], &declares)?;
 
     let gen_dir = dir.join(format!("{INDEX_DIR_PREFIX}{seq}"));
     let (schema, fields) = mapping::build_schema(&mapping);
     let index = Index::open_in_dir(&gen_dir)?;
     crate::analysis::register_all(index.tokenizers());
+    mapping.analysis.register(index.tokenizers());
     if index.schema() != schema {
         return Err(EsError::internal(format!(
             "[{name}] : le schema sur disque ne correspond pas au mapping enregistre"

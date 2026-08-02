@@ -10,25 +10,65 @@ use std::ops::Bound;
 use serde_json::{Map, Value};
 use tantivy::query::{
     AllQuery, BooleanQuery, BoostQuery, ConstScoreQuery, EmptyQuery, ExistsQuery, FuzzyTermQuery,
-    Occur, PhraseQuery, Query, RangeQuery, RegexQuery, TermQuery,
+    Occur, PhraseQuery, Query, RangeQuery, RegexQuery, TermQuery, TermSetQuery,
 };
 use tantivy::schema::IndexRecordOption;
-use tantivy::Index;
+use tantivy::{Index, Searcher, Term};
 
 use crate::analysis::Analyzer;
 use crate::dismax::DisMaxQuery;
 use crate::error::{EsError, EsResult};
-use crate::mapping::{self, FieldKind, Fields, MappedField};
+use crate::mapping::{self, FieldKind, Fields, MappedField, TypedValue};
+use crate::nested::{Clause, NestedQuery, Predicat, Valeur};
 
 /// Ce dont la traduction a besoin : le schema resolu et l'index (pour les
 /// tokenizers).
 pub struct QueryCtx<'a> {
     pub fields: &'a Fields,
     pub index: &'a Index,
+    /// La racine `nested` en cours de traduction, s'il y en a une.
+    ///
+    /// Chez Elasticsearch, les sous-champs d'un `nested` vivent dans des
+    /// documents caches : les interroger depuis la racine ne rend **rien**, en
+    /// silence. ferrite les indexe sur le parent, il pourrait donc y repondre —
+    /// et rendre des documents la ou ES n'en rend aucun. Il refuse a la place,
+    /// et ce champ est ce qui distingue « dans une clause `nested` » de
+    /// « depuis la racine ».
+    pub nested_ouvert: std::cell::RefCell<Vec<String>>,
+    /// Un `searcher` sur la meme generation, pour les clauses qui se resolvent
+    /// en **deux passes** : `has_child` et `has_parent` executent leur requete
+    /// interne a la traduction, materialisent l'ensemble des identifiants
+    /// concernes, et rendent une recherche sur ces identifiants. C'est ce que
+    /// le mono-shard rend possible sans *global ordinals*.
+    pub searcher: &'a Searcher,
+}
+
+impl<'a> QueryCtx<'a> {
+    pub fn new(fields: &'a Fields, index: &'a Index, searcher: &'a Searcher) -> Self {
+        Self {
+            fields,
+            index,
+            nested_ouvert: std::cell::RefCell::new(Vec::new()),
+            searcher,
+        }
+    }
 }
 
 impl QueryCtx<'_> {
     fn field(&self, name: &str, clause: &str) -> EsResult<MappedField> {
+        if let Some(racine) = self.fields.racine_nested(name) {
+            if !self.nested_ouvert.borrow().iter().any(|r| r == racine) {
+                return Err(EsError::new(
+                    axum::http::StatusCode::BAD_REQUEST,
+                    "query_shard_exception",
+                    format!(
+                        "[{name}] est sous le champ [nested] [{racine}] : il ne peut etre \
+                         interroge que dans une clause [nested] sur ce chemin (clause \
+                         [{clause}])"
+                    ),
+                ));
+            }
+        }
         self.fields.get(name).ok_or_else(|| {
             // ES cherche le champ dans le mapping dynamique ; ferrite n'en a pas,
             // donc un champ inconnu est une erreur explicite et non « 0 hit ».
@@ -51,9 +91,9 @@ impl QueryCtx<'_> {
         let mut analyzer = self
             .index
             .tokenizers()
-            .get(analyzer.tokenizer())
+            .get(&analyzer.tokenizer())
             .ok_or_else(|| {
-                EsError::internal(format!("analyzer [{}] introuvable", analyzer.name()))
+                EsError::internal(format!("analyzer [{}] introuvable", analyzer.tokenizer()))
             })?;
         let mut stream = analyzer.token_stream(text);
         let mut out = Vec::new();
@@ -89,10 +129,14 @@ pub fn build_query(v: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         "terms" => terms_query(body, ctx),
         "range" => range_query(body, ctx),
         "bool" => bool_query(body, ctx),
+        "nested" => nested_query(body, ctx),
+        "has_child" => join_query(body, ctx, Sens::VersLeParent),
+        "has_parent" => join_query(body, ctx, Sens::VersLEnfant),
+        "parent_id" => parent_id_query(body, ctx),
         other => Err(EsError::parsing(format!(
             "unknown query [{other}] : ferrite supporte [match_all, match_none, match, \
              multi_match, match_phrase, exists, ids, prefix, wildcard, fuzzy, term, terms, \
-             range, bool, constant_score, dis_max]"
+             range, bool, constant_score, dis_max, nested, has_child, has_parent, parent_id]"
         ))),
     }
 }
@@ -173,7 +217,7 @@ fn field_match(
         // Sur un champ non analyse, `match` se comporte comme `term` (ES fait
         // pareil : l'analyzer d'un keyword est `keyword`).
         _ => {
-            let tv = mapping::coerce(field_name, ty, value)?;
+            let tv = mapping::coerce_avec(field_name, ty, value, ctx.fields.format_de(field_name))?;
             Box::new(TermQuery::new(tv.to_term(field), IndexRecordOption::Basic))
         }
     })
@@ -383,7 +427,8 @@ fn match_phrase_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> 
                      [{field_name}]"
                 )));
             }
-            let tv = mapping::coerce(field_name, ty, &value)?;
+            let tv =
+                mapping::coerce_avec(field_name, ty, &value, ctx.fields.format_de(field_name))?;
             Box::new(TermQuery::new(tv.to_term(field), IndexRecordOption::Basic))
         }
     };
@@ -435,7 +480,7 @@ fn term_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         v => (v.clone(), None),
     };
 
-    let tv = mapping::coerce(field_name, ty, &value)?;
+    let tv = mapping::coerce_avec(field_name, ty, &value, ctx.fields.format_de(field_name))?;
     let record = if ty.kind() == FieldKind::Text {
         IndexRecordOption::WithFreqs
     } else {
@@ -475,7 +520,7 @@ fn terms_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     let clauses: Vec<(Occur, Box<dyn Query>)> = list
         .iter()
         .map(|v| {
-            let tv = mapping::coerce(field_name, ty, v)?;
+            let tv = mapping::coerce_avec(field_name, ty, v, ctx.fields.format_de(field_name))?;
             let q: Box<dyn Query> =
                 Box::new(TermQuery::new(tv.to_term(field), IndexRecordOption::Basic));
             Ok((Occur::Should, q))
@@ -507,7 +552,10 @@ fn range_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     let to_term = |key: &str| -> EsResult<Option<tantivy::Term>> {
         match spec.get(key) {
             None | Some(Value::Null) => Ok(None),
-            Some(v) => Ok(Some(mapping::coerce(field_name, ty, v)?.to_term(field))),
+            Some(v) => Ok(Some(
+                mapping::coerce_avec(field_name, ty, v, ctx.fields.format_de(field_name))?
+                    .to_term(field),
+            )),
         }
     };
 
@@ -938,4 +986,550 @@ fn expect_only(obj: &Map<String, Value>, allowed: &[&str], clause: &str) -> EsRe
         }
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// nested
+// ---------------------------------------------------------------------------
+
+/// `{"nested": {"path": "lignes", "query": {...}}}`.
+///
+/// La requete interne sert deux fois : telle quelle comme **pre-filtre** (elle
+/// rend un sur-ensemble exact, avec les postings et le score de tantivy), et
+/// traduite en [`Clause`] pour la **verification** element par element. Voir
+/// [`crate::nested`] pour le pourquoi de ce double emploi.
+fn nested_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
+    let obj = as_object(body, "nested")?;
+    expect_only(
+        obj,
+        &[
+            "path",
+            "query",
+            "score_mode",
+            "boost",
+            "inner_hits",
+            "ignore_unmapped",
+        ],
+        "nested",
+    )?;
+    for refuse in ["inner_hits", "ignore_unmapped"] {
+        if obj.contains_key(refuse) {
+            return Err(EsError::unsupported(format!(
+                "ferrite ne supporte pas [{refuse}] dans [nested]"
+            )));
+        }
+    }
+    // Le score d'une clause `nested` est celui du pre-filtre, calcule a plat :
+    // ferrite n'a pas de document par element, donc pas de score par element.
+    // Le dire plutot que de rendre un classement qui n'est pas celui demande.
+    if let Some(mode) = obj.get("score_mode").and_then(Value::as_str) {
+        if mode != "none" && mode != "avg" {
+            return Err(EsError::unsupported(format!(
+                "ferrite ne supporte pas [score_mode: {mode}] dans [nested] ; le score est celui \
+                 de la requete interne evaluee a plat (voir docs/compat.md)"
+            )));
+        }
+    }
+
+    let path = obj
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| EsError::parsing("[nested] : cle [path] manquante"))?;
+    if !ctx.fields.nested.contains(path) {
+        return Err(EsError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            "query_shard_exception",
+            format!("[nested] : [{path}] n'est pas un champ de type [nested] dans ce mapping"),
+        ));
+    }
+    let interne = obj
+        .get("query")
+        .ok_or_else(|| EsError::parsing("[nested] : cle [query] manquante"))?;
+
+    ctx.nested_ouvert.borrow_mut().push(path.to_string());
+    let construit = (|| {
+        // Le pre-filtre doit etre un **sur-ensemble** des documents attendus.
+        // Une negation ne l'est pas : `must_not: ref=vis` ecarterait a plat un
+        // document dont une *autre* ligne satisfait la clause. On la retire
+        // donc du pre-filtre — la verification par element, elle, la garde.
+        let prefiltre = build_query(&sans_negations(interne), ctx)?;
+        let clause = clause_nested(interne, ctx, path)?;
+        EsResult::Ok((prefiltre, clause))
+    })();
+    ctx.nested_ouvert.borrow_mut().pop();
+    let (prefiltre, clause) = construit?;
+    let q: Box<dyn Query> = Box::new(NestedQuery::new(path.to_string(), prefiltre, clause)?);
+    boost(q, obj.get("boost"))
+}
+
+/// Traduit la requete interne d'un `nested` en conditions verifiables sur les
+/// colonnes. Tout ce qui ne s'y reduit pas est refuse explicitement.
+fn clause_nested(v: &Value, ctx: &QueryCtx, racine: &str) -> EsResult<Clause> {
+    let obj = as_object(v, "nested.query")?;
+    let (name, body) = single_key(obj, "nested.query")?;
+    match name {
+        "match_all" => Ok(Clause::Tous),
+        "match_none" => Ok(Clause::Aucun),
+        "term" | "match" => {
+            let o = as_object(body, name)?;
+            let (champ, spec) = single_key(o, name)?;
+            let valeur = match spec {
+                Value::Object(sub) => sub
+                    .get("value")
+                    .or_else(|| sub.get("query"))
+                    .cloned()
+                    .ok_or_else(|| EsError::parsing(format!("[{name}] : valeur manquante")))?,
+                v => v.clone(),
+            };
+            let mf = champ_nested(ctx, champ, racine, name)?;
+            Ok(Clause::Champ {
+                chemin: champ.to_string(),
+                champ: mf,
+                predicat: Predicat::Parmi(vec![valeur_de(ctx, champ, mf, &valeur)?]),
+            })
+        }
+        "terms" => {
+            let o = as_object(body, "terms")?;
+            let (champ, spec) = single_key(o, "terms")?;
+            let liste = spec
+                .as_array()
+                .ok_or_else(|| EsError::parsing("[terms] attend un tableau"))?;
+            let mf = champ_nested(ctx, champ, racine, "terms")?;
+            let vals = liste
+                .iter()
+                .map(|v| valeur_de(ctx, champ, mf, v))
+                .collect::<EsResult<Vec<_>>>()?;
+            Ok(Clause::Champ {
+                chemin: champ.to_string(),
+                champ: mf,
+                predicat: Predicat::Parmi(vals),
+            })
+        }
+        "range" => {
+            let o = as_object(body, "range")?;
+            let (champ, spec) = single_key(o, "range")?;
+            let spec = as_object(spec, "range")?;
+            let mf = champ_nested(ctx, champ, racine, "range")?;
+            let borne = |cle: &str| -> EsResult<Option<Valeur>> {
+                match spec.get(cle) {
+                    None | Some(Value::Null) => Ok(None),
+                    Some(v) => Ok(Some(valeur_de(ctx, champ, mf, v)?)),
+                }
+            };
+            let bas = match (borne("gte")?, borne("gt")?) {
+                (Some(v), None) => Bound::Included(v),
+                (None, Some(v)) => Bound::Excluded(v),
+                (None, None) => Bound::Unbounded,
+                (Some(_), Some(_)) => {
+                    return Err(EsError::illegal_argument(
+                        "[range] : [gte] et [gt] sont mutuellement exclusifs",
+                    ))
+                }
+            };
+            let haut = match (borne("lte")?, borne("lt")?) {
+                (Some(v), None) => Bound::Included(v),
+                (None, Some(v)) => Bound::Excluded(v),
+                (None, None) => Bound::Unbounded,
+                (Some(_), Some(_)) => {
+                    return Err(EsError::illegal_argument(
+                        "[range] : [lte] et [lt] sont mutuellement exclusifs",
+                    ))
+                }
+            };
+            Ok(Clause::Champ {
+                chemin: champ.to_string(),
+                champ: mf,
+                predicat: Predicat::Intervalle(bas, haut),
+            })
+        }
+        "exists" => {
+            let o = as_object(body, "exists")?;
+            let champ = o
+                .get("field")
+                .and_then(Value::as_str)
+                .ok_or_else(|| EsError::parsing("[exists] : cle [field] manquante"))?;
+            let mf = champ_nested(ctx, champ, racine, "exists")?;
+            Ok(Clause::Champ {
+                chemin: champ.to_string(),
+                champ: mf,
+                predicat: Predicat::Existe,
+            })
+        }
+        "prefix" => {
+            let o = as_object(body, "prefix")?;
+            let (champ, spec) = single_key(o, "prefix")?;
+            let valeur = match spec {
+                Value::Object(sub) => sub.get("value").cloned().unwrap_or(Value::Null),
+                v => v.clone(),
+            };
+            let prefixe = valeur
+                .as_str()
+                .ok_or_else(|| EsError::parsing("[prefix] attend une chaine"))?;
+            let mf = champ_nested(ctx, champ, racine, "prefix")?;
+            Ok(Clause::Champ {
+                chemin: champ.to_string(),
+                champ: mf,
+                predicat: Predicat::Prefixe(prefixe.to_string()),
+            })
+        }
+        "bool" => {
+            let o = as_object(body, "bool")?;
+            expect_only(
+                o,
+                &[
+                    "must",
+                    "filter",
+                    "should",
+                    "must_not",
+                    "minimum_should_match",
+                    "boost",
+                ],
+                "nested.bool",
+            )?;
+            let liste = |cle: &str| -> EsResult<Vec<Clause>> {
+                match o.get(cle) {
+                    None => Ok(Vec::new()),
+                    Some(Value::Array(a)) => a
+                        .iter()
+                        .map(|c| clause_nested(c, ctx, racine))
+                        .collect::<EsResult<Vec<_>>>(),
+                    Some(v) => Ok(vec![clause_nested(v, ctx, racine)?]),
+                }
+            };
+            let mut et = liste("must")?;
+            et.extend(liste("filter")?);
+            let should = liste("should")?;
+            let must_not = liste("must_not")?;
+            if !should.is_empty() {
+                // Meme regle que chez ES : `should` seul exige un match, `should`
+                // accompagne d'un `must` est facultatif sauf minimum explicite.
+                let defaut = usize::from(et.is_empty() && must_not.is_empty());
+                let minimum = match o.get("minimum_should_match") {
+                    None => defaut,
+                    Some(Value::Number(n)) => n.as_u64().unwrap_or(0) as usize,
+                    Some(_) => {
+                        return Err(EsError::unsupported(
+                            "ferrite ne supporte que [minimum_should_match] entier dans un \
+                             [nested]",
+                        ))
+                    }
+                };
+                if minimum > 0 {
+                    et.push(Clause::Ou(should, minimum));
+                }
+            }
+            for c in must_not {
+                et.push(Clause::Non(Box::new(c)));
+            }
+            Ok(if et.is_empty() {
+                Clause::Tous
+            } else {
+                Clause::Et(et)
+            })
+        }
+        autre => Err(EsError::unsupported(format!(
+            "ferrite ne supporte pas [{autre}] dans une clause [nested] ; clauses verifiables \
+             element par element : match_all, match_none, term, terms, match, range, exists, \
+             prefix, bool"
+        ))),
+    }
+}
+
+/// Le champ vise par une clause interne : il doit vivre sous la racine
+/// `nested`, sinon la correlation par element n'a pas de sens.
+fn champ_nested(ctx: &QueryCtx, champ: &str, racine: &str, clause: &str) -> EsResult<MappedField> {
+    if !mapping::est_sous_chemin(champ, racine) {
+        return Err(EsError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            "query_shard_exception",
+            format!(
+                "[nested] sur [{racine}] : le champ [{champ}] n'est pas sous ce chemin (clause \
+                 [{clause}])"
+            ),
+        ));
+    }
+    let mf = ctx.field(champ, clause)?;
+    if mf.ty.kind() == FieldKind::Text {
+        return Err(EsError::unsupported(format!(
+            "ferrite ne verifie pas un champ [text] element par element (champ [{champ}] dans un \
+             [nested]) : les colonnes portent la valeur, pas les termes analyses. Interroge son \
+             multi-field [keyword], ou sors la clause du [nested]"
+        )));
+    }
+    if mf.elem.is_none() {
+        return Err(EsError::internal(format!(
+            "[{champ}] n'a pas de colonne d'element : index construit avant le support [nested] ?"
+        )));
+    }
+    Ok(mf)
+}
+
+/// Convertit une valeur JSON au type du champ, puis en [`Valeur`] comparable.
+fn valeur_de(ctx: &QueryCtx, champ: &str, mf: MappedField, v: &Value) -> EsResult<Valeur> {
+    Ok(
+        match mapping::coerce_avec(champ, mf.ty, v, ctx.fields.format_de(champ))? {
+            TypedValue::Str(s) => Valeur::Str(s),
+            TypedValue::I64(n) => Valeur::I64(n),
+            TypedValue::F64(n) => Valeur::F64(n),
+            TypedValue::Bool(b) => Valeur::Bool(b),
+            TypedValue::Date(ms) => Valeur::I64(ms),
+        },
+    )
+}
+
+/// La requete privee de ses `must_not`, a tous les niveaux.
+///
+/// Le resultat est **plus large** que l'original : c'est exactement ce qu'un
+/// pre-filtre doit etre.
+fn sans_negations(v: &Value) -> Value {
+    match v {
+        Value::Object(o) => Value::Object(
+            o.iter()
+                .filter(|(k, _)| k.as_str() != "must_not")
+                .map(|(k, sous)| (k.clone(), sans_negations(sous)))
+                .collect(),
+        ),
+        Value::Array(a) => Value::Array(a.iter().map(sans_negations).collect()),
+        autre => autre.clone(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// join : has_child / has_parent / parent_id
+// ---------------------------------------------------------------------------
+
+/// De quel cote de la relation la requete interne s'applique.
+#[derive(Clone, Copy, PartialEq)]
+enum Sens {
+    /// `has_child` : la requete porte sur les enfants, on rend les parents.
+    VersLeParent,
+    /// `has_parent` : la requete porte sur les parents, on rend les enfants.
+    VersLEnfant,
+}
+
+/// `has_child` / `has_parent`, en deux passes.
+///
+/// 1. la requete interne est executee, restreinte a la relation visee ;
+/// 2. les identifiants qui en sortent (celui du parent pour un enfant, le sien
+///    pour un parent) deviennent une recherche sur `_id` ou sur la colonne du
+///    parent.
+///
+/// Exact, et borne par le nombre d'identifiants distincts. Elasticsearch ne
+/// peut pas se le permettre — distribue, il lui faut des *global ordinals* —
+/// mais mono-shard, parent et enfant sont forcement au meme endroit.
+fn join_query(body: &Value, ctx: &QueryCtx, sens: Sens) -> EsResult<Box<dyn Query>> {
+    let nom_clause = if sens == Sens::VersLeParent {
+        "has_child"
+    } else {
+        "has_parent"
+    };
+    let obj = as_object(body, nom_clause)?;
+    let cle_type = if sens == Sens::VersLeParent {
+        "type"
+    } else {
+        "parent_type"
+    };
+    expect_only(
+        obj,
+        &[
+            cle_type,
+            "query",
+            "score_mode",
+            "boost",
+            "inner_hits",
+            "ignore_unmapped",
+            "min_children",
+            "max_children",
+        ],
+        nom_clause,
+    )?;
+    for refuse in [
+        "inner_hits",
+        "ignore_unmapped",
+        "min_children",
+        "max_children",
+    ] {
+        if obj.contains_key(refuse) {
+            return Err(EsError::unsupported(format!(
+                "ferrite ne supporte pas [{refuse}] dans [{nom_clause}]"
+            )));
+        }
+    }
+    if let Some(mode) = obj.get("score_mode").and_then(Value::as_str) {
+        if mode != "none" {
+            return Err(EsError::unsupported(format!(
+                "ferrite ne supporte pas [score_mode: {mode}] dans [{nom_clause}] : la jointure \
+                 rend un score constant (voir docs/compat.md)"
+            )));
+        }
+    }
+
+    let (join, f_nom, f_parent) = infos_join(ctx, nom_clause)?;
+    let relation = obj
+        .get(cle_type)
+        .and_then(Value::as_str)
+        .ok_or_else(|| EsError::parsing(format!("[{nom_clause}] : cle [{cle_type}] manquante")))?;
+    let attendu_enfant = sens == Sens::VersLeParent;
+    let est_enfant = join.parent_de(relation).is_some();
+    if !join.connait(relation) || est_enfant != attendu_enfant {
+        return Err(EsError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            "query_shard_exception",
+            format!(
+                "[{nom_clause}] : [{relation}] n'est pas {} declare dans [{}] ; relations : {:?}",
+                if attendu_enfant {
+                    "un enfant"
+                } else {
+                    "un parent"
+                },
+                join.champ,
+                join.noms()
+            ),
+        ));
+    }
+    let interne = obj
+        .get("query")
+        .ok_or_else(|| EsError::parsing(format!("[{nom_clause}] : cle [query] manquante")))?;
+
+    // Passe 1 : les documents du cote interroge, restreints a la relation.
+    let cible = BooleanQuery::new(vec![
+        (Occur::Must, build_query(interne, ctx)?),
+        (
+            Occur::Must,
+            Box::new(TermQuery::new(
+                Term::from_field_text(f_nom, relation),
+                IndexRecordOption::Basic,
+            )),
+        ),
+    ]);
+
+    // Passe 2 : de ces documents aux identifiants qui les relient.
+    let (lu, vise) = if sens == Sens::VersLeParent {
+        (f_parent, ctx.fields.id) // l'enfant porte l'id du parent
+    } else {
+        (ctx.fields.id, f_parent) // le parent porte le sien
+    };
+    let ids = collecte_termes(ctx, &cible, lu)?;
+    if ids.is_empty() {
+        return Ok(Box::new(EmptyQuery));
+    }
+    let termes: Vec<Term> = ids
+        .iter()
+        .map(|id| Term::from_field_text(vise, id))
+        .collect();
+    let inner: Box<dyn Query> = Box::new(ConstScoreQuery::new(
+        Box::new(TermSetQuery::new(termes)),
+        1.0,
+    ));
+    boost(inner, obj.get("boost"))
+}
+
+/// `{"parent_id": {"type": "ligne", "id": "1"}}` : les enfants d'un parent.
+fn parent_id_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
+    let obj = as_object(body, "parent_id")?;
+    expect_only(
+        obj,
+        &["type", "id", "boost", "ignore_unmapped"],
+        "parent_id",
+    )?;
+    if obj.contains_key("ignore_unmapped") {
+        return Err(EsError::unsupported(
+            "ferrite ne supporte pas [ignore_unmapped] dans [parent_id]",
+        ));
+    }
+    let (join, f_nom, f_parent) = infos_join(ctx, "parent_id")?;
+    let relation = obj
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| EsError::parsing("[parent_id] : cle [type] manquante"))?;
+    if join.parent_de(relation).is_none() {
+        return Err(EsError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            "query_shard_exception",
+            format!(
+                "[parent_id] : [{relation}] n'est pas un enfant declare dans [{}]",
+                join.champ
+            ),
+        ));
+    }
+    let id = match obj.get("id") {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Number(n)) => n.to_string(),
+        _ => return Err(EsError::parsing("[parent_id] : cle [id] manquante")),
+    };
+    let inner: Box<dyn Query> = Box::new(ConstScoreQuery::new(
+        Box::new(BooleanQuery::new(vec![
+            (
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_text(f_nom, relation),
+                    IndexRecordOption::Basic,
+                )) as Box<dyn Query>,
+            ),
+            (
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_text(f_parent, &id),
+                    IndexRecordOption::Basic,
+                )),
+            ),
+        ])),
+        1.0,
+    ));
+    boost(inner, obj.get("boost"))
+}
+
+fn infos_join<'a>(
+    ctx: &'a QueryCtx,
+    clause: &str,
+) -> EsResult<(
+    &'a mapping::Join,
+    tantivy::schema::Field,
+    tantivy::schema::Field,
+)> {
+    match (
+        ctx.fields.join.as_ref(),
+        ctx.fields.join_name,
+        ctx.fields.join_parent,
+    ) {
+        (Some(j), Some(n), Some(p)) => Ok((j, n, p)),
+        _ => Err(EsError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            "query_shard_exception",
+            format!("[{clause}] : cet index n'a pas de champ [join]"),
+        )),
+    }
+}
+
+/// Les valeurs distinctes d'une colonne `keyword`, pour les documents qui
+/// correspondent a `q`.
+fn collecte_termes(
+    ctx: &QueryCtx,
+    q: &dyn Query,
+    champ: tantivy::schema::Field,
+) -> EsResult<Vec<String>> {
+    use std::collections::BTreeSet;
+    let nom = ctx.searcher.schema().get_field_name(champ).to_string();
+    let mut out = BTreeSet::new();
+    let poids = q.weight(tantivy::query::EnableScoring::disabled_from_searcher(
+        ctx.searcher,
+    ))?;
+    for reader in ctx.searcher.segment_readers() {
+        let Ok(Some(col)) = reader.fast_fields().str(&nom) else {
+            continue;
+        };
+        let mut docset = poids.scorer(reader, 1.0)?;
+        let mut buf = String::new();
+        let mut doc = docset.doc();
+        while doc != tantivy::TERMINATED {
+            for ord in col.term_ords(doc) {
+                buf.clear();
+                if col.ord_to_str(ord, &mut buf).unwrap_or(false) {
+                    out.insert(buf.clone());
+                }
+            }
+            doc = docset.advance();
+        }
+    }
+    Ok(out.into_iter().collect())
 }

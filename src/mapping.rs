@@ -6,7 +6,7 @@
 //! qu'en bricolant un schema extensible. Le mapping dynamique aura sa propre
 //! iteration ; d'ici la, la couture est ici et nulle part ailleurs.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{json, Map, Value};
 use tantivy::schema::{
@@ -15,7 +15,8 @@ use tantivy::schema::{
 };
 use tantivy::{DateTime, Term};
 
-use crate::analysis::{self, Analyzer};
+use crate::analysis::{self, Analysis, Analyzer};
+use crate::dateformat::DateFormat;
 use crate::error::{EsError, EsResult};
 
 /// Champs internes du schema tantivy. Prefixes par `_` — un mapping utilisateur
@@ -121,6 +122,8 @@ pub struct FieldMapping {
     /// (elle reste dans `_source`). Le defaut d'ES pour les `.keyword` generes
     /// dynamiquement est 256.
     pub ignore_above: Option<usize>,
+    /// Le `format` d'un champ `date`. `None` = celui d'ES par defaut.
+    pub format: Option<DateFormat>,
 }
 
 impl FieldMapping {
@@ -130,7 +133,13 @@ impl FieldMapping {
             analyzer: None,
             fields: BTreeMap::new(),
             ignore_above: None,
+            format: None,
         }
+    }
+
+    /// Le format effectif d'un champ `date`.
+    pub fn format(&self) -> DateFormat {
+        self.format.clone().unwrap_or_default()
     }
 
     /// L'analyzer effectif d'un champ `text`.
@@ -138,19 +147,22 @@ impl FieldMapping {
         self.analyzer.unwrap_or_default()
     }
 
-    fn to_json(&self) -> Value {
+    fn to_json(&self, analysis: &Analysis) -> Value {
         let mut o = Map::new();
         o.insert("type".into(), json!(self.ty.name()));
         if let Some(a) = self.analyzer {
-            o.insert("analyzer".into(), json!(a.name()));
+            o.insert("analyzer".into(), json!(a.name(analysis)));
         }
         if let Some(n) = self.ignore_above {
             o.insert("ignore_above".into(), json!(n));
         }
+        if let Some(f) = &self.format {
+            o.insert("format".into(), json!(f.source));
+        }
         if !self.fields.is_empty() {
             let mut subs = Map::new();
             for (name, fm) in &self.fields {
-                subs.insert(name.clone(), fm.to_json());
+                subs.insert(name.clone(), fm.to_json(analysis));
             }
             o.insert("fields".into(), Value::Object(subs));
         }
@@ -201,10 +213,131 @@ impl Dynamic {
     }
 }
 
+/// Le champ `join` d'un index : un seul, et ses relations parent -> enfants.
+///
+/// ferrite etant mono-shard, parent et enfant sont forcement au meme endroit :
+/// la jointure n'a besoin ni de routage ni de *global ordinals*, seulement de
+/// deux colonnes (le nom de la relation, l'identifiant du parent).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Join {
+    /// Le nom du champ (`lien`).
+    pub champ: String,
+    /// `parent -> enfants`.
+    pub relations: BTreeMap<String, Vec<String>>,
+}
+
+impl Join {
+    /// Le parent declare pour ce nom de relation, s'il s'agit d'un enfant.
+    pub fn parent_de(&self, nom: &str) -> Option<&str> {
+        self.relations
+            .iter()
+            .find(|(_, enfants)| enfants.iter().any(|e| e == nom))
+            .map(|(p, _)| p.as_str())
+    }
+
+    pub fn connait(&self, nom: &str) -> bool {
+        self.relations.contains_key(nom) || self.parent_de(nom).is_some()
+    }
+
+    pub fn noms(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = self.relations.keys().map(String::as_str).collect();
+        for enfants in self.relations.values() {
+            out.extend(enfants.iter().map(String::as_str));
+        }
+        out
+    }
+
+    fn to_json(&self) -> Value {
+        let relations: Map<String, Value> = self
+            .relations
+            .iter()
+            .map(|(p, enfants)| {
+                let v = if enfants.len() == 1 {
+                    json!(enfants[0])
+                } else {
+                    json!(enfants)
+                };
+                (p.clone(), v)
+            })
+            .collect();
+        json!({"type": "join", "eager_global_ordinals": true, "relations": relations})
+    }
+
+    fn parse(champ: &str, obj: &Map<String, Value>) -> EsResult<Self> {
+        for cle in obj.keys() {
+            if !matches!(cle.as_str(), "type" | "relations" | "eager_global_ordinals") {
+                return Err(EsError::unsupported(format!(
+                    "ferrite ne supporte pas [{cle}] sur un champ [join] ([{champ}])"
+                )));
+            }
+        }
+        let relations = obj
+            .get("relations")
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                EsError::mapper_parsing(format!("[{champ}] : un [join] declare ses [relations]"))
+            })?;
+        let mut out = BTreeMap::new();
+        for (parent, enfants) in relations {
+            let enfants = match enfants {
+                Value::String(s) => vec![s.clone()],
+                Value::Array(a) => a
+                    .iter()
+                    .map(|v| {
+                        v.as_str().map(str::to_string).ok_or_else(|| {
+                            EsError::mapper_parsing(format!(
+                                "[{champ}.relations.{parent}] : noms d'enfants attendus"
+                            ))
+                        })
+                    })
+                    .collect::<EsResult<Vec<_>>>()?,
+                _ => {
+                    return Err(EsError::mapper_parsing(format!(
+                        "[{champ}.relations.{parent}] : une chaine ou un tableau est attendu"
+                    )))
+                }
+            };
+            out.insert(parent.clone(), enfants);
+        }
+        if out.is_empty() {
+            return Err(EsError::mapper_parsing(format!(
+                "[{champ}] : un [join] sans relation n'a pas d'objet"
+            )));
+        }
+        Ok(Self {
+            champ: champ.to_string(),
+            relations: out,
+        })
+    }
+}
+
 /// Le mapping d'un index. Ordonne par nom, comme le rend ES.
+///
+/// Les sous-objets n'ont pas de representation propre : ils sont **aplatis en
+/// chemins pointes** (`fournisseur.nom`), exactement comme le fait
+/// Elasticsearch, qui n'indexe pas non plus d'objet — il indexe des chemins.
+/// C'est ce qui permet aux requetes, aux tris et aux agregations de resoudre un
+/// champ imbrique sans rien connaitre des objets : `Fields.mapped` est deja une
+/// table `chemin -> champ`. Le nichage n'existe que dans la reponse
+/// `GET /{index}/_mapping`, ou [`Mapping::to_json`] le reconstruit.
 #[derive(Debug, Clone, Default)]
 pub struct Mapping {
     pub properties: BTreeMap<String, FieldMapping>,
+    /// Les chemins declares `type: nested`. Un `nested` s'indexe comme un objet
+    /// — mais chaque valeur retient **a quel element du tableau** elle
+    /// appartient, ce qui permet de retrouver la correspondance qu'un `object`
+    /// perd. Voir [`crate::nested`].
+    pub nested: BTreeSet<String>,
+    /// Les objets declares sans aucun sous-champ (`{"type": "object"}`). Ils
+    /// n'indexent rien — leurs champs viendront des documents — mais ES les
+    /// rend dans `_mapping`, donc on les garde.
+    pub objets_vides: BTreeSet<String>,
+    /// Le champ `join`, s'il y en a un. ES n'en autorise qu'un par index.
+    pub join: Option<Join>,
+    /// Les analyzers sur mesure de l'index (`settings.analysis`). Ils vivent
+    /// avec le mapping parce que c'est lui qui les nomme, mais ils ne sont pas
+    /// rendus par `_mapping` : leur place est dans `_settings`.
+    pub analysis: crate::analysis::Analysis,
     pub dynamic: Dynamic,
 }
 
@@ -213,11 +346,25 @@ impl Mapping {
         self.properties.get(field)
     }
 
-    /// Le mapping tel qu'ES le rend sur `GET /{index}/_mapping`.
+    /// Le mapping tel qu'ES le rend sur `GET /{index}/_mapping` : les chemins
+    /// pointes y redeviennent des objets imbriques.
     pub fn to_json(&self) -> Value {
         let mut props = Map::new();
-        for (name, fm) in &self.properties {
-            props.insert(name.clone(), fm.to_json());
+        for (chemin, fm) in &self.properties {
+            niche(&mut props, chemin, fm.to_json(&self.analysis));
+        }
+        for vide in &self.objets_vides {
+            if pointe_mut(&mut props, vide).is_none() {
+                niche(&mut props, vide, json!({"type": "object"}));
+            }
+        }
+        if let Some(j) = &self.join {
+            props.insert(j.champ.clone(), j.to_json());
+        }
+        for racine in &self.nested {
+            if let Some(o) = pointe_mut(&mut props, racine).and_then(Value::as_object_mut) {
+                o.insert("type".into(), json!("nested"));
+            }
         }
         let mut o = Map::new();
         if self.dynamic != Dynamic::True {
@@ -227,16 +374,25 @@ impl Mapping {
         Value::Object(o)
     }
 
-    /// Parse `{"properties": {...}}`.
+    /// Parse `{"properties": {...}}`, sous-objets compris.
     ///
     /// Tout ce qui n'est pas compris est refuse : c'est la seule facon de ne pas
     /// mentir sur ce qui est indexe.
     pub fn parse(v: &Value) -> EsResult<Self> {
+        Self::parse_avec(v, &Analysis::default())
+    }
+
+    /// Parse un mapping en connaissant les analyzers declares dans les
+    /// `settings` : c'est ce qui permet a un champ de citer `fr_produit`.
+    pub fn parse_avec(v: &Value, declares: &Analysis) -> EsResult<Self> {
         let obj = v
             .as_object()
             .ok_or_else(|| EsError::mapper_parsing("[mappings] doit etre un objet"))?;
 
         let mut properties = BTreeMap::new();
+        let mut nested = BTreeSet::new();
+        let mut vides = BTreeSet::new();
+        let mut join = None;
         let mut dynamic = Dynamic::default();
         for (key, val) in obj {
             match key.as_str() {
@@ -245,8 +401,23 @@ impl Mapping {
                         EsError::mapper_parsing("[mappings.properties] doit etre un objet")
                     })?;
                     for (name, spec) in props {
-                        validate_field_name(name)?;
-                        properties.insert(name.clone(), parse_field_mapping(name, spec, false)?);
+                        if spec.get("type").and_then(Value::as_str) == Some("join") {
+                            if join.is_some() {
+                                return Err(EsError::mapper_parsing(
+                                    "un index n'accepte qu'un seul champ [join]",
+                                ));
+                            }
+                            join = Some(Join::parse(name, as_obj(spec, name)?)?);
+                            continue;
+                        }
+                        parse_propriete(
+                            name,
+                            spec,
+                            &mut properties,
+                            &mut nested,
+                            &mut vides,
+                            declares,
+                        )?;
                     }
                 }
                 "dynamic" => dynamic = Dynamic::parse(val)?,
@@ -268,8 +439,175 @@ impl Mapping {
         }
         Ok(Self {
             properties,
+            nested,
+            objets_vides: vides,
+            join,
+            analysis: declares.clone(),
             dynamic,
         })
+    }
+}
+
+/// Parse une propriete du mapping, qui peut etre un champ ou un sous-objet.
+///
+/// Un sous-objet ne produit aucune entree pour lui-meme : il n'existe que par
+/// les chemins de ses feuilles (`fournisseur` -> `fournisseur.nom`,
+/// `fournisseur.pays`). C'est exactement le modele d'Elasticsearch, ou un objet
+/// n'est pas un champ indexable.
+fn parse_propriete(
+    chemin: &str,
+    spec: &Value,
+    dans: &mut BTreeMap<String, FieldMapping>,
+    nested: &mut BTreeSet<String>,
+    vides: &mut BTreeSet<String>,
+    declares: &Analysis,
+) -> EsResult<()> {
+    for part in chemin.split('.') {
+        validate_field_name_part(part, chemin)?;
+    }
+    if chemin.starts_with('_') {
+        return Err(EsError::mapper_parsing(format!(
+            "[{chemin}] : les noms de champ commencant par [_] sont reserves"
+        )));
+    }
+
+    let obj = spec.as_object().ok_or_else(|| {
+        EsError::mapper_parsing(format!("[mappings.properties.{chemin}] doit etre un objet"))
+    })?;
+
+    // Un objet se reconnait a son `properties`. ES accepte les deux ecritures :
+    // avec ou sans `"type": "object"`.
+    if let Some(sous) = obj.get("properties") {
+        let ty = obj.get("type").and_then(Value::as_str);
+        if !matches!(ty, None | Some("object") | Some("nested")) {
+            return Err(EsError::mapper_parsing(format!(
+                "[{chemin}] : [properties] n'a pas de sens sur un champ de type [{}]",
+                ty.unwrap_or("?")
+            )));
+        }
+        if ty == Some("nested") {
+            // Un `nested` dans un `nested` demanderait un indice d'element par
+            // niveau : refus explicite plutot qu'une correlation fausse.
+            if let Some(parent) = nested.iter().find(|r| est_sous_chemin(chemin, r)) {
+                return Err(EsError::unsupported(format!(
+                    "ferrite ne supporte pas un [nested] dans un autre [nested] (champ \
+                     [{chemin}], deja sous [{parent}])"
+                )));
+            }
+            nested.insert(chemin.to_string());
+        }
+        for autre in obj.keys() {
+            if autre != "properties" && autre != "type" && autre != "dynamic" {
+                return Err(EsError::unsupported(format!(
+                    "ferrite ne supporte pas le parametre [{autre}] sur l'objet [{chemin}] ; \
+                     parametres acceptes : type, properties"
+                )));
+            }
+        }
+        if obj.contains_key("dynamic") {
+            return Err(EsError::unsupported(format!(
+                "ferrite ne supporte pas [dynamic] par objet (champ [{chemin}]) ; il se declare \
+                 au niveau du mapping"
+            )));
+        }
+        let sous = sous.as_object().ok_or_else(|| {
+            EsError::mapper_parsing(format!("[{chemin}.properties] doit etre un objet"))
+        })?;
+        if sous.is_empty() {
+            // Un objet sans sous-champ ne declare rien — ES l'accepte, et ses
+            // champs viendront des documents. On le memorise quand meme pour
+            // pouvoir le rendre dans `_mapping`.
+            vides.insert(chemin.to_string());
+            return Ok(());
+        }
+        for (nom, decl) in sous {
+            parse_propriete(
+                &format!("{chemin}.{nom}"),
+                decl,
+                dans,
+                nested,
+                vides,
+                declares,
+            )?;
+        }
+        return Ok(());
+    }
+    if matches!(
+        obj.get("type").and_then(Value::as_str),
+        Some("object") | Some("nested")
+    ) {
+        vides.insert(chemin.to_string());
+        return Ok(());
+    }
+
+    let fm = parse_field_mapping(chemin, spec, false, declares)?;
+    // `a` feuille et `a.b` objet ne peuvent pas coexister — ES refuse aussi.
+    conflit_de_chemin(chemin, dans)?;
+    dans.insert(chemin.to_string(), fm);
+    Ok(())
+}
+
+/// Un chemin ne doit etre ni le prefixe, ni le prolongement d'un autre.
+fn conflit_de_chemin(chemin: &str, dans: &BTreeMap<String, FieldMapping>) -> EsResult<()> {
+    for existant in dans.keys() {
+        let (court, long) = if existant.len() < chemin.len() {
+            (existant.as_str(), chemin)
+        } else {
+            (chemin, existant.as_str())
+        };
+        if long.strip_prefix(court).is_some_and(|r| r.starts_with('.')) {
+            return Err(EsError::mapper_parsing(format!(
+                "[{court}] est declare a la fois comme champ et comme objet (avec [{long}])"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn as_obj<'a>(v: &'a Value, quoi: &str) -> EsResult<&'a Map<String, Value>> {
+    v.as_object()
+        .ok_or_else(|| EsError::mapper_parsing(format!("[{quoi}] doit etre un objet")))
+}
+
+/// `chemin` est-il sous `racine` (strictement) ?
+pub fn est_sous_chemin(chemin: &str, racine: &str) -> bool {
+    chemin
+        .strip_prefix(racine)
+        .is_some_and(|reste| reste.starts_with('.'))
+}
+
+/// Retrouve le noeud `{"properties": {...}}` d'un chemin dans un arbre rendu.
+fn pointe_mut<'a>(props: &'a mut Map<String, Value>, chemin: &str) -> Option<&'a mut Value> {
+    match chemin.split_once('.') {
+        None => props.get_mut(chemin),
+        Some((tete, reste)) => {
+            let sous = props
+                .get_mut(tete)?
+                .as_object_mut()?
+                .get_mut("properties")?
+                .as_object_mut()?;
+            pointe_mut(sous, reste)
+        }
+    }
+}
+
+/// Repose un chemin pointe dans l'arbre `properties` d'une reponse `_mapping`.
+fn niche(props: &mut Map<String, Value>, chemin: &str, feuille: Value) {
+    match chemin.split_once('.') {
+        None => {
+            props.insert(chemin.to_string(), feuille);
+        }
+        Some((tete, reste)) => {
+            let entree = props
+                .entry(tete.to_string())
+                .or_insert_with(|| json!({"properties": {}}));
+            let sous = entree
+                .as_object_mut()
+                .and_then(|o| o.get_mut("properties"))
+                .and_then(Value::as_object_mut)
+                .expect("un prefixe de chemin est toujours un objet");
+            niche(sous, reste, feuille);
+        }
     }
 }
 
@@ -277,7 +615,12 @@ impl Mapping {
 ///
 /// `sous_champ` indique qu'on est deja dans un `fields` : ES n'autorise qu'un
 /// seul niveau de multi-fields, et ferrite refuse le second explicitement.
-fn parse_field_mapping(name: &str, spec: &Value, sous_champ: bool) -> EsResult<FieldMapping> {
+fn parse_field_mapping(
+    name: &str,
+    spec: &Value,
+    sous_champ: bool,
+    declares: &Analysis,
+) -> EsResult<FieldMapping> {
     let obj = spec.as_object().ok_or_else(|| {
         EsError::mapper_parsing(format!("[mappings.properties.{name}] doit etre un objet"))
     })?;
@@ -286,6 +629,7 @@ fn parse_field_mapping(name: &str, spec: &Value, sous_champ: bool) -> EsResult<F
     let mut fields = BTreeMap::new();
     let mut ignore_above = None;
     let mut analyzer = None;
+    let mut format = None;
 
     for (key, val) in obj {
         match key.as_str() {
@@ -315,7 +659,12 @@ fn parse_field_mapping(name: &str, spec: &Value, sous_champ: bool) -> EsResult<F
                     validate_field_name_part(sub_name, &format!("{name}.{sub_name}"))?;
                     fields.insert(
                         sub_name.clone(),
-                        parse_field_mapping(&format!("{name}.{sub_name}"), sub_spec, true)?,
+                        parse_field_mapping(
+                            &format!("{name}.{sub_name}"),
+                            sub_spec,
+                            true,
+                            declares,
+                        )?,
                     );
                 }
             }
@@ -323,7 +672,13 @@ fn parse_field_mapping(name: &str, spec: &Value, sous_champ: bool) -> EsResult<F
                 let nom = val.as_str().ok_or_else(|| {
                     EsError::mapper_parsing(format!("[{name}.analyzer] doit etre une chaine"))
                 })?;
-                analyzer = Some(analysis::parse_declaration(nom, name)?);
+                analyzer = Some(analysis::parse_declaration(nom, name, declares)?);
+            }
+            "format" => {
+                let motif = val.as_str().ok_or_else(|| {
+                    EsError::mapper_parsing(format!("[{name}.format] doit etre une chaine"))
+                })?;
+                format = Some(DateFormat::parse(motif)?);
             }
             "ignore_above" => {
                 ignore_above = Some(
@@ -336,15 +691,10 @@ fn parse_field_mapping(name: &str, spec: &Value, sous_champ: bool) -> EsResult<F
                         })?,
                 );
             }
-            "properties" => {
-                return Err(EsError::unsupported(format!(
-                    "ferrite ne supporte pas les champs objet/imbriques (champ [{name}])"
-                )))
-            }
             other => {
                 return Err(EsError::unsupported(format!(
                     "ferrite ne supporte pas le parametre de champ [{other}] (champ [{name}]) ; \
-                     parametres acceptes : type, analyzer, fields, ignore_above"
+                     parametres acceptes : type, analyzer, fields, ignore_above, format"
                 )))
             }
         }
@@ -368,7 +718,136 @@ fn parse_field_mapping(name: &str, spec: &Value, sous_champ: bool) -> EsResult<F
         analyzer,
         fields,
         ignore_above,
+        format,
     })
+}
+
+/// Parcourt un document en profondeur et appelle `f` sur chaque **feuille**,
+/// avec son chemin pointe.
+///
+/// C'est la traduction, cote document, du choix fait cote mapping : un objet
+/// n'est pas une valeur indexable, ses feuilles le sont.
+/// `{"client": {"ville": "Lyon"}}` appelle `f("client.ville", "Lyon")`.
+///
+/// Un tableau d'objets est **aplati**, comme chez Elasticsearch :
+/// `{"l": [{"ref": "A"}, {"ref": "B"}]}` appelle `f("l.ref", "A")` puis
+/// `f("l.ref", "B")` — le champ devient multivalue et la correspondance entre
+/// sous-champs d'un meme element est perdue. C'est precisement ce que le type
+/// `nested` existe pour conserver.
+pub fn parcours_feuilles(
+    obj: &Map<String, Value>,
+    f: &mut impl FnMut(&str, &Value) -> EsResult<()>,
+) -> EsResult<()> {
+    parcours_feuilles_nested(obj, &BTreeSet::new(), &mut |chemin, valeur, _| {
+        f(chemin, valeur)
+    })
+}
+
+/// Meme parcours, mais en suivant les elements des tableaux `nested`.
+///
+/// Le troisieme argument du rappel est l'indice de l'element du tableau
+/// `nested` le plus proche — `None` hors de tout `nested`. C'est **la** donnee
+/// qui distingue `nested` d'`object` : elle permet de savoir, plus tard, que
+/// `l.ref = "A"` et `l.qte = 5` venaient du meme element.
+///
+/// Le rappel `element` est appele une fois par racine `nested` rencontree, avec
+/// le nombre d'elements du tableau.
+pub fn parcours_nested<'a>(
+    obj: &'a Map<String, Value>,
+    nested: &BTreeSet<String>,
+    f: &mut impl FnMut(&str, &'a Value, Option<u32>) -> EsResult<()>,
+    cardinal: &mut impl FnMut(&str, u32) -> EsResult<()>,
+) -> EsResult<()> {
+    parcours_feuilles_nested_avec(obj, nested, f, &mut Some(cardinal))
+}
+
+fn parcours_feuilles_nested<'a>(
+    obj: &'a Map<String, Value>,
+    nested: &BTreeSet<String>,
+    f: &mut impl FnMut(&str, &'a Value, Option<u32>) -> EsResult<()>,
+) -> EsResult<()> {
+    parcours_feuilles_nested_avec(
+        obj,
+        nested,
+        f,
+        &mut None::<&mut dyn FnMut(&str, u32) -> EsResult<()>>,
+    )
+}
+
+fn parcours_feuilles_nested_avec<'a>(
+    obj: &'a Map<String, Value>,
+    nested: &BTreeSet<String>,
+    f: &mut impl FnMut(&str, &'a Value, Option<u32>) -> EsResult<()>,
+    cardinal: &mut Option<impl FnMut(&str, u32) -> EsResult<()>>,
+) -> EsResult<()> {
+    fn descend<'a>(
+        chemin: &str,
+        valeur: &'a Value,
+        elem: Option<u32>,
+        nested: &BTreeSet<String>,
+        f: &mut impl FnMut(&str, &'a Value, Option<u32>) -> EsResult<()>,
+        cardinal: &mut Option<impl FnMut(&str, u32) -> EsResult<()>>,
+    ) -> EsResult<()> {
+        // Une racine `nested` : ses elements sont numerotes, et c'est ce
+        // numero que porteront toutes les valeurs qui en descendent.
+        if nested.contains(chemin) {
+            let elements: Vec<&Value> = match valeur {
+                Value::Array(a) => a.iter().filter(|v| !v.is_null()).collect(),
+                Value::Null => return Ok(()),
+                v => vec![v],
+            };
+            if let Some(c) = cardinal.as_mut() {
+                c(chemin, elements.len() as u32)?;
+            }
+            for (i, element) in elements.iter().enumerate() {
+                let o = element.as_object().ok_or_else(|| {
+                    EsError::mapper_parsing(format!(
+                        "[{chemin}] est declare [nested] : ses elements doivent etre des objets"
+                    ))
+                })?;
+                for (nom, v) in o {
+                    descend(&joins(chemin, nom), v, Some(i as u32), nested, f, cardinal)?;
+                }
+            }
+            return Ok(());
+        }
+
+        match valeur {
+            Value::Object(o) => {
+                for (nom, v) in o {
+                    descend(&joins(chemin, nom), v, elem, nested, f, cardinal)?;
+                }
+                Ok(())
+            }
+            Value::Array(a) if a.iter().any(Value::is_object) => {
+                if a.iter().any(|v| !v.is_object() && !v.is_null()) {
+                    return Err(EsError::mapper_parsing(format!(
+                        "[{chemin}] melange des objets et des valeurs dans le meme tableau"
+                    )));
+                }
+                for v in a {
+                    if !v.is_null() {
+                        descend(chemin, v, elem, nested, f, cardinal)?;
+                    }
+                }
+                Ok(())
+            }
+            v => f(chemin, v, elem),
+        }
+    }
+
+    for (nom, valeur) in obj {
+        descend(nom, valeur, None, nested, f, cardinal)?;
+    }
+    Ok(())
+}
+
+fn joins(prefixe: &str, nom: &str) -> String {
+    if prefixe.is_empty() {
+        nom.to_string()
+    } else {
+        format!("{prefixe}.{nom}")
+    }
 }
 
 /// Devine le mapping d'un champ a partir de sa premiere valeur, comme le fait
@@ -404,6 +883,7 @@ pub fn infer(value: &Value) -> Option<FieldMapping> {
                     analyzer: None,
                     fields: BTreeMap::new(),
                     ignore_above: Some(256),
+                    format: None,
                 },
             );
             Some(fm)
@@ -431,23 +911,6 @@ fn validate_field_name_part(name: &str, chemin: &str) -> EsResult<()> {
     Ok(())
 }
 
-fn validate_field_name(name: &str) -> EsResult<()> {
-    if name.is_empty() {
-        return Err(EsError::mapper_parsing("nom de champ vide"));
-    }
-    if name.starts_with('_') {
-        return Err(EsError::mapper_parsing(format!(
-            "[{name}] : les noms de champ commencant par [_] sont reserves"
-        )));
-    }
-    if name.contains('.') {
-        return Err(EsError::unsupported(format!(
-            "ferrite ne supporte pas les noms de champ pointes (champ [{name}])"
-        )));
-    }
-    Ok(())
-}
-
 /// Un champ du schema tantivy, resolu.
 #[derive(Debug, Clone, Copy)]
 pub struct MappedField {
@@ -456,7 +919,19 @@ pub struct MappedField {
     pub ignore_above: Option<usize>,
     /// L'analyzer a appliquer aux requetes sur ce champ.
     pub analyzer: Analyzer,
+    /// Sous un `nested` : la colonne jumelle qui dit, pour chaque valeur
+    /// indexee ici, de quel element du tableau elle vient. Meme arite, par
+    /// construction — elle est alimentee dans la meme boucle.
+    pub elem: Option<Field>,
 }
+
+/// Prefixe des colonnes internes qui portent l'indice d'element d'un `nested`.
+/// Un champ utilisateur ne peut pas commencer par `_`, donc pas de collision.
+pub const P_ELEM: &str = "_elem.";
+/// Prefixe de la colonne qui compte les elements d'un `nested`, par document.
+pub const P_NELEM: &str = "_nelem.";
+/// La colonne qui porte l'identifiant du parent, pour un document enfant.
+pub const F_JOIN_PARENT: &str = "_join_parent";
 
 /// Les handles tantivy resolus une fois pour toutes a l'ouverture de l'index.
 #[derive(Debug, Clone)]
@@ -471,6 +946,19 @@ pub struct Fields {
     /// Pour une propriete de premier niveau, toutes les cibles a alimenter a
     /// l'indexation : le champ lui-meme **et** ses multi-fields.
     pub targets: BTreeMap<String, Vec<MappedField>>,
+    /// Les racines `nested` declarees.
+    pub nested: BTreeSet<String>,
+    /// Par racine `nested` : le nombre d'elements du document.
+    pub nelem: BTreeMap<String, Field>,
+    /// Le `format` declare des champs `date`, par chemin. Il sert a la lecture
+    /// (indexation, bornes d'un `range`) comme au rendu (`*_as_string`).
+    pub formats: BTreeMap<String, DateFormat>,
+    /// Le champ `join` declare, et ses deux colonnes : le nom de la relation
+    /// (interrogeable comme un `keyword`, sous le nom du champ) et
+    /// l'identifiant du parent.
+    pub join: Option<Join>,
+    pub join_name: Option<Field>,
+    pub join_parent: Option<Field>,
 }
 
 impl Fields {
@@ -480,6 +968,20 @@ impl Fields {
 
     pub fn targets_of(&self, name: &str) -> Option<&[MappedField]> {
         self.targets.get(name).map(Vec::as_slice)
+    }
+
+    /// Le format de date d'un champ, s'il en declare un.
+    pub fn format_de(&self, chemin: &str) -> Option<&DateFormat> {
+        self.formats.get(chemin)
+    }
+
+    /// La racine `nested` dont ce chemin depend, s'il y en a une.
+    pub fn racine_nested(&self, chemin: &str) -> Option<&str> {
+        self.nested
+            .iter()
+            .rev()
+            .find(|r| est_sous_chemin(chemin, r))
+            .map(String::as_str)
     }
 }
 
@@ -496,8 +998,41 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
     let version = b.add_u64_field(F_VERSION, FAST | STORED);
     let seq_no = b.add_u64_field(F_SEQ_NO, FAST | STORED);
 
-    let mut mapped = BTreeMap::new();
+    let mut mapped: BTreeMap<String, MappedField> = BTreeMap::new();
     let mut targets: BTreeMap<String, Vec<MappedField>> = BTreeMap::new();
+    let mut nelem = BTreeMap::new();
+    let mut formats = BTreeMap::new();
+    let (mut join_name, mut join_parent) = (None, None);
+    if let Some(j) = &mapping.join {
+        let f = add_field(&mut b, &j.champ, FieldType::Keyword, Analyzer::default());
+        // Interrogeable comme un `keyword` sous son propre nom — c'est ce que
+        // fait ES : `{"term": {"lien": "article"}}` filtre sur la relation.
+        // Present dans `mapped` (donc dans les requetes) mais pas dans
+        // `targets` : sa valeur ne s'indexe pas comme un champ ordinaire.
+        mapped.insert(
+            j.champ.clone(),
+            MappedField {
+                field: f,
+                ty: FieldType::Keyword,
+                ignore_above: None,
+                analyzer: Analyzer::default(),
+                elem: None,
+            },
+        );
+        join_name = Some(f);
+        join_parent = Some(add_field(
+            &mut b,
+            F_JOIN_PARENT,
+            FieldType::Keyword,
+            Analyzer::default(),
+        ));
+    }
+    for racine in &mapping.nested {
+        nelem.insert(
+            racine.clone(),
+            b.add_u64_field(&format!("{P_NELEM}{racine}"), NumericOptions::from(FAST)),
+        );
+    }
 
     for (name, fm) in &mapping.properties {
         let mut cibles = Vec::with_capacity(1 + fm.fields.len());
@@ -511,7 +1046,17 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
                 ty: decl.ty,
                 ignore_above: decl.ignore_above,
                 analyzer: decl.analyzer(),
+                elem: mapping
+                    .nested
+                    .iter()
+                    .any(|r| est_sous_chemin(&chemin, r))
+                    .then(|| {
+                        b.add_u64_field(&format!("{P_ELEM}{chemin}"), NumericOptions::from(FAST))
+                    }),
             };
+            if let Some(f) = &decl.format {
+                formats.insert(chemin.clone(), f.clone());
+            }
             mapped.insert(chemin, entry);
             cibles.push(entry);
         }
@@ -527,6 +1072,12 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
             seq_no,
             mapped,
             targets,
+            nested: mapping.nested.clone(),
+            nelem,
+            formats,
+            join: mapping.join.clone(),
+            join_name,
+            join_parent,
         },
     )
 }
@@ -536,7 +1087,7 @@ fn add_field(b: &mut SchemaBuilder, name: &str, ty: FieldType, analyzer: Analyze
         FieldKind::Text => {
             let opts = TextOptions::default().set_indexing_options(
                 TextFieldIndexing::default()
-                    .set_tokenizer(analyzer.tokenizer())
+                    .set_tokenizer(&analyzer.tokenizer())
                     .set_index_option(IndexRecordOption::WithFreqsAndPositions),
             );
             b.add_text_field(name, opts)
@@ -595,6 +1146,16 @@ impl TypedValue {
 ///
 /// Toute valeur non convertible est une erreur : jamais de valeur ignoree.
 pub fn coerce(field: &str, ty: FieldType, v: &Value) -> EsResult<TypedValue> {
+    coerce_avec(field, ty, v, None)
+}
+
+/// Comme [`coerce`], avec le `format` declare du champ pour les dates.
+pub fn coerce_avec(
+    field: &str,
+    ty: FieldType,
+    v: &Value,
+    format: Option<&DateFormat>,
+) -> EsResult<TypedValue> {
     let bad = |expected: &str| {
         EsError::mapper_parsing(format!(
             "failed to parse field [{field}] of type [{}] : valeur {v} non convertible en \
@@ -660,11 +1221,15 @@ pub fn coerce(field: &str, ty: FieldType, v: &Value) -> EsResult<TypedValue> {
             };
             Ok(TypedValue::Bool(b))
         }
-        FieldKind::Date => Ok(TypedValue::Date(parse_date(field, v)?)),
+        FieldKind::Date => Ok(TypedValue::Date(match format {
+            Some(f) => f.lit(field, v)?,
+            None => parse_date(field, v)?,
+        })),
     }
 }
 
 /// `strict_date_optional_time || epoch_millis`, le format par defaut d'ES.
+/// La lecture d'une date sans `format` declare : celui d'ES par defaut.
 fn parse_date(field: &str, v: &Value) -> EsResult<i64> {
     use time::format_description::well_known::Rfc3339;
     use time::macros::format_description;
@@ -732,7 +1297,7 @@ mod tests {
 
     #[test]
     fn refuse_un_parametre_de_champ_non_supporte() {
-        let e = mapping(r#"{"properties":{"t":{"type":"text","analyzer":"french"}}}"#).unwrap_err();
+        let e = mapping(r#"{"properties":{"t":{"type":"text","analyzer":"german"}}}"#).unwrap_err();
         assert!(e.reason.contains("analyzer"));
     }
 
@@ -801,6 +1366,58 @@ mod tests {
         assert_eq!(fm.ty, FieldType::Text);
         assert_eq!(fm.fields["keyword"].ty, FieldType::Keyword);
         assert_eq!(fm.fields["keyword"].ignore_above, Some(256));
+    }
+
+    fn feuilles(v: Value) -> Vec<(String, Value)> {
+        let mut out = Vec::new();
+        parcours_feuilles(v.as_object().unwrap(), &mut |chemin, valeur| {
+            out.push((chemin.to_string(), valeur.clone()));
+            Ok(())
+        })
+        .unwrap();
+        out
+    }
+
+    #[test]
+    fn un_document_se_parcourt_par_chemins() {
+        assert_eq!(
+            // L'ordre est celui du document (`serde_json` preserve les cles).
+            feuilles(json!({"titre": "a", "client": {"ville": "Lyon", "cp": 69}})),
+            vec![
+                ("titre".into(), json!("a")),
+                ("client.ville".into(), json!("Lyon")),
+                ("client.cp".into(), json!(69)),
+            ]
+        );
+        // Profondeur quelconque.
+        assert_eq!(
+            feuilles(json!({"a": {"b": {"c": 1}}})),
+            vec![("a.b.c".into(), json!(1))]
+        );
+        // Un tableau d'objets est aplati : deux valeurs pour le meme chemin,
+        // comme chez ES — c'est ce que `nested` existe pour eviter.
+        assert_eq!(
+            feuilles(json!({"l": [{"ref": "A"}, {"ref": "B"}]})),
+            vec![("l.ref".into(), json!("A")), ("l.ref".into(), json!("B"))]
+        );
+        // Un tableau de scalaires reste une seule feuille multivaluee.
+        assert_eq!(
+            feuilles(json!({"tags": ["a", "b"]})),
+            vec![("tags".into(), json!(["a", "b"]))]
+        );
+        // Une cle deja pointee est un chemin, comme chez ES.
+        assert_eq!(
+            feuilles(json!({"client.ville": "Lyon"})),
+            vec![("client.ville".into(), json!("Lyon"))]
+        );
+    }
+
+    #[test]
+    fn un_tableau_ne_melange_pas_objets_et_valeurs() {
+        let mut rien = |_: &str, _: &Value| Ok(());
+        let v = json!({"l": [{"ref": "A"}, 42]});
+        let err = parcours_feuilles(v.as_object().unwrap(), &mut rien).unwrap_err();
+        assert!(err.reason.contains("melange"), "{}", err.reason);
     }
 
     const UNSUPPORTED_TY: &str = crate::error::UNSUPPORTED;

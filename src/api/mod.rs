@@ -67,6 +67,11 @@ pub fn router(state: SharedState) -> Router {
                 .head(indices::exists)
                 .get(indices::get_index),
         )
+        .route("/_mapping", get(indices::get_mapping_all))
+        .route(
+            "/_refresh",
+            post(indices::refresh_all).get(indices::refresh_all),
+        )
         .route(
             "/{index}/_mapping",
             get(indices::get_mapping).put(indices::put_mapping),

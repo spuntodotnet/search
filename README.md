@@ -18,14 +18,23 @@ répondre à des requêtes `bool` + `terms` + un tri.
 | RSS au repos | > 1 Go | **2,9 Mo** |
 | Démarrage | 30-60 s | **11 ms** (~230 ms via `docker run`) |
 | Runtime | JVM + tuning heap | un binaire statique |
+| Latence de recherche (médiane / p95) | 4,90 / 7,00 ms | **1,41 / 1,98 ms** |
+| Débit (8 requêtes en vol) | 779 req/s | **1 172 req/s** |
 
-Ces chiffres sont mesurés, pas visés — voir [Le conteneur](#le-conteneur).
+Ces chiffres sont mesurés, pas visés — voir [Le conteneur](#le-conteneur) pour
+l'enveloppe, et `tests/compat/bench_vs_es.py` pour les deux dernières lignes :
+mêmes 600 documents et mêmes 138 requêtes des deux côtés, dont **137 rendent
+exactement les mêmes documents dans le même ordre** (la 138ᵉ permute deux
+ex æquo). Le banc se lance contre n'importe quel Elasticsearch, 7.x ou 8.x.
 
 L'argument n'est pas « on refait Elasticsearch en mieux ». C'est : **le code
 client existant ne change pas** (mêmes bibliothèques officielles, mêmes
 requêtes, mêmes mappings), et le déploiement devient un détail — un sidecar, un
 conteneur de CI, un binaire embarqué dans une image applicative, un
 environnement de dev qui démarre instantanément.
+
+Pour reprendre le projet — la méthode, les décisions déjà tranchées, les pièges
+déjà payés : [`CLAUDE.md`](CLAUDE.md).
 
 ## Périmètre
 
@@ -37,7 +46,10 @@ réel est la **couche de compatibilité** au-dessus.
 ### Dans le périmètre
 
 - API HTTP compatible **Elasticsearch 8.x** — les clients officiels
-  (`elasticsearch-py`, `-js`, `-go`) doivent fonctionner sans modification.
+  (`elasticsearch-py`, `-js`, `-go`) doivent fonctionner sans modification. Un
+  client **7.x** se connecte sans rien changer lui aussi ; ce qui casse alors,
+  c'est ce que la 8 a supprimé — inventaire mesuré dans
+  [`docs/compat-es7.md`](docs/compat-es7.md).
 - **Ingestion** : `_doc`, `_create`, `_update`, `_mget`, `_bulk` (NDJSON),
   sémantique de `refresh`.
 - **Mappings** : types de base, multi-fields (`.keyword`), analyzers

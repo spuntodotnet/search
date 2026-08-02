@@ -170,6 +170,208 @@ def mapping_dynamique(es):
 
 
 @scenario
+def sous_objets(es):
+    """Un sous-objet s'indexe par ses chemins, declare ou devine.
+
+    Un objet n'est pas un champ : `client` n'existe pas, `client.ville` si —
+    c'est le modele d'Elasticsearch, et le mapping rendu re-niche les chemins.
+    """
+    es.options(ignore_status=404).indices.delete(index="imbrique")
+    es.indices.create(index="imbrique", mappings={"properties": {
+        "titre": {"type": "text"},
+        "client": {"properties": {
+            "ville": {"type": "keyword"},
+            "adr": {"properties": {"cp": {"type": "integer"}}},
+        }},
+    }})
+    es.index(index="imbrique", id="1", refresh=True, document={
+        "titre": "commande", "client": {"ville": "Lyon", "adr": {"cp": 69001}}})
+
+    def hits(**kw):
+        return sorted(h["_id"] for h in es.search(index="imbrique", **kw)["hits"]["hits"])
+
+    assert hits(query={"term": {"client.ville": "Lyon"}}) == ["1"]
+    assert hits(query={"range": {"client.adr.cp": {"gte": 69000}}}) == ["1"]
+    assert hits(query={"match_all": {}}, sort=[{"client.ville": "asc"}]) == ["1"]
+    # `_source` n'est pas touche, et son filtrage suit les chemins.
+    assert es.get(index="imbrique", id="1")["_source"]["client"]["adr"]["cp"] == 69001
+    assert es.search(index="imbrique", query={"match_all": {}},
+                     source_includes=["client.ville"]
+                     )["hits"]["hits"][0]["_source"] == {"client": {"ville": "Lyon"}}
+    # Le mapping rendu est niche, pas pointe.
+    props = es.indices.get_mapping(index="imbrique")["imbrique"]["mappings"]["properties"]
+    assert props["client"]["properties"]["adr"]["properties"]["cp"]["type"] == "integer"
+    # Un objet declare comme champ, ou l'inverse : refus explicite.
+    refused(lambda: es.indices.create(index="conflit", mappings={"properties": {
+        "a": {"type": "keyword"}, "a.b": {"type": "keyword"}}}),
+        contains="a la fois comme champ et comme objet")
+    es.indices.delete(index="imbrique")
+
+
+@scenario
+def sous_objets_devines(es):
+    """Sans mapping, les chemins viennent des documents — et un tableau d'objets
+    est aplati, exactement comme chez ES : la correspondance entre sous-champs
+    d'un meme element est perdue (c'est ce que `nested` existe pour garder)."""
+    es.options(ignore_status=404).indices.delete(index="imbdyn")
+    es.indices.create(index="imbdyn")
+    es.index(index="imbdyn", id="1", refresh=True,
+             document={"l": [{"ref": "A", "qte": 5}, {"ref": "B", "qte": 20}]})
+    props = es.indices.get_mapping(index="imbdyn")["imbdyn"]["mappings"]["properties"]
+    assert props["l"]["properties"]["qte"]["type"] == "long"
+    assert props["l"]["properties"]["ref"]["fields"]["keyword"]["type"] == "keyword"
+
+    def total(query):
+        return es.search(index="imbdyn", query=query)["hits"]["total"]["value"]
+
+    assert total({"term": {"l.ref.keyword": "B"}}) == 1
+    # A a une quantite de 5, mais le document correspond quand meme : c'est le
+    # comportement d'ES pour un `object`, et il est verifie tel quel.
+    assert total({"bool": {"must": [{"term": {"l.ref.keyword": "A"}},
+                                    {"range": {"l.qte": {"gte": 20}}}]}}) == 1
+    es.indices.delete(index="imbdyn")
+
+
+@scenario
+def nested(es):
+    """`nested` garde la correspondance entre sous-champs d'un meme element.
+
+    C'est toute la difference avec un `object` : « une ligne `vis` d'au moins
+    20 » ne doit pas remonter un document qui a une ligne `vis` *et* une ligne
+    de 20, mais jamais les deux ensemble.
+    """
+    es.options(ignore_status=404).indices.delete(index="cmd")
+    es.indices.create(index="cmd", mappings={"properties": {
+        "client": {"type": "keyword"},
+        "lignes": {"type": "nested", "properties": {
+            "ref": {"type": "keyword"},
+            "qte": {"type": "integer"},
+            "promo": {"type": "boolean"},
+        }},
+    }})
+    es.bulk(operations=[
+        {"index": {"_index": "cmd", "_id": "1"}},
+        {"client": "A", "lignes": [{"ref": "vis", "qte": 5, "promo": False},
+                                   {"ref": "ecrou", "qte": 20, "promo": True}]},
+        {"index": {"_index": "cmd", "_id": "2"}},
+        {"client": "B", "lignes": [{"ref": "vis", "qte": 30, "promo": True}]},
+        {"index": {"_index": "cmd", "_id": "3"}},
+        {"client": "C", "lignes": [{"ref": "ecrou", "qte": 1}]},
+    ], refresh=True)
+
+    def hits(query):
+        return sorted(h["_id"] for h in es.search(index="cmd", query=query, size=10)["hits"]["hits"])
+
+    def nest(inner):
+        return {"nested": {"path": "lignes", "query": inner}}
+
+    assert hits(nest({"term": {"lignes.ref": "vis"}})) == ["1", "2"]
+    # Le coeur du sujet : seul le document 2 a une ligne `vis` d'au moins 20.
+    assert hits(nest({"bool": {"must": [{"term": {"lignes.ref": "vis"}},
+                                        {"range": {"lignes.qte": {"gte": 20}}}]}})) == ["2"]
+    # Un element qui *n'est pas* `vis` : le document 1 en a un.
+    assert hits(nest({"bool": {"must": [{"exists": {"field": "lignes.ref"}}],
+                               "must_not": [{"term": {"lignes.ref": "vis"}}]}})) == ["1", "3"]
+    assert hits(nest({"terms": {"lignes.ref": ["ecrou"]}})) == ["1", "3"]
+    assert hits(nest({"term": {"lignes.promo": True}})) == ["1", "2"]
+    # Combinable avec le reste de la requete, et negeable.
+    assert hits({"bool": {"must": [{"term": {"client": "A"}},
+                                   nest({"range": {"lignes.qte": {"gte": 20}}})]}}) == ["1"]
+    assert hits({"bool": {"must_not": [nest({"range": {"lignes.qte": {"gte": 20}}})]}}) == ["3"]
+    # Le mapping rendu porte bien le type.
+    m = es.indices.get_mapping(index="cmd")["cmd"]["mappings"]["properties"]["lignes"]
+    assert m["type"] == "nested" and m["properties"]["qte"]["type"] == "integer"
+    es.indices.delete(index="cmd")
+
+
+@scenario
+def nested_refus_explicites(es):
+    """Ce que `nested` ne sait pas faire doit se dire, pas s'approximer."""
+    es.options(ignore_status=404).indices.delete(index="cmd2")
+    es.indices.create(index="cmd2", mappings={"properties": {
+        "lignes": {"type": "nested", "properties": {
+            "ref": {"type": "keyword"},
+            "note": {"type": "text"},
+        }},
+    }})
+    es.index(index="cmd2", id="1", refresh=True,
+             document={"lignes": [{"ref": "vis", "note": "a serrer"}]})
+
+    def nest(inner):
+        return {"nested": {"path": "lignes", "query": inner}}
+
+    # Un sous-champ de `nested` interroge depuis la racine : ES rend 0 hit en
+    # silence, ferrite le dit (voir docs/compat.md, divergences assumees).
+    refused(lambda: es.search(index="cmd2", query={"term": {"lignes.ref": "vis"}}),
+            contains="ne peut etre interroge que dans une clause [nested]")
+    # Un `text` ne se verifie pas element par element.
+    refused(lambda: es.search(index="cmd2", query=nest({"match": {"lignes.note": "serrer"}})),
+            contains="ne verifie pas un champ [text]")
+    # Un chemin qui n'est pas `nested`, ou un champ hors du chemin.
+    refused(lambda: es.search(index="cmd2", query={"nested": {"path": "autre",
+                                                             "query": {"match_all": {}}}}),
+            contains="n'est pas un champ de type [nested]")
+    refused(lambda: es.search(index="cmd2", query={"nested": {
+        "path": "lignes", "query": {"term": {"lignes.ref": "vis"}}, "inner_hits": {}}}),
+        contains="[inner_hits]")
+    es.indices.delete(index="cmd2")
+
+
+@scenario
+def join_parent_enfant(es):
+    """`join` : parent et enfant sont deux documents, reunis a la requete."""
+    es.options(ignore_status=404).indices.delete(index="blog")
+    es.indices.create(index="blog", mappings={"properties": {
+        "titre": {"type": "text"},
+        "auteur": {"type": "keyword"},
+        "note": {"type": "integer"},
+        "lien": {"type": "join", "relations": {"article": "commentaire"}},
+    }})
+    for doc_id, doc in [
+        ("a1", {"titre": "le rust au quotidien", "lien": {"name": "article"}}),
+        ("a2", {"titre": "article sans commentaire", "lien": {"name": "article"}}),
+        ("c1", {"titre": "tres bon papier", "auteur": "zoe", "note": 5,
+                "lien": {"name": "commentaire", "parent": "a1"}}),
+        ("c2", {"titre": "bof", "auteur": "max", "note": 2,
+                "lien": {"name": "commentaire", "parent": "a1"}}),
+    ]:
+        es.index(index="blog", id=doc_id, document=doc, refresh=True)
+
+    def hits(query):
+        return sorted(h["_id"] for h in es.search(index="blog", query=query, size=10)["hits"]["hits"])
+
+    assert hits({"has_child": {"type": "commentaire",
+                               "query": {"term": {"auteur": "zoe"}}}}) == ["a1"]
+    assert hits({"has_child": {"type": "commentaire",
+                               "query": {"match_all": {}}}}) == ["a1"]
+    assert hits({"has_parent": {"parent_type": "article",
+                                "query": {"match": {"titre": "rust"}}}}) == ["c1", "c2"]
+    assert hits({"parent_id": {"type": "commentaire", "id": "a1"}}) == ["c1", "c2"]
+    # Le champ `join` se filtre comme un `keyword`, sous son propre nom.
+    assert hits({"term": {"lien": "article"}}) == ["a1", "a2"]
+    assert hits({"bool": {"must": [{"term": {"lien": "article"}}],
+                          "must_not": [{"has_child": {"type": "commentaire",
+                                                      "query": {"match_all": {}}}}]}}) == ["a2"]
+    m = es.indices.get_mapping(index="blog")["blog"]["mappings"]["properties"]["lien"]
+    assert m["type"] == "join" and m["relations"] == {"article": "commentaire"}
+
+    # Ce qui n'a pas de sens est refuse, pas devine.
+    refused(lambda: es.index(index="blog", id="x",
+                             document={"lien": {"name": "commentaire"}}),
+            contains="[parent] est obligatoire")
+    refused(lambda: es.index(index="blog", id="y",
+                             document={"lien": {"name": "inconnu"}}),
+            contains="relation [inconnu] inconnue")
+    refused(lambda: es.search(index="blog", query={"has_child": {
+        "type": "article", "query": {"match_all": {}}}}),
+        contains="n'est pas un enfant")
+    refused(lambda: es.search(index="blog", query={"has_child": {
+        "type": "commentaire", "query": {"match_all": {}}, "score_mode": "max"}}),
+        contains="score_mode")
+    es.indices.delete(index="blog")
+
+
+@scenario
 def mapping_dynamique_preserve_l_existant(es):
     """Le point dur : tantivy fige le schema, donc ferrite change de generation
     quand un champ apparait. Les documents deja indexes doivent survivre."""
@@ -230,7 +432,7 @@ def type_de_champ_non_supporte(es):
 def parametre_de_champ_non_supporte(es):
     refused(lambda: es.indices.create(
         index="analyse", mappings={"properties": {
-            "t": {"type": "text", "analyzer": "french"}}}),
+            "t": {"type": "text", "analyzer": "german"}}}),
         contains="analyzer")
 
 
@@ -334,9 +536,17 @@ def analyzers(es):
 
 @scenario
 def analyzers_refuses(es):
-    """Les analyzers de langue portent le nom d'ES mais pas son stemmer :
-    les accepter changerait silencieusement les termes indexes."""
-    for nom in ("french", "english", "snowball"):
+    """`french` et `english` sont mesures identiques a ES (`diff_analyzers.py`,
+    210 textes) : leurs stemmers sont ceux de Lucene, portes dans
+    `src/stemmer.rs`. Ce qui reste refuse, ce sont les langues dont le stemmer
+    n'a pas ete porte."""
+    assert [t["token"] for t in es.indices.analyze(
+        analyzer="english", text="The running dogs run quickly")["tokens"]] == [
+        "run", "dog", "run", "quickli"]
+    assert [t["token"] for t in es.indices.analyze(
+        analyzer="french", text="l'ascension des chevaux")["tokens"]] == [
+        "ascension", "cheval"]
+    for nom in ("german", "snowball"):
         refused(lambda n=nom: es.indices.create(
             index="an", mappings={"properties": {"t": {"type": "text", "analyzer": n}}}),
             contains=nom)
@@ -344,10 +554,12 @@ def analyzers_refuses(es):
         index="an", mappings={"properties": {"t": {"type": "text",
                                                    "analyzer": "inexistant"}}}),
         contains="inexistant")
-    # Un analyzer sur mesure passe par [settings.analysis], non supporte.
+    # Un analyzer sur mesure, lui, est supporte (voir `analyzers_sur_mesure`) :
+    # ce qui reste refuse, c'est ce qui repose sur un stemmer.
     refused(lambda: es.indices.create(index="an", settings={"analysis": {
-        "analyzer": {"mien": {"type": "custom", "tokenizer": "standard"}}}}),
-        contains="analysis")
+        "analyzer": {"mien": {"type": "custom", "tokenizer": "standard",
+                              "filter": ["french_stem"]}}}}),
+        contains="french_stem")
     # `analyzer` n'a de sens que sur un champ `text`.
     refused(lambda: es.indices.create(index="an", mappings={"properties": {
         "k": {"type": "keyword", "analyzer": "standard"}}}),
@@ -388,8 +600,9 @@ def bulk_statut_par_item(es):
         {"create": {"_index": INDEX, "_id": "1"}},
         {"titre": "conflit", "auteur": "x"},
         {"delete": {"_index": INDEX, "_id": "ok1"}},
-        {"index": {"_index": "index_absent", "_id": "z"}},
-        {"titre": "x"},
+        # Supprimer dans un index absent reste un 404 : seule l'ecriture cree
+        # l'index a la volee, comme chez ES.
+        {"delete": {"_index": "index_absent", "_id": "z"}},
     ], refresh=True)
     assert resp["errors"] is True
     statuses = [list(item.values())[0]["status"] for item in resp["items"]]
@@ -400,6 +613,151 @@ def bulk_statut_par_item(es):
     assert bodies[4]["error"]["type"] == "index_not_found_exception"
     # Le document valide a bien ete indexe puis supprime.
     assert not es.exists(index=INDEX, id="ok1")
+
+
+@scenario
+def index_cree_a_l_ecriture(es):
+    """Indexer dans un index absent le cree, comme chez ES — mais lire ou
+    supprimer dans un index absent reste un 404."""
+    for nom in ("auto1", "auto2", "auto3"):
+        es.options(ignore_status=404).indices.delete(index=nom)
+    es.index(index="auto1", id="1", document={"titre": "cree a la volee"}, refresh=True)
+    assert es.indices.exists(index="auto1")
+    assert es.search(index="auto1", query={"match": {"titre": "volee"}}
+                     )["hits"]["total"]["value"] == 1
+    # `_update` avec upsert cree aussi l'index ; sans upsert, le document manque.
+    es.update(index="auto2", id="1", doc={"a": 1}, doc_as_upsert=True, refresh=True)
+    assert es.get(index="auto2", id="1")["_source"] == {"a": 1}
+    refused(lambda: es.update(index="auto3", id="1", doc={"a": 1}), status=404,
+            contains="document")
+    # Le bulk aussi, sauf pour une suppression.
+    r = es.bulk(operations=[{"index": {"_index": "auto4", "_id": "1"}}, {"a": 1}],
+                refresh=True)
+    assert r["items"][0]["index"]["status"] == 201
+    refused(lambda: es.search(index="jamais_creee", query={"match_all": {}}), status=404)
+    refused(lambda: es.delete(index="jamais_creee", id="1"), status=404)
+    for nom in ("auto1", "auto2", "auto3", "auto4"):
+        es.options(ignore_status=404).indices.delete(index=nom)
+
+
+@scenario
+def analyzers_sur_mesure(es):
+    """`settings.analysis` : un mapping venu d'une instance réelle déclare
+    presque toujours son propre analyzer, le plus souvent `standard` +
+    `lowercase` + `asciifolding`."""
+    es.options(ignore_status=404).indices.delete(index="ana")
+    es.indices.create(index="ana", settings={"analysis": {
+        "analyzer": {
+            "fr_produit": {"type": "custom", "tokenizer": "standard",
+                           "filter": ["lowercase", "asciifolding"]},
+            "brut": {"type": "custom", "tokenizer": "keyword"},
+            "sans_vides": {"type": "custom", "tokenizer": "standard",
+                           "filter": ["lowercase", "mes_vides"]},
+        },
+        "filter": {"mes_vides": {"type": "stop", "stopwords": ["le", "la", "des"]}},
+    }}, mappings={"properties": {
+        "titre": {"type": "text", "analyzer": "fr_produit"},
+        "code": {"type": "text", "analyzer": "brut"},
+        "corps": {"type": "text", "analyzer": "sans_vides"},
+    }})
+
+    def tokens(**kw):
+        return [t["token"] for t in es.indices.analyze(index="ana", **kw)["tokens"]]
+
+    # Les accents sont repliés : « ÉDITION » et « edition » se retrouvent.
+    assert tokens(analyzer="fr_produit", text="ÉDITION originale") == ["edition", "originale"]
+    assert tokens(analyzer="brut", text="AB-12 xy") == ["AB-12 xy"]
+    assert tokens(analyzer="sans_vides", text="le cheval des pres") == ["cheval", "pres"]
+    # Et par champ, pas seulement par nom.
+    assert tokens(field="titre", text="COÛTE") == ["coute"]
+
+    es.index(index="ana", id="1", refresh=True,
+             document={"titre": "ÉDITION originale", "code": "AB-12", "corps": "le cheval"})
+    assert es.search(index="ana", query={"match": {"titre": "edition"}}
+                     )["hits"]["total"]["value"] == 1
+    # Le mapping rend le nom déclaré, pas un identifiant interne.
+    props = es.indices.get_mapping(index="ana")["ana"]["mappings"]["properties"]
+    assert props["titre"]["analyzer"] == "fr_produit"
+
+    # Ce qui n'est pas reproductible à l'identique reste refusé.
+    refused(lambda: es.indices.create(index="ana_ko", settings={"analysis": {"analyzer": {
+        "x": {"type": "custom", "tokenizer": "standard", "filter": ["porter_stem"]}}}}),
+        contains="ne supporte pas le filtre [porter_stem]")
+    refused(lambda: es.indices.create(index="ana_ko", settings={"analysis": {"analyzer": {
+        "x": {"type": "custom", "tokenizer": "ngram"}}}}),
+        contains="ne supporte pas le tokenizer [ngram]")
+    refused(lambda: es.indices.create(index="ana_ko", settings={"analysis": {"analyzer": {
+        "x": {"type": "french"}}}}), contains="type [french]")
+    es.indices.delete(index="ana")
+
+
+@scenario
+def format_de_date(es):
+    """Un mapping venu d'une instance reelle declare presque toujours un
+    `format` sur ses dates. Il sert a lire (indexation, bornes d'un `range`) et
+    a rendre (`*_as_string`)."""
+    es.options(ignore_status=404).indices.delete(index="dates")
+    es.indices.create(index="dates", mappings={"properties": {
+        "cree_le": {"type": "date", "format": "yyyy-MM-dd HH:mm:ss"},
+        "jour": {"type": "date", "format": "yyyy-MM-dd"},
+        "multi": {"type": "date", "format": "yyyy-MM-dd HH:mm:ss||yyyy-MM-dd"},
+        "basique": {"type": "date", "format": "basic_date"},
+        "defaut": {"type": "date"},
+    }})
+    es.bulk(operations=[
+        {"index": {"_index": "dates", "_id": "1"}},
+        {"cree_le": "2021-03-04 10:00:00", "jour": "2021-03-04",
+         "multi": "2021-03-04", "basique": "20210304", "defaut": "2021-03-04T10:00:00Z"},
+        {"index": {"_index": "dates", "_id": "2"}},
+        {"cree_le": "2022-06-11 09:30:00", "jour": "2022-06-11",
+         "multi": "2022-06-11 09:30:00", "basique": "20220611",
+         "defaut": "2022-06-11T09:30:00Z"},
+    ], refresh=True)
+
+    def hits(query):
+        return sorted(h["_id"] for h in es.search(index="dates", query=query)["hits"]["hits"])
+
+    # Les bornes d'un `range` se lisent au format du champ, pas en ISO.
+    assert hits({"range": {"cree_le": {"gte": "2022-01-01 00:00:00"}}}) == ["2"]
+    assert hits({"range": {"jour": {"lt": "2022-01-01"}}}) == ["1"]
+    assert hits({"term": {"cree_le": "2021-03-04 10:00:00"}}) == ["1"]
+    assert hits({"range": {"basique": {"gte": "20220101"}}}) == ["2"]
+    # Une alternative `||` : les deux ecritures entrent.
+    assert hits({"range": {"multi": {"gte": "2022-01-01"}}}) == ["2"]
+    # Le format par defaut n'a pas bouge.
+    assert hits({"range": {"defaut": {"gte": "2022-01-01T00:00:00Z"}}}) == ["2"]
+    # Le mapping rend le format tel qu'il a ete declare.
+    props = es.indices.get_mapping(index="dates")["dates"]["mappings"]["properties"]
+    assert props["cree_le"]["format"] == "yyyy-MM-dd HH:mm:ss"
+    assert "format" not in props["defaut"]
+    # La forme lisible d'une agregation suit le format du champ.
+    agg = es.search(index="dates", size=0,
+                    aggs={"m": {"max": {"field": "cree_le"}}})["aggregations"]["m"]
+    assert agg["value_as_string"] == "2022-06-11 09:30:00", agg
+    # Ce qui n'est pas au format est refuse — y compris un epoch, comme chez ES.
+    refused(lambda: es.index(index="dates", id="9", document={"cree_le": "04/03/2021"}),
+            contains="failed to parse date field")
+    refused(lambda: es.index(index="dates", id="9", document={"cree_le": 1614852000000}),
+            contains="failed to parse date field")
+    # Un motif qu'on ne sait pas traduire se dit, il ne s'approxime pas.
+    refused(lambda: es.indices.create(index="dz", mappings={"properties": {
+        "x": {"type": "date", "format": "GGGG yyyy"}}}),
+        contains="ne sait pas traduire")
+    es.indices.delete(index="dates")
+
+
+@scenario
+def routes_sans_index(es):
+    """`_refresh` et `_mapping` sans index portent sur tous, comme chez ES."""
+    for nom in ("multi1", "multi2"):
+        es.options(ignore_status=404).indices.delete(index=nom)
+        es.index(index=nom, id="1", document={"titre": "x"})
+    assert es.indices.refresh()["_shards"]["successful"] == 1
+    m = es.indices.get_mapping()
+    assert {"multi1", "multi2"} <= set(m), sorted(m)
+    assert set(es.indices.get_mapping(index="_all")) == set(m)
+    for nom in ("multi1", "multi2"):
+        es.indices.delete(index=nom)
 
 
 @scenario

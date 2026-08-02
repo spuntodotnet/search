@@ -18,12 +18,15 @@
 pub mod aggs;
 pub mod analysis;
 pub mod api;
+pub mod dateformat;
 pub mod dismax;
 pub mod dsl;
 pub mod engine;
 pub mod error;
 pub mod mapping;
+pub mod nested;
 pub mod search;
+pub mod stemmer;
 pub mod util;
 
 /// Version d'Elasticsearch annoncee par ferrite.
