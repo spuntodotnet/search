@@ -15,7 +15,7 @@ use tantivy::schema::{
 };
 use tantivy::{DateTime, Term};
 
-use crate::analysis::{self, Analyzer};
+use crate::analysis::{self, Analysis, Analyzer};
 use crate::dateformat::DateFormat;
 use crate::error::{EsError, EsResult};
 
@@ -147,11 +147,11 @@ impl FieldMapping {
         self.analyzer.unwrap_or_default()
     }
 
-    fn to_json(&self) -> Value {
+    fn to_json(&self, analysis: &Analysis) -> Value {
         let mut o = Map::new();
         o.insert("type".into(), json!(self.ty.name()));
         if let Some(a) = self.analyzer {
-            o.insert("analyzer".into(), json!(a.name()));
+            o.insert("analyzer".into(), json!(a.name(analysis)));
         }
         if let Some(n) = self.ignore_above {
             o.insert("ignore_above".into(), json!(n));
@@ -162,7 +162,7 @@ impl FieldMapping {
         if !self.fields.is_empty() {
             let mut subs = Map::new();
             for (name, fm) in &self.fields {
-                subs.insert(name.clone(), fm.to_json());
+                subs.insert(name.clone(), fm.to_json(analysis));
             }
             o.insert("fields".into(), Value::Object(subs));
         }
@@ -334,6 +334,10 @@ pub struct Mapping {
     pub objets_vides: BTreeSet<String>,
     /// Le champ `join`, s'il y en a un. ES n'en autorise qu'un par index.
     pub join: Option<Join>,
+    /// Les analyzers sur mesure de l'index (`settings.analysis`). Ils vivent
+    /// avec le mapping parce que c'est lui qui les nomme, mais ils ne sont pas
+    /// rendus par `_mapping` : leur place est dans `_settings`.
+    pub analysis: crate::analysis::Analysis,
     pub dynamic: Dynamic,
 }
 
@@ -347,7 +351,7 @@ impl Mapping {
     pub fn to_json(&self) -> Value {
         let mut props = Map::new();
         for (chemin, fm) in &self.properties {
-            niche(&mut props, chemin, fm.to_json());
+            niche(&mut props, chemin, fm.to_json(&self.analysis));
         }
         for vide in &self.objets_vides {
             if pointe_mut(&mut props, vide).is_none() {
@@ -375,6 +379,12 @@ impl Mapping {
     /// Tout ce qui n'est pas compris est refuse : c'est la seule facon de ne pas
     /// mentir sur ce qui est indexe.
     pub fn parse(v: &Value) -> EsResult<Self> {
+        Self::parse_avec(v, &Analysis::default())
+    }
+
+    /// Parse un mapping en connaissant les analyzers declares dans les
+    /// `settings` : c'est ce qui permet a un champ de citer `fr_produit`.
+    pub fn parse_avec(v: &Value, declares: &Analysis) -> EsResult<Self> {
         let obj = v
             .as_object()
             .ok_or_else(|| EsError::mapper_parsing("[mappings] doit etre un objet"))?;
@@ -400,7 +410,14 @@ impl Mapping {
                             join = Some(Join::parse(name, as_obj(spec, name)?)?);
                             continue;
                         }
-                        parse_propriete(name, spec, &mut properties, &mut nested, &mut vides)?;
+                        parse_propriete(
+                            name,
+                            spec,
+                            &mut properties,
+                            &mut nested,
+                            &mut vides,
+                            declares,
+                        )?;
                     }
                 }
                 "dynamic" => dynamic = Dynamic::parse(val)?,
@@ -425,6 +442,7 @@ impl Mapping {
             nested,
             objets_vides: vides,
             join,
+            analysis: declares.clone(),
             dynamic,
         })
     }
@@ -442,6 +460,7 @@ fn parse_propriete(
     dans: &mut BTreeMap<String, FieldMapping>,
     nested: &mut BTreeSet<String>,
     vides: &mut BTreeSet<String>,
+    declares: &Analysis,
 ) -> EsResult<()> {
     for part in chemin.split('.') {
         validate_field_name_part(part, chemin)?;
@@ -502,7 +521,14 @@ fn parse_propriete(
             return Ok(());
         }
         for (nom, decl) in sous {
-            parse_propriete(&format!("{chemin}.{nom}"), decl, dans, nested, vides)?;
+            parse_propriete(
+                &format!("{chemin}.{nom}"),
+                decl,
+                dans,
+                nested,
+                vides,
+                declares,
+            )?;
         }
         return Ok(());
     }
@@ -514,7 +540,7 @@ fn parse_propriete(
         return Ok(());
     }
 
-    let fm = parse_field_mapping(chemin, spec, false)?;
+    let fm = parse_field_mapping(chemin, spec, false, declares)?;
     // `a` feuille et `a.b` objet ne peuvent pas coexister — ES refuse aussi.
     conflit_de_chemin(chemin, dans)?;
     dans.insert(chemin.to_string(), fm);
@@ -589,7 +615,12 @@ fn niche(props: &mut Map<String, Value>, chemin: &str, feuille: Value) {
 ///
 /// `sous_champ` indique qu'on est deja dans un `fields` : ES n'autorise qu'un
 /// seul niveau de multi-fields, et ferrite refuse le second explicitement.
-fn parse_field_mapping(name: &str, spec: &Value, sous_champ: bool) -> EsResult<FieldMapping> {
+fn parse_field_mapping(
+    name: &str,
+    spec: &Value,
+    sous_champ: bool,
+    declares: &Analysis,
+) -> EsResult<FieldMapping> {
     let obj = spec.as_object().ok_or_else(|| {
         EsError::mapper_parsing(format!("[mappings.properties.{name}] doit etre un objet"))
     })?;
@@ -628,7 +659,12 @@ fn parse_field_mapping(name: &str, spec: &Value, sous_champ: bool) -> EsResult<F
                     validate_field_name_part(sub_name, &format!("{name}.{sub_name}"))?;
                     fields.insert(
                         sub_name.clone(),
-                        parse_field_mapping(&format!("{name}.{sub_name}"), sub_spec, true)?,
+                        parse_field_mapping(
+                            &format!("{name}.{sub_name}"),
+                            sub_spec,
+                            true,
+                            declares,
+                        )?,
                     );
                 }
             }
@@ -636,7 +672,7 @@ fn parse_field_mapping(name: &str, spec: &Value, sous_champ: bool) -> EsResult<F
                 let nom = val.as_str().ok_or_else(|| {
                     EsError::mapper_parsing(format!("[{name}.analyzer] doit etre une chaine"))
                 })?;
-                analyzer = Some(analysis::parse_declaration(nom, name)?);
+                analyzer = Some(analysis::parse_declaration(nom, name, declares)?);
             }
             "format" => {
                 let motif = val.as_str().ok_or_else(|| {
@@ -1051,7 +1087,7 @@ fn add_field(b: &mut SchemaBuilder, name: &str, ty: FieldType, analyzer: Analyze
         FieldKind::Text => {
             let opts = TextOptions::default().set_indexing_options(
                 TextFieldIndexing::default()
-                    .set_tokenizer(analyzer.tokenizer())
+                    .set_tokenizer(&analyzer.tokenizer())
                     .set_index_option(IndexRecordOption::WithFreqsAndPositions),
             );
             b.add_text_field(name, opts)

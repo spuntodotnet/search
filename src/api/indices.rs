@@ -53,16 +53,23 @@ pub async fn create(
             ));
         }
     }
+    let mut declares = crate::analysis::Analysis::default();
     if let Some(settings) = obj.get("settings") {
+        // `analysis` est extrait avant la verification : c'est la seule section
+        // de `settings` que ferrite exploite vraiment.
+        if let Some(a) = section_analysis(settings) {
+            declares = crate::analysis::Analysis::parse(a)?;
+        }
         check_settings(settings)?;
     }
 
     // Sans `mappings`, l'index part vide et se remplit par mapping dynamique,
     // comme chez ES.
-    let mapping = match obj.get("mappings") {
-        Some(m) => Mapping::parse(m)?,
+    let mut mapping = match obj.get("mappings") {
+        Some(m) => Mapping::parse_avec(m, &declares)?,
         None => Mapping::default(),
     };
+    mapping.analysis = declares;
 
     st.catalog.create(&index, mapping)?;
     Ok(Json::ok(json!({
@@ -72,10 +79,39 @@ pub async fn create(
     })))
 }
 
+/// `settings.analysis`, sous ses deux ecritures (`{"analysis": …}` ou
+/// `{"index": {"analysis": …}}`).
+fn section_analysis(settings: &Value) -> Option<&Value> {
+    let o = settings.as_object()?;
+    o.get("analysis")
+        .or_else(|| o.get("index")?.as_object()?.get("analysis"))
+}
+
 fn check_settings(settings: &Value) -> EsResult<()> {
     let obj = settings
         .as_object()
         .ok_or_else(|| EsError::parsing("[settings] doit etre un objet"))?;
+    // `analysis` est traite ailleurs (il est exploite, lui).
+    let obj: serde_json::Map<String, Value> = obj
+        .iter()
+        .filter(|(k, _)| k.as_str() != "analysis")
+        .map(|(k, v)| {
+            if k == "index" {
+                let sans = v.as_object().map(|o| {
+                    Value::Object(
+                        o.iter()
+                            .filter(|(k2, _)| k2.as_str() != "analysis")
+                            .map(|(k2, v2)| (k2.clone(), v2.clone()))
+                            .collect(),
+                    )
+                });
+                (k.clone(), sans.unwrap_or_else(|| v.clone()))
+            } else {
+                (k.clone(), v.clone())
+            }
+        })
+        .collect();
+    let obj = &obj;
     // Forme imbriquee : {"index": {...}}
     let mut flat: Vec<(String, &Value)> = Vec::new();
     for (k, v) in obj {
@@ -279,7 +315,16 @@ pub async fn analyze(
                 Some(Path(nom_index)) => Some(st.catalog.get(nom_index)?.current()),
                 None => None,
             };
-            (crate::analysis::parse_declaration(nom, "_analyze")?, gen)
+            // Un analyzer sur mesure n'existe que dans son index : `_analyze`
+            // sans index ne connait que les analyzers integres.
+            let declares = gen
+                .as_ref()
+                .map(|g| g.mapping.analysis.clone())
+                .unwrap_or_default();
+            (
+                crate::analysis::parse_declaration(nom, "_analyze", &declares)?,
+                gen,
+            )
         }
         (None, Some(f)) => {
             let Path(nom_index) = index.as_ref().ok_or_else(|| {

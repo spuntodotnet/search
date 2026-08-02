@@ -921,6 +921,7 @@ fn construire_generation(
     let (schema, fields) = mapping::build_schema(&mapping);
     let index = Index::create_in_dir(&gen_dir, schema)?;
     crate::analysis::register_all(index.tokenizers());
+    mapping.analysis.register(index.tokenizers());
     let writer: IndexWriter = index.writer_with_num_threads(1, WRITER_HEAP)?;
     let reader: IndexReader = index
         .reader_builder()
@@ -981,6 +982,10 @@ fn ecrire_meta(dir: &Path, uuid: &str, created_at: i64, gen: &Generation) -> EsR
         "ferrite_version": crate::FERRITE_VERSION,
         "generation": gen.seq,
         "mappings": gen.mapping.to_json(),
+        // `_mapping` ne rend pas les analyzers : ils vivent dans les settings.
+        // Il faut donc les persister a part, sinon un redemarrage perdrait le
+        // nom que les champs citent.
+        "analysis": gen.mapping.analysis.to_json(),
     });
     let tmp = dir.join(format!("{META_FILE}.tmp"));
     fs::write(&tmp, serde_json::to_vec_pretty(&meta).unwrap())
@@ -999,12 +1004,17 @@ fn open_index(dir: &Path, name: &str) -> EsResult<FerriteIndex> {
     let uuid = meta["uuid"].as_str().unwrap_or_default().to_string();
     let created_at = meta["created_at"].as_i64().unwrap_or_else(util::now_millis);
     let seq = meta["generation"].as_u64().unwrap_or(0);
-    let mapping = Mapping::parse(&meta["mappings"])?;
+    let declares = match meta.get("analysis") {
+        Some(a) if !a.is_null() => crate::analysis::Analysis::parse(a)?,
+        _ => crate::analysis::Analysis::default(),
+    };
+    let mapping = Mapping::parse_avec(&meta["mappings"], &declares)?;
 
     let gen_dir = dir.join(format!("{INDEX_DIR_PREFIX}{seq}"));
     let (schema, fields) = mapping::build_schema(&mapping);
     let index = Index::open_in_dir(&gen_dir)?;
     crate::analysis::register_all(index.tokenizers());
+    mapping.analysis.register(index.tokenizers());
     if index.schema() != schema {
         return Err(EsError::internal(format!(
             "[{name}] : le schema sur disque ne correspond pas au mapping enregistre"

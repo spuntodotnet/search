@@ -116,7 +116,7 @@ Chaque analyzer intégré est comparé **token par token** à son homonyme d'ES 
 | `keyword` | ✅ identique |
 | `stop` | ✅ identique |
 | `french`, `english`, `snowball` et les autres analyzers de langue | ❌ **refus assumé** |
-| Analyzers sur mesure (`settings.analysis`) | ❌ |
+| Analyzers sur mesure (`settings.analysis`) | ✅ | voir ci-dessous |
 
 **Pourquoi les analyzers de langue sont refusés.** Ils reposent sur un stemmer,
 et celui de tantivy (Snowball) n'est pas celui de Lucene (stemmer *léger* pour
@@ -129,6 +129,34 @@ Porter le nom d'ES en indexant autre chose changerait silencieusement le
 comportement d'un mapping existant — précisément ce que ce projet refuse. Les
 supporter demande de porter les stemmers de Lucene, ce qui mérite sa propre
 itération.
+
+**Les analyzers sur mesure**, eux, sont supportés — un mapping venu d'une
+instance réelle en déclare presque toujours un, et le plus souvent avec des
+briques que ferrite a :
+
+```json
+"analysis": {
+  "analyzer": {"fr_produit": {"type": "custom", "tokenizer": "standard",
+                              "filter": ["lowercase", "asciifolding"]}},
+  "filter":   {"mes_vides":  {"type": "stop", "stopwords": ["le", "la"]}}
+}
+```
+
+| | État | Détail |
+|---|---|---|
+| `analysis.analyzer` de type `custom` | ✅ | `tokenizer` + liste de `filter` |
+| Tokenizers | 🟡 | `standard`, `whitespace`, `keyword`, `letter`, `lowercase`. Les tokenizers définis dans `analysis.tokenizer` (n-grams, `pattern`…) : ❌ |
+| Filtres | 🟡 | `lowercase`, `asciifolding`, `stop` (liste explicite ou `_english_`). Tout filtre à base de stemmer : ❌, pour la même raison que les analyzers de langue |
+| `char_filter` | ❌ | |
+| Un analyzer de type autre que `custom` (`french`, `standard` paramétré…) | ❌ | |
+
+Le nom déclaré est celui que rend `_mapping`, et un analyzer sur mesure n'existe
+que dans son index — `_analyze` sans index ne connaît que les intégrés.
+
+**À savoir sur l'élision.** `standard` garde `l'édition` en **un seul terme**,
+des deux côtés : c'est le filtre `elision` de l'analyzer `french` qui le
+couperait, et il n'est pas encore là. Chercher `edition` ne trouve donc pas
+`l'édition` — chez ES non plus, avec le même analyzer.
 
 **Ce que la comparaison a corrigé au passage.** `standard` — l'analyzer **par
 défaut** — découpait `l'ascension` en `l` et `ascension`, là où ES garde

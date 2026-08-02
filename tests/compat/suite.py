@@ -546,10 +546,12 @@ def analyzers_refuses(es):
         index="an", mappings={"properties": {"t": {"type": "text",
                                                    "analyzer": "inexistant"}}}),
         contains="inexistant")
-    # Un analyzer sur mesure passe par [settings.analysis], non supporte.
+    # Un analyzer sur mesure, lui, est supporte (voir `analyzers_sur_mesure`) :
+    # ce qui reste refuse, c'est ce qui repose sur un stemmer.
     refused(lambda: es.indices.create(index="an", settings={"analysis": {
-        "analyzer": {"mien": {"type": "custom", "tokenizer": "standard"}}}}),
-        contains="analysis")
+        "analyzer": {"mien": {"type": "custom", "tokenizer": "standard",
+                              "filter": ["french_stem"]}}}}),
+        contains="french_stem")
     # `analyzer` n'a de sens que sur un champ `text`.
     refused(lambda: es.indices.create(index="an", mappings={"properties": {
         "k": {"type": "keyword", "analyzer": "standard"}}}),
@@ -628,6 +630,57 @@ def index_cree_a_l_ecriture(es):
     refused(lambda: es.delete(index="jamais_creee", id="1"), status=404)
     for nom in ("auto1", "auto2", "auto3", "auto4"):
         es.options(ignore_status=404).indices.delete(index=nom)
+
+
+@scenario
+def analyzers_sur_mesure(es):
+    """`settings.analysis` : un mapping venu d'une instance réelle déclare
+    presque toujours son propre analyzer, le plus souvent `standard` +
+    `lowercase` + `asciifolding`."""
+    es.options(ignore_status=404).indices.delete(index="ana")
+    es.indices.create(index="ana", settings={"analysis": {
+        "analyzer": {
+            "fr_produit": {"type": "custom", "tokenizer": "standard",
+                           "filter": ["lowercase", "asciifolding"]},
+            "brut": {"type": "custom", "tokenizer": "keyword"},
+            "sans_vides": {"type": "custom", "tokenizer": "standard",
+                           "filter": ["lowercase", "mes_vides"]},
+        },
+        "filter": {"mes_vides": {"type": "stop", "stopwords": ["le", "la", "des"]}},
+    }}, mappings={"properties": {
+        "titre": {"type": "text", "analyzer": "fr_produit"},
+        "code": {"type": "text", "analyzer": "brut"},
+        "corps": {"type": "text", "analyzer": "sans_vides"},
+    }})
+
+    def tokens(**kw):
+        return [t["token"] for t in es.indices.analyze(index="ana", **kw)["tokens"]]
+
+    # Les accents sont repliés : « ÉDITION » et « edition » se retrouvent.
+    assert tokens(analyzer="fr_produit", text="ÉDITION originale") == ["edition", "originale"]
+    assert tokens(analyzer="brut", text="AB-12 xy") == ["AB-12 xy"]
+    assert tokens(analyzer="sans_vides", text="le cheval des pres") == ["cheval", "pres"]
+    # Et par champ, pas seulement par nom.
+    assert tokens(field="titre", text="COÛTE") == ["coute"]
+
+    es.index(index="ana", id="1", refresh=True,
+             document={"titre": "ÉDITION originale", "code": "AB-12", "corps": "le cheval"})
+    assert es.search(index="ana", query={"match": {"titre": "edition"}}
+                     )["hits"]["total"]["value"] == 1
+    # Le mapping rend le nom déclaré, pas un identifiant interne.
+    props = es.indices.get_mapping(index="ana")["ana"]["mappings"]["properties"]
+    assert props["titre"]["analyzer"] == "fr_produit"
+
+    # Ce qui n'est pas reproductible à l'identique reste refusé.
+    refused(lambda: es.indices.create(index="ana_ko", settings={"analysis": {"analyzer": {
+        "x": {"type": "custom", "tokenizer": "standard", "filter": ["porter_stem"]}}}}),
+        contains="ne supporte pas le filtre [porter_stem]")
+    refused(lambda: es.indices.create(index="ana_ko", settings={"analysis": {"analyzer": {
+        "x": {"type": "custom", "tokenizer": "ngram"}}}}),
+        contains="ne supporte pas le tokenizer [ngram]")
+    refused(lambda: es.indices.create(index="ana_ko", settings={"analysis": {"analyzer": {
+        "x": {"type": "french"}}}}), contains="type [french]")
+    es.indices.delete(index="ana")
 
 
 @scenario

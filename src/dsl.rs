@@ -91,9 +91,9 @@ impl QueryCtx<'_> {
         let mut analyzer = self
             .index
             .tokenizers()
-            .get(analyzer.tokenizer())
+            .get(&analyzer.tokenizer())
             .ok_or_else(|| {
-                EsError::internal(format!("analyzer [{}] introuvable", analyzer.name()))
+                EsError::internal(format!("analyzer [{}] introuvable", analyzer.tokenizer()))
             })?;
         let mut stream = analyzer.token_stream(text);
         let mut out = Vec::new();

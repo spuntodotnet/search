@@ -86,7 +86,7 @@ développement, pas de CI).
 
 | Commande | La question à laquelle elle répond |
 |---|---|
-| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**67/67**) |
+| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**68/68**) |
 | `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (137/138, 0 écart réel) |
 | `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (39/40) |
 | `tests/compat/diff_aggs.py` | les mêmes agrégations ? (34/34) |
@@ -114,7 +114,11 @@ bouger**, pas après.
   obligatoire. Deux passes suffisent.
 - **Les analyzers de langue sont refusés**, pas approximés : le stemmer de
   tantivy n'est pas celui de Lucene (17 textes sur 28 donnent des termes
-  différents en `french`). Les supporter demande de porter les stemmers.
+  différents en `french`). Les supporter demande de porter les stemmers de
+  Lucene — c'est le dernier gros morceau. Les analyzers **sur mesure**
+  (`settings.analysis`), eux, sont supportés : ils se composent de briques que
+  ferrite reproduit à l'identique (`standard`, `lowercase`, `asciifolding`,
+  `stop`).
 - **La recherche refuse les motifs et les listes d'index**, là où `_refresh` et
   `_mapping` les acceptent. La distinction est volontaire : fusionner des
   résultats venus de mappings différents est précisément là où naissent les
@@ -139,14 +143,20 @@ bouger**, pas après.
 - **Un conteneur ES qui vient de démarrer ment.** Un `diff_relevance` à 81/138
   s'est révélé être un ES 8.15 encore en train de se stabiliser. Re-mesurer
   avant de diagnostiquer.
+- **Un `curl` de vérification qui n'utilise pas le même texte que le test ne
+  vérifie rien.** Une chasse au bug d'analyzer s'est terminée sur un faux
+  positif : `match edition` ne trouvait pas `l'édition` — ce que fait aussi ES,
+  puisque `standard` garde l'élision. Comparer aux **deux** serveurs avant de
+  conclure, y compris quand on croit tenir le coupable.
 
 ## Où va le projet
 
 En rejouant une migration complète depuis une instance 7.10.2
 (`tests/compat/diff_es7.py`), il ne reste qu'un refus qui change vraiment les
-**résultats** plutôt que la forme : les **analyzers** — sur mesure
-(`settings.analysis`) et de langue (`french`, `english`). Les supporter demande
-de porter les stemmers de Lucene, c'est le prochain gros morceau.
+**résultats** plutôt que la forme : les **analyzers de langue** (`french`,
+`english`). Les supporter demande de porter les stemmers de Lucene — le
+`FrenchLightStemmer` et le `PorterStemmer`, plus le filtre `elision` — c'est le
+dernier gros morceau.
 
 Ensuite, par ordre de gêne pour un projet réel : `scroll` / `helpers.scan`,
 `rest_total_hits_as_int`, `_msearch`, `_stats`, les alias et les templates.
