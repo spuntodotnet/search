@@ -7,7 +7,7 @@ use serde_json::{json, Map, Value};
 use tantivy::collector::{Collector, Count, SegmentCollector, TopDocs};
 use tantivy::columnar::{Column, StrColumn};
 use tantivy::query::Query;
-use tantivy::{DocAddress, DocId, Score, SegmentOrdinal, SegmentReader};
+use tantivy::{DocAddress, DocId, Score, Searcher, SegmentOrdinal, SegmentReader};
 
 use crate::engine::Generation;
 use crate::error::{EsError, EsResult};
@@ -61,10 +61,16 @@ impl SortValue {
     }
 }
 
+/// Un document candidat, avant la fusion entre index.
+///
+/// `cible` est le rang de l'index dont il vient : c'est lui qui departage deux
+/// documents que tout le reste laisse ex aequo, et il est stable parce que les
+/// index arrivent tries par nom.
 #[derive(Debug, Clone)]
 struct Hit {
     keys: Vec<SortValue>,
     score: Score,
+    cible: usize,
     seg: SegmentOrdinal,
     doc: DocId,
 }
@@ -80,6 +86,7 @@ struct Hit {
 struct SortCollector {
     specs: Arc<Vec<SortSpec>>,
     needs_score: bool,
+    cible: usize,
 }
 
 enum Accessor {
@@ -94,6 +101,7 @@ enum Accessor {
 
 struct SortSegmentCollector {
     seg: SegmentOrdinal,
+    cible: usize,
     accessors: Vec<Accessor>,
     hits: Vec<Hit>,
     buf: Vec<u8>,
@@ -125,6 +133,7 @@ impl Collector for SortCollector {
         }
         Ok(SortSegmentCollector {
             seg,
+            cible: self.cible,
             accessors,
             hits: Vec::new(),
             buf: Vec::new(),
@@ -174,6 +183,7 @@ impl SegmentCollector for SortSegmentCollector {
         self.hits.push(Hit {
             keys,
             score,
+            cible: self.cible,
             seg: self.seg,
             doc,
         });
@@ -260,7 +270,10 @@ fn matches_include(includes: &[String], path: &str) -> bool {
 }
 
 /// Comparaison de motif facon ES : `*` remplace n'importe quelle sous-chaine.
-fn glob_match(pattern: &str, text: &str) -> bool {
+///
+/// Sert au filtrage de `_source` comme a la resolution des noms d'index
+/// ([`crate::selection`]) : c'est le meme joker des deux cotes.
+pub fn glob_match(pattern: &str, text: &str) -> bool {
     if !pattern.contains('*') {
         return pattern == text;
     }
@@ -294,13 +307,31 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 // Execution
 // ---------------------------------------------------------------------------
 
-pub struct SearchRequest {
+/// Un index a interroger : sa generation, et la requete **construite dans
+/// cette generation**.
+///
+/// Une `Query` tantivy porte des `Field` qui n'ont de sens que dans le schema
+/// ou ils ont ete obtenus : deux index, meme de mapping identique, exigent donc
+/// deux requetes distinctes. C'est la raison pour laquelle une cible transporte
+/// sa requete plutot que la recherche n'en construise une seule.
+pub struct Cible {
+    pub nom: String,
+    pub gen: Arc<Generation>,
     pub query: Box<dyn Query>,
+    /// Les cles de tri resolues dans **cette** generation.
+    pub sort: Vec<SortSpec>,
+    /// Les agregations sont-elles collectees sur cet index ? (`false` quand il
+    /// ignore un des champs agreges : il n'a alors aucune valeur a apporter.)
+    pub agrege: bool,
+}
+
+pub struct SearchRequest {
     /// Les agregations demandees, deja validees.
     pub aggs: Option<Value>,
     pub from: usize,
     pub size: usize,
-    pub sort: Vec<SortSpec>,
+    /// Le sens de chaque cle de tri. Vide : tri par score.
+    pub sort_asc: Vec<bool>,
     pub source: SourceFilter,
 }
 
@@ -311,88 +342,133 @@ pub struct SearchOutcome {
     pub aggregations: Option<Value>,
 }
 
-pub fn execute(index_name: &str, gen: &Generation, req: &SearchRequest) -> EsResult<SearchOutcome> {
-    let searcher = gen.searcher();
+/// Execute la recherche sur chaque index vise, puis fusionne.
+///
+/// C'est le schema `query_then_fetch` d'Elasticsearch, applique a des index
+/// mono-shard : chaque index classe ses propres documents avec **ses** IDF, on
+/// ne rassemble que les meilleurs de chacun, et le classement final se fait sur
+/// ces candidats. Les scores ne sont donc pas comparables terme a terme entre
+/// index — ils ne le sont pas davantage entre shards chez ES, qui fait
+/// exactement ce calcul par defaut.
+pub fn execute(cibles: &[Cible], req: &SearchRequest) -> EsResult<SearchOutcome> {
+    let searchers: Vec<Searcher> = cibles.iter().map(|c| c.gen.searcher()).collect();
+
     // Les agregations portent sur tous les documents qui correspondent, pas sur
-    // la page rendue : elles se calculent a part.
+    // la page rendue : elles se calculent a part, et se fusionnent a part.
     let aggregations = match &req.aggs {
-        Some(aggs) => Some(crate::aggs::run(gen, &searcher, &*req.query, aggs)?),
+        Some(aggs) => {
+            let parts: Vec<crate::aggs::Part<'_>> = cibles
+                .iter()
+                .zip(&searchers)
+                .filter(|(c, _)| c.agrege)
+                .map(|(c, s)| crate::aggs::Part {
+                    gen: &c.gen,
+                    searcher: s,
+                    query: &*c.query,
+                })
+                .collect();
+            Some(crate::aggs::run(&parts, aggs)?)
+        }
         None => None,
     };
 
-    if req.sort.is_empty() {
-        let count = searcher.search(&req.query, &Count)?;
-        // `size: 0` ne demande aucun document : ES ne calcule alors pas de score
-        // et rend `max_score: null`.
-        if req.size == 0 {
-            return Ok(SearchOutcome {
-                total: count,
-                max_score: None,
-                hits: Vec::new(),
-                aggregations,
-            });
+    let trie = !req.sort_asc.is_empty();
+    let needs_score = !trie
+        || cibles
+            .iter()
+            .any(|c| c.sort.iter().any(|s| matches!(s.key, SortKey::Score)));
+    // Combien de documents chaque index doit remonter pour que la page finale
+    // soit exacte : les `from` premiers peuvent tous venir du meme index.
+    let fenetre = req.from + req.size;
+
+    let mut total = 0usize;
+    let mut max_score: Option<f32> = None;
+    let mut candidats: Vec<Hit> = Vec::new();
+
+    for (rang, (cible, searcher)) in cibles.iter().zip(&searchers).enumerate() {
+        if trie {
+            let specs = Arc::new(cible.sort.clone());
+            let collector = SortCollector {
+                specs: specs.clone(),
+                needs_score,
+                cible: rang,
+            };
+            let mut locaux = searcher.search(&cible.query, &collector)?;
+            total += locaux.len();
+            locaux.sort_by(|a, b| compare(&req.sort_asc, a, b));
+            locaux.truncate(fenetre);
+            candidats.extend(locaux);
+        } else {
+            total += searcher.search(&cible.query, &Count)?;
+            if fenetre == 0 {
+                continue;
+            }
+            let top =
+                searcher.search(&cible.query, &TopDocs::with_limit(fenetre).order_by_score())?;
+            // ES rapporte le meilleur score de la requete, pas de la page.
+            if let Some((score, _)) = top.first() {
+                max_score = Some(max_score.map_or(*score, |m: f32| m.max(*score)));
+            }
+            candidats.extend(top.into_iter().map(|(score, addr)| Hit {
+                keys: Vec::new(),
+                score,
+                cible: rang,
+                seg: addr.segment_ord,
+                doc: addr.doc_id,
+            }));
         }
-        let top = searcher.search(
-            &req.query,
-            &TopDocs::with_limit(req.from + req.size).order_by_score(),
-        )?;
-        // ES rapporte le meilleur score de la requete, pas de la page courante.
-        let max_score = top.first().map(|(score, _)| *score);
-        let mut hits = Vec::new();
-        for (score, addr) in top.into_iter().skip(req.from) {
-            hits.push(build_hit(
-                index_name,
-                gen,
-                &searcher,
-                addr,
-                Some(score),
-                None,
-                &req.source,
-            )?);
-        }
+    }
+
+    // `size: 0` ne demande aucun document : ES ne calcule alors pas de score et
+    // rend `max_score: null`.
+    if req.size == 0 {
         return Ok(SearchOutcome {
-            total: count,
-            max_score,
-            hits,
+            total,
+            max_score: None,
+            hits: Vec::new(),
             aggregations,
         });
     }
 
-    let specs = Arc::new(req.sort.clone());
-    let needs_score = specs.iter().any(|s| matches!(s.key, SortKey::Score));
-    let collector = SortCollector {
-        specs: specs.clone(),
-        needs_score,
-    };
-    let mut all = searcher.search(&req.query, &collector)?;
-    all.sort_by(|a, b| compare(&specs, a, b));
+    candidats.sort_by(|a, b| compare(&req.sort_asc, a, b));
 
-    let total = all.len();
     let mut hits = Vec::new();
-    for hit in all.into_iter().skip(req.from).take(req.size) {
+    for hit in candidats.into_iter().skip(req.from).take(req.size) {
+        let cible = &cibles[hit.cible];
         let addr = DocAddress::new(hit.seg, hit.doc);
-        let sort_values: Vec<Value> = hit.keys.iter().map(SortValue::to_json).collect();
-        let score = if needs_score { Some(hit.score) } else { None };
+        let sort_values = trie.then(|| hit.keys.iter().map(SortValue::to_json).collect());
+        let score = (!trie || needs_score).then_some(hit.score);
         hits.push(build_hit(
-            index_name,
-            gen,
-            &searcher,
+            &cible.nom,
+            &cible.gen,
+            &searchers[hit.cible],
             addr,
             score,
-            Some(sort_values),
+            sort_values,
             &req.source,
         )?);
     }
     Ok(SearchOutcome {
         total,
-        max_score: None,
+        // Un tri explicite remplace le score : ES rend alors `max_score: null`.
+        max_score: if trie { None } else { max_score },
         hits,
         aggregations,
     })
 }
 
-fn compare(specs: &[SortSpec], a: &Hit, b: &Hit) -> Ordering {
-    for (i, spec) in specs.iter().enumerate() {
+/// L'ordre entre deux candidats, quel que soit l'index d'ou ils viennent.
+///
+/// `sort_asc` vide signifie « par score decroissant » : c'est le classement par
+/// defaut d'ES.
+fn compare(sort_asc: &[bool], a: &Hit, b: &Hit) -> Ordering {
+    if sort_asc.is_empty() {
+        let ord = b.score.total_cmp(&a.score);
+        if ord != Ordering::Equal {
+            return ord;
+        }
+    }
+    for (i, asc) in sort_asc.iter().enumerate() {
         let (av, bv) = (&a.keys[i], &b.keys[i]);
         let ord = match (av, bv) {
             (SortValue::Missing, SortValue::Missing) => Ordering::Equal,
@@ -401,7 +477,7 @@ fn compare(specs: &[SortSpec], a: &Hit, b: &Hit) -> Ordering {
             (_, SortValue::Missing) => Ordering::Less,
             _ => {
                 let c = av.cmp_present(bv);
-                if spec.asc {
+                if *asc {
                     c
                 } else {
                     c.reverse()
@@ -412,8 +488,9 @@ fn compare(specs: &[SortSpec], a: &Hit, b: &Hit) -> Ordering {
             return ord;
         }
     }
-    // Departage stable : l'ordre d'indexation, comme ES.
-    (a.seg, a.doc).cmp(&(b.seg, b.doc))
+    // Departage stable : l'index vise, puis l'ordre d'indexation, comme ES
+    // departage par shard puis par document.
+    (a.cible, a.seg, a.doc).cmp(&(b.cible, b.seg, b.doc))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -507,26 +584,49 @@ mod tests {
 
     #[test]
     fn tri_valeurs_manquantes_en_dernier() {
-        let specs = vec![SortSpec {
-            key: SortKey::Field {
-                name: "a".into(),
-                kind: FieldKind::I64,
-            },
-            asc: false,
-        }];
         let present = Hit {
             keys: vec![SortValue::I64(1)],
             score: 1.0,
+            cible: 0,
             seg: 0,
             doc: 0,
         };
         let missing = Hit {
             keys: vec![SortValue::Missing],
             score: 1.0,
+            cible: 0,
             seg: 0,
             doc: 1,
         };
-        assert_eq!(compare(&specs, &present, &missing), Ordering::Less);
-        assert_eq!(compare(&specs, &missing, &present), Ordering::Greater);
+        assert_eq!(compare(&[false], &present, &missing), Ordering::Less);
+        assert_eq!(compare(&[false], &missing, &present), Ordering::Greater);
+    }
+
+    /// Sans cle de tri, deux documents de meme score sont departages par
+    /// l'index d'ou ils viennent — et les index arrivent tries par nom, donc
+    /// l'ordre rendu ne depend pas de celui ou la recherche les a parcourus.
+    #[test]
+    fn ex_aequo_departages_par_index() {
+        let a = Hit {
+            keys: vec![],
+            score: 2.0,
+            cible: 1,
+            seg: 0,
+            doc: 0,
+        };
+        let b = Hit {
+            keys: vec![],
+            score: 2.0,
+            cible: 0,
+            seg: 0,
+            doc: 9,
+        };
+        assert_eq!(compare(&[], &b, &a), Ordering::Less);
+        // Le score reste prioritaire sur l'index.
+        let meilleur = Hit {
+            score: 3.0,
+            ..a.clone()
+        };
+        assert_eq!(compare(&[], &meilleur, &b), Ordering::Less);
     }
 }

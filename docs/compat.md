@@ -22,12 +22,12 @@ Version d'API annoncée : **Elasticsearch 8.15.0** (`version.number`,
 
 | | ferrite | ES 7.10.2 (validation du runner) |
 |---|---|---|
-| réussis | 44 | 537 |
-| refusés explicitement (hors périmètre) | 333 | 0 |
-| sautés (version, fonctionnalité du runner) | 97 | 103 |
-| **échecs** | **169** | 3 |
+| réussis | 65 | 537 |
+| refusés explicitement (hors périmètre) | 324 | 0 |
+| sautés (version, fonctionnalité du runner) | 98 | 103 |
+| **échecs** | **156** | 3 |
 
-Les 169 échecs sont l'inventaire des écarts qui restent — les plus gros sont
+Les 156 échecs sont l'inventaire des écarts qui restent — les plus gros sont
 listés dans [`conformance.md`](conformance.md). C'est la mesure la moins
 complaisante du projet : les cas viennent d'Elastic, pas de nous.
 
@@ -50,17 +50,18 @@ complaisante du projet : les cas viennent d'Elastic, pas de nous.
 | | État | Détail |
 |---|---|---|
 | Création à l'écriture | ✅ | indexer dans un index absent le **crée**, comme ES (`action.auto_create_index`) : `index`, `create`, `update`, et le `_bulk`. La lecture, la recherche et la suppression rendent toujours 404 |
-| `POST /_refresh`, `GET /_mapping`, `_all` / `*` sur ces routes | ✅ | les formes sans index portent sur tous les index. La **recherche** continue de refuser les motifs : y répondre demanderait de fusionner des mappings différents |
-| `PUT /{index}` | 🟡 | `mappings` est **optionnel** (les champs viendront des documents). `settings` limité à `number_of_shards` / `number_of_replicas` (acceptés, sans effet : ferrite est mono-shard). `aliases` doit être vide |
-| `DELETE /{index}` | ✅ | `ignore_unavailable` honoré |
-| `HEAD /{index}` | ✅ | |
-| `GET /{index}` | ✅ | `aliases` / `mappings` / `settings` |
+| Expressions d'index (`a,b`, `logs-*`, `_all`, exclusions, alias) | ✅ | sur **toutes** les routes, recherche comprise — voir la section dédiée |
+| `PUT /{index}` | 🟡 | `mappings` est **optionnel** (les champs viendront des documents). `settings` limité à `number_of_shards` / `number_of_replicas` (acceptés, sans effet : ferrite est mono-shard). `aliases` ✅ |
+| `DELETE /{index}` | ✅ | listes et motifs, sous `action.destructive_requires_name` (voir plus bas). `ignore_unavailable` honoré |
+| `HEAD /{index}` | ✅ | 200 dès que l'expression se résout, même sur zéro index — comme ES |
+| `GET /{index}` | ✅ | `aliases` / `mappings` / `settings`, une entrée par index visé |
 | `GET /{index}/_mapping` | ✅ | |
 | `PUT /{index}/_mapping` | 🟡 | **ajoute** des champs (une nouvelle génération est construite). Changer le type d'un champ existant reste refusé, comme chez ES. Modifier `dynamic` : ❌ |
 | `POST /{index}/_refresh` | ✅ | |
 | `POST\|GET /_analyze`, `/{index}/_analyze` | 🟡 | `text` (chaîne ou liste), `analyzer`, `field`. `tokenizer` / `filter` / `char_filter` explicites : ❌ |
 | Mapping dynamique | ✅ | `dynamic` : `true` (défaut), `false`, `strict`. `runtime` ❌. Voir plus bas |
-| Alias, templates, ILM, `_settings`, `_stats`, `_close`, `_open` | ❌ | |
+| Alias | ✅ | voir la section dédiée |
+| Templates, ILM, `_settings`, `_stats`, `_close`, `_open` | ❌ | |
 
 ### Mapping dynamique
 
@@ -222,9 +223,111 @@ train de tourner — les rafraîchissements sont sérialisés entre eux.
 
 ## Recherche
 
-`POST\|GET /{index}/_search` ✅. `POST\|GET /_search` (multi-index) ❌ — il faut
-nommer un index ; les motifs et les listes (`livres*`, `a,b`) sont ❌ eux aussi,
-avec une erreur qui dit pourquoi.
+`POST|GET /{index}/_search` ✅, et `{index}` est une **expression** au sens
+d'Elasticsearch — voir [Expressions d'index](#expressions-dindex-listes-motifs-alias)
+juste en dessous. `POST|GET /_search` sans index cherche partout, comme `_all`.
+
+## Expressions d'index (listes, motifs, alias)
+
+Partout où une route attend un index, elle accepte la même grammaire qu'ES.
+C'est [`src/selection.rs`](../src/selection.rs) qui la résout, et **elle seule** :
+un motif veut donc dire la même chose pour `_search`, `_count`, `_refresh`,
+`_mapping`, `_cat/indices` et `DELETE`.
+
+| Forme | État | Ce qu'elle désigne |
+|---|---|---|
+| `catalogue` | ✅ | l'index, ou l'alias, de ce nom |
+| `produits,marques` | ✅ | les deux — c'est ce qu'envoie `es.search(index=["produits","marques"])` |
+| `audits-2026.08.*` | ✅ | les index **et les alias** dont le nom correspond |
+| `_all`, `*`, URL sans index | ✅ | tous les index |
+| `audits-*,-audits-2026.07.*` | ✅ | les premiers, moins les seconds |
+| `ignore_unavailable` | ✅ | un nom concret absent est ignoré au lieu d'être une erreur |
+| `allow_no_indices` | ✅ | défaut `true` : un motif sans correspondance rend 0 résultat, pas 404 |
+| `expand_wildcards` | 🟡 | `open`, `hidden`, `all` sont équivalents (ferrite n'a ni index fermé ni index caché) ; `closed` seul ne désigne donc rien ; `none` est ❌ |
+
+Un nom concret absent reste une erreur (`index_not_found_exception`), un nom
+réservé aussi (`invalid_index_name_exception` sur un `_` initial) : ES fait la
+même distinction, et elle est utile — `GET /_route_inconnue` doit dire « nom
+invalide », pas laisser croire qu'il manque un index.
+
+Les opérations qui portent sur **un seul** document (`_doc/{id}`, `_create`,
+`_update`, `_mget`, une action `_bulk`) suivent un alias mais refusent une liste
+ou un motif, comme ES.
+
+**Comment le multi-index est exécuté.** Chaque index est un index tantivy
+distinct, avec son propre schéma : la requête est donc **reconstruite** pour
+chacun, exécutée séparément, et les résultats sont fusionnés. C'est le schéma
+`query_then_fetch` d'ES appliqué à des index mono-shard : chaque index classe ses
+documents avec **ses** statistiques, on ne rassemble que les `from + size`
+meilleurs de chacun, et le classement final se fait sur ces candidats — ce que
+fait ES entre shards par défaut. Deux documents que tout laisse ex æquo sont
+départagés par l'index d'où ils viennent, et les index arrivent triés par nom,
+donc l'ordre rendu est reproductible.
+
+Les **agrégations** ne sont pas fusionnées sur leur résultat final : ferrite
+collecte les résultats *intermédiaires* de tantivy
+(`DistributedAggregationCollector`), les fusionne, et ne finalise qu'une fois.
+Faire autrement rendrait faux tout `avg` (la moyenne des moyennes n'est pas la
+moyenne) — c'est exactement la mécanique qu'ES applique entre ses shards.
+
+**Les mappings hétérogènes**, eux, sont la règle dès qu'on parle d'index
+quotidiens : un champ ajouté la semaine dernière n'existe que dans les index
+récents. Deux comportements, tous deux mesurés sur un vrai ES :
+
+- **dans la requête** : une clause qui cite un champ que *cet* index ne mappe
+  pas devient « ne correspond à rien » **pour cet index-là**, et les clauses qui
+  l'entourent continuent de compter. Écarter l'index entier serait faux : dans
+  un `bool` avec `should`, on perdrait les documents que les *autres* clauses y
+  trouvent. L'erreur « champ inconnu » n'est rendue que si **aucun** index visé
+  ne connaît le champ — là, c'est encore une faute de frappe.
+- **dans le `sort`** : ES ne fait pas échouer la recherche, il rapporte l'échec
+  **de ce shard** et rend les documents des autres. ferrite fait pareil :
+  `_shards.failed` est incrémenté et `_shards.failures[]` porte le
+  `query_shard_exception`, index par index. Si aucun index ne sait trier, c'est
+  un `search_phase_execution_exception` « all shards failed », avec une
+  `root_cause` par index — le format exact d'ES.
+
+`tests/compat/diff_multi_index.py` mesure tout ça contre un vrai ES 8.15 :
+**86/87 appels identiques**, 1 divergence assumée, 0 écart. Le même fichier se
+lance contre **deux** Elasticsearch (`--calibrer`) pour vérifier que ses verdicts
+veulent dire quelque chose : 87/87.
+
+## Alias
+
+| Route | État | Détail |
+|---|---|---|
+| `POST /_aliases` | 🟡 | `add`, `remove`, `remove_index` ; `index`/`indices` et `alias`/`aliases` au singulier comme au pluriel, motifs compris. Tout ou rien, comme chez ES — c'est ce qui rend une bascule atomique |
+| `PUT\|POST /{index}/_alias/{nom}` | ✅ | `{index}` est une expression, `{nom}` accepte une liste |
+| `DELETE /{index}/_alias/{nom}` | ✅ | `{nom}` accepte un motif |
+| `GET /_alias`, `/_alias/{nom}`, `/{index}/_alias`, `/{index}/_alias/{nom}` | ✅ | y compris le 404 « à corps de chaîne » d'ES (`{"error": "alias [x] missing", "status": 404}`) |
+| `HEAD /_alias/{nom}`, `/{index}/_alias/{nom}` | ✅ | |
+| `aliases` dans `PUT /{index}` | ✅ | posé après la création ; un alias refusé annule la création plutôt que de laisser une demande à moitié faite |
+| `is_write_index` | ✅ | désigne l'index qui reçoit les écritures quand l'alias en couvre plusieurs |
+| `filter`, `routing`, `index_routing`, `search_routing` sur un alias | ❌ | un alias filtré dont le filtre n'est pas appliqué rendrait précisément les documents qu'il est censé cacher ; le routage n'a rien à choisir sur un mono-shard |
+
+Écrire à travers un alias qui couvre plusieurs index est refusé tant qu'aucun
+`is_write_index` ne tranche — choisir à la place du client écrirait
+silencieusement au mauvais endroit. La réponse porte alors le nom **concret** de
+l'index, pas celui de l'alias, comme chez ES.
+
+Un index et un alias ne peuvent pas porter le même nom (la résolution ne saurait
+plus lequel désigner) ; supprimer un index le retire de ses alias ; et
+`DELETE /{alias}` est refusé — effacer des index que le client n'a pas nommés
+n'est pas une suppression, c'est un accident.
+
+## Réglages de cluster
+
+| | État | Détail |
+|---|---|---|
+| `GET\|PUT /_cluster/settings` | 🟡 | `persistent` et `transient` (le second l'emporte), écriture plate ou imbriquée. Seul `action.destructive_requires_name` est reconnu ; tout autre réglage est refusé avec le message d'ES (`not recognized`) |
+| `action.destructive_requires_name` | ✅ | `true` par défaut, **comme ES depuis la 8.0** |
+
+Conséquence : `DELETE /audits-2026.07.*` et `DELETE /_all` sont **refusés par
+défaut**, avec le message d'ES (`Wildcard expressions or all indices are not
+allowed`). C'est délibéré : un projet qui purge par motif a forcément basculé ce
+réglage sur son Elasticsearch, et si ferrite obéissait là où ES refuse, la
+première différence de comportement entre les deux serveurs serait une
+suppression de données.
 
 ### Clauses du Query DSL
 
@@ -254,15 +357,16 @@ avec une erreur qui dit pourquoi.
 |---|---|---|
 | `query` | ✅ | |
 | `from` / `size` | ✅ | corps ou query string. `from + size > 10000` ❌ (`max_result_window`) |
-| `sort` | 🟡 | multi-clés, `asc` / `desc`, sur `keyword` / numérique / `date` / `boolean`, plus `_score` et `_doc`. Valeurs manquantes en dernier (`missing: _last`). Le tableau `sort` est rendu dans chaque hit. Tri sur un champ `text` ❌ ; `missing`, `mode`, `nested`, tri par script ❌ |
+| `sort` | 🟡 | multi-clés, `asc` / `desc`, sur `keyword` / numérique / `date` / `boolean`, plus `_score` et `_doc`. Valeurs manquantes en dernier (`missing: _last`). Le tableau `sort` est rendu dans chaque hit. En multi-index, un champ non mappé par un des index donne un échec **de ce shard**, comme chez ES. Tri sur un champ `text` ❌ ; `missing`, `mode`, `nested`, `unmapped_type`, tri par script ❌ |
 | `_source` | ✅ | `true` / `false`, chaîne, liste, `{includes, excludes}`, motifs `*`. Aussi via `_source_includes` / `_source_excludes` en query string |
 | `track_total_hits` | 🟡 | le total est **toujours exact** (`relation: "eq"`), donc `true` et une valeur numérique sont acceptés ; `false` est ❌ |
 | Scoring | ✅ | BM25 (tantivy), `_score` et `max_score` renseignés ; `null` quand un tri est demandé, comme chez ES |
-| Format de réponse | ✅ | `took`, `timed_out`, `_shards`, `hits.total.{value,relation}`, `hits.max_score`, `hits.hits[]` avec `_index` / `_id` / `_score` / `_source` / `sort` |
+| Format de réponse | ✅ | `took`, `timed_out`, `_shards` (avec `failures[]` quand un index n'a pas su répondre), `hits.total.{value,relation}`, `hits.max_score`, `hits.hits[]` avec `_index` / `_id` / `_score` / `_source` / `sort` |
 | `preference` | 🟡 | accepté, sans objet : il n'y a qu'un shard |
 | `aggs` / `aggregations` | 🟡 | voir la section dédiée |
 | `highlight`, `search_after`, `scroll`, PIT, `collapse`, `knn`, `explain`, `fields`, `post_filter`, `min_score`, `suggest`, `rescore`, `track_scores`, `q` | ❌ | |
-| `ignore_unavailable`, `allow_no_indices`, `expand_wildcards`, `routing`, `filter_path`, `typed_keys` | ❌ | ils n'ont de sens qu'avec des motifs multi-index ou changent la forme de la réponse |
+| `ignore_unavailable`, `allow_no_indices`, `expand_wildcards` | ✅ | voir [Expressions d'index](#expressions-dindex-listes-motifs-alias) — `expand_wildcards=none` reste ❌ |
+| `routing`, `filter_path`, `typed_keys` | ❌ | ferrite est mono-shard (`routing` n'a rien à choisir) ; les deux autres changent la forme de la réponse |
 | `rest_total_hits_as_int` | ❌ | il change la forme de `hits.total` (nombre au lieu d'objet). Accepté par ES 8, refusé ici : du code venu de la 6.x/7.x s'en sert encore, voir [`compat-es7.md`](compat-es7.md) |
 | `_msearch`, `_search/template`, `_explain`, `_validate` | ❌ | |
 
@@ -377,6 +481,12 @@ pas pour être découverts en production.
    « aucun résultat » serait exactement le résultat faux présenté comme complet
    que ce projet refuse. ferrite renvoie `query_shard_exception`.
 
+   En **multi-index**, la règle est resserrée pour ne pas casser un usage
+   légitime : si un *autre* index visé connaît le champ, ce n'est plus une faute
+   de frappe mais un mapping hétérogène, et la clause se comporte comme chez ES
+   (elle ne correspond à rien, pour cet index seulement). L'erreur n'est rendue
+   que si *aucun* index visé ne connaît le champ.
+
 2. **`slop` est refusé dans `match_phrase`.** tantivy et Lucene ne comptent pas
    les déplacements de la même façon dès que la phrase dépasse deux termes :
    cherchée comme `un deux trois`, la phrase `deux un trois` correspond à
@@ -407,7 +517,8 @@ pas pour être découverts en production.
    les valeurs absolues, non.
 
 6. **`_shards.total` vaut 1** (un shard, zéro réplique) là où un ES par défaut
-   annonce 2 dans les réponses d'écriture.
+   annonce 2 dans les réponses d'écriture. En recherche multi-index, il vaut le
+   **nombre d'index visés** : un index = un shard, et c'est ce que compte ES.
 
 7. **`_cluster/health` est toujours `green`.** C'est le comportement voulu pour
    un mono-nœud : il n'y a pas de réplique à assigner.

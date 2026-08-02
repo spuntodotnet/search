@@ -160,13 +160,15 @@ du code 7.x, où ils sont particulièrement idiomatiques.
 |---|---|---|---|
 | `search(scroll="1m")` + `scroll()` | 400 paramètre `scroll` inconnu | ✅ | pas de `scroll` (voir `docs/compat.md`) ; pagination par `from`/`size` sous `max_result_window` |
 | `helpers.scan(es, …)` | 400 (repose sur `scroll`) | ✅ | idem — **c'est le manque le plus visible** : `scan` est le raccourci le plus utilisé dans du code 7.x |
-| `search(rest_total_hits_as_int=True)` | 400 paramètre inconnu | ✅ (`"total": 4`) | lire `hits.total.value` ; ce paramètre est du compat 6.x, il n'y a aucune raison technique de le refuser |
+| `search(rest_total_hits_as_int=True)` | 400 refus explicite | ✅ (`"total": 4`) | lire `hits.total.value` ; ce paramètre est du compat 6.x, il n'y a aucune raison technique de le refuser |
 | `msearch(body=[…])` | 400 route non implémentée | ✅ | boucler sur `search` |
 | `indices.stats()` | 400 `no handler found` | ✅ | `cat.indices(format="json")` donne le nombre de documents |
-| `indices.put_template` / `get_settings` / `put_settings` / alias | 400 | ✅ | non implémentés (`docs/compat.md`) |
+| `indices.put_template` / `get_settings` / `put_settings` | 400 | ✅ | non implémentés (`docs/compat.md`) |
+| `indices.put_alias` / `get_alias` / `update_aliases` | ✅ | ✅ | supportés (`filter` sur un alias reste refusé) |
 | `update_by_query` / `delete_by_query` / `reindex` | 400 refus explicite | ✅ | réindexer côté client |
-| `search(index="a*")`, `search(index="a,b")`, `_search` global | 400 refus explicite | ✅ | nommer un index unique |
-| `settings.analysis` (analyzers sur mesure), analyzers de langue (`french`, `english`) | 400 refus explicite | ✅ | analyzers intégrés seulement (`standard`, `simple`, `whitespace`, `keyword`, `stop`) |
+| `search(index="a*")`, `search(index="a,b")`, `_search` global | ✅ | ✅ | — |
+| `indices.delete(index="a*")` | 400 tant que `action.destructive_requires_name` n'est pas basculé | idem en 8.x (le réglage valait `false` en 7.x) | `PUT /_cluster/settings` avec `action.destructive_requires_name: false`, ou nommer les index |
+| `settings.analysis` (analyzers sur mesure), `french`, `english` | ✅ | ✅ | mesurés identiques à ES ; les autres langues restent refusées |
 
 Le tableau complet du périmètre est dans [`compat.md`](compat.md) — cette page
 n'en extrait que ce qu'un code 7.x heurte en premier.

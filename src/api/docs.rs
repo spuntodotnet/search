@@ -13,6 +13,7 @@ use super::search::source_filter;
 use super::{elapsed_ms, parse_body, shards_ok, Json, Params, SharedState};
 use crate::engine::{Catalog, WriteOptions, WriteOutcome};
 use crate::error::{EsError, EsResult};
+use crate::selection::{index_d_ecriture, index_unique};
 use crate::util;
 
 /// `PUT|POST /{index}/_doc/{id}`
@@ -79,7 +80,10 @@ async fn write_one(
             "le corps du document doit etre un objet JSON",
         ));
     }
-    let idx = st.catalog.get_or_create(&index)?;
+    // Une ecriture adressee a un alias part dans son index d'ecriture ; ES
+    // rapporte alors le nom **concret**, pas l'alias.
+    let idx = index_d_ecriture(&st.catalog, &index)?;
+    let index = idx.name.clone();
     let id = id.unwrap_or_else(util::random_uuid);
 
     let outcome = {
@@ -136,7 +140,8 @@ pub async fn get_doc(
     p.opt("preference");
     p.done()?;
 
-    let idx = st.catalog.get(&index)?;
+    let idx = index_unique(&st.catalog, &index)?;
+    let index = idx.name.clone();
     let found = {
         let idx = idx.clone();
         let id = id.clone();
@@ -171,7 +176,7 @@ pub async fn head_doc(
     State(st): State<SharedState>,
     Path((index, id)): Path<(String, String)>,
 ) -> Response {
-    let Ok(idx) = st.catalog.get(&index) else {
+    let Ok(idx) = index_unique(&st.catalog, &index) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     match tokio::task::spawn_blocking(move || idx.get_doc(&id)).await {
@@ -197,7 +202,8 @@ pub async fn delete_doc(
     };
     p.done()?;
 
-    let idx = st.catalog.get(&index)?;
+    let idx = index_unique(&st.catalog, &index)?;
+    let index = idx.name.clone();
     let outcome = {
         let idx = idx.clone();
         let id = id.clone();
@@ -277,7 +283,8 @@ pub async fn update_doc(
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
-    let idx = st.catalog.get_or_create(&index)?;
+    let idx = index_d_ecriture(&st.catalog, &index)?;
+    let index = idx.name.clone();
     let (outcome, resultat) = {
         let idx = idx.clone();
         let id = id.clone();
@@ -383,7 +390,7 @@ pub async fn mget(
 
     let mut sortie = Vec::with_capacity(demandes.len());
     for (idx_nom, doc_id) in demandes {
-        let idx = match st.catalog.get(&idx_nom) {
+        let idx = match index_unique(&st.catalog, &idx_nom) {
             Ok(i) => i,
             Err(e) => {
                 // ES rapporte l'erreur par document, sans faire echouer le lot.
@@ -395,6 +402,7 @@ pub async fn mget(
                 continue;
             }
         };
+        let idx_nom = idx.name.clone();
         let trouve = {
             let idx = idx.clone();
             let doc_id = doc_id.clone();
@@ -462,7 +470,7 @@ async fn bulk_inner(
 
     if refresh {
         for name in touched {
-            if let Ok(idx) = st.catalog.get(&name) {
+            if let Ok(idx) = index_unique(&st.catalog, &name) {
                 let _ = tokio::task::spawn_blocking(move || idx.refresh()).await;
             }
         }
@@ -612,12 +620,20 @@ fn execute_action(
 ) -> Value {
     let id = action.id.clone().unwrap_or_else(util::random_uuid);
 
+    // L'index vise est resolu d'abord : `_index` doit porter le nom **concret**
+    // quand l'action nommait un alias, comme chez ES.
+    let cible = if action.op == "delete" {
+        index_unique(catalog, &action.index)
+    } else {
+        index_d_ecriture(catalog, &action.index)
+    };
+    let nom = cible
+        .as_ref()
+        .map(|i| i.name.clone())
+        .unwrap_or_else(|_| action.index.clone());
+
     let result = (|| -> EsResult<(StatusCode, &str, WriteOutcome)> {
-        let idx = if action.op == "delete" {
-            catalog.get(&action.index)?
-        } else {
-            catalog.get_or_create(&action.index)?
-        };
+        let idx = cible.clone()?;
         match action.op.as_str() {
             "delete" => {
                 let out = idx.delete_doc(&id, WriteOptions::default())?;
@@ -694,7 +710,7 @@ fn execute_action(
     })();
 
     let mut item = Map::new();
-    item.insert("_index".into(), json!(action.index));
+    item.insert("_index".into(), json!(nom));
     item.insert("_id".into(), json!(id));
 
     match result {

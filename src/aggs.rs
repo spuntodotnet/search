@@ -14,7 +14,10 @@ use std::collections::HashMap;
 
 use serde_json::{json, Map, Value};
 use tantivy::aggregation::agg_req::Aggregations;
-use tantivy::aggregation::{AggContextParams, AggregationCollector, AggregationLimitsGuard};
+use tantivy::aggregation::intermediate_agg_result::IntermediateAggregationResults;
+use tantivy::aggregation::{
+    AggContextParams, AggregationLimitsGuard, DistributedAggregationCollector,
+};
 use tantivy::query::Query;
 use tantivy::Searcher;
 
@@ -259,6 +262,7 @@ fn verifier_champ(nom: &str, type_agg: &str, champ: &str, gen: &Generation) -> E
             "illegal_argument_exception",
             format!("Invalid aggregation [{nom}] : no mapping found for field [{champ}]"),
         )
+        .sur_champ_inconnu(champ)
     })?;
 
     if ty.kind() == FieldKind::Text {
@@ -283,26 +287,58 @@ fn verifier_champ(nom: &str, type_agg: &str, champ: &str, gen: &Generation) -> E
     }
 }
 
-/// Execute les agregations et rend le resultat au format d'Elasticsearch.
-pub fn run(
-    gen: &Generation,
-    searcher: &Searcher,
-    query: &dyn Query,
-    aggs: &Value,
-) -> EsResult<Value> {
+/// Un index a agreger : sa generation, son `searcher` et la requete construite
+/// pour lui.
+pub struct Part<'a> {
+    pub gen: &'a Generation,
+    pub searcher: &'a Searcher,
+    pub query: &'a dyn Query,
+}
+
+/// Execute les agregations sur un ou plusieurs index et rend le resultat au
+/// format d'Elasticsearch.
+///
+/// Chaque index est un index tantivy distinct : il faut donc l'agreger a part,
+/// puis **fusionner**. On ne fusionne pas les resultats finaux — un `avg` final
+/// ne porte plus le compte qui permettrait de le repondererer, et faire la
+/// moyenne des moyennes rendrait un nombre faux. On collecte donc les resultats
+/// **intermediaires** (`DistributedAggregationCollector`, prevu pour ca chez
+/// tantivy), on les fusionne, et on ne finalise qu'une fois — exactement la
+/// mecanique qu'ES applique entre ses shards.
+pub fn run(parts: &[Part<'_>], aggs: &Value) -> EsResult<Value> {
+    let Some(premiere) = parts.first() else {
+        return Ok(Value::Object(Map::new()));
+    };
+
+    // Les metadonnees de mise en forme (champ date, `format`, `size`, ordre) se
+    // lisent dans un mapping. Elles sont prises sur le premier index vise : ce
+    // sont des proprietes de la **demande**, pas des documents.
     let mut infos = HashMap::new();
-    let demande = preparer(aggs, gen, &mut infos);
+    let demande = preparer(aggs, premiere.gen, &mut infos);
 
     let requete: Aggregations = serde_json::from_value(demande)
         .map_err(|e| EsError::parsing(format!("[aggs] illisible : {e}")))?;
+    let limites = AggregationLimitsGuard::new(Some(MEMORY_LIMIT), Some(MAX_BUCKETS));
 
-    let contexte = AggContextParams::new(
-        AggregationLimitsGuard::new(Some(MEMORY_LIMIT), Some(MAX_BUCKETS)),
-        gen.index.tokenizers().clone(),
-    );
-    let collecteur = AggregationCollector::from_aggs(requete, contexte);
-    let resultat = searcher
-        .search(query, &collecteur)
+    let mut cumul: Option<IntermediateAggregationResults> = None;
+    for part in parts {
+        let contexte = AggContextParams::new(limites.clone(), part.gen.index.tokenizers().clone());
+        let collecteur = DistributedAggregationCollector::from_aggs(requete.clone(), contexte);
+        let partiel = part
+            .searcher
+            .search(part.query, &collecteur)
+            .map_err(|e| EsError::illegal_argument(format!("agregation : {e}")))?;
+        match &mut cumul {
+            None => cumul = Some(partiel),
+            Some(total) => total
+                .merge_fruits(partiel)
+                .map_err(|e| EsError::internal(format!("fusion d'agregations : {e}")))?,
+        }
+    }
+
+    let resultat = cumul
+        .unwrap_or_default()
+        .into_final_result(requete, limites)
         .map_err(|e| EsError::illegal_argument(format!("agregation : {e}")))?;
 
     let brut = serde_json::to_value(resultat)

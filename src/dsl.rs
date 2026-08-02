@@ -41,7 +41,21 @@ pub struct QueryCtx<'a> {
     /// concernes, et rendent une recherche sur ces identifiants. C'est ce que
     /// le mono-shard rend possible sans *global ordinals*.
     pub searcher: &'a Searcher,
+    /// Les champs connus d'**un autre** index de la meme recherche.
+    ///
+    /// Vide sur un index unique : un champ absent est alors une faute de frappe,
+    /// et c'est une erreur. En multi-index, un champ que cet index ne mappe pas
+    /// mais qu'un autre connait n'est plus une faute : c'est un mapping
+    /// heterogene, et la clause ne correspond simplement a rien **ici** — ce que
+    /// fait Elasticsearch sur un champ non mappe. Sans ca, ecarter l'index
+    /// entier ferait perdre les documents que les *autres* clauses d'un `bool`
+    /// auraient trouves.
+    pub champs_ailleurs: &'a std::collections::BTreeSet<String>,
 }
+
+/// L'ensemble vide, pour les appels qui ne visent qu'un index.
+static AUCUN_AUTRE_CHAMP: std::sync::LazyLock<std::collections::BTreeSet<String>> =
+    std::sync::LazyLock::new(std::collections::BTreeSet::new);
 
 impl<'a> QueryCtx<'a> {
     pub fn new(fields: &'a Fields, index: &'a Index, searcher: &'a Searcher) -> Self {
@@ -50,7 +64,21 @@ impl<'a> QueryCtx<'a> {
             index,
             nested_ouvert: std::cell::RefCell::new(Vec::new()),
             searcher,
+            champs_ailleurs: &AUCUN_AUTRE_CHAMP,
         }
+    }
+
+    /// Les champs qu'un autre index de la meme recherche connait.
+    pub fn avec_champs_ailleurs(mut self, champs: &'a std::collections::BTreeSet<String>) -> Self {
+        self.champs_ailleurs = champs;
+        self
+    }
+
+    /// Cette erreur ne designe-t-elle qu'un mapping heterogene ?
+    fn simple_mapping_heterogene(&self, e: &EsError) -> bool {
+        e.champ_inconnu
+            .as_deref()
+            .is_some_and(|c| self.champs_ailleurs.contains(c))
     }
 }
 
@@ -80,6 +108,7 @@ impl QueryCtx<'_> {
                      mapping explicite"
                 ),
             )
+            .sur_champ_inconnu(name)
         })
     }
 
@@ -107,6 +136,18 @@ impl QueryCtx<'_> {
 
 /// Traduit une requete du DSL. `v` est la valeur de la cle `query`.
 pub fn build_query(v: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
+    let q = build_une(v, ctx);
+    // Rattrapage au plus pres de la clause : une feuille qui cite un champ
+    // absent d'ici mais present ailleurs devient « ne correspond a rien », et
+    // les clauses qui l'entourent (`bool`, `nested`, `dis_max`) continuent de se
+    // construire normalement.
+    match q {
+        Err(e) if ctx.simple_mapping_heterogene(&e) => Ok(Box::new(EmptyQuery)),
+        autre => autre,
+    }
+}
+
+fn build_une(v: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     let obj = as_object(v, "query")?;
     let (name, body) = single_key(obj, "query")?;
     match name {

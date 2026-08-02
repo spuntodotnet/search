@@ -137,19 +137,27 @@ sans rien déclarer.
 Les **agrégations** sont là aussi : métriques, `terms`, `range`, `histogram`,
 `date_histogram`, et sous-agrégations — de quoi construire des facettes.
 
-Les **analyzers** `standard`, `simple`, `whitespace`, `keyword` et `stop` sont
-vérifiés token par token identiques à ceux d'ES, et `_analyze` permet de le
-constater. Les analyzers de langue (`french`, `english`…) sont **refusés** :
-le stemmer de tantivy n'est pas celui de Lucene, et porter le nom d'ES en
-indexant autre chose changerait silencieusement les résultats.
+Les **analyzers** `standard`, `simple`, `whitespace`, `keyword`, `stop`,
+`english` et `french` sont vérifiés token par token identiques à ceux d'ES sur
+210 textes, et `_analyze` permet de le constater. Les autres langues restent
+**refusées** : leur stemmer n'est pas porté, et porter le nom d'ES en indexant
+autre chose changerait silencieusement les résultats.
 
 Côté API de documents : `_update` (fusion partielle, `upsert`), `_mget`,
 `_count`, l'action `update` du `_bulk`, le versionnage optimiste
 (`if_seq_no`/`if_primary_term`) et `PUT _mapping` pour ajouter des champs.
 
-**Ce qui n'y est pas encore** : `highlight`, `search_after`, analyzers de langue
-et sur mesure, `_update_by_query` / `_reindex`, `query_string`, recherche
-multi-index, alias.
+La recherche porte sur **une expression d'index**, comme chez ES :
+`es.search(index=["produits", "marques"])`, `logs-2026.08.*`, `_all`,
+`logs-*,-logs-2026.07.*`, ou un **alias**. Les alias sont gérés
+(`POST /_aliases`, `is_write_index`, bascule atomique), et la purge d'une
+rétention par index quotidien s'écrit `DELETE /logs-2026.07.*` — refusée par
+défaut, comme sur un ES 8, tant que `action.destructive_requires_name` n'a pas
+été basculé.
+
+**Ce qui n'y est pas encore** : `highlight`, `search_after`, `scroll`,
+`_msearch`, `_stats`, les templates, `_update_by_query` / `_reindex`,
+`query_string`, et les analyzers des autres langues.
 
 L'inventaire complet — supporté, partiel, refusé, et les divergences assumées —
 est dans [`docs/compat.md`](docs/compat.md). Rien de ce qui n'est pas supporté

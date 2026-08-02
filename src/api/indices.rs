@@ -7,9 +7,11 @@ use axum::http::{StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use serde_json::{json, Value};
 
-use super::{expect_only, parse_body, Json, Params, SharedState};
+use super::{expect_only, parse_body, selection_options, Json, Params, SharedState};
+use crate::engine::ActionAlias;
 use crate::error::{EsError, EsResult};
 use crate::mapping::Mapping;
+use crate::selection::{index_unique, resoudre, Options};
 
 /// Reglages d'index acceptes et sans effet : ferrite est mono-shard,
 /// zero-replique par construction, donc ces valeurs sont deja ce qu'elles
@@ -46,11 +48,20 @@ pub async fn create(
     };
     expect_only(&obj, &["mappings", "settings", "aliases"], "PUT /{index}")?;
 
+    // Les alias sont poses **apres** la creation : un alias ne peut pas
+    // designer un index qui n'existe pas encore.
+    let mut alias_a_poser = Vec::new();
     if let Some(aliases) = obj.get("aliases") {
-        if !aliases.as_object().map(|o| o.is_empty()).unwrap_or(false) {
-            return Err(EsError::unsupported(
-                "ferrite ne supporte pas les alias d'index",
-            ));
+        let decl = aliases
+            .as_object()
+            .ok_or_else(|| EsError::parsing("[PUT /{index}] : [aliases] doit etre un objet"))?;
+        for (nom, corps) in decl {
+            crate::alias::valider_nom(nom)?;
+            alias_a_poser.push(ActionAlias::Ajouter {
+                index: index.clone(),
+                alias: nom.clone(),
+                attache: crate::alias::lire_attache(corps, "PUT /{index}.aliases")?,
+            });
         }
     }
     let mut declares = crate::analysis::Analysis::default();
@@ -72,6 +83,14 @@ pub async fn create(
     mapping.analysis = declares;
 
     st.catalog.create(&index, mapping)?;
+    if !alias_a_poser.is_empty() {
+        // Un alias refuse laisse un index sans alias : on defait la creation
+        // plutot que de rendre `acknowledged` sur une moitie de demande.
+        if let Err(e) = st.catalog.modifier_alias(&alias_a_poser) {
+            let _ = st.catalog.delete(&index);
+            return Err(e);
+        }
+    }
     Ok(Json::ok(json!({
         "acknowledged": true,
         "shards_acknowledged": true,
@@ -136,7 +155,11 @@ fn check_settings(settings: &Value) -> EsResult<()> {
     Ok(())
 }
 
-/// `DELETE /{index}`
+/// `DELETE /{index}` — un nom, une liste, un motif.
+///
+/// Le motif est ce qui rend une retention par index quotidien tenable :
+/// `DELETE /audits-2026.07.*` en un appel, plutot qu'une boucle cote client qui
+/// doit d'abord savoir quels index existent.
 pub async fn delete(
     State(st): State<SharedState>,
     Path(index): Path<String>,
@@ -146,24 +169,64 @@ pub async fn delete(
     // Operations synchrones et immediates : ces delais n'ont rien a attendre.
     p.opt("timeout");
     p.opt("master_timeout");
-    let ignore_unavailable = p.flag("ignore_unavailable", false)?;
+    let opts = selection_options(&mut p)?;
     p.done()?;
 
-    match st.catalog.delete(&index) {
-        Ok(()) => Ok(Json::ok(json!({"acknowledged": true}))),
-        Err(e) if ignore_unavailable && e.ty == "index_not_found_exception" => {
-            Ok(Json::ok(json!({"acknowledged": true})))
-        }
-        Err(e) => Err(e),
+    // `action.destructive_requires_name` : ES 8 refuse par defaut de supprimer
+    // ce que le client n'a pas nomme. Le message est le sien, mot pour mot.
+    if st.catalog.destructive_requires_name()
+        && index
+            .split(',')
+            .map(str::trim)
+            .any(|t| t.contains('*') || t == "_all")
+    {
+        return Err(EsError::illegal_argument(
+            "Wildcard expressions or all indices are not allowed",
+        ));
     }
+
+    // Supprimer « l'index » designe par un alias effacerait des donnees que le
+    // client n'a pas nommees : ES refuse, ferrite aussi.
+    for terme in index.split(',').map(str::trim) {
+        if st.catalog.est_alias(terme) {
+            return Err(EsError::illegal_argument(format!(
+                "The provided expression [{terme}] matches an alias, specify the corresponding \
+                 concrete indices instead."
+            )));
+        }
+    }
+
+    let vises = match resoudre(&st.catalog, &index, &opts) {
+        Ok(v) => v,
+        Err(e) if opts.ignore_unavailable && e.ty == "index_not_found_exception" => Vec::new(),
+        Err(e) => return Err(e),
+    };
+    for idx in vises {
+        match st.catalog.delete(&idx.name) {
+            Ok(()) => {}
+            // Un autre appel a pu passer devant : l'index est parti, c'est le
+            // resultat demande.
+            Err(e) if e.ty == "index_not_found_exception" => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(Json::ok(json!({"acknowledged": true})))
 }
 
 /// `HEAD /{index}` — 200 ou 404, sans corps.
-pub async fn exists(State(st): State<SharedState>, Path(index): Path<String>) -> Response {
-    if st.catalog.exists(&index) {
-        StatusCode::OK.into_response()
-    } else {
-        StatusCode::NOT_FOUND.into_response()
+pub async fn exists(
+    State(st): State<SharedState>,
+    Path(index): Path<String>,
+    uri: Uri,
+) -> Response {
+    let mut p = Params::parse(&uri);
+    let opts = selection_options(&mut p).unwrap_or_default();
+    // Un motif qui ne correspond a rien reste un 200 chez ES : la question
+    // posee est « cette expression est-elle resoluble ? », pas « trouve-t-elle
+    // quelque chose ? ». Seul un nom concret absent rend 404.
+    match resoudre(&st.catalog, &index, &opts) {
+        Ok(_) => StatusCode::OK.into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
@@ -173,22 +236,36 @@ pub async fn get_index(
     Path(index): Path<String>,
     uri: Uri,
 ) -> EsResult<Json> {
-    Params::parse(&uri).done()?;
-    let idx = st.catalog.get(&index)?;
-    Ok(Json::ok(json!({
-        index.as_str(): {
-            "aliases": {},
-            "mappings": idx.mapping().to_json(),
-            "settings": {"index": {
-                "number_of_shards": "1",
-                "number_of_replicas": "0",
-                "uuid": idx.uuid,
-                "provided_name": index,
-                "creation_date": idx.created_at.to_string(),
-                "version": {"created": crate::ES_VERSION},
-            }},
+    let mut p = Params::parse(&uri);
+    let opts = selection_options(&mut p)?;
+    p.done()?;
+
+    let registre = st.catalog.aliases();
+    let mut out = serde_json::Map::new();
+    for idx in resoudre(&st.catalog, &index, &opts)? {
+        let mut aliases = serde_json::Map::new();
+        for (nom, cibles) in &registre {
+            if let Some(attache) = cibles.get(&idx.name) {
+                aliases.insert(nom.clone(), attache.to_json());
+            }
         }
-    })))
+        out.insert(
+            idx.name.clone(),
+            json!({
+                "aliases": Value::Object(aliases),
+                "mappings": idx.mapping().to_json(),
+                "settings": {"index": {
+                    "number_of_shards": "1",
+                    "number_of_replicas": "0",
+                    "uuid": idx.uuid,
+                    "provided_name": idx.name,
+                    "creation_date": idx.created_at.to_string(),
+                    "version": {"created": crate::ES_VERSION},
+                }},
+            }),
+        );
+    }
+    Ok(Json::ok(Value::Object(out)))
 }
 
 /// `GET /{index}/_mapping`
@@ -197,9 +274,11 @@ pub async fn get_mapping(
     Path(index): Path<String>,
     uri: Uri,
 ) -> EsResult<Json> {
-    Params::parse(&uri).done()?;
+    let mut p = Params::parse(&uri);
+    let opts = selection_options(&mut p)?;
+    p.done()?;
     let mut out = serde_json::Map::new();
-    for idx in cibles(&st, &index)? {
+    for idx in resoudre(&st.catalog, &index, &opts)? {
         out.insert(
             idx.name.clone(),
             json!({"mappings": idx.mapping().to_json()}),
@@ -216,22 +295,6 @@ pub async fn get_mapping_all(State(st): State<SharedState>, uri: Uri) -> EsResul
 /// `POST /_refresh` — tous les index.
 pub async fn refresh_all(State(st): State<SharedState>, uri: Uri) -> EsResult<Json> {
     refresh(State(st), Path("_all".to_string()), uri).await
-}
-
-/// Les index vises par un nom de route.
-///
-/// `_all` et `*` designent tous les index — c'est ce qu'attendent les routes
-/// administratives (`_refresh`, `_mapping`). La **recherche**, elle, continue
-/// de refuser les motifs : y repondre demanderait de fusionner des resultats
-/// venus de mappings differents, et c'est la que se cachent les resultats faux.
-fn cibles(
-    st: &SharedState,
-    nom: &str,
-) -> EsResult<Vec<std::sync::Arc<crate::engine::FerriteIndex>>> {
-    if nom == "_all" || nom == "*" {
-        return Ok(st.catalog.list());
-    }
-    Ok(vec![st.catalog.get(nom)?])
 }
 
 /// `PUT /{index}/_mapping` — ajoute des champs au mapping.
@@ -257,10 +320,15 @@ pub async fn put_mapping(
         ));
     }
 
-    let idx = st.catalog.get(&index)?;
-    tokio::task::spawn_blocking(move || idx.add_fields(mapping.properties))
-        .await
-        .map_err(|e| EsError::internal(format!("put_mapping: {e}")))??;
+    // `PUT /{index}/_mapping` accepte plusieurs index chez ES : le meme champ
+    // est ajoute a chacun.
+    let vises = resoudre(&st.catalog, &index, &Options::default())?;
+    for idx in vises {
+        let props = mapping.properties.clone();
+        tokio::task::spawn_blocking(move || idx.add_fields(props))
+            .await
+            .map_err(|e| EsError::internal(format!("put_mapping: {e}")))??;
+    }
     Ok(Json::ok(json!({"acknowledged": true})))
 }
 
@@ -312,7 +380,7 @@ pub async fn analyze(
                 EsError::illegal_argument("[_analyze.analyzer] : chaine attendue")
             })?;
             let gen = match &index {
-                Some(Path(nom_index)) => Some(st.catalog.get(nom_index)?.current()),
+                Some(Path(nom_index)) => Some(index_unique(&st.catalog, nom_index)?.current()),
                 None => None,
             };
             // Un analyzer sur mesure n'existe que dans son index : `_analyze`
@@ -333,7 +401,7 @@ pub async fn analyze(
             let champ = f
                 .as_str()
                 .ok_or_else(|| EsError::illegal_argument("[_analyze.field] : chaine attendue"))?;
-            let gen = st.catalog.get(nom_index)?.current();
+            let gen = index_unique(&st.catalog, nom_index)?.current();
             let mapped = gen.fields.get(champ).ok_or_else(|| {
                 EsError::illegal_argument(format!("[_analyze] : champ [{champ}] inconnu"))
             })?;
@@ -375,8 +443,11 @@ pub async fn refresh(
     Path(index): Path<String>,
     uri: Uri,
 ) -> EsResult<Json> {
-    Params::parse(&uri).done()?;
-    let index = cibles(&st, &index)?;
+    let mut p = Params::parse(&uri);
+    let opts = selection_options(&mut p)?;
+    p.done()?;
+    let index = resoudre(&st.catalog, &index, &opts)?;
+    let nb = index.len();
     tokio::task::spawn_blocking(move || {
         for idx in index {
             idx.refresh()?;
@@ -385,5 +456,8 @@ pub async fn refresh(
     })
     .await
     .map_err(|e| EsError::internal(format!("refresh: {e}")))??;
-    Ok(Json::ok(json!({"_shards": super::shards_ok()})))
+    // Un index = un shard : ES compte les shards touches, pas les index.
+    Ok(Json::ok(
+        json!({"_shards": {"total": nb, "successful": nb, "failed": 0}}),
+    ))
 }

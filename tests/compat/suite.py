@@ -748,16 +748,185 @@ def format_de_date(es):
 
 @scenario
 def routes_sans_index(es):
-    """`_refresh` et `_mapping` sans index portent sur tous, comme chez ES."""
+    """`_refresh`, `_mapping`, `_search` et `_count` sans index portent sur
+    tous, comme chez ES."""
     for nom in ("multi1", "multi2"):
         es.options(ignore_status=404).indices.delete(index=nom)
-        es.index(index=nom, id="1", document={"titre": "x"})
-    assert es.indices.refresh()["_shards"]["successful"] == 1
+        es.index(index=nom, id="1", refresh=True, document={"titre": "x"})
+    # Un index = un shard : `_shards` compte les index rafraichis.
+    tous = set(es.indices.get_mapping())
+    assert es.indices.refresh()["_shards"]["successful"] == len(tous)
     m = es.indices.get_mapping()
     assert {"multi1", "multi2"} <= set(m), sorted(m)
     assert set(es.indices.get_mapping(index="_all")) == set(m)
+    # `_search` sans index cherche partout.
+    partout = es.search(query={"match_all": {}}, size=0)
+    assert partout["_shards"]["total"] == len(tous)
+    assert partout["hits"]["total"]["value"] == es.count()["count"]
     for nom in ("multi1", "multi2"):
         es.indices.delete(index=nom)
+
+
+@scenario
+def recherche_multi_index(es):
+    """Le tableau d'index d'un client officiel, les motifs, les exclusions.
+
+    `es.search(index=["a", "b"])` est ce qu'ecrit un service qui cherche dans
+    plusieurs catalogues d'un coup : le client recolle le tableau en une liste
+    separee par des virgules, et le serveur doit fusionner les resultats des
+    deux index — total, ordre et agregations comprises.
+    """
+    for nom in ("mi_a", "mi_b", "mi_c"):
+        es.options(ignore_status=404).indices.delete(index=nom)
+    es.indices.create(index="mi_a", mappings={"properties": {
+        "titre": {"type": "text"}, "marque": {"type": "keyword"},
+        "prix": {"type": "double"}}})
+    es.indices.create(index="mi_b", mappings={"properties": {
+        "titre": {"type": "text"}, "marque": {"type": "keyword"},
+        "prix": {"type": "double"}}})
+    es.indices.create(index="mi_c", mappings={"properties": {
+        "titre": {"type": "text"}, "marque": {"type": "keyword"},
+        "prix": {"type": "double"}}})
+    es.bulk(refresh=True, operations=[
+        {"index": {"_index": "mi_a", "_id": "1"}},
+        {"titre": "casque bluetooth", "marque": "Sony", "prix": 100.0},
+        {"index": {"_index": "mi_a", "_id": "2"}},
+        {"titre": "casque filaire", "marque": "Sony", "prix": 40.0},
+        {"index": {"_index": "mi_b", "_id": "3"}},
+        {"titre": "casque de chantier", "marque": "Bose", "prix": 25.0},
+        {"index": {"_index": "mi_c", "_id": "4"}},
+        {"titre": "clavier", "marque": "Logitech", "prix": 80.0},
+    ])
+
+    # Le tableau : la forme exacte qu'ecrit le code client.
+    r = es.search(index=["mi_a", "mi_b"], query={"match": {"titre": "casque"}})
+    assert r["hits"]["total"]["value"] == 3, r["hits"]["total"]
+    assert r["_shards"]["total"] == 2, r["_shards"]
+    # Chaque hit dit de quel index il vient.
+    assert {h["_index"] for h in r["hits"]["hits"]} == {"mi_a", "mi_b"}
+
+    # Un motif, et un motif moins une exclusion.
+    assert es.search(index="mi_*", query={"match_all": {}})["hits"]["total"]["value"] == 4
+    r = es.search(index="mi_*,-mi_c", query={"match_all": {}})
+    assert r["hits"]["total"]["value"] == 3 and r["_shards"]["total"] == 2
+
+    # Un motif qui ne correspond a rien n'est pas une erreur : zero shard.
+    r = es.search(index="fantome_*", query={"match_all": {}})
+    assert r["hits"]["total"]["value"] == 0 and r["_shards"]["total"] == 0
+
+    # Un index absent d'une liste reste une erreur, sauf `ignore_unavailable`.
+    refused(lambda: es.search(index=["mi_a", "fantome"], query={"match_all": {}}),
+            status=404)
+    r = es.search(index=["mi_a", "fantome"], query={"match_all": {}},
+                  ignore_unavailable=True)
+    assert r["hits"]["total"]["value"] == 2
+
+    # Le tri fusionne entre index, page par page.
+    r = es.search(index="mi_*", query={"match_all": {}},
+                  sort=[{"prix": "asc"}], size=10)
+    assert [h["_id"] for h in r["hits"]["hits"]] == ["3", "2", "4", "1"]
+    r = es.search(index="mi_*", query={"match_all": {}},
+                  sort=[{"prix": "asc"}], from_=1, size=2)
+    assert [h["_id"] for h in r["hits"]["hits"]] == ["2", "4"]
+
+    # Les agregations aussi : un `avg` fusionne se repondere, il ne fait pas la
+    # moyenne des moyennes.
+    a = es.search(index="mi_*", size=0, aggs={
+        "m": {"avg": {"field": "prix"}},
+        "f": {"terms": {"field": "marque"}},
+    })["aggregations"]
+    assert abs(a["m"]["value"] - (100.0 + 40.0 + 25.0 + 80.0) / 4) < 1e-9
+    assert {b["key"]: b["doc_count"] for b in a["f"]["buckets"]} == {
+        "Sony": 2, "Bose": 1, "Logitech": 1}
+
+    # `_count` suit la meme resolution.
+    assert es.count(index=["mi_a", "mi_b"])["count"] == 3
+
+    for nom in ("mi_a", "mi_b", "mi_c"):
+        es.indices.delete(index=nom)
+
+
+@scenario
+def alias(es):
+    """Un alias sur des index quotidiens : le nom stable que le code client
+    connait, alors que les index qu'il designe changent tous les jours."""
+    jours = ["al_2026.08.01", "al_2026.08.02", "al_2026.08.03"]
+    for nom in jours + ["al_vieux"]:
+        es.options(ignore_status=404).indices.delete(index=nom)
+    for i, nom in enumerate(jours):
+        es.indices.create(index=nom, mappings={"properties": {
+            "message": {"type": "text"}, "niveau": {"type": "keyword"}}})
+        es.index(index=nom, id=str(i), refresh=True,
+                 document={"message": f"evenement {i}", "niveau": "info"})
+    # Un alias pose a la creation.
+    es.indices.create(index="al_vieux", aliases={"audits": {}})
+
+    # ... et le meme alias pose sur les trois autres, en un lot atomique.
+    es.indices.put_alias(index=",".join(jours), name="audits")
+    assert set(es.indices.get_alias(name="audits")) == set(jours) | {"al_vieux"}
+
+    # L'alias se cherche comme un index.
+    r = es.search(index="audits", query={"match_all": {}})
+    assert r["hits"]["total"]["value"] == 3 and r["_shards"]["total"] == 4
+
+    # Ecrire a travers un alias qui couvre plusieurs index est refuse tant
+    # qu'aucun n'est designe comme index d'ecriture.
+    refused(lambda: es.index(index="audits", id="x", document={"message": "y"}),
+            contains="write index")
+    es.indices.put_alias(index=jours[-1], name="audits", is_write_index=True)
+    resp = es.index(index="audits", id="x", refresh=True,
+                    document={"message": "ecrit via alias"})
+    # La reponse porte le nom **concret**, pas celui de l'alias.
+    assert resp["_index"] == jours[-1], resp
+    assert es.get(index=jours[-1], id="x")["found"] is True
+
+    # Une bascule sans interruption : retrait et pose dans le meme appel.
+    es.indices.update_aliases(actions=[
+        {"remove": {"index": jours[0], "alias": "audits"}},
+        {"add": {"index": jours[0], "alias": "audits_froid"}},
+    ])
+    assert set(es.indices.get_alias(name="audits_froid")) == {jours[0]}
+    assert jours[0] not in es.indices.get_alias(name="audits")
+
+    # Supprimer un index le retire de ses alias.
+    es.indices.delete(index="al_vieux")
+    assert "al_vieux" not in es.indices.get_alias(name="audits")
+
+    # Un index et un alias ne peuvent pas porter le meme nom.
+    refused(lambda: es.indices.create(index="audits"), contains="already exists as alias")
+    # Et `DELETE /{alias}` ne supprime pas les index qu'il designe.
+    refused(lambda: es.indices.delete(index="audits"), contains="matches an alias")
+
+    for nom in jours:
+        es.indices.delete(index=nom)
+
+
+@scenario
+def suppression_par_motif(es):
+    """La purge d'une retention par index quotidien.
+
+    ES 8 la refuse par defaut (`action.destructive_requires_name`, passe a
+    `true` en 8.0) : ferrite refuse au meme endroit, et n'obeit qu'une fois le
+    reglage bascule — sinon la premiere difference de comportement entre les
+    deux serveurs serait une suppression de donnees.
+    """
+    for nom in ("purge_2026.07.01", "purge_2026.07.02", "purge_2026.08.01"):
+        es.options(ignore_status=404).indices.delete(index=nom)
+        es.indices.create(index=nom)
+
+    refused(lambda: es.indices.delete(index="purge_2026.07.*"),
+            contains="Wildcard expressions or all indices are not allowed")
+
+    es.cluster.put_settings(persistent={"action.destructive_requires_name": False})
+    try:
+        es.indices.delete(index="purge_2026.07.*")
+        restants = set(es.indices.get(index="purge_*"))
+        assert restants == {"purge_2026.08.01"}, restants
+        # Un motif sans correspondance n'est pas une erreur.
+        es.indices.delete(index="fantome_*")
+    finally:
+        es.cluster.put_settings(persistent={"action.destructive_requires_name": None})
+    es.indices.delete(index="purge_2026.08.01")
 
 
 @scenario
@@ -1331,7 +1500,6 @@ def fonctionnalites_hors_perimetre_refusees(es):
                               search_after=[1885], sort=[{"annee": "asc"}]),
             contains="search_after")
     refused(lambda: es.search(index=INDEX, q="titre:bel"), contains="q")
-    refused(lambda: es.search(query={"match_all": {}}))
 
 
 @scenario
@@ -1429,13 +1597,14 @@ def parametre_inconnu_refuse(es):
     refused(lambda: es.search(index=INDEX, query={"match_all": {}},
                               routing="abc"),
             contains="routing")
-    # Ces parametres n'ont de sens qu'avec des motifs multi-index, que ferrite
-    # ne supporte pas : les accepter laisserait croire qu'ils font quelque chose.
-    refused(lambda: es.search(index=INDEX, query={"match_all": {}},
-                              ignore_unavailable=True),
-            contains="ignore_unavailable")
     refused(lambda: es.cat.indices(index=INDEX, format="json", h="index"),
             contains="h")
+    # `expand_wildcards=none` demanderait de chercher un motif comme un nom
+    # litteral : refuse plutot que d'inventer une erreur sur un nom que
+    # personne n'a ecrit.
+    refused(lambda: es.search(index="compat_*", query={"match_all": {}},
+                              expand_wildcards="none"),
+            contains="expand_wildcards")
 
 
 @scenario
@@ -1496,9 +1665,9 @@ def route_inconnue_refusee(es):
     # Un nom d'index reserve n'est pas un index absent, comme chez ES.
     refused(lambda: es.perform_request("GET", "/_route_reservee"),
             contains="must not start with")
-    # Un motif multi-index dit pourquoi il est refuse.
-    refused(lambda: es.search(index="compat_*", query={"match_all": {}}),
-            contains="motifs")
+    # Un motif multi-index, lui, est resolu : il ne trouve rien, sans erreur.
+    r = es.search(index="fantome_absolu_*", query={"match_all": {}})
+    assert r["hits"]["total"]["value"] == 0
 
 
 # ---------------------------------------------------------------------------

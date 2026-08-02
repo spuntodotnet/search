@@ -94,13 +94,14 @@ développement, pas de CI).
 
 | Commande | La question à laquelle elle répond |
 |---|---|
-| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**68/68**) |
+| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**71/71**) |
 | `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (137/138, 0 écart réel) |
 | `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (39/40) |
 | `tests/compat/diff_aggs.py` | les mêmes agrégations ? (34/34) |
 | `tests/compat/diff_analyzers.py` | les mêmes tokens ? (7 analyzers, 210 textes, tous identiques) |
+| `tests/compat/diff_multi_index.py` | `index=["a","b"]`, `logs-*`, les alias : **les mêmes index visés, fusionnés pareil** ? (86/87, 0 écart ; `--calibrer` : 87/87 contre deux ES) |
 | `tests/compat/releve_mots_vides.py` | quelle est **vraiment** la liste de mots vides d'un analyzer d'ES ? |
-| `tests/compat/conformance_es.py` | que dit la suite de tests **d'Elastic** ? (44 réussis, 331 refus explicites, 171 échecs / 643) |
+| `tests/compat/conformance_es.py` | que dit la suite de tests **d'Elastic** ? (65 réussis, 324 refus explicites, 156 échecs / 643) |
 | `tests/compat/bench_vs_es.py` | mêmes résultats, **et à quel prix** ? (×3,5 en latence, ×9 en indexation) |
 | `tests/compat/probe_es7.py` | un **client** 7.x peut-il se brancher ? |
 | `tests/compat/diff_es7.py` | une **instance** 7.x peut-elle être reprise ? `--inventaire` liste ses types de champ |
@@ -129,10 +130,18 @@ bouger**, pas après.
   (`settings.analysis`), eux, sont supportés : ils se composent de briques que
   ferrite reproduit à l'identique (`standard`, `lowercase`, `asciifolding`,
   `stop`).
-- **La recherche refuse les motifs et les listes d'index**, là où `_refresh` et
-  `_mapping` les acceptent. La distinction est volontaire : fusionner des
-  résultats venus de mappings différents est précisément là où naissent les
-  résultats faux.
+- **Une expression d'index se résout à un seul endroit** ([`src/selection.rs`](src/selection.rs)) :
+  `a,b`, `logs-*`, `_all`, `-exclusion`, alias. Toutes les routes passent par
+  là, donc un motif veut dire la même chose partout. Le multi-index s'exécute
+  index par index puis fusionne — c'est le `query_then_fetch` d'ES appliqué à
+  des index mono-shard, et les agrégations se fusionnent sur leurs résultats
+  **intermédiaires** (sinon un `avg` fusionné serait la moyenne des moyennes,
+  donc faux).
+- **`action.destructive_requires_name` vaut `true`**, comme ES depuis la 8.0 :
+  `DELETE /logs-*` est refusé tant que le réglage n'a pas été basculé via
+  `PUT /_cluster/settings`. Obéir là où ES refuse ferait de la première
+  différence de comportement entre les deux serveurs une suppression de
+  données.
 - **Un champ inconnu dans une requête est une erreur, pas 0 résultat.** Idem
   pour un sous-champ de `nested` interrogé depuis la racine, là où ES rend 0 hit
   en silence. Les divergences assumées sont listées et justifiées dans
@@ -147,6 +156,12 @@ bouger**, pas après.
 - **Un pré-filtre doit être un sur-ensemble.** Le `nested` cassait sur les
   `must_not` : une négation évaluée à plat écarte un document dont une *autre*
   ligne satisfait la clause.
+- **Écarter un index n'est pas neutre.** Sur un mapping hétérogène, la première
+  version écartait l'index qui ignorait un champ de la requête. Vrai sur un
+  `term` seul, faux dans un `bool` : `should: [term sur champ absent, match]`
+  rendait 1 document là où ES en rend 163, en silence. La tolérance doit être
+  posée **sur la clause**, pas sur l'index. Trouvé par `diff_multi_index.py`,
+  pas par le raisonnement qui avait produit le code.
 - **Un `[{…}]` accepté en silence.** `infer` rend `None` sur un objet comme sur
   un tableau d'objets ; seul le premier cas était testé, donc le second entrait
   dans `_source` sans entrer dans le mapping — invisible à la recherche.
@@ -162,12 +177,14 @@ bouger**, pas après.
 ## Où va le projet
 
 Une migration depuis une instance 7.10.2 se reprend maintenant **entière** sur
-l'index d'exemple. Ce qui reste, par ordre de gêne pour un projet réel :
-`scroll` / `helpers.scan`, `rest_total_hits_as_int`, `_msearch`, `_stats`, les
-alias et les templates, et les analyzers des autres langues.
+l'index d'exemple, et un projet qui découpe ses données en plusieurs index —
+catalogues séparés, index quotidiens derrière un alias — se branche sans
+changer son code.
 
-Ensuite, par ordre de gêne pour un projet réel : `scroll` / `helpers.scan`,
-`rest_total_hits_as_int`, `_msearch`, `_stats`, les alias et les templates.
+Ce qui reste, par ordre de gêne pour un projet réel : `scroll` /
+`helpers.scan`, `rest_total_hits_as_int`, `_msearch`, `_stats`, les templates,
+les alias **filtrés** (`filter`, refusé explicitement), et les analyzers des
+autres langues.
 
 ## Ton, et forme des livrables
 
