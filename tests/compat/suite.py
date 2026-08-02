@@ -432,7 +432,7 @@ def type_de_champ_non_supporte(es):
 def parametre_de_champ_non_supporte(es):
     refused(lambda: es.indices.create(
         index="analyse", mappings={"properties": {
-            "t": {"type": "text", "analyzer": "french"}}}),
+            "t": {"type": "text", "analyzer": "german"}}}),
         contains="analyzer")
 
 
@@ -536,12 +536,17 @@ def analyzers(es):
 
 @scenario
 def analyzers_refuses(es):
-    """`english` est desormais identique a ES (Porter porte a l'identique) ;
-    `french` reste refuse tant que sa liste de mots vides differe."""
+    """`french` et `english` sont mesures identiques a ES (`diff_analyzers.py`,
+    210 textes) : leurs stemmers sont ceux de Lucene, portes dans
+    `src/stemmer.rs`. Ce qui reste refuse, ce sont les langues dont le stemmer
+    n'a pas ete porte."""
     assert [t["token"] for t in es.indices.analyze(
         analyzer="english", text="The running dogs run quickly")["tokens"]] == [
         "run", "dog", "run", "quickli"]
-    for nom in ("french", "snowball"):
+    assert [t["token"] for t in es.indices.analyze(
+        analyzer="french", text="l'ascension des chevaux")["tokens"]] == [
+        "ascension", "cheval"]
+    for nom in ("german", "snowball"):
         refused(lambda n=nom: es.indices.create(
             index="an", mappings={"properties": {"t": {"type": "text", "analyzer": n}}}),
             contains=nom)

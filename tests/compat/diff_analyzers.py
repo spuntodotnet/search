@@ -21,7 +21,7 @@ from elasticsearch import ApiError, Elasticsearch
 FERRITE = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:9200"
 ES = sys.argv[2] if len(sys.argv) > 2 else "http://localhost:9201"
 
-ANALYZERS = ["standard", "simple", "whitespace", "keyword", "stop", "english"]
+ANALYZERS = ["standard", "simple", "whitespace", "keyword", "stop", "english", "french"]
 
 # Du francais courant, avec ce qui fait trebucher : elisions, accents, traits
 # d'union, chiffres, pluriels irreguliers, majuscules.
@@ -56,6 +56,52 @@ TEXTES = [
     "n'est-ce pas",
 ]
 
+# Un stemmer ne se juge pas sur quelques phrases : ce vocabulaire couvre les
+# familles de suffixes que les deux algorithmes traitent differemment. Chaque
+# ligne est passee telle quelle a `_analyze` des deux cotes.
+VOCABULAIRE_FR = """
+chevaux journaux travaux bateaux eaux cheveux yeux nationaux
+mineurs mineur mineure mineures editions edition editrice editeur
+arriviste arrivistes journaliste journalistes socialisme socialiste
+finissement finissant grandissement rougissant etablissement
+lentement rapidement doucement gouvernement mouvement changement
+directrice directeur creatrice createur acteur actrice
+verificatrice verificateur simplificateur multiplicatrice
+chanteuse chanteur vendeuse vendeur porteuse porteur
+premiere derniere maniere lumiere carriere
+troisieme quatrieme dixieme centieme
+nationalite qualite quantite realite
+heureux malheureux nombreux courageux
+president presidence presidente presidents
+parlant parlante parlants parlantes
+maison maisons cheval chevaux animal animaux
+naive naif naives naifs
+belle beau belles beaux nouvelle nouveau
+grande grandes grand grands petite petites petit petits
+manger mangera mangerait mangeaient mange manges
+finir finira finissait fini finie finis finies
+""".split()
+
+VOCABULAIRE_EN = """
+running runner runs ran runningly
+happiness happily happy happier
+national nationalism nationalize nationality
+relational relativity relative relatives
+conditional conditionally condition conditions
+argument arguments arguing argued argues
+beautiful beautifully beauty beauties
+organization organizational organize organizer organizing
+sensitivity sensitiveness sensible sensibility
+electricity electrical electric electrician
+communism communist community communicate
+adjustment adjustable adjusting adjusted
+dependent dependence depending depends
+probate rate cease controlling rolling
+skies sky flies fly dying dies died
+generalization feudalism callousness hopefulness
+""".split()
+
+
 
 def tokens(client, analyzer, texte):
     r = client.indices.analyze(analyzer=analyzer, text=texte)
@@ -66,12 +112,12 @@ def main():
     f = Elasticsearch(FERRITE, request_timeout=60)
     e = Elasticsearch(ES, request_timeout=60)
 
-    print(f"== {len(TEXTES)} textes x {len(ANALYZERS)} analyzers\n")
+    print(f"== {len(TEXTES) + len(VOCABULAIRE_FR) + len(VOCABULAIRE_EN)} textes x {len(ANALYZERS)} analyzers\n")
     resume = []
     for analyzer in ANALYZERS:
         identiques = 0
         exemples = []
-        for texte in TEXTES:
+        for texte in TEXTES + VOCABULAIRE_FR + VOCABULAIRE_EN:
             try:
                 a = tokens(f, analyzer, texte)
             except ApiError as ex:
@@ -82,7 +128,7 @@ def main():
             elif len(exemples) < 3:
                 exemples.append((texte, a, b))
 
-        total = len(TEXTES)
+        total = len(TEXTES) + len(VOCABULAIRE_FR) + len(VOCABULAIRE_EN)
         etat = "identique" if identiques == total else f"{identiques}/{total}"
         resume.append((analyzer, identiques, total))
         print(f"  [{etat:>9}] {analyzer}")

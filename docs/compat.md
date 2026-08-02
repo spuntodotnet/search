@@ -106,7 +106,8 @@ remplacées ne sont effacées que lorsque plus aucune recherche ne les tient.
 ### Analyzers
 
 Chaque analyzer intégré est comparé **token par token** à son homonyme d'ES sur
-28 textes français et anglais (`tests/compat/diff_analyzers.py`).
+**210 textes** français et anglais (`tests/compat/diff_analyzers.py`) : des
+phrases, et surtout un vocabulaire qui balaie les familles de suffixes.
 
 | Analyzer | État |
 |---|---|
@@ -115,9 +116,9 @@ Chaque analyzer intégré est comparé **token par token** à son homonyme d'ES 
 | `whitespace` | ✅ identique |
 | `keyword` | ✅ identique |
 | `stop` | ✅ identique |
-| `english` | ✅ **identique à ES sur les 28 textes** — Porter porté depuis Lucene (`src/stemmer.rs`), filtre possessif compris |
-| `french` | ❌ le stemmer est fidèle, c'est la **liste de mots vides** qui diverge encore (5 textes sur 28) |
-| `snowball` et les autres analyzers de langue | ❌ **refus assumé** |
+| `english` | ✅ identique — Porter porté depuis Lucene, filtre possessif compris |
+| `french` | ✅ identique — stemmer léger de Savoy, élision, mots vides relevés |
+| `german`, `spanish`, `snowball` et les autres langues | ❌ leur stemmer n'est pas porté |
 | Analyzers sur mesure (`settings.analysis`) | ✅ | voir ci-dessous |
 
 **Les stemmers de Lucene sont portés** (`src/stemmer.rs`) : le stemmer Porter
@@ -125,17 +126,18 @@ pour l'anglais, le stemmer léger de Savoy pour le français. Celui de tantivy
 (Snowball) n'est celui d'aucun des deux — c'est ce qui donnait, avant ce
 portage, **19 textes divergents sur 28 en `english` et 17 en `french`**.
 
-`english` est désormais **identique à ES sur les 28 textes** : Porter (validé en
-plus sur les 66 exemples de l'article de Porter lui-même), filtre possessif
-(`Peter's` → `Peter`), mots vides et ordre des filtres de `EnglishAnalyzer`.
+**Les deux sont désormais identiques à ES sur les 210 textes.** `english` :
+Porter (validé en plus sur les 66 exemples de l'article de Porter lui-même),
+filtre possessif (`Peter's` → `Peter`), mots vides et ordre des filtres de
+`EnglishAnalyzer`. `french` : stemmer léger de Savoy, élision (`l'ascension` →
+`ascension`), et une liste de mots vides **relevée mot à mot** sur un vrai ES
+(`tests/compat/releve_mots_vides.py`) — elle n'est ni celle de Snowball (qui
+garde `est`) ni l'ancienne de Lucene (elle retire `ceci`, `cette`, `avec`,
+`sans`, `ils`), donc la deviner n'était pas une option.
 
-`french` reste **refusé**, et la raison a changé de nature : son stemmer et son
-filtre d'élision sont fidèles, mais sa **liste de mots vides** ne l'est pas
-encore. Mesuré : 5 textes divergents sur 28, tous de cette seule cause. Celle
-d'Elasticsearch n'est ni la liste Snowball (qui garde `est`) ni l'ancienne liste
-de Lucene (elle retire `ceci`, `cette`, `avec`, `sans`, `ils`) — l'établir
-demande de la relever mot à mot. Livrer `french` avec une liste approchante
-changerait silencieusement les termes indexés, ce que ce projet refuse.
+Les autres langues (`german`, `spanish`, `snowball`…) restent refusées : leur
+stemmer n'est pas porté, et livrer sous le nom d'ES un analyzer qui indexe
+autre chose changerait silencieusement les résultats d'un mapping existant.
 
 **Les analyzers sur mesure**, eux, sont supportés — un mapping venu d'une
 instance réelle en déclare presque toujours un, et le plus souvent avec des

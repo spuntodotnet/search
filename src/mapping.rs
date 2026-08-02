@@ -1297,7 +1297,7 @@ mod tests {
 
     #[test]
     fn refuse_un_parametre_de_champ_non_supporte() {
-        let e = mapping(r#"{"properties":{"t":{"type":"text","analyzer":"french"}}}"#).unwrap_err();
+        let e = mapping(r#"{"properties":{"t":{"type":"text","analyzer":"german"}}}"#).unwrap_err();
         assert!(e.reason.contains("analyzer"));
     }
 

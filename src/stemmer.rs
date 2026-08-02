@@ -287,6 +287,13 @@ pub fn french_light(mot: &str) -> String {
         }
         return normalise(&s[..n]);
     }
+    // « relative » -> « relatif », mais « naive » reste « naiv » : la regle ne
+    // s applique qu au-dela de 5 caracteres.
+    if n > 5 && fin!("ive") {
+        n -= 1;
+        s[n - 1] = 'f';
+        return normalise(&s[..n]);
+    }
     if n > 11 && fin!("ficatrice") {
         n -= 5;
         s[n - 2] = 'e';
@@ -299,16 +306,17 @@ pub fn french_light(mot: &str) -> String {
         s[n - 1] = 'r';
         return normalise(&s[..n]);
     }
+    // « multiplicatrice » -> « multipliqu » : le radical reprend le `qu`.
     if n > 9 && fin!("catrice") {
         n -= 5;
-        s[n - 2] = 'e';
-        s[n - 1] = 'r';
+        s[n - 2] = 'q';
+        s[n - 1] = 'u';
         return normalise(&s[..n]);
     }
     if n > 8 && fin!("cateur") {
         n -= 4;
-        s[n - 2] = 'e';
-        s[n - 1] = 'r';
+        s[n - 2] = 'q';
+        s[n - 1] = 'u';
         return normalise(&s[..n]);
     }
     if n > 8 && fin!("atrice") {
@@ -328,6 +336,16 @@ pub fn french_light(mot: &str) -> String {
         s[n - 3] = 'e';
         s[n - 2] = 'u';
         s[n - 1] = 'r';
+    }
+    // « organization » -> « organiz », « condition » -> « cond » (le `e` pose
+    // ici devient « ...ie », que la normalisation coupe).
+    if n > 8 && fin!("ation") {
+        return normalise(&s[..n - 5]);
+    }
+    if n > 8 && fin!("ition") {
+        n -= 3;
+        s[n - 1] = 'e';
+        return normalise(&s[..n]);
     }
     if n > 5 && fin!("ième") {
         return normalise(&s[..n - 4]);
@@ -376,9 +394,11 @@ fn normalise(s: &[char]) -> String {
             *c = match *c {
                 'à' | 'á' | 'â' => 'a',
                 'ô' => 'o',
-                'è' | 'é' | 'ê' | 'ë' => 'e',
+                // Savoy replie `î` mais **pas** `ï`, ni `ë` : mesure sur
+                // « naïve » et « noël », que ES rend `naïv` et `noël`.
+                'è' | 'é' | 'ê' => 'e',
                 'ù' | 'û' => 'u',
-                'î' | 'ï' => 'i',
+                'î' => 'i',
                 'ç' => 'c',
                 autre => autre,
             };

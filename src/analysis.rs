@@ -156,15 +156,6 @@ pub fn register_all(manager: &TokenizerManager) {
 /// Les analyzers d'ES que ferrite refuse **volontairement**, avec la raison.
 fn refus_explicite(nom: &str) -> Option<&'static str> {
     match nom {
-        "french" => Some(
-            "le stemmer, lui, est desormais fidele : `crate::stemmer::french_light` porte le \
-             `FrenchLightStemFilter` de Lucene et l'elision est en place. Ce qui diverge encore \
-             est la **liste de mots vides** — mesure sur 28 textes : 5 divergences, toutes de \
-             cette seule cause. Celle d'ES n'est ni la liste Snowball (elle garde `est`) ni \
-             l'ancienne liste de Lucene (elle retire `ceci`, `cette`, `avec`, `sans`, `ils`), et \
-             l'etablir demande de la relever mot a mot. Livrer `french` avec une liste \
-             approchante changerait silencieusement les termes indexes",
-        ),
         "german" | "spanish" | "italian" | "portuguese" | "dutch" | "russian" | "swedish"
         | "norwegian" | "danish" | "finnish" | "hungarian" | "romanian" | "turkish"
         | "snowball" => Some(
@@ -904,20 +895,23 @@ fn french_light(t: &str) -> Option<String> {
     Some(crate::stemmer::french_light(t))
 }
 
-/// Les mots vides francais de Lucene (`french_stop.txt`, la liste de Snowball).
+/// Les mots vides francais d'Elasticsearch, **relevés** mot a mot plutot que
+/// reconstitues : ce n'est ni la liste Snowball (qui garde `est`) ni l'ancienne
+/// de Lucene. Le relevé se refait avec `tests/compat/releve_mots_vides.py`, et
+/// `diff_analyzers.py` reste l'arbitre.
 const MOTS_VIDES_FR: &[&str] = &[
-    "au", "aux", "avec", "ce", "ces", "dans", "de", "des", "du", "elle", "en", "et", "eux", "il",
-    "je", "la", "le", "les", "leur", "lui", "ma", "mais", "me", "même", "mes", "moi", "mon", "ne",
-    "nos", "notre", "nous", "on", "ou", "par", "pas", "pour", "qu", "que", "qui", "sa", "se",
-    "ses", "son", "sur", "ta", "te", "tes", "toi", "ton", "tu", "un", "une", "vos", "votre",
-    "vous", "c", "d", "j", "l", "à", "m", "n", "s", "t", "y", "été", "étée", "étées", "étés",
-    "étant", "étante", "étants", "étantes", "suis", "es", "est", "sommes", "êtes", "sont", "serai",
-    "seras", "sera", "serons", "serez", "seront", "serais", "serait", "serions", "seriez",
-    "seraient", "étais", "était", "étions", "étiez", "étaient", "fus", "fut", "fûmes", "fûtes",
-    "furent", "sois", "soit", "soyons", "soyez", "soient", "fusse", "fusses", "fût", "fussions",
-    "fussiez", "fussent", "ayant", "ayante", "ayantes", "ayants", "eu", "eue", "eues", "eus", "ai",
-    "as", "avons", "avez", "ont", "aurai", "auras", "aura", "aurons", "aurez", "auront", "aurais",
-    "aurait", "aurions", "auriez", "auraient", "avais", "avait", "avions", "aviez", "avaient",
-    "eut", "eûmes", "eûtes", "eurent", "aie", "aies", "ait", "ayons", "ayez", "aient", "eusse",
-    "eusses", "eût", "eussions", "eussiez", "eussent",
+    "ai", "aie", "aient", "aies", "ait", "au", "aurai", "auraient", "aurais", "aurait", "aurez",
+    "auriez", "aurions", "aurons", "auront", "aux", "avaient", "avais", "avait", "avec", "avez",
+    "aviez", "avons", "ayant", "ayez", "ayons", "c", "ce", "ceci", "cela", "ces", "cet", "cette",
+    "d", "dans", "de", "des", "du", "elle", "en", "es", "et", "eu", "eue", "eues", "eurent", "eus",
+    "eusse", "eussent", "eusses", "eussiez", "eussions", "eut", "eux", "eûmes", "eût", "eûtes",
+    "furent", "fus", "fusse", "fussent", "fusses", "fussiez", "fussions", "fut", "fûmes", "fûtes",
+    "ici", "il", "ils", "j", "je", "l", "la", "le", "les", "leur", "leurs", "lui", "m", "ma",
+    "mais", "me", "mes", "moi", "mon", "même", "n", "ne", "nos", "notre", "nous", "on", "ont",
+    "ou", "par", "pas", "pour", "qu", "que", "quel", "quelle", "quelles", "quels", "qui", "s",
+    "sa", "sans", "se", "sera", "serai", "seraient", "serais", "serait", "seras", "serez",
+    "seriez", "serions", "serons", "seront", "ses", "soi", "soient", "sois", "soit", "sont",
+    "soyez", "soyons", "suis", "sur", "t", "ta", "te", "tes", "toi", "ton", "tu", "un", "une",
+    "vos", "votre", "vous", "y", "à", "étaient", "étais", "était", "étant", "étiez", "étions",
+    "étée", "étées", "êtes",
 ];

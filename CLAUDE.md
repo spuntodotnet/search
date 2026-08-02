@@ -31,9 +31,9 @@ d'Elasticsearch. Rendre des résultats faux parce qu'on a ignoré un
 `minimum_should_match` est le pire résultat possible de ce projet — pire que de
 ne pas supporter la clause du tout.
 
-## La méthode, en cinq gestes
+## La méthode, en six gestes
 
-Ces cinq gestes ont chacun trouvé quelque chose qu'un raisonnement n'aurait pas
+Ces six gestes ont chacun trouvé quelque chose qu'un raisonnement n'aurait pas
 trouvé. Ils ne sont pas décoratifs.
 
 ### 1. Mesurer contre un vrai Elasticsearch, jamais contre son idée d'Elasticsearch
@@ -72,7 +72,15 @@ teste ce à quoi *Elastic* a pensé — et c'est elle qui a trouvé les deux vra
 manques (création d'index à l'écriture, routes sans index) qu'aucun test écrit
 ici n'avait vus. Voir [`docs/conformance.md`](docs/conformance.md).
 
-### 5. Vérifier une hypothèse sur une dépendance par un spike, pas par une lecture
+### 5. Élargir le corpus avant de conclure « identique »
+
+Les analyzers passaient 28/28 textes. Le corpus porté à 210 — un vocabulaire qui
+balaie les familles de suffixes — a trouvé **5 bugs de plus** dans le stemmer
+français, dont deux règles que j'avais écrites de travers. « Identique sur ce
+qu'on a testé » n'est pas « identique » : quand un algorithme a des dizaines de
+branches, il faut un corpus qui les visite.
+
+### 6. Vérifier une hypothèse sur une dépendance par un spike, pas par une lecture
 
 `tests/spike_nested.rs` mesure deux propriétés de tantivy dont dépend tout le
 support de `nested`. Elles ne sont pas documentées comme des garanties : le
@@ -90,7 +98,8 @@ développement, pas de CI).
 | `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (137/138, 0 écart réel) |
 | `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (39/40) |
 | `tests/compat/diff_aggs.py` | les mêmes agrégations ? (34/34) |
-| `tests/compat/diff_analyzers.py` | les mêmes tokens ? |
+| `tests/compat/diff_analyzers.py` | les mêmes tokens ? (7 analyzers, 210 textes, tous identiques) |
+| `tests/compat/releve_mots_vides.py` | quelle est **vraiment** la liste de mots vides d'un analyzer d'ES ? |
 | `tests/compat/conformance_es.py` | que dit la suite de tests **d'Elastic** ? (44 réussis, 331 refus explicites, 171 échecs / 643) |
 | `tests/compat/bench_vs_es.py` | mêmes résultats, **et à quel prix** ? (×3,5 en latence, ×9 en indexation) |
 | `tests/compat/probe_es7.py` | un **client** 7.x peut-il se brancher ? |
@@ -113,10 +122,10 @@ bouger**, pas après.
   sont forcément au même endroit : pas de *global ordinals*, pas de `routing`
   obligatoire. Deux passes suffisent.
 - **Les stemmers de Lucene sont portés** dans `src/stemmer.rs`, parce que celui
-  de tantivy (Snowball) n'est celui d'aucun des deux : `english` est identique à
-  ES sur les 28 textes, `french` reste refusé pour sa seule liste de mots vides.
-  Un analyzer n'est **jamais** livré sous le nom d'ES tant qu'il n'est pas
-  mesuré identique. Les analyzers **sur mesure**
+  de tantivy (Snowball) n'est celui d'aucun des deux : `french` et `english`
+  sont mesurés identiques à ES sur 210 textes. Un analyzer n'est **jamais**
+  livré sous le nom d'ES tant qu'il n'est pas mesuré identique. Les analyzers
+  **sur mesure**
   (`settings.analysis`), eux, sont supportés : ils se composent de briques que
   ferrite reproduit à l'identique (`standard`, `lowercase`, `asciifolding`,
   `stop`).
@@ -152,10 +161,10 @@ bouger**, pas après.
 
 ## Où va le projet
 
-Le seul refus qui change encore les **résultats** plutôt que la forme :
-l'analyzer **`french`**, et il ne tient plus qu'à sa liste de mots vides — le
-stemmer et l'élision sont fidèles. La relever mot à mot contre un vrai ES est un
-travail court et entièrement mesurable (`diff_analyzers.py`).
+Une migration depuis une instance 7.10.2 se reprend maintenant **entière** sur
+l'index d'exemple. Ce qui reste, par ordre de gêne pour un projet réel :
+`scroll` / `helpers.scan`, `rest_total_hits_as_int`, `_msearch`, `_stats`, les
+alias et les templates, et les analyzers des autres langues.
 
 Ensuite, par ordre de gêne pour un projet réel : `scroll` / `helpers.scan`,
 `rest_total_hits_as_int`, `_msearch`, `_stats`, les alias et les templates.
