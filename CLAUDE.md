@@ -15,7 +15,7 @@ fichier-ci dit **comment penser** dans ce dépôt.
 
 Un moteur de recherche compatible avec l'API Elasticsearch, écrit en Rust
 au-dessus de [tantivy](https://github.com/quickwit-oss/tantivy), tenant dans une
-image de 2,4 Mo. Le produit, c'est **« le code client existant ne change pas »**.
+image de 7,9 Mo. Le produit, c'est **« le code client existant ne change pas »**.
 L'index inversé n'est pas réécrit : le travail réel est la couche de
 compatibilité au-dessus. API annoncée : Elasticsearch **8.15.0**.
 

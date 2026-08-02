@@ -14,9 +14,9 @@ répondre à des requêtes `bool` + `terms` + un tri.
 
 |  | Elasticsearch | ferrite |
 |---|---|---|
-| Image | ~1,3 Go | **2,4 Mo** (`scratch`) |
-| RSS au repos | > 1 Go | **2,9 Mo** |
-| Démarrage | 30-60 s | **11 ms** (~230 ms via `docker run`) |
+| Image | ~1,3 Go | **7,9 Mo** (`scratch`) |
+| RSS au repos | > 1 Go | **3,4 Mo** |
+| Démarrage | 30-60 s | **215 ms** (`docker run` → premier `GET /` servi) |
 | Runtime | JVM + tuning heap | un binaire statique |
 | Latence de recherche (médiane / p95) | 4,90 / 7,00 ms | **1,41 / 1,98 ms** |
 | Débit (8 requêtes en vol) | 779 req/s | **1 172 req/s** |
@@ -82,7 +82,7 @@ Sans rien compiler : chaque version publie un binaire statique Linux **x86-64**
 et **arm64** dans les [releases](../../releases) (archive `.tar.gz` + `.sha256`).
 
 ```bash
-tar xzf ferrite-v0.1.0-x86_64-unknown-linux-musl.tar.gz && ./ferrite
+tar xzf ferrite-v0.2.0-x86_64-unknown-linux-musl.tar.gz && ./ferrite
 ```
 
 Puis, avec le client officiel — sans une ligne de code spécifique à ferrite :
@@ -109,11 +109,11 @@ Les chiffres ci-dessous sont mesurés, pas visés — par
 chaque CI. Elasticsearch 8.15.0 est mesuré sur la même machine, dans les mêmes
 conditions.
 
-| | Elasticsearch 8.15.0 | ferrite 0.1.0 |
+| | Elasticsearch 8.15.0 | ferrite 0.2.0 |
 |---|---|---|
-| Image | 638 Mo | **2,4 Mo** |
-| Mémoire au repos | 1,02 Gio | **2,9 Mo** (RSS) |
-| Démarrage (`docker run` → premier `GET /` servi) | 22,9 s | **232 ms** (11 ms pour le binaire seul : le reste est la création du conteneur par Docker) |
+| Image | 638 Mo | **7,9 Mo** |
+| Mémoire au repos | 1,02 Gio | **3,4 Mo** (RSS) |
+| Démarrage (`docker run` → premier `GET /` servi) | 22,9 s | **215 ms** (l'essentiel est la création du conteneur par Docker) |
 
 L'image finale est un `scratch` qui ne contient que le binaire statique.
 
