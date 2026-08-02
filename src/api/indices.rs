@@ -23,6 +23,11 @@ const NOOP_SETTINGS: &[&str] = &[
     "index.number_of_replicas",
 ];
 
+/// `index.query.parse.allow_unmapped_fields` : le seul reglage d'index que
+/// ferrite exploite vraiment (voir
+/// [`crate::mapping::Mapping::allow_unmapped_fields`]).
+const ALLOW_UNMAPPED: &str = "index.query.parse.allow_unmapped_fields";
+
 /// `PUT /{index}` — creation avec mapping explicite obligatoire.
 pub async fn create(
     State(st): State<SharedState>,
@@ -65,13 +70,14 @@ pub async fn create(
         }
     }
     let mut declares = crate::analysis::Analysis::default();
+    let mut allow_unmapped = None;
     if let Some(settings) = obj.get("settings") {
         // `analysis` est extrait avant la verification : c'est la seule section
-        // de `settings` que ferrite exploite vraiment.
+        // de `settings` qui declare quelque chose plutot que de regler.
         if let Some(a) = section_analysis(settings) {
             declares = crate::analysis::Analysis::parse(a)?;
         }
-        check_settings(settings)?;
+        allow_unmapped = check_settings(settings)?;
     }
 
     // Sans `mappings`, l'index part vide et se remplit par mapping dynamique,
@@ -81,6 +87,9 @@ pub async fn create(
         None => Mapping::default(),
     };
     mapping.analysis = declares;
+    if let Some(v) = allow_unmapped {
+        mapping.allow_unmapped_fields = v;
+    }
 
     st.catalog.create(&index, mapping)?;
     if !alias_a_poser.is_empty() {
@@ -106,53 +115,75 @@ fn section_analysis(settings: &Value) -> Option<&Value> {
         .or_else(|| o.get("index")?.as_object()?.get("analysis"))
 }
 
-fn check_settings(settings: &Value) -> EsResult<()> {
+/// Verifie les `settings` d'un index, et rend la valeur de celui que ferrite
+/// exploite (`allow_unmapped_fields`), s'il est fourni.
+///
+/// Un reglage d'ES s'ecrit aussi bien a plat (`"index.number_of_shards": 1`)
+/// qu'imbrique (`{"index": {"number_of_shards": 1}}`), et les clients melangent
+/// les deux : on aplatit tout avant de comparer, sinon la meme demande serait
+/// acceptee sous une forme et refusee sous l'autre.
+fn check_settings(settings: &Value) -> EsResult<Option<bool>> {
     let obj = settings
         .as_object()
         .ok_or_else(|| EsError::parsing("[settings] doit etre un objet"))?;
-    // `analysis` est traite ailleurs (il est exploite, lui).
-    let obj: serde_json::Map<String, Value> = obj
-        .iter()
-        .filter(|(k, _)| k.as_str() != "analysis")
-        .map(|(k, v)| {
-            if k == "index" {
-                let sans = v.as_object().map(|o| {
-                    Value::Object(
-                        o.iter()
-                            .filter(|(k2, _)| k2.as_str() != "analysis")
-                            .map(|(k2, v2)| (k2.clone(), v2.clone()))
-                            .collect(),
-                    )
-                });
-                (k.clone(), sans.unwrap_or_else(|| v.clone()))
-            } else {
-                (k.clone(), v.clone())
-            }
-        })
-        .collect();
-    let obj = &obj;
-    // Forme imbriquee : {"index": {...}}
-    let mut flat: Vec<(String, &Value)> = Vec::new();
-    for (k, v) in obj {
-        if k == "index" {
-            if let Some(inner) = v.as_object() {
-                for (ik, iv) in inner {
-                    flat.push((format!("index.{ik}"), iv));
-                }
-                continue;
-            }
+    let mut plats: Vec<(String, &Value)> = Vec::new();
+    aplatir("", obj, &mut plats);
+
+    let mut allow_unmapped = None;
+    for (cle, valeur) in plats {
+        let complete = if cle.starts_with("index.") {
+            cle.clone()
+        } else {
+            format!("index.{cle}")
+        };
+        if complete == ALLOW_UNMAPPED {
+            allow_unmapped = Some(lire_booleen(valeur, &cle)?);
+            continue;
         }
-        flat.push((k.clone(), v));
-    }
-    for (key, _) in flat {
-        if !NOOP_SETTINGS.contains(&key.as_str()) {
+        if !NOOP_SETTINGS.contains(&cle.as_str()) {
             return Err(EsError::unsupported(format!(
-                "ferrite ne supporte pas le reglage d'index [{key}] ; reglages acceptes (et sans \
-                 effet, ferrite etant mono-shard) : {NOOP_SETTINGS:?}"
+                "ferrite ne supporte pas le reglage d'index [{cle}] ; reglages acceptes : \
+                 {NOOP_SETTINGS:?} (sans effet, ferrite etant mono-shard) et [{ALLOW_UNMAPPED}]"
             )));
         }
     }
-    Ok(())
+    Ok(allow_unmapped)
+}
+
+/// Aplatit les `settings` en chemins pointes. `analysis` est laisse de cote :
+/// il est traite ailleurs (il est exploite, lui).
+fn aplatir<'a>(
+    prefixe: &str,
+    obj: &'a serde_json::Map<String, Value>,
+    out: &mut Vec<(String, &'a Value)>,
+) {
+    for (cle, valeur) in obj {
+        let chemin = if prefixe.is_empty() {
+            cle.clone()
+        } else {
+            format!("{prefixe}.{cle}")
+        };
+        if chemin == "analysis" || chemin == "index.analysis" {
+            continue;
+        }
+        match valeur {
+            Value::Object(o) => aplatir(&chemin, o, out),
+            _ => out.push((chemin, valeur)),
+        }
+    }
+}
+
+/// ES accepte un booleen comme sa forme chaine (`"false"`) dans les settings.
+fn lire_booleen(v: &Value, cle: &str) -> EsResult<bool> {
+    match v {
+        Value::Bool(b) => Ok(*b),
+        Value::String(s) if s == "true" => Ok(true),
+        Value::String(s) if s == "false" => Ok(false),
+        autre => Err(EsError::illegal_argument(format!(
+            "Failed to parse value [{autre}] as only [true] or [false] are allowed for setting \
+             [{cle}]"
+        ))),
+    }
 }
 
 /// `DELETE /{index}` — un nom, une liste, un motif.
@@ -254,16 +285,47 @@ pub async fn get_index(
             json!({
                 "aliases": Value::Object(aliases),
                 "mappings": idx.mapping().to_json(),
-                "settings": {"index": {
-                    "number_of_shards": "1",
-                    "number_of_replicas": "0",
-                    "uuid": idx.uuid,
-                    "provided_name": idx.name,
-                    "creation_date": idx.created_at.to_string(),
-                    "version": {"created": crate::ES_VERSION},
-                }},
+                "settings": reglages_de(&idx),
             }),
         );
+    }
+    Ok(Json::ok(Value::Object(out)))
+}
+
+/// Les `settings` d'un index, au format d'ES (`{"index": {...}}`, valeurs en
+/// chaines).
+fn reglages_de(idx: &crate::engine::FerriteIndex) -> Value {
+    let mut index = json!({
+        "number_of_shards": "1",
+        "number_of_replicas": "0",
+        "uuid": idx.uuid,
+        "provided_name": idx.name,
+        "creation_date": idx.created_at.to_string(),
+        "version": {"created": crate::ES_VERSION},
+    });
+    // Comme chez ES, le reglage n'apparait que s'il a ete pose.
+    if !idx.mapping().allow_unmapped_fields {
+        index["query"] = json!({"parse": {"allow_unmapped_fields": "false"}});
+    }
+    json!({ "index": index })
+}
+
+/// `GET /{index}/_settings`
+pub async fn get_settings(
+    State(st): State<SharedState>,
+    Path(index): Path<String>,
+    uri: Uri,
+) -> EsResult<Json> {
+    let mut p = Params::parse(&uri);
+    let opts = selection_options(&mut p)?;
+    p.opt("master_timeout");
+    p.flag("flat_settings", false)?;
+    p.flag("include_defaults", false)?;
+    p.done()?;
+
+    let mut out = serde_json::Map::new();
+    for idx in resoudre(&st.catalog, &index, &opts)? {
+        out.insert(idx.name.clone(), json!({"settings": reglages_de(&idx)}));
     }
     Ok(Json::ok(Value::Object(out)))
 }

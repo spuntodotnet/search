@@ -51,6 +51,12 @@ pub struct QueryCtx<'a> {
     /// entier ferait perdre les documents que les *autres* clauses d'un `bool`
     /// auraient trouves.
     pub champs_ailleurs: &'a std::collections::BTreeSet<String>,
+    /// `index.query.parse.allow_unmapped_fields` de l'index interroge.
+    ///
+    /// A `true` (le defaut d'ES), une clause sur un champ que le mapping ne
+    /// connait pas ne correspond a rien au lieu d'echouer — voir
+    /// [`crate::mapping::Mapping::allow_unmapped_fields`].
+    pub champs_inconnus_toleres: bool,
 }
 
 /// L'ensemble vide, pour les appels qui ne visent qu'un index.
@@ -65,6 +71,9 @@ impl<'a> QueryCtx<'a> {
             nested_ouvert: std::cell::RefCell::new(Vec::new()),
             searcher,
             champs_ailleurs: &AUCUN_AUTRE_CHAMP,
+            // Le defaut d'Elasticsearch. Le reglage de l'index le resserre, via
+            // [`QueryCtx::selon_le_mapping`].
+            champs_inconnus_toleres: true,
         }
     }
 
@@ -74,11 +83,22 @@ impl<'a> QueryCtx<'a> {
         self
     }
 
-    /// Cette erreur ne designe-t-elle qu'un mapping heterogene ?
-    fn simple_mapping_heterogene(&self, e: &EsError) -> bool {
+    /// Applique les reglages de l'index interroge (`allow_unmapped_fields`).
+    pub fn selon_le_mapping(mut self, mapping: &crate::mapping::Mapping) -> Self {
+        self.champs_inconnus_toleres = mapping.allow_unmapped_fields;
+        self
+    }
+
+    /// Cette erreur peut-elle etre rattrapee en « ne correspond a rien » ?
+    ///
+    /// Deux cas, tous deux mesures sur un vrai ES : le champ est connu d'un
+    /// **autre** index de la meme recherche (mapping heterogene), ou l'index
+    /// laisse passer les champs non mappes (`allow_unmapped_fields`, le defaut
+    /// d'ES).
+    fn champ_inconnu_tolere(&self, e: &EsError) -> bool {
         e.champ_inconnu
             .as_deref()
-            .is_some_and(|c| self.champs_ailleurs.contains(c))
+            .is_some_and(|c| self.champs_inconnus_toleres || self.champs_ailleurs.contains(c))
     }
 }
 
@@ -98,14 +118,18 @@ impl QueryCtx<'_> {
             }
         }
         self.fields.get(name).ok_or_else(|| {
-            // ES cherche le champ dans le mapping dynamique ; ferrite n'en a pas,
-            // donc un champ inconnu est une erreur explicite et non « 0 hit ».
+            // Rattrapee plus haut en « ne correspond a rien » quand l'index
+            // tolere les champs non mappes (le defaut d'ES) ou qu'un autre index
+            // de la meme recherche connait le champ. Si elle sort, c'est que
+            // `allow_unmapped_fields` vaut `false` : le message est celui d'ES
+            // dans ce cas, et il nomme le reglage a rebasculer.
             EsError::new(
                 axum::http::StatusCode::BAD_REQUEST,
                 "query_shard_exception",
                 format!(
-                    "no mapping found for field [{name}] (clause [{clause}]) ; ferrite exige un \
-                     mapping explicite"
+                    "No field mapping can be found for the field with name [{name}] (clause \
+                     [{clause}]) ; [index.query.parse.allow_unmapped_fields] vaut [false] sur cet \
+                     index"
                 ),
             )
             .sur_champ_inconnu(name)
@@ -137,12 +161,14 @@ impl QueryCtx<'_> {
 /// Traduit une requete du DSL. `v` est la valeur de la cle `query`.
 pub fn build_query(v: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     let q = build_une(v, ctx);
-    // Rattrapage au plus pres de la clause : une feuille qui cite un champ
-    // absent d'ici mais present ailleurs devient « ne correspond a rien », et
-    // les clauses qui l'entourent (`bool`, `nested`, `dis_max`) continuent de se
-    // construire normalement.
+    // Rattrapage au plus pres de la clause : une feuille qui cite un champ que
+    // ce mapping ne connait pas devient « ne correspond a rien », et les clauses
+    // qui l'entourent (`bool`, `nested`, `dis_max`) continuent de se construire
+    // normalement. C'est ce qui fait qu'un `must_not: exists` sur un champ
+    // jamais mappe matche tous les documents, comme chez ES, au lieu de faire
+    // echouer la recherche entiere.
     match q {
-        Err(e) if ctx.simple_mapping_heterogene(&e) => Ok(Box::new(EmptyQuery)),
+        Err(e) if ctx.champ_inconnu_tolere(&e) => Ok(Box::new(EmptyQuery)),
         autre => autre,
     }
 }

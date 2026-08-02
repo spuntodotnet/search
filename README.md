@@ -56,10 +56,10 @@ réel est la **couche de compatibilité** au-dessus.
   déclaratifs, `_source`, mapping dynamique.
 - **Recherche** : le noyau du Query DSL (`bool`, `match`, `match_phrase`,
   `match_phrase_prefix`, `term(s)`, `range`, `exists`, `prefix`, `wildcard`,
-  `regexp`, `nested`…), `sort`, `from`/`size`,
-  `search_after`, `highlight`, filtrage de `_source`.
+  `regexp`, `nested`…), `sort`, `from`/`size`, `scroll` (donc `helpers.scan`),
+  filtrage de `_source`.
 - **Agrégations** : métriques + `terms` / `date_histogram` / `range` /
-  `filters`, avec sous-agrégations.
+  `histogram` / `filter`, avec sous-agrégations.
 - **Mono-nœud assumé** : les routes de cluster (`_cluster/health`, `_cat/*`,
   `_nodes`) répondent de façon crédible et constante — un shard, zéro réplique,
   toujours `green`.
@@ -156,9 +156,14 @@ rétention par index quotidien s'écrit `DELETE /logs-2026.07.*` — refusée pa
 défaut, comme sur un ES 8, tant que `action.destructive_requires_name` n'a pas
 été basculé.
 
-**Ce qui n'y est pas encore** : `highlight`, `search_after`, `scroll`,
-`_msearch`, `_stats`, les templates, `_update_by_query` / `_reindex`,
-`query_string`, et les analyzers des autres langues.
+L'**export d'un index** marche avec le code que tout le monde écrit :
+`helpers.scan` du client officiel, donc `?scroll=1m` et `/_search/scroll`. Le
+contexte fige l'index : ce qui est écrit pendant l'export ne s'y invite pas, et
+chaque document sort une fois et une seule.
+
+**Ce qui n'y est pas encore** : `highlight`, `search_after`, `_msearch`,
+`_stats`, les templates, `PUT /{index}/_settings`, `_update_by_query` /
+`_reindex`, `query_string`, et les analyzers des autres langues.
 
 L'inventaire complet — supporté, partiel, refusé, et les divergences assumées —
 est dans [`docs/compat.md`](docs/compat.md). Rien de ce qui n'est pas supporté

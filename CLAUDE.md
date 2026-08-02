@@ -94,15 +94,15 @@ développement, pas de CI).
 
 | Commande | La question à laquelle elle répond |
 |---|---|
-| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**74/74**) |
+| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**82/82**, dont l'export par `helpers.scan`) |
 | `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (167/168, 0 écart réel) |
-| `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (39/40) |
-| `tests/compat/diff_aggs.py` | les mêmes agrégations ? (34/34) |
+| `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (45/46 ; le seul écart est `_cluster/health`, toujours vert par choix) |
+| `tests/compat/diff_aggs.py` | les mêmes agrégations ? (45/45, `filter` comprise) |
 | `tests/compat/diff_analyzers.py` | les mêmes tokens ? (7 analyzers, 210 textes, tous identiques) |
 | `tests/compat/diff_motifs.py` | les mêmes documents sur un **motif** — `regexp`, `wildcard`, `prefix`, `match_phrase_prefix` ? (101/101) |
-| `tests/compat/diff_multi_index.py` | `index=["a","b"]`, `logs-*`, les alias : **les mêmes index visés, fusionnés pareil** ? (86/87, 0 écart ; `--calibrer` : 87/87 contre deux ES) |
+| `tests/compat/diff_multi_index.py` | `index=["a","b"]`, `logs-*`, les alias : **les mêmes index visés, fusionnés pareil** ? (87/87, 0 écart, plus aucune divergence assumée ; `--calibrer` : 87/87 contre deux ES) |
 | `tests/compat/releve_mots_vides.py` | quelle est **vraiment** la liste de mots vides d'un analyzer d'ES ? |
-| `tests/compat/conformance_es.py` | que dit la suite de tests **d'Elastic** ? (65 réussis, 324 refus explicites, 156 échecs / 643) |
+| `tests/compat/conformance_es.py` | que dit la suite de tests **d'Elastic** ? (66 réussis, 325 refus explicites, 154 échecs / 643) |
 | `tests/compat/bench_vs_es.py` | mêmes résultats, **et à quel prix** ? (×3,6 en latence, ×6 en indexation) |
 | `tests/compat/probe_es7.py` | un **client** 7.x peut-il se brancher ? |
 | `tests/compat/diff_es7.py` | une **instance** 7.x peut-elle être reprise ? `--inventaire` liste ses types de champ |
@@ -153,10 +153,26 @@ bouger**, pas après.
   `PUT /_cluster/settings`. Obéir là où ES refuse ferait de la première
   différence de comportement entre les deux serveurs une suppression de
   données.
-- **Un champ inconnu dans une requête est une erreur, pas 0 résultat.** Idem
-  pour un sous-champ de `nested` interrogé depuis la racine, là où ES rend 0 hit
-  en silence. Les divergences assumées sont listées et justifiées dans
-  [`docs/compat.md`](docs/compat.md).
+- **Un champ inconnu dans une requête ne correspond à rien, comme chez ES** —
+  c'est `index.query.parse.allow_unmapped_fields`, le vrai réglage d'ES, avec
+  son défaut (`true`). Ça a longtemps été l'inverse, et la décision était
+  défendable : sans mapping dynamique, un champ inconnu ressemble toujours à une
+  faute de frappe. Un vrai client l'a démentie — un filtre `archiveAt` posé sur
+  chaque recherche, jamais mappé faute de commande archivée, faisait échouer
+  l'application entière en 400. Le mode strict reste disponible index par index
+  (`allow_unmapped_fields: false`). Un sous-champ de `nested` interrogé depuis la
+  racine, lui, reste une erreur. Toutes les divergences assumées sont listées et
+  justifiées dans [`docs/compat.md`](docs/compat.md).
+- **`scroll` fige un `Searcher`, il ne rejoue pas la requête.** Un contexte
+  balaie tout le résultat à l'ouverture et garde l'instantané tantivy du moment :
+  chaque document sort une fois et une seule, la Nième page ne coûte pas N
+  recherches, et ce qui est écrit pendant l'export ne s'y invite pas. Le prix est
+  la mémoire du contexte, d'où le `keep_alive` et la purge.
+- **L'agrégation `filter` est exécutée par ferrite.** Celle de tantivy prend une
+  chaîne dans sa propre syntaxe de requête — inutilisable. Mais son sens est une
+  intersection de requêtes, et le Query DSL de ferrite sait déjà traduire la
+  seconde : le refus n'était donc pas une limite de tantivy, seulement de son
+  agrégation homonyme. Sous une agrégation de buckets, elle reste refusée.
 
 ## Les pièges rencontrés, pour ne pas les repayer
 
@@ -186,6 +202,12 @@ bouger**, pas après.
   retourné la règle en une minute, là où la lecture donnait une réponse fausse
   avec assurance. Même histoire pour `case_insensitive`, qui ne replie **pas**
   les plages (`[d-e]` ne matche pas `D`), ce qu'aucune documentation ne dit.
+- **Une divergence assumée n'est valable que jusqu'au premier vrai client.**
+  « Un champ inconnu est une faute de frappe » a tenu tant que personne n'avait
+  branché de vraie application : un filtre posé sur *chaque* recherche, sur un
+  champ que rien n'a encore mappé, n'est pas une faute — et le 400 rendait
+  l'application inutilisable. Quand un écart avec ES est un choix, il faut aussi
+  se demander **ce qui arrive à celui qui ne l'a pas fait**.
 - **Un `curl` de vérification qui n'utilise pas le même texte que le test ne
   vérifie rien.** Une chasse au bug d'analyzer s'est terminée sur un faux
   positif : `match edition` ne trouvait pas `l'édition` — ce que fait aussi ES,
@@ -202,10 +224,14 @@ service (`regexp`, `case_insensitive`), l'autocomplétion (`match_phrase_prefix`
 et le `DELETE /*` d'un script d'init (sous `PUT /_cluster/settings`) passent
 aussi tels quels.
 
-Ce qui reste, par ordre de gêne pour un projet réel : `scroll` /
-`helpers.scan`, `rest_total_hits_as_int`, `_msearch`, `_stats`, les templates,
-les alias **filtrés** (`filter`, refusé explicitement), et les analyzers des
-autres langues.
+L'export d'un index par `helpers.scan` (donc une sauvegarde, donc un
+`timemachine export`) passe maintenant, et une application qui compte ses
+filtres rapides en agrégations `filter` sur chaque appel aussi.
+
+Ce qui reste, par ordre de gêne pour un projet réel : `rest_total_hits_as_int`,
+`_msearch`, `_stats`, les templates, `PUT /{index}/_settings`, l'agrégation
+`filters` (la sœur plurielle de `filter`), les alias **filtrés** (`filter`,
+refusé explicitement), et les analyzers des autres langues.
 
 ## Ton, et forme des livrables
 

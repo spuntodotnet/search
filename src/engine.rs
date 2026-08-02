@@ -1260,6 +1260,12 @@ fn ecrire_meta(dir: &Path, uuid: &str, created_at: i64, gen: &Generation) -> EsR
         // Il faut donc les persister a part, sinon un redemarrage perdrait le
         // nom que les champs citent.
         "analysis": gen.mapping.analysis.to_json(),
+        // Meme raison pour les reglages exploites : un redemarrage qui perdrait
+        // `allow_unmapped_fields` changerait le comportement des recherches sans
+        // que personne n'ait rien demande.
+        "settings": {"index": {"query": {"parse": {
+            "allow_unmapped_fields": gen.mapping.allow_unmapped_fields,
+        }}}},
     });
     let tmp = dir.join(format!("{META_FILE}.tmp"));
     fs::write(&tmp, serde_json::to_vec_pretty(&meta).unwrap())
@@ -1309,7 +1315,15 @@ fn open_index(dir: &Path, name: &str) -> EsResult<FerriteIndex> {
         Some(a) if !a.is_null() => crate::analysis::Analysis::parse(a)?,
         _ => crate::analysis::Analysis::default(),
     };
-    let mapping = Mapping::parse_avec(&meta["mappings"], &declares)?;
+    let mut mapping = Mapping::parse_avec(&meta["mappings"], &declares)?;
+    // Absent des index crees avant que le reglage n'existe : le defaut d'ES
+    // s'applique alors, comme pour un index cree aujourd'hui sans le poser.
+    if let Some(v) = meta
+        .pointer("/settings/index/query/parse/allow_unmapped_fields")
+        .and_then(Value::as_bool)
+    {
+        mapping.allow_unmapped_fields = v;
+    }
 
     let gen_dir = dir.join(format!("{INDEX_DIR_PREFIX}{seq}"));
     let (schema, fields) = mapping::build_schema(&mapping);

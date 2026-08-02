@@ -424,13 +424,13 @@ def normaliser(v, cle=None):
 # Les ecarts **voulus**, avec leur raison. Les compter comme des echecs
 # masquerait les vrais ; ne pas les lister du tout laisserait croire a une
 # identite qui n'existe pas. Ils sont aussi dans `docs/compat.md`.
-DIVERGENCES_ASSUMEES = {
-    "champ inconnu partout": (
-        "ES rend 0 hit en silence sur un champ absent de tous les mappings vises ; "
-        "ferrite rend une erreur, pour que la faute de frappe se voie. Des qu'un "
-        "seul index vise connait le champ, ferrite se comporte comme ES."
-    ),
-}
+#
+# La table est vide depuis que ferrite implemente
+# `index.query.parse.allow_unmapped_fields` (le reglage d'ES, avec son defaut) :
+# « champ inconnu partout » etait la derniere divergence, et un vrai client l'a
+# fait tomber — un filtre pose sur chaque recherche, sur un champ pas encore
+# mappe, faisait echouer l'application entiere la ou ES rend 0.
+DIVERGENCES_ASSUMEES = {}
 
 
 def presque_egal(a, b, chemin, ecarts):

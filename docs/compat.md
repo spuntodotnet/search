@@ -22,12 +22,12 @@ Version d'API annoncée : **Elasticsearch 8.15.0** (`version.number`,
 
 | | ferrite | ES 7.10.2 (validation du runner) |
 |---|---|---|
-| réussis | 65 | 537 |
-| refusés explicitement (hors périmètre) | 324 | 0 |
+| réussis | 66 | 537 |
+| refusés explicitement (hors périmètre) | 325 | 0 |
 | sautés (version, fonctionnalité du runner) | 98 | 103 |
-| **échecs** | **156** | 3 |
+| **échecs** | **154** | 3 |
 
-Les 156 échecs sont l'inventaire des écarts qui restent — les plus gros sont
+Les 154 échecs sont l'inventaire des écarts qui restent — les plus gros sont
 listés dans [`conformance.md`](conformance.md). C'est la mesure la moins
 complaisante du projet : les cas viennent d'Elastic, pas de nous.
 
@@ -51,17 +51,19 @@ complaisante du projet : les cas viennent d'Elastic, pas de nous.
 |---|---|---|
 | Création à l'écriture | ✅ | indexer dans un index absent le **crée**, comme ES (`action.auto_create_index`) : `index`, `create`, `update`, et le `_bulk`. La lecture, la recherche et la suppression rendent toujours 404 |
 | Expressions d'index (`a,b`, `logs-*`, `_all`, exclusions, alias) | ✅ | sur **toutes** les routes, recherche comprise — voir la section dédiée |
-| `PUT /{index}` | 🟡 | `mappings` est **optionnel** (les champs viendront des documents). `settings` limité à `number_of_shards` / `number_of_replicas` (acceptés, sans effet : ferrite est mono-shard). `aliases` ✅ |
+| `PUT /{index}` | 🟡 | `mappings` est **optionnel** (les champs viendront des documents). `settings` limité à `number_of_shards` / `number_of_replicas` (acceptés, sans effet : ferrite est mono-shard) et à `index.query.parse.allow_unmapped_fields` (voir plus bas), à plat comme imbriqué. `aliases` ✅ |
 | `DELETE /{index}` | ✅ | listes et motifs, sous `action.destructive_requires_name` (voir plus bas). `ignore_unavailable` honoré |
 | `HEAD /{index}` | ✅ | 200 dès que l'expression se résout, même sur zéro index — comme ES |
 | `GET /{index}` | ✅ | `aliases` / `mappings` / `settings`, une entrée par index visé |
 | `GET /{index}/_mapping` | ✅ | |
+| `GET /{index}/_settings` | ✅ | les réglages d'ES qu'un index a vraiment (`number_of_shards`, `uuid`, `creation_date`…), et `index.query.parse.allow_unmapped_fields` s'il a été posé |
+| `PUT /{index}/_settings` | ❌ | le seul réglage exploité se pose à la création : le changer à chaud demanderait de reconstruire la génération courante, et un client qui le croit changé chercherait longtemps |
 | `PUT /{index}/_mapping` | 🟡 | **ajoute** des champs (une nouvelle génération est construite). Changer le type d'un champ existant reste refusé, comme chez ES. Modifier `dynamic` : ❌ |
 | `POST /{index}/_refresh` | ✅ | |
 | `POST\|GET /_analyze`, `/{index}/_analyze` | 🟡 | `text` (chaîne ou liste), `analyzer`, `field`. `tokenizer` / `filter` / `char_filter` explicites : ❌ |
 | Mapping dynamique | ✅ | `dynamic` : `true` (défaut), `false`, `strict`. `runtime` ❌. Voir plus bas |
 | Alias | ✅ | voir la section dédiée |
-| Templates, ILM, `_settings`, `_stats`, `_close`, `_open` | ❌ | |
+| Templates, ILM, `_stats`, `_close`, `_open` | ❌ | |
 
 ### Mapping dynamique
 
@@ -227,6 +229,40 @@ train de tourner — les rafraîchissements sont sérialisés entre eux.
 d'Elasticsearch — voir [Expressions d'index](#expressions-dindex-listes-motifs-alias)
 juste en dessous. `POST|GET /_search` sans index cherche partout, comme `_all`.
 
+### `scroll` — l'export d'un index
+
+C'est ce que `helpers.scan` du client officiel utilise, donc ce dont dépend tout
+export : sans lui, une sauvegarde d'index échoue au premier appel.
+
+| Route / paramètre | État | Détail |
+|---|---|---|
+| `?scroll=1m` sur `_search` | ✅ | ouvre un contexte et rend `_scroll_id`. Durées d'ES (`30s`, `1m`, `2h`, `500ms`…) ; sans unité, ❌ avec le message d'ES |
+| `POST\|GET /_search/scroll` | ✅ | `{"scroll_id": "...", "scroll": "1m"}`, ou en query string. Le `keep_alive` est repoussé à chaque page |
+| `POST\|GET /_search/scroll/{scroll_id}` | ✅ | la forme héritée, identifiant dans l'URL |
+| `DELETE /_search/scroll`, `/_search/scroll/{scroll_id}` | ✅ | une liste d'identifiants ou `_all` ; `{"succeeded": true, "num_freed": n}`. Fermer deux fois n'est pas une erreur |
+| `from` avec `scroll` | ❌ | comme ES : `action_request_validation_exception` |
+| Contexte expiré, fermé, ou jamais ouvert | ❌ | **404** `search_phase_execution_exception`, cause `search_context_missing_exception` — la forme exacte d'ES, celle que les clients reconnaissent |
+
+Ce que le contexte garantit, et comment :
+
+- **chaque document une fois, et une seule** : tout ce qui correspond est balayé
+  et ordonné **à l'ouverture**, une fois pour toutes ; les pages suivantes sont
+  des tranches de ce tableau. La Nième page ne coûte donc pas N recherches ;
+- **l'index est figé** : le `Searcher` tantivy du moment est retenu — c'est un
+  instantané, et tantivy garantit que ses segments survivent à sa durée de vie.
+  Ce qui est écrit pendant l'export ne s'y invite pas, et rien de ce qui existait
+  ne se perd. Sans ça, un commit pendant l'export renumérote les segments et les
+  adresses déjà repérées ne désignent plus les mêmes documents ;
+- **les agrégations ne sont rendues qu'une fois**, sur la première page, comme
+  chez ES ;
+- `hits.total` et `_shards` sont les mêmes sur toutes les pages.
+
+Le prix : un contexte vivant côté serveur (un candidat par document
+correspondant). D'où le `keep_alive`, la purge des contextes expirés toutes les
+30 s, et la limite de **500 contextes ouverts** (`search.max_open_scroll_context`
+d'ES) — au-delà, ouvrir est refusé plutôt que de laisser un client oublieux
+retenir tout l'index.
+
 ## Expressions d'index (listes, motifs, alias)
 
 Partout où une route attend un index, elle accepte la même grammaire qu'ES.
@@ -288,7 +324,7 @@ récents. Deux comportements, tous deux mesurés sur un vrai ES :
   `root_cause` par index — le format exact d'ES.
 
 `tests/compat/diff_multi_index.py` mesure tout ça contre un vrai ES 8.15 :
-**86/87 appels identiques**, 1 divergence assumée, 0 écart. Le même fichier se
+**87/87 appels identiques**, 0 divergence assumée, 0 écart. Le même fichier se
 lance contre **deux** Elasticsearch (`--calibrer`) pour vérifier que ses verdicts
 veulent dire quelque chose : 87/87.
 
@@ -366,7 +402,8 @@ suppression de données.
 | Format de réponse | ✅ | `took`, `timed_out`, `_shards` (avec `failures[]` quand un index n'a pas su répondre), `hits.total.{value,relation}`, `hits.max_score`, `hits.hits[]` avec `_index` / `_id` / `_score` / `_source` / `sort` |
 | `preference` | 🟡 | accepté, sans objet : il n'y a qu'un shard |
 | `aggs` / `aggregations` | 🟡 | voir la section dédiée |
-| `highlight`, `search_after`, `scroll`, PIT, `collapse`, `knn`, `explain`, `fields`, `post_filter`, `min_score`, `suggest`, `rescore`, `track_scores`, `q` | ❌ | |
+| `scroll` | ✅ | `?scroll=1m` ouvre un contexte figé et rend un `_scroll_id` — voir la section dédiée |
+| `highlight`, `search_after`, PIT, `collapse`, `knn`, `explain`, `fields`, `post_filter`, `min_score`, `suggest`, `rescore`, `track_scores`, `q` | ❌ | |
 | `ignore_unavailable`, `allow_no_indices`, `expand_wildcards` | ✅ | voir [Expressions d'index](#expressions-dindex-listes-motifs-alias) — `expand_wildcards=none` reste ❌ |
 | `routing`, `filter_path`, `typed_keys` | ❌ | ferrite est mono-shard (`routing` n'a rien à choisir) ; les deux autres changent la forme de la réponse |
 | `rest_total_hits_as_int` | ❌ | il change la forme de `hits.total` (nombre au lieu d'objet). Accepté par ES 8, refusé ici : du code venu de la 6.x/7.x s'en sert encore, voir [`compat-es7.md`](compat-es7.md) |
@@ -380,7 +417,7 @@ acceptés partout ; `pretty` est implémenté (indentation de la réponse).
 
 ## Agrégations
 
-Comparées champ par champ à un vrai ES 8.15 sur 34 requêtes
+Comparées champ par champ à un vrai ES 8.15 sur 45 requêtes
 (`tests/compat/diff_aggs.py`), clés de réponse comprises.
 
 | Agrégation | État | Détail |
@@ -392,11 +429,26 @@ Comparées champ par champ à un vrai ES 8.15 sur 34 requêtes
 | `date_histogram` | 🟡 | `fixed_interval` et les mêmes paramètres. `calendar_interval` ❌ (mois et années civils n'ont pas d'équivalent dans tantivy) |
 | Sous-agrégations | ✅ | sur tous les types de buckets, vérifiées jusqu'à trois niveaux |
 | `cardinality` | ❌ | **refus assumé** : l'estimation de tantivy diffère de celle d'ES (mesuré : 582 valeurs distinctes annoncées là où ES en compte 598), y compris sous le seuil où ES est exact |
-| `filter` | ❌ | l'agrégation `filter` de tantivy prend une chaîne dans sa propre syntaxe de requête, pas une requête du Query DSL : la traduction serait approximative |
+| `filter` | 🟡 | n'importe quelle requête du Query DSL, avec ses sous-agrégations. **Exécutée par ferrite**, pas par tantivy : compter les documents qui correspondent à la recherche *et* au filtre, c'est exécuter l'intersection des deux requêtes (voir les divergences). Sous une agrégation de buckets : ❌, explicitement |
 | `percentiles`, `extended_stats`, `top_hits`, `composite`, `filters`, `nested`, `significant_terms`, `date_range`, `ip_range`… | ❌ | |
 
 Agréger sur un champ `text` est refusé, comme chez ES (`Fielddata is disabled`) :
 utiliser son multi-field `.keyword`.
+
+**`filter` est exécutée par ferrite, pas par tantivy.** Elle était refusée pour
+une bonne raison — celle de tantivy prend une chaîne dans *sa* syntaxe de
+requête, pas une requête du Query DSL, et la traduction serait approximative.
+Mais rien n'oblige à passer par elle : compter les documents qui correspondent à
+la recherche **et** au filtre, c'est exécuter l'intersection des deux requêtes,
+et le Query DSL de ferrite sait déjà traduire la seconde. Les sous-agrégations
+tournent sur ce croisement — la définition même de l'agrégation chez Elastic.
+N'importe quelle clause que ferrite sait traduire est donc utilisable comme
+filtre, et le résultat est mesuré identique à ES (11 cas dans `diff_aggs.py`).
+
+Sous une agrégation de **buckets** (`terms` → `filter`), elle reste refusée
+explicitement : il faudrait rejouer sa requête bucket par bucket, ce qui n'est
+pas la même mécanique. Au premier niveau, et sous une autre `filter`, elle
+fonctionne.
 
 **Quatre écarts avec tantivy sont corrigés au passage** — ils sont la raison
 d'être de la couche de mise en forme dans `src/aggs.rs` :
@@ -477,17 +529,30 @@ Types réutilisés d'ES : `index_not_found_exception`,
 Ce ne sont pas des manques, ce sont des choix — ils sont ici pour être discutés,
 pas pour être découverts en production.
 
-1. **Un champ inconnu dans une requête est une erreur, pas 0 résultat.**
-   ES renvoie `hits.total = 0` quand on interroge un champ absent du mapping.
-   Sans mapping dynamique, ce cas est toujours un bug du client, et répondre
-   « aucun résultat » serait exactement le résultat faux présenté comme complet
-   que ce projet refuse. ferrite renvoie `query_shard_exception`.
+1. **Un champ inconnu dans une requête ne correspond à rien — sauf si on
+   demande le contraire.** C'était la divergence assumée numéro un du projet :
+   ferrite refusait la requête là où ES rend 0 hit, au motif que sans mapping
+   dynamique un champ inconnu est toujours une faute de frappe.
 
-   En **multi-index**, la règle est resserrée pour ne pas casser un usage
-   légitime : si un *autre* index visé connaît le champ, ce n'est plus une faute
-   de frappe mais un mapping hétérogène, et la clause se comporte comme chez ES
-   (elle ne correspond à rien, pour cet index seulement). L'erreur n'est rendue
-   que si *aucun* index visé ne connaît le champ.
+   Un vrai client l'a démentie. Un filtre `archiveAt` posé sur **chaque**
+   recherche, sur un jeu où aucune commande n'est encore archivée — donc où le
+   champ n'est jamais mappé — faisait échouer l'application entière, en 400, là
+   où ES répondait. Le raisonnement était juste dans l'absolu et faux en
+   pratique : le champ inconnu n'est pas toujours une faute, c'est aussi un
+   mapping qui n'est pas encore né.
+
+   ferrite implémente donc le vrai réglage d'ES,
+   `index.query.parse.allow_unmapped_fields`, avec **son** défaut (`true`) : la
+   clause ne correspond à rien, et les clauses qui l'entourent continuent de
+   compter (`must_not: exists` sur un champ non mappé matche donc tous les
+   documents, comme chez ES — mesuré). Le mode strict reste disponible en posant
+   le réglage à `false` dans les `settings` à la création de l'index ; l'erreur
+   est alors le `query_shard_exception` d'ES, et elle nomme le réglage.
+
+   Ça ne change rien à deux points voisins : un champ inconnu dans une
+   **agrégation** reste une erreur (ES rend un bucket vide ; c'est la divergence
+   n° 11), et un sous-champ de `nested` interrogé depuis la racine aussi
+   (n° 10).
 
 2. **`slop` est refusé dans `match_phrase`.** tantivy et Lucene ne comptent pas
    les déplacements de la même façon dès que la phrase dépasse deux termes :
@@ -549,11 +614,20 @@ pas pour être découverts en production.
    rien à attendre.
 
 10. **Un sous-champ de `nested` interrogé depuis la racine est une erreur, pas 0
-   résultat.** Chez Elasticsearch, ces valeurs vivent dans des documents cachés :
+    résultat.** Chez Elasticsearch, ces valeurs vivent dans des documents cachés :
    `{"term": {"lignes.ref": "vis"}}` hors d'une clause `nested` ne rend **rien**,
    en silence — un piège classique. ferrite les indexe sur le document parent, il
    pourrait donc y répondre, et rendrait alors des documents là où ES n'en rend
    aucun. Il refuse explicitement, en nommant la clause `nested` attendue.
+
+11. **Un champ inconnu dans une agrégation reste une erreur.** ES rend un
+    résultat vide (`buckets: []`, `value: null`, `sum: 0.0` selon l'agrégation) ;
+    ferrite refuse, en nommant le champ. Contrairement au cas de la requête
+    (divergence n° 1), aucun usage réel n'a encore montré qu'une agrégation
+    portait sur un champ pas encore mappé — et `allow_unmapped_fields` ne
+    gouverne pas ce cas chez ES non plus. En multi-index, la règle est la même
+    que pour les requêtes : si un *autre* index visé mappe le champ, l'index qui
+    l'ignore n'agrège simplement pas.
 
 ## Limites connues (perf, pas fonctionnalité)
 
@@ -564,6 +638,12 @@ pas pour être découverts en production.
   l'occupation mémoire est proportionnelle au nombre de résultats. À revoir
   quand le tri deviendra un chemin chaud. La recherche **sans** tri utilise un
   top-K classique et n'a pas cette limite.
+- **Un contexte de `scroll` tient toute la liste des correspondances en
+  mémoire** (une adresse et ses clés de tri par document), plus l'instantané de
+  l'index. C'est le prix de « chaque document une fois, et une seule, en un seul
+  balayage » ; l'alternative — rejouer la requête à chaque page — coûterait N
+  recherches pour N pages et ne figerait rien. Les contextes expirés sont purgés
+  toutes les 30 s, et 500 au plus peuvent être ouverts.
 - **`GET /{index}/_doc/{id}` déclenche un commit** si des écritures sont en
   attente, pour rester temps réel comme ES. Sous forte charge d'écriture, un
   `get` peut donc coûter cher.

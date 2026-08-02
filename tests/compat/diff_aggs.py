@@ -82,6 +82,34 @@ def aggregations():
                                  "aggs": {"b": {"terms": {"field": "marque", "size": 2},
                                                 "aggs": {"c": {"avg": {
                                                     "field": "prix"}}}}}}}),
+        # --- filter : celle que ferrite execute lui-meme, en croisant la
+        # requete de la recherche avec celle du filtre
+        ("filter simple", {"f": {"filter": {"term": {"categorie": "audio"}}}}),
+        ("filter qui ne prend rien", {"f": {"filter": {
+            "term": {"categorie": "categorie_inexistante"}}}}),
+        ("filter sur un range", {"f": {"filter": {"range": {"prix": {"gte": 500}}}}}),
+        ("filter sur un bool", {"f": {"filter": {"bool": {
+            "must": [{"range": {"prix": {"lt": 300}}}],
+            "must_not": [{"term": {"categorie": "audio"}}]}}}}),
+        ("plusieurs filter", {"a": {"filter": {"term": {"actif": True}}},
+                              "b": {"filter": {"term": {"actif": False}}},
+                              "c": {"filter": {"match_all": {}}}}),
+        ("filter + metrique", {"f": {"filter": {"term": {"categorie": "audio"}},
+                                     "aggs": {"m": {"avg": {"field": "prix"}}}}}),
+        ("filter + terms", {"f": {"filter": {"range": {"prix": {"gte": 200}}},
+                                  "aggs": {"g": {"terms": {"field": "marque",
+                                                           "size": 5}}}}}),
+        ("filter + terms + avg", {"f": {
+            "filter": {"term": {"actif": True}},
+            "aggs": {"g": {"terms": {"field": "categorie"},
+                           "aggs": {"m": {"avg": {"field": "prix"}}}}}}}),
+        ("filter dans filter", {"a": {
+            "filter": {"range": {"prix": {"gte": 100}}},
+            "aggs": {"b": {"filter": {"term": {"categorie": "audio"}}}}}}),
+        ("filter a cote d'un terms", {"f": {"filter": {"term": {"actif": True}}},
+                                      "g": {"terms": {"field": "categorie"}}}),
+        ("filter sous une requete", {"f": {"filter": {"term": {"actif": True}}}},
+         {"match": {"corps": "appareil"}}),
         # --- agregations sous une requete (pas seulement match_all)
         ("avec une requete", {"f": {"terms": {"field": "marque"}}},
          {"match": {"corps": "appareil"}}),

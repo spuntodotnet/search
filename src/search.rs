@@ -323,6 +323,10 @@ pub struct Cible {
     /// Les agregations sont-elles collectees sur cet index ? (`false` quand il
     /// ignore un des champs agreges : il n'a alors aucune valeur a apporter.)
     pub agrege: bool,
+    /// Les requetes des agregations [`filter`], construites **dans cette
+    /// generation** comme la requete principale, et rangees par chemin
+    /// d'agregation (voir [`crate::aggs`]).
+    pub filtres: crate::aggs::Filtres,
 }
 
 pub struct SearchRequest {
@@ -342,6 +346,168 @@ pub struct SearchOutcome {
     pub aggregations: Option<Value>,
 }
 
+/// Un candidat **fige** : de quoi retrouver un document et le rendre plus tard,
+/// sans garder la requete qui l'a trouve.
+///
+/// C'est ce qu'un contexte de `scroll` conserve, une fois l'ordre final calcule.
+#[derive(Debug, Clone)]
+pub struct HitFige {
+    /// Le rang de l'index d'ou vient le document, dans [`Balayage::cibles`].
+    pub cible: usize,
+    pub seg: SegmentOrdinal,
+    pub doc: DocId,
+    pub score: Score,
+    /// Les valeurs de tri, deja mises au format JSON (le tableau `sort` du hit).
+    pub sort: Vec<Value>,
+}
+
+/// Un index tel qu'un contexte de `scroll` le retient : son nom, sa generation,
+/// et **le `searcher` du moment ou le scroll a ete ouvert**.
+///
+/// Garder le `searcher` n'est pas un detail : une ecriture commitee pendant le
+/// balayage fait recharger le reader, donc changer les numeros de segment. Les
+/// adresses figees ne designeraient plus les memes documents. Un `Searcher`
+/// tantivy est un instantane — le retenir, c'est exactement le « point in
+/// time » que scroll promet chez Elasticsearch.
+pub type CibleFigee = (String, Arc<Generation>, Searcher);
+
+/// Tous les documents qui correspondent, dans l'ordre final.
+pub struct Balayage {
+    pub total: usize,
+    pub max_score: Option<f32>,
+    pub hits: Vec<HitFige>,
+    pub aggregations: Option<Value>,
+    pub cibles: Vec<CibleFigee>,
+    /// Un tri explicite a-t-il ete demande ? (il remplace le score, comme chez
+    /// ES : `sort` dans chaque hit, `max_score: null`)
+    pub trie: bool,
+    /// Le hit porte-t-il un `_score` ?
+    pub avec_score: bool,
+}
+
+/// Balaye **tout** ce qui correspond, une fois pour toutes.
+///
+/// La recherche paginee ne remonte que `from + size` documents par index ;
+/// `scroll`, lui, promet de rendre l'integralite du resultat dans un ordre
+/// stable, y compris pendant que l'index change. On collecte donc l'ensemble
+/// des correspondances **une seule fois**, on les ordonne, et les pages
+/// suivantes ne sont plus qu'une tranche de ce tableau : chaque document est vu
+/// une fois et une seule, et la Nieme page ne coute pas N recherches.
+///
+/// Le prix est la memoire : un candidat par document correspondant (une adresse
+/// et ses cles de tri). C'est le meme choix que le collecteur de tri, et il est
+/// note dans `docs/compat.md`.
+pub fn balayer(cibles: Vec<Cible>, req: &SearchRequest) -> EsResult<Balayage> {
+    let searchers: Vec<Searcher> = cibles.iter().map(|c| c.gen.searcher()).collect();
+
+    let aggregations = match &req.aggs {
+        Some(aggs) => Some(crate::aggs::run(
+            &parts_d_agregation(&cibles, &searchers),
+            aggs,
+        )?),
+        None => None,
+    };
+
+    let trie = !req.sort_asc.is_empty();
+    let needs_score = !trie
+        || cibles
+            .iter()
+            .any(|c| c.sort.iter().any(|s| matches!(s.key, SortKey::Score)));
+
+    let mut total = 0usize;
+    let mut max_score: Option<f32> = None;
+    let mut candidats: Vec<Hit> = Vec::new();
+    for (rang, (cible, searcher)) in cibles.iter().zip(&searchers).enumerate() {
+        let collector = SortCollector {
+            specs: Arc::new(cible.sort.clone()),
+            needs_score,
+            cible: rang,
+        };
+        let locaux = searcher.search(&cible.query, &collector)?;
+        total += locaux.len();
+        if !trie {
+            for h in &locaux {
+                max_score = Some(max_score.map_or(h.score, |m: f32| m.max(h.score)));
+            }
+        }
+        candidats.extend(locaux);
+    }
+    candidats.sort_by(|a, b| compare(&req.sort_asc, a, b));
+
+    let hits = candidats
+        .into_iter()
+        .map(|h| HitFige {
+            cible: h.cible,
+            seg: h.seg,
+            doc: h.doc,
+            score: h.score,
+            sort: h.keys.iter().map(SortValue::to_json).collect(),
+        })
+        .collect();
+
+    let cibles = cibles
+        .into_iter()
+        .zip(searchers)
+        .map(|(c, s)| (c.nom, c.gen, s))
+        .collect();
+
+    Ok(Balayage {
+        total,
+        max_score: if trie { None } else { max_score },
+        hits,
+        aggregations,
+        cibles,
+        trie,
+        avec_score: !trie || needs_score,
+    })
+}
+
+/// Rend une tranche de candidats deja ordonnes au format `hits.hits[]`.
+///
+/// Sert aux pages d'un `scroll` : l'ordre est deja decide, il ne reste qu'a
+/// aller chercher les documents dans le `searcher` fige.
+pub fn rendre_page(
+    cibles: &[CibleFigee],
+    hits: &[HitFige],
+    source: &SourceFilter,
+    trie: bool,
+    avec_score: bool,
+) -> EsResult<Vec<Value>> {
+    let mut out = Vec::with_capacity(hits.len());
+    for hit in hits {
+        let (nom, gen, searcher) = &cibles[hit.cible];
+        out.push(build_hit(
+            nom,
+            gen,
+            searcher,
+            DocAddress::new(hit.seg, hit.doc),
+            avec_score.then_some(hit.score),
+            trie.then(|| hit.sort.clone()),
+            source,
+        )?);
+    }
+    Ok(out)
+}
+
+/// Les index sur lesquels les agregations se collectent : ceux qui mappent tous
+/// les champs agreges.
+fn parts_d_agregation<'a>(
+    cibles: &'a [Cible],
+    searchers: &'a [Searcher],
+) -> Vec<crate::aggs::Part<'a>> {
+    cibles
+        .iter()
+        .zip(searchers)
+        .filter(|(c, _)| c.agrege)
+        .map(|(c, s)| crate::aggs::Part {
+            gen: &c.gen,
+            searcher: s,
+            query: &*c.query,
+            filtres: &c.filtres,
+        })
+        .collect()
+}
+
 /// Execute la recherche sur chaque index vise, puis fusionne.
 ///
 /// C'est le schema `query_then_fetch` d'Elasticsearch, applique a des index
@@ -356,19 +522,10 @@ pub fn execute(cibles: &[Cible], req: &SearchRequest) -> EsResult<SearchOutcome>
     // Les agregations portent sur tous les documents qui correspondent, pas sur
     // la page rendue : elles se calculent a part, et se fusionnent a part.
     let aggregations = match &req.aggs {
-        Some(aggs) => {
-            let parts: Vec<crate::aggs::Part<'_>> = cibles
-                .iter()
-                .zip(&searchers)
-                .filter(|(c, _)| c.agrege)
-                .map(|(c, s)| crate::aggs::Part {
-                    gen: &c.gen,
-                    searcher: s,
-                    query: &*c.query,
-                })
-                .collect();
-            Some(crate::aggs::run(&parts, aggs)?)
-        }
+        Some(aggs) => Some(crate::aggs::run(
+            &parts_d_agregation(cibles, &searchers),
+            aggs,
+        )?),
         None => None,
     };
 
