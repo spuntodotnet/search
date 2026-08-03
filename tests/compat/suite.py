@@ -1286,14 +1286,123 @@ def recherche_multi_match(es):
 
 
 @scenario
+def recherche_libre_lenient(es):
+    """La barre « chercher par nom / reference / annee » : la meme chaine posee
+    sur des champs de types differents.
+
+    Sans `lenient`, taper un nom fait echouer la recherche entiere en 400 des
+    qu'un des champs vises est numerique — c'est ce que remonte le premier
+    client de ferrite.
+    """
+    champs = ["titre", "resume", "auteur", "annee", "tirage", "paru"]
+    refused(lambda: es.search(index=INDEX, query={
+        "multi_match": {"query": "presse", "fields": champs}}))
+    assert ids(es.search(index=INDEX, query={
+        "multi_match": {"query": "presse", "fields": champs, "lenient": True}})) == ["2"]
+    # Le champ numerique reste cherche quand la valeur, elle, est lisible.
+    assert ids(es.search(index=INDEX, query={
+        "multi_match": {"query": "1887", "fields": ["titre", "annee"],
+                        "lenient": True}})) == ["1"]
+    # Aucun champ ne sait lire la valeur : 0 document, sans erreur...
+    assert ids(es.search(index=INDEX, query={
+        "multi_match": {"query": "presse", "fields": ["annee", "tirage"],
+                        "lenient": True}})) == []
+    # ...et la clause vide n'exclut rien sous un `must_not`.
+    assert sorted(ids(es.search(index=INDEX, query={"bool": {
+        "must": [{"match_all": {}}],
+        "must_not": [{"multi_match": {"query": "presse", "fields": ["annee"],
+                                      "lenient": True}}]}}))) == ["1", "2", "3"]
+    # Un champ que le mapping ne connait pas est ecarte de la liste, il ne rend
+    # pas la clause entiere vide : sinon une barre de recherche qui cite un
+    # champ jamais mappe rendrait 0 document en silence.
+    assert ids(es.search(index=INDEX, query={
+        "multi_match": {"query": "presse", "fields": ["resume", "jamais_mappe"]}})) == ["2"]
+    # `lenient` existe aussi sur `match` — et seulement la, comme chez ES.
+    assert ids(es.search(index=INDEX, query={
+        "match": {"annee": {"query": "presse", "lenient": True}}})) == []
+    assert ids(es.search(index=INDEX, query={
+        "match": {"annee": {"query": "1887", "lenient": True}}})) == ["1"]
+    refused(lambda: es.search(index=INDEX, query={
+        "match_phrase": {"annee": {"query": "presse", "lenient": True}}}),
+        contains="lenient")
+
+
+@scenario
+def recherche_libre_phrase(es):
+    """`type: phrase` : la meme phrase cherchee dans plusieurs champs."""
+    assert ids(es.search(index=INDEX, query={
+        "multi_match": {"query": "la presse parisienne", "fields": ["titre", "resume"],
+                        "type": "phrase"}})) == ["2"]
+    # Les memes mots dans le desordre ne matchent pas, la ou `best_fields` si.
+    assert ids(es.search(index=INDEX, query={
+        "multi_match": {"query": "parisienne presse", "fields": ["titre", "resume"],
+                        "type": "phrase"}})) == []
+    assert ids(es.search(index=INDEX, query={
+        "multi_match": {"query": "parisienne presse", "fields": ["titre", "resume"],
+                        "operator": "and"}})) == ["2"]
+    # Sur un champ non analyse, la phrase est la valeur entiere (comme ES).
+    assert sorted(ids(es.search(index=INDEX, query={
+        "multi_match": {"query": "Maupassant", "fields": ["auteur", "titre"],
+                        "type": "phrase"}}))) == ["1", "2"]
+    # `tie_breaker` s'applique : `phrase` se combine en dis_max, comme
+    # `best_fields`.
+    assert ids(es.search(index=INDEX, query={
+        "multi_match": {"query": "la presse parisienne", "fields": ["titre^2", "resume"],
+                        "type": "phrase", "tie_breaker": 0.3}})) == ["2"]
+    # phrase + lenient : le champ qui ne sait pas lire la valeur est ecarte.
+    assert ids(es.search(index=INDEX, query={
+        "multi_match": {"query": "la presse parisienne", "fields": ["resume", "annee"],
+                        "type": "phrase", "lenient": True}})) == ["2"]
+
+
+@scenario
+def recherche_libre_phrase_prefix(es):
+    """`type: phrase_prefix` : la meme barre, pendant la frappe."""
+    assert ids(es.search(index=INDEX, query={
+        "multi_match": {"query": "la presse pari", "fields": ["titre", "resume"],
+                        "type": "phrase_prefix"}})) == ["2"]
+    assert ids(es.search(index=INDEX, query={
+        "multi_match": {"query": "germ", "fields": ["titre", "resume"],
+                        "type": "phrase_prefix", "max_expansions": 10}})) == ["3"]
+    # Un `keyword` ne peut pas porter de phrase a prefixe : ES refuse avec ce
+    # message, ferrite le reprend — sauf sous `lenient`, ou le champ est
+    # simplement ecarte (mesure contre ES 8.15).
+    refused(lambda: es.search(index=INDEX, query={
+        "multi_match": {"query": "germ", "fields": ["titre", "auteur"],
+                        "type": "phrase_prefix"}}), contains="phrase prefix")
+    assert ids(es.search(index=INDEX, query={
+        "multi_match": {"query": "germ", "fields": ["titre", "auteur"],
+                        "type": "phrase_prefix", "lenient": True}})) == ["3"]
+
+
+@scenario
 def multi_match_refus(es):
     refused(lambda: es.search(index=INDEX, query={
         "multi_match": {"query": "x", "fields": ["titre"], "type": "cross_fields"}}),
         contains="cross_fields")
     refused(lambda: es.search(index=INDEX, query={
+        "multi_match": {"query": "x", "fields": ["titre"], "type": "bool_prefix"}}),
+        contains="bool_prefix")
+    # Un type qui n'existe pas chez ES non plus : son message, mot pour mot.
+    refused(lambda: es.search(index=INDEX, query={
+        "multi_match": {"query": "x", "fields": ["titre"], "type": "PHRASE"}}),
+        contains="unknown type")
+    refused(lambda: es.search(index=INDEX, query={
         "multi_match": {"query": "x", "fields": ["tit*"]}}), contains="motifs")
     refused(lambda: es.search(index=INDEX, query={"multi_match": {"query": "x"}}),
             contains="fields")
+    # `slop` reste refuse partout (voir docs/compat.md), y compris en phrase.
+    refused(lambda: es.search(index=INDEX, query={
+        "multi_match": {"query": "la presse", "fields": ["resume"],
+                        "type": "phrase", "slop": 2}}), contains="slop")
+    # `tie_breaker` n'a pas de sens quand les scores s'additionnent.
+    refused(lambda: es.search(index=INDEX, query={
+        "multi_match": {"query": "x", "fields": ["titre"], "type": "most_fields",
+                        "tie_breaker": 0.3}}), contains="tie_breaker")
+    # `lenient` n'accepte que true/false, comme ES.
+    refused(lambda: es.search(index=INDEX, query={
+        "multi_match": {"query": "x", "fields": ["titre"], "lenient": "TRUE"}}),
+        contains="only [true] or [false]")
 
 
 @scenario

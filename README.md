@@ -54,7 +54,8 @@ réel est la **couche de compatibilité** au-dessus.
   sémantique de `refresh`.
 - **Mappings** : types de base, multi-fields (`.keyword`), analyzers
   déclaratifs, `_source`, mapping dynamique.
-- **Recherche** : le noyau du Query DSL (`bool`, `match`, `match_phrase`,
+- **Recherche** : le noyau du Query DSL (`bool`, `match`, `multi_match` (avec
+  `lenient` et les types `phrase` / `phrase_prefix`), `match_phrase`,
   `match_phrase_prefix`, `term(s)`, `range` avec le **date math** (`now`),
   `exists`, `prefix`, `wildcard`, `regexp`, `nested`…), `sort`, `from`/`size`,
   `scroll` (donc `helpers.scan`), filtrage de `_source`.
@@ -127,7 +128,7 @@ avec un mapping explicite, indexe des documents via `_bulk`, et les retrouve via
 `fuzzy`, `bool`, `constant_score`, `dis_max`, `match_all` — avec scoring BM25, `from`/`size`, tri, filtrage de
 `_source`, et le format de réponse exact d'ES.
 
-Sur un corpus de 600 documents et 168 requêtes, ferrite et un vrai
+Sur un corpus de 600 documents et 207 requêtes, ferrite et un vrai
 Elasticsearch 8.15 renvoient **les mêmes documents dans le même ordre**
 (`tests/compat/diff_relevance.py`).
 

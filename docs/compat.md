@@ -371,8 +371,8 @@ suppression de données.
 |---|---|---|
 | `match_all` | ✅ | `boost` |
 | `match_none` | ✅ | |
-| `match` | 🟡 | `query`, `operator` (`or` / `and`), `boost`. Sur un champ non analysé, se comporte comme `term`. `fuzziness`, `minimum_should_match`, `analyzer`, `zero_terms_query`, `prefix_length` : ❌ |
-| `multi_match` | 🟡 | `query`, `fields` (**obligatoire**, avec la pondération `champ^3`), `type` `best_fields` (défaut) et `most_fields`, `operator`, `tie_breaker`, `boost`. `cross_fields`, `phrase`, `phrase_prefix`, `bool_prefix` et les motifs de champ (`tit*`) : ❌ |
+| `match` | 🟡 | `query`, `operator` (`or` / `and`), `boost`, `lenient` (voir [la recherche libre](#la-recherche-libre-multi_match)). Sur un champ non analysé, se comporte comme `term`. `fuzziness`, `minimum_should_match`, `analyzer`, `zero_terms_query`, `prefix_length` : ❌ |
+| `multi_match` | 🟡 | `query`, `fields` (**obligatoire**, avec la pondération `champ^3`), `type` `best_fields` (défaut), `most_fields`, `phrase` et `phrase_prefix`, `operator`, `tie_breaker`, `lenient`, `max_expansions`, `boost` — voir [la recherche libre](#la-recherche-libre-multi_match). `cross_fields`, `bool_prefix`, `slop` et les motifs de champ (`tit*`) : ❌ |
 | `match_phrase` | 🟡 | les termes dans l'ordre, adjacents. `boost`. `slop` : ❌ (voir les divergences) |
 | `match_phrase_prefix` | 🟡 | les termes dans l'ordre, le dernier n'étant qu'un début de mot. `query`, `max_expansions` (défaut 50, comme ES), `boost`. Sur un champ `keyword`, refusée avec le message d'ES (« Can only use phrase prefix queries on text fields »). `slop`, `analyzer`, `zero_terms_query` : ❌ |
 | `exists` | ✅ | sur tous les types, y compris `text`. Un champ absent, `null`, ou un tableau vide compte comme absent, comme chez ES |
@@ -388,6 +388,44 @@ suppression de données.
 | `range` | 🟡 | `gte`, `gt`, `lte`, `lt`, `boost`, sur `keyword` / numérique / `date` / `boolean`. Sur un champ `date`, les bornes acceptent le **date math** (`now`, `now-1d/d`, `2026-03-15\|\|+1M`) et sont **arrondies selon leur côté** — voir [la section dédiée](#date-math-et-arrondi-des-bornes). `format` (lecture des bornes) ✅. Sur un champ `text` : ❌. `time_zone`, `relation` : ❌ |
 | `bool` | 🟡 | `must`, `should`, `filter`, `must_not`, `boost`, et `minimum_should_match` **sous forme entière** (les pourcentages et expressions sont ❌). `filter` ne contribue pas au score. Un `bool` qui n'a que des `must_not` matche tous les autres documents, comme chez ES |
 | `query_string`, `simple_query_string`, `function_score`, `boosting`, `intervals`, `terms_set`, `script`… | ❌ | `parsing_exception: unknown query [...]` |
+
+### La recherche libre (`multi_match`)
+
+C'est la clause d'une barre « chercher par référence / nom / montant » : la même
+chaîne posée sur plusieurs champs, souvent de **types différents**. Deux
+paramètres y sont indispensables et manquaient, tous deux signalés par le
+premier client de ferrite.
+
+| Paramètre | État | Détail |
+|---|---|---|
+| `lenient` | ✅ | un champ dont le **type ne sait pas lire la valeur** cherchée est écarté de la clause au lieu de faire échouer la recherche (`"alice"` sur un `long`, une date illisible, une phrase à préfixe sur un `keyword`). Accepté sur `multi_match` et `match` — et seulement là, comme chez ES (`match_phrase`, `term`, `range` le refusent des deux côtés) |
+| `type: best_fields` (défaut) | ✅ | le meilleur champ l'emporte (`dis_max`), `tie_breaker` optionnel |
+| `type: most_fields` | ✅ | les scores s'additionnent ; `tie_breaker` y est refusé (il n'y a pas de meilleur champ à départager) |
+| `type: phrase` | ✅ | `match_phrase` répété sur chaque champ, puis `dis_max` — exactement comme `best_fields` est `match` répété. `tie_breaker` s'applique |
+| `type: phrase_prefix` | ✅ | idem, le dernier mot n'étant qu'un début de mot. `max_expansions` (défaut 50, comme ES) |
+| `type: cross_fields`, `bool_prefix` | ❌ | refusés explicitement : le premier demande des statistiques de termes fusionnées entre champs, le second un scoring de suggestion |
+| `slop` | ❌ | refusé quel que soit le type, pour la raison qui le fait refuser dans `match_phrase` (divergence n° 2) |
+| `operator` sous `phrase` / `phrase_prefix` | 🟡 | accepté et sans effet — c'est ce que fait ES (mesuré) |
+
+Mesuré contre un ES 8.15.0, en documents **et en ordre**
+([`tests/compat/diff_relevance.py`](../tests/compat/diff_relevance.py), 207
+requêtes dont une quarantaine sur ces deux paramètres) :
+
+- avec `lenient`, la clause rend exactement ce que rendrait la même recherche
+  sur les seuls champs lisibles ;
+- si **aucun** champ ne sait lire la valeur, la clause ne correspond à rien —
+  0 document, sans erreur, et sans rien exclure sous un `must_not` ;
+- `lenient` n'accepte que `true` / `false` (booléen ou chaîne), avec le message
+  d'ES sur le reste ;
+- un `type` inconnu est refusé avec le message d'ES, mot pour mot (`failed to
+  parse [multi_match] query type [...]. unknown type.`) ; le nom du type est
+  sensible à la casse chez ES aussi.
+
+Un champ **absent du mapping** est écarté de la liste `fields`, sans que la
+clause entière devienne vide : c'est ce que fait ES. C'était l'inverse jusqu'ici
+— ferrite rendait **0 document en silence** dès qu'un des champs cités n'était
+pas mappé, le cas exact d'une barre de recherche qui balaie un champ qu'aucun
+document n'a encore rempli.
 
 ### Corps et paramètres de `_search`
 

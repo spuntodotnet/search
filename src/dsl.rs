@@ -238,9 +238,9 @@ fn match_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     let obj = as_object(body, "match")?;
     let (field_name, spec) = single_key(obj, "match")?;
 
-    let (query_value, operator, boost_value) = match spec {
+    let (query_value, operator, boost_value, lenient) = match spec {
         Value::Object(o) => {
-            expect_only(o, &["query", "operator", "boost"], "match")?;
+            expect_only(o, &["query", "operator", "boost", "lenient"], "match")?;
             let q = o.get("query").ok_or_else(|| {
                 EsError::parsing(format!(
                     "[match] sur [{field_name}] : cle [query] manquante"
@@ -250,13 +250,46 @@ fn match_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
                 q.clone(),
                 read_operator(o.get("operator"), "match")?,
                 o.get("boost").cloned(),
+                read_lenient(o.get("lenient"))?,
             )
         }
-        v => (v.clone(), Occur::Should, None),
+        v => (v.clone(), Occur::Should, None, false),
     };
 
-    let inner = field_match(field_name, &query_value, operator, "match", ctx)?;
+    let inner = match field_match(field_name, &query_value, operator, "match", ctx) {
+        // `lenient` : le champ ne sait pas lire cette valeur — la clause ne
+        // correspond a rien, au lieu d'echouer (mesure contre ES 8.15 :
+        // `match numero: "alice"` avec `lenient` rend 0 document, sans erreur).
+        Err(e) if lenient && e.valeur_illisible => Box::new(EmptyQuery),
+        autre => autre?,
+    };
     boost(inner, boost_value.as_ref())
+}
+
+/// `lenient` : le champ dont le type ne sait pas lire la valeur cherchee est
+/// **ecarte** de la clause au lieu de la faire echouer.
+///
+/// C'est le parametre d'une barre de recherche qui balaie des champs de types
+/// differents (`nom` en `text`, `numero` en `long`) : sans lui, taper un nom
+/// fait echouer la recherche entiere en 400 parce qu'un des champs vises est
+/// numerique. Il ne couvre **que** cette famille d'erreurs (voir
+/// [`EsError::valeur_illisible`]) : un parametre non supporte reste un refus.
+///
+/// ES n'accepte que `true`/`false`, booleen ou chaine — pas `1`, pas `TRUE` —
+/// et rend ce message-la sur le reste (mesure contre ES 8.15).
+fn read_lenient(value: Option<&Value>) -> EsResult<bool> {
+    match value {
+        None => Ok(false),
+        Some(Value::Bool(b)) => Ok(*b),
+        Some(Value::String(s)) if s == "true" => Ok(true),
+        Some(Value::String(s)) if s == "false" => Ok(false),
+        Some(v) => {
+            let brut = v.as_str().map_or_else(|| v.to_string(), str::to_string);
+            Err(EsError::illegal_argument(format!(
+                "Failed to parse value [{brut}] as only [true] or [false] are allowed."
+            )))
+        }
+    }
 }
 
 /// Le coeur de `match` pour **un** champ : analyse la chaine avec l'analyzer du
@@ -303,9 +336,14 @@ fn field_match(
         }
         // Sur un champ non analyse, `match` se comporte comme `term` (ES fait
         // pareil : l'analyzer d'un keyword est `keyword`).
-        FieldKind::Date => periode_date(field_name, field, value, ctx)?,
+        // Une valeur que le type du champ ne sait pas lire est marquee : c'est
+        // ce que `lenient` ecarte au lieu de faire echouer la recherche.
+        FieldKind::Date => {
+            periode_date(field_name, field, value, ctx).map_err(EsError::sur_valeur_illisible)?
+        }
         _ => {
-            let tv = mapping::coerce_avec(field_name, ty, value, ctx.fields.format_de(field_name))?;
+            let tv = mapping::coerce_avec(field_name, ty, value, ctx.fields.format_de(field_name))
+                .map_err(EsError::sur_valeur_illisible)?;
             Box::new(TermQuery::new(tv.to_term(field), IndexRecordOption::Basic))
         }
     })
@@ -359,12 +397,18 @@ fn read_operator(value: Option<&Value>, clause: &str) -> EsResult<Occur> {
 
 /// `multi_match` : la meme chaine cherchee dans plusieurs champs.
 ///
-/// C'est la clause d'une barre de recherche ordinaire. Deux strategies de
+/// C'est la clause d'une barre de recherche ordinaire. Quatre strategies de
 /// score, celles qui couvrent l'usage courant :
 ///
 /// - `best_fields` (defaut chez ES) : le score du meilleur champ l'emporte
 ///   (`dis_max`), avec un `tie_breaker` optionnel pour tenir compte des autres.
 /// - `most_fields` : les scores de tous les champs s'additionnent.
+/// - `phrase` : la meme phrase cherchee dans chaque champ, puis `dis_max` —
+///   c'est `match_phrase` repete, exactement comme `best_fields` est `match`
+///   repete (mesure contre ES 8.15 : sur deux champs texte, le score du
+///   document est celui de son meilleur champ, et `tie_breaker` y ajoute bien
+///   0,3 fois l'autre).
+/// - `phrase_prefix` : idem avec le dernier mot ampute.
 fn multi_match_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     let obj = as_object(body, "multi_match")?;
     expect_only(
@@ -376,6 +420,9 @@ fn multi_match_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
             "operator",
             "boost",
             "tie_breaker",
+            "lenient",
+            "slop",
+            "max_expansions",
         ],
         "multi_match",
     )?;
@@ -395,15 +442,30 @@ fn multi_match_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         ));
     }
     let operator = read_operator(obj.get("operator"), "multi_match")?;
+    let lenient = read_lenient(obj.get("lenient"))?;
     let ty = obj
         .get("type")
         .and_then(Value::as_str)
         .unwrap_or("best_fields");
-    if !matches!(ty, "best_fields" | "most_fields") {
-        return Err(EsError::unsupported(format!(
-            "ferrite ne supporte pas [type: {ty}] dans [multi_match] ; types acceptes : \
-             best_fields, most_fields"
-        )));
+    match ty {
+        "best_fields" | "most_fields" | "phrase" | "phrase_prefix" => {}
+        // Deux types qu'ES sait faire et pas ferrite : ils demandent des
+        // statistiques de termes fusionnees entre champs (`cross_fields`) ou un
+        // scoring de suggestion (`bool_prefix`). Le refus est explicite.
+        "cross_fields" | "bool_prefix" => {
+            return Err(EsError::unsupported(format!(
+                "ferrite ne supporte pas [type: {ty}] dans [multi_match] ; types acceptes : \
+                 best_fields, most_fields, phrase, phrase_prefix"
+            )))
+        }
+        // Le reste n'existe pas chez ES non plus : son message, mot pour mot.
+        _ => {
+            return Err(EsError::new(
+                axum::http::StatusCode::BAD_REQUEST,
+                "parse_exception",
+                format!("failed to parse [multi_match] query type [{ty}]. unknown type."),
+            ))
+        }
     }
     let tie_breaker = match obj.get("tie_breaker") {
         None => 0.0f32,
@@ -412,11 +474,16 @@ fn multi_match_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
             .ok_or_else(|| EsError::illegal_argument("[tie_breaker] : nombre attendu"))?
             as f32,
     };
+    // `most_fields` additionne : il n'y a pas de « meilleur champ » a departager.
     if ty == "most_fields" && obj.contains_key("tie_breaker") {
         return Err(EsError::illegal_argument(
-            "[tie_breaker] ne s'applique qu'a [type: best_fields]",
+            "[tie_breaker] ne s'applique qu'aux types [best_fields], [phrase] et [phrase_prefix]",
         ));
     }
+    // Refuse au-dela de 0, quel que soit le type : tantivy et Lucene ne comptent
+    // pas les deplacements pareil (voir `read_slop`).
+    let slop = read_slop(obj.get("slop"), "multi_match")?;
+    let max_expansions = read_max_expansions(obj.get("max_expansions"))?;
 
     let mut subs: Vec<Box<dyn Query>> = Vec::with_capacity(fields.len());
     for spec in fields {
@@ -441,33 +508,64 @@ fn multi_match_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
                  [{spec}]) : nomme les champs un par un"
             )));
         }
-        let mut q = field_match(name, value, operator, "multi_match", ctx)?;
+        let construite = match ty {
+            "phrase" => field_phrase(name, value, slop, "multi_match", ctx),
+            "phrase_prefix" => field_phrase_prefix(name, value, max_expansions, "multi_match", ctx),
+            // `operator` ne veut rien dire pour une phrase, et ES l'ignore dans
+            // ce cas (mesure) : il n'est lu que par les deux autres types.
+            _ => field_match(name, value, operator, "multi_match", ctx),
+        };
+        let mut q = match construite {
+            // Un champ que ce mapping ne connait pas est **ecarte de la liste**,
+            // pas fatal a la clause entiere : c'est ce que fait ES, et
+            // rattraper plus haut (au niveau de la clause) rendrait 0 document
+            // la ou ES en rend, en silence, des que l'un des champs de la barre
+            // de recherche n'est pas mappe ici.
+            Err(e) if ctx.champ_inconnu_tolere(&e) => continue,
+            // `lenient` : ce champ-la ne sait pas lire la valeur cherchee.
+            Err(e) if lenient && e.valeur_illisible => continue,
+            autre => autre?,
+        };
         if let Some(b) = field_boost {
             q = Box::new(BoostQuery::new(q, b));
         }
         subs.push(q);
     }
 
-    let inner: Box<dyn Query> = if ty == "best_fields" {
-        Box::new(DisMaxQuery::new(subs, tie_breaker))
-    } else {
+    // Tous les champs ecartes : la clause ne correspond a rien, sans erreur —
+    // et sans matcher non plus sous un `must_not` (mesure contre ES 8.15).
+    if subs.is_empty() {
+        return boost(Box::new(EmptyQuery), obj.get("boost"));
+    }
+
+    let inner: Box<dyn Query> = if ty == "most_fields" {
         Box::new(BooleanQuery::new(
             subs.into_iter().map(|q| (Occur::Should, q)).collect(),
         ))
+    } else {
+        // `best_fields`, `phrase` et `phrase_prefix` : le meilleur champ
+        // l'emporte.
+        Box::new(DisMaxQuery::new(subs, tie_breaker))
     };
     boost(inner, obj.get("boost"))
+}
+
+/// `max_expansions` : combien de termes un prefixe a le droit de developper.
+fn read_max_expansions(value: Option<&Value>) -> EsResult<u32> {
+    match value {
+        None => Ok(50),
+        Some(v) => v
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .filter(|n| *n > 0)
+            .ok_or_else(|| EsError::illegal_argument("[max_expansions] : entier positif attendu")),
+    }
 }
 
 /// `match_phrase` : les termes dans cet ordre, cote a cote.
 fn match_phrase_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     let obj = as_object(body, "match_phrase")?;
     let (field_name, spec) = single_key(obj, "match_phrase")?;
-    let MappedField {
-        field,
-        ty,
-        analyzer,
-        ..
-    } = ctx.field(field_name, "match_phrase")?;
 
     let (value, slop, boost_value) = match spec {
         Value::Object(o) => {
@@ -486,9 +584,31 @@ fn match_phrase_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> 
         v => (v.clone(), 0, None),
     };
 
+    let inner = field_phrase(field_name, &value, slop, "match_phrase", ctx)?;
+    boost(inner, boost_value.as_ref())
+}
+
+/// Le coeur de `match_phrase` pour **un** champ.
+///
+/// Partage avec `multi_match` en `type: phrase`, qui n'est rien d'autre que
+/// cette phrase repetee sur plusieurs champs, puis mise en `dis_max`.
+fn field_phrase(
+    field_name: &str,
+    value: &Value,
+    slop: u32,
+    clause: &str,
+    ctx: &QueryCtx,
+) -> EsResult<Box<dyn Query>> {
+    let MappedField {
+        field,
+        ty,
+        analyzer,
+        ..
+    } = ctx.field(field_name, clause)?;
+
     let inner: Box<dyn Query> = match ty.kind() {
         FieldKind::Text => {
-            let tokens = ctx.analyze(&query_text(field_name, &value, "match_phrase")?, analyzer)?;
+            let tokens = ctx.analyze(&query_text(field_name, value, clause)?, analyzer)?;
             match tokens.len() {
                 0 => Box::new(EmptyQuery),
                 // Une phrase d'un seul terme est un `term` : tantivy exige au
@@ -511,16 +631,15 @@ fn match_phrase_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> 
         _ => {
             if slop != 0 {
                 return Err(EsError::illegal_argument(format!(
-                    "[match_phrase] : [slop] n'a pas de sens sur le champ non analyse \
-                     [{field_name}]"
+                    "[{clause}] : [slop] n'a pas de sens sur le champ non analyse [{field_name}]"
                 )));
             }
-            let tv =
-                mapping::coerce_avec(field_name, ty, &value, ctx.fields.format_de(field_name))?;
+            let tv = mapping::coerce_avec(field_name, ty, value, ctx.fields.format_de(field_name))
+                .map_err(EsError::sur_valeur_illisible)?;
             Box::new(TermQuery::new(tv.to_term(field), IndexRecordOption::Basic))
         }
     };
-    boost(inner, boost_value.as_ref())
+    Ok(inner)
 }
 
 /// `match_phrase_prefix` : les termes dans cet ordre, le dernier n'etant qu'un
@@ -532,12 +651,6 @@ fn match_phrase_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> 
 fn match_phrase_prefix_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     let obj = as_object(body, "match_phrase_prefix")?;
     let (field_name, spec) = single_key(obj, "match_phrase_prefix")?;
-    let MappedField {
-        field,
-        ty,
-        analyzer,
-        ..
-    } = ctx.field(field_name, "match_phrase_prefix")?;
 
     let (value, max_expansions, boost_value) = match spec {
         Value::Object(o) => {
@@ -558,27 +671,42 @@ fn match_phrase_prefix_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Q
                     "[match_phrase_prefix] sur [{field_name}] : cle [query] manquante"
                 ))
             })?;
-            let max = match o.get("max_expansions") {
-                None => 50,
-                Some(v) => v
-                    .as_u64()
-                    .and_then(|n| u32::try_from(n).ok())
-                    .filter(|n| *n > 0)
-                    .ok_or_else(|| {
-                        EsError::illegal_argument("[max_expansions] : entier positif attendu")
-                    })?,
-            };
+            let max = read_max_expansions(o.get("max_expansions"))?;
             (q.clone(), max, o.get("boost").cloned())
         }
         v => (v.clone(), 50, None),
     };
 
+    let inner = field_phrase_prefix(
+        field_name,
+        &value,
+        max_expansions,
+        "match_phrase_prefix",
+        ctx,
+    )?;
+    boost(inner, boost_value.as_ref())
+}
+
+/// Le coeur de `match_phrase_prefix` pour **un** champ.
+///
+/// Partage avec `multi_match` en `type: phrase_prefix`.
+fn field_phrase_prefix(
+    field_name: &str,
+    value: &Value,
+    max_expansions: u32,
+    clause: &str,
+    ctx: &QueryCtx,
+) -> EsResult<Box<dyn Query>> {
+    let MappedField {
+        field,
+        ty,
+        analyzer,
+        ..
+    } = ctx.field(field_name, clause)?;
+
     let inner: Box<dyn Query> = match ty.kind() {
         FieldKind::Text => {
-            let tokens = ctx.analyze(
-                &query_text(field_name, &value, "match_phrase_prefix")?,
-                analyzer,
-            )?;
+            let tokens = ctx.analyze(&query_text(field_name, value, clause)?, analyzer)?;
             match tokens.len() {
                 0 => Box::new(EmptyQuery),
                 // Un seul terme : il n'y a plus de phrase, et Lucene reecrit
@@ -645,7 +773,10 @@ fn match_phrase_prefix_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Q
         }
         // Une phrase suppose des positions, qu'un champ non analyse n'a pas.
         // ES refuse ici, avec ce message : ferrite le reprend mot pour mot,
-        // pour qu'un client ne voie pas la difference.
+        // pour qu'un client ne voie pas la difference. Marquee « valeur
+        // illisible » parce que c'est aussi une des erreurs que le `lenient`
+        // d'ES avale (mesure : `phrase_prefix` sur un `keyword` rend 0 document
+        // au lieu d'echouer).
         _ => {
             return Err(EsError::new(
                 axum::http::StatusCode::BAD_REQUEST,
@@ -655,10 +786,11 @@ fn match_phrase_prefix_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Q
                      not on [{field_name}] which is of type [{}]",
                     ty.name()
                 ),
-            ))
+            )
+            .sur_valeur_illisible())
         }
     };
-    boost(inner, boost_value.as_ref())
+    Ok(inner)
 }
 
 /// Les termes indexes qui commencent par ce prefixe, dans l'ordre du
