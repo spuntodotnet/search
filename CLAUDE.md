@@ -94,8 +94,8 @@ développement, pas de CI).
 
 | Commande | La question à laquelle elle répond |
 |---|---|
-| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**83/83**, dont l'export par `helpers.scan` et le date math) |
-| `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (167/168, 0 écart réel) |
+| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**86/86**, dont l'export par `helpers.scan`, le date math et la recherche libre) |
+| `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (206/207, 0 écart réel) |
 | `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (45/46 ; le seul écart est `_cluster/health`, toujours vert par choix) |
 | `tests/compat/diff_aggs.py` | les mêmes agrégations ? (45/45, `filter` comprise) |
 | `tests/compat/diff_analyzers.py` | les mêmes tokens ? (7 analyzers, 210 textes, tous identiques) |
@@ -182,6 +182,15 @@ bouger**, pas après.
   intersection de requêtes, et le Query DSL de ferrite sait déjà traduire la
   seconde : le refus n'était donc pas une limite de tantivy, seulement de son
   agrégation homonyme. Sous une agrégation de buckets, elle reste refusée.
+- **`lenient` écarte un champ, il n'avale pas les erreurs.** Une barre de
+  recherche pose la même chaîne sur des champs de types différents : `lenient`
+  dit « le champ qui ne sait pas lire cette valeur sort de la clause ». La
+  tentation est d'attraper *toute* erreur du champ courant — ce serait retourner
+  la règle du projet, puisqu'un `slop` non supporté deviendrait un silence dès
+  qu'un client passe `lenient: true`. Seule la famille « la valeur n'a pas le
+  type du champ » est marquée à la source (`EsError::valeur_illisible`), et
+  c'est exactement celle qu'ES avale — mesuré, y compris sur la phrase à
+  préfixe posée sur un `keyword`.
 
 ## Les pièges rencontrés, pour ne pas les repayer
 
@@ -198,6 +207,15 @@ bouger**, pas après.
   rendait 1 document là où ES en rend 163, en silence. La tolérance doit être
   posée **sur la clause**, pas sur l'index. Trouvé par `diff_multi_index.py`,
   pas par le raisonnement qui avait produit le code.
+- **Le même piège un cran plus bas : écarter un champ n'est pas neutre.** La
+  tolérance au champ non mappé était posée sur la **clause** — juste pour un
+  `term`, faux pour un `multi_match` : un seul champ non mappé dans `fields`
+  vidait la clause entière, donc **0 document en silence** là où ES ignore ce
+  champ-là et cherche dans les autres. C'est le cas d'une barre de recherche qui
+  balaie un champ qu'aucun document n'a encore rempli. La tolérance se pose
+  toujours au plus près : sur l'élément que le moteur écarte, pas sur ce qui le
+  contient. Personne ne l'avait signalé — c'est d'avoir mesuré le **voisinage**
+  des deux manques signalés (`lenient`, `type: phrase`) qui l'a sorti.
 - **Un `[{…}]` accepté en silence.** `infer` rend `None` sur un objet comme sur
   un tableau d'objets ; seul le premier cas était testé, donc le second entrait
   dans `_source` sans entrer dans le mapping — invisible à la recherche.
@@ -245,6 +263,12 @@ filtres rapides en agrégations `filter` sur chaque appel aussi.
 Un tableau de bord qui filtre sur `now` (« en retard », « livré aujourd'hui »,
 « ce mois-ci ») se branche aussi : le date math est résolu côté serveur, et une
 borne de date est arrondie du bon côté.
+
+La **recherche libre** d'une application — un `multi_match` qui balaie
+identifiant, référence et nom du client d'un coup — passe maintenant telle
+quelle : `lenient` écarte les champs dont le type ne sait pas lire ce qu'on
+tape, `type: phrase` et `type: phrase_prefix` cherchent l'expression exacte ou
+son début, et un champ pas encore mappé n'annule plus la clause.
 
 Ce qui reste, par ordre de gêne pour un projet réel : `rest_total_hits_as_int`,
 `_msearch`, `_stats`, les templates, `PUT /{index}/_settings`, l'agrégation

@@ -40,6 +40,14 @@ pub struct EsError {
     /// une faute de frappe, seulement un mapping heterogene — la clause devient
     /// alors « ne correspond a rien » pour cet index-la, comme chez ES.
     pub champ_inconnu: Option<Box<str>>,
+    /// La valeur cherchee n'a pas le type du champ vise (« alice » sur un
+    /// `long`, une date illisible, une phrase a prefixe sur un `keyword`).
+    ///
+    /// C'est exactement ce que `lenient` couvre chez Elasticsearch : sans lui
+    /// l'erreur sort, avec lui le champ est simplement ecarte de la clause
+    /// (mesure contre ES 8.15 : voir [`crate::dsl`]). Aucune autre erreur n'est
+    /// avalee par `lenient` — un parametre non supporte reste un refus.
+    pub valeur_illisible: bool,
 }
 
 impl EsError {
@@ -51,6 +59,7 @@ impl EsError {
             extra: Vec::new(),
             racines: None,
             champ_inconnu: None,
+            valeur_illisible: false,
         }
     }
 
@@ -69,6 +78,14 @@ impl EsError {
     /// [`EsError::champ_inconnu`]).
     pub fn sur_champ_inconnu(mut self, champ: &str) -> Self {
         self.champ_inconnu = Some(champ.into());
+        self
+    }
+
+    /// Marque une erreur comme « la valeur n'a pas le type du champ » — la
+    /// seule famille d'erreurs que `lenient` avale (voir
+    /// [`EsError::valeur_illisible`]).
+    pub fn sur_valeur_illisible(mut self) -> Self {
+        self.valeur_illisible = true;
         self
     }
 

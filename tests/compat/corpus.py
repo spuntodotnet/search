@@ -146,6 +146,62 @@ def requetes(docs):
                   {"multi_match": {"query": deux, "fields": ["titre", "corps"],
                                    "tie_breaker": 0.3}}, None))
 
+    # --- multi_match : la recherche libre telle qu'une application l'ecrit
+    # Une barre « chercher par reference / nom / montant » balaie des champs de
+    # types differents : sans `lenient`, taper un mot fait echouer la recherche
+    # entiere parce qu'un des champs vises est numerique.
+    mixtes = ["titre", "corps", "marque", "prix", "stock", "cree_le"]
+    for mot in mots[:6]:
+        q.append((f"multi_match lenient champs mixtes [{mot}]",
+                  {"multi_match": {"query": mot, "fields": mixtes, "lenient": True}}, None))
+    q.append(("multi_match lenient, aucun champ ne sait lire la valeur",
+              {"multi_match": {"query": "appareil", "fields": ["prix", "stock", "cree_le"],
+                               "lenient": True}}, None))
+    q.append(("multi_match lenient sur une valeur lisible partout",
+              {"multi_match": {"query": "42", "fields": ["titre", "stock"],
+                               "lenient": True}}, None))
+    q.append(("multi_match lenient sous must_not (clause vide, rien d'exclu)", {"bool": {
+        "must": [{"match": {"corps": "appareil"}}],
+        "must_not": [{"multi_match": {"query": "appareil", "fields": ["prix"],
+                                      "lenient": True}}]}}, None))
+    # Un champ que le mapping ne connait pas est ecarte de la liste, pas fatal a
+    # la clause : sinon la barre de recherche rend 0 document en silence.
+    q.append(("multi_match champ non mappe + champ mappe",
+              {"multi_match": {"query": "appareil", "fields": ["titre", "jamais_mappe"]}}, None))
+    q.append(("multi_match champ non mappe seul",
+              {"multi_match": {"query": "appareil", "fields": ["jamais_mappe"]}}, None))
+
+    # `type: phrase` — la meme phrase dans chaque champ, puis dis_max.
+    for phrase in phrases[:6]:
+        q.append((f"multi_match phrase [{phrase}]",
+                  {"multi_match": {"query": phrase, "fields": ["titre", "corps"],
+                                   "type": "phrase"}}, None))
+        q.append((f"multi_match phrase tie_breaker [{phrase}]",
+                  {"multi_match": {"query": phrase, "fields": ["titre", "corps"],
+                                   "type": "phrase", "tie_breaker": 0.3}}, None))
+        q.append((f"multi_match phrase titre^2 [{phrase}]",
+                  {"multi_match": {"query": phrase, "fields": ["titre^2", "corps"],
+                                   "type": "phrase"}}, None))
+    q.append(("multi_match phrase sur un keyword",
+              {"multi_match": {"query": "Sony", "fields": ["marque", "categorie"],
+                               "type": "phrase"}}, [{"prix": "asc"}]))
+    q.append(("multi_match phrase lenient champs mixtes",
+              {"multi_match": {"query": phrases[0], "fields": mixtes,
+                               "type": "phrase", "lenient": True}}, None))
+
+    # `type: phrase_prefix` — la meme barre pendant la frappe.
+    for phrase in phrases[:6]:
+        tronquee = phrase[:-2]
+        q.append((f"multi_match phrase_prefix [{tronquee}]",
+                  {"multi_match": {"query": tronquee, "fields": ["titre", "corps"],
+                                   "type": "phrase_prefix"}}, None))
+    q.append(("multi_match phrase_prefix max_expansions",
+              {"multi_match": {"query": "reduction de bru", "fields": ["titre", "corps"],
+                               "type": "phrase_prefix", "max_expansions": 3}}, None))
+    q.append(("multi_match phrase_prefix lenient sur un keyword",
+              {"multi_match": {"query": "reduct", "fields": ["corps", "marque"],
+                               "type": "phrase_prefix", "lenient": True}}, None))
+
     # --- match_phrase : sur des suites qui existent vraiment
     for phrase in phrases:
         q.append((f"match_phrase [{phrase}]", {"match_phrase": {"corps": phrase}}, None))
