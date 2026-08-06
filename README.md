@@ -84,7 +84,7 @@ Sans rien compiler : chaque version publie un binaire statique Linux **x86-64**
 et **arm64** dans les [releases](../../releases) (archive `.tar.gz` + `.sha256`).
 
 ```bash
-tar xzf ferrite-v0.6.0-x86_64-unknown-linux-musl.tar.gz && ./ferrite
+tar xzf ferrite-v0.7.0-x86_64-unknown-linux-musl.tar.gz && ./ferrite
 ```
 
 Puis, avec le client officiel — sans une ligne de code spécifique à ferrite :
@@ -111,7 +111,7 @@ Les chiffres ci-dessous sont mesurés, pas visés — par
 chaque CI. Elasticsearch 8.15.0 est mesuré sur la même machine, dans les mêmes
 conditions.
 
-| | Elasticsearch 8.15.0 | ferrite 0.6.0 |
+| | Elasticsearch 8.15.0 | ferrite 0.7.0 |
 |---|---|---|
 | Image | 638 Mo | **8,2 Mo** |
 | Mémoire au repos | 1,02 Gio | **3,6 Mo** (RSS) |
