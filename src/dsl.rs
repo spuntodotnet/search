@@ -1121,32 +1121,8 @@ fn bool_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     }
 
     // Semantique ES : sans clause obligatoire, au moins un `should` doit matcher.
-    let min_should = match obj.get("minimum_should_match") {
-        None => {
-            if has_required || should_count == 0 {
-                0
-            } else {
-                1
-            }
-        }
-        Some(Value::Number(n)) => n
-            .as_i64()
-            .and_then(|v| usize::try_from(v).ok())
-            .ok_or_else(|| {
-                EsError::illegal_argument("[minimum_should_match] : entier positif attendu")
-            })?,
-        Some(Value::String(s)) => s.trim().parse::<usize>().map_err(|_| {
-            EsError::unsupported(format!(
-                "ferrite ne supporte que la forme entiere de [minimum_should_match] (recu \
-                 [{s}])"
-            ))
-        })?,
-        Some(v) => {
-            return Err(EsError::illegal_argument(format!(
-                "[minimum_should_match] : valeur {v} invalide"
-            )))
-        }
-    };
+    let defaut = usize::from(!has_required && should_count > 0);
+    let min_should = crate::msm::resoudre(obj.get("minimum_should_match"), should_count, defaut)?;
     if min_should > should_count {
         return Ok(Box::new(EmptyQuery));
     }
@@ -1768,17 +1744,15 @@ fn clause_nested(v: &Value, ctx: &QueryCtx, racine: &str) -> EsResult<Clause> {
             if !should.is_empty() {
                 // Meme regle que chez ES : `should` seul exige un match, `should`
                 // accompagne d'un `must` est facultatif sauf minimum explicite.
-                let defaut = usize::from(et.is_empty() && must_not.is_empty());
-                let minimum = match o.get("minimum_should_match") {
-                    None => defaut,
-                    Some(Value::Number(n)) => n.as_u64().unwrap_or(0) as usize,
-                    Some(_) => {
-                        return Err(EsError::unsupported(
-                            "ferrite ne supporte que [minimum_should_match] entier dans un \
-                             [nested]",
-                        ))
-                    }
-                };
+                // Un `must_not` **ne rend pas** le `should` facultatif : seule
+                // une clause obligatoire le fait. La version qui le croyait
+                // rendait des documents qu'ES ne rend pas, en silence — un
+                // element sans aucun `should` suffisait des lors qu'un *autre*
+                // element du meme document passait le pre-filtre (mesure :
+                // `tests/compat/sonde_msm.py`, document `ny`).
+                let defaut = usize::from(et.is_empty());
+                let minimum =
+                    crate::msm::resoudre(o.get("minimum_should_match"), should.len(), defaut)?;
                 if minimum > 0 {
                     et.push(Clause::Ou(should, minimum));
                 }

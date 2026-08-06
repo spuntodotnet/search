@@ -94,14 +94,15 @@ développement, pas de CI).
 
 | Commande | La question à laquelle elle répond |
 |---|---|
-| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**86/86**, dont l'export par `helpers.scan`, le date math et la recherche libre) |
-| `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (206/207, 0 écart réel) |
+| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**88/88**, dont l'export par `helpers.scan`, le date math et la recherche libre) |
+| `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (212/213, 0 écart réel) |
 | `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (45/46 ; le seul écart est `_cluster/health`, toujours vert par choix) |
 | `tests/compat/diff_aggs.py` | les mêmes agrégations ? (45/45, `filter` comprise) |
 | `tests/compat/diff_analyzers.py` | les mêmes tokens ? (7 analyzers, 210 textes, tous identiques) |
 | `tests/compat/diff_datemath.py` | les mêmes documents sur une **borne de date** — `now`, `now-1d/d`, `2026-03-15\|\|+1M`, et l'arrondi selon le côté de la borne ? (276/276, messages d'erreur compris ; 45/276 avant le chantier) |
 | `tests/compat/diff_motifs.py` | les mêmes documents sur un **motif** — `regexp`, `wildcard`, `prefix`, `match_phrase_prefix` ? (101/101) |
 | `tests/compat/diff_multi_index.py` | `index=["a","b"]`, `logs-*`, les alias : **les mêmes index visés, fusionnés pareil** ? (87/87, 0 écart, plus aucune divergence assumée ; `--calibrer` : 87/87 contre deux ES) |
+| `tests/compat/sonde_msm.py` | les mêmes documents sur un **`minimum_should_match`** — entier, pourcentage, formes négatives, conditions `3<90%`, et sous un `nested` ? (47/47) |
 | `tests/compat/releve_mots_vides.py` | quelle est **vraiment** la liste de mots vides d'un analyzer d'ES ? |
 | `tests/compat/conformance_es.py` | que dit la suite de tests **d'Elastic** ? (66 réussis, 325 refus explicites, 154 échecs / 643) |
 | `tests/compat/bench_vs_es.py` | mêmes résultats, **et à quel prix** ? (×3,6 en latence, ×6 en indexation) |
@@ -191,6 +192,18 @@ bouger**, pas après.
   type du champ » est marquée à la source (`EsError::valeur_illisible`), et
   c'est exactement celle qu'ES avale — mesuré, y compris sur la phrase à
   préfixe posée sur un `keyword`.
+- **`minimum_should_match` se calcule, il ne s'approxime pas**
+  ([`src/msm.rs`](src/msm.rs)). Ses quatre notations (entier, pourcentage, les
+  deux en négatif, et les conditions `3<90%`) tiennent en une trentaine de
+  lignes, mais aucun de leurs bords n'était devinable : l'arrondi est une
+  **troncature vers zéro** (donc `-33%` de 3 clauses les exige toutes les
+  trois, là où un plancher en exigerait 2), un minimum supérieur au nombre de
+  clauses n'est **pas** plafonné (`150%` ne rend rien), le séparateur des
+  conditions est l'espace, et le `%` doit être le dernier caractère. Tout vient
+  de `tests/compat/sonde_msm.py`, qui pose les mêmes questions aux deux
+  serveurs. C'est le paramètre que le README du projet cite comme exemple du
+  pire échec possible : l'ignorer rendrait **plus** de documents que demandé,
+  en silence.
 
 ## Les pièges rencontrés, pour ne pas les repayer
 
@@ -201,6 +214,16 @@ bouger**, pas après.
 - **Un pré-filtre doit être un sur-ensemble.** Le `nested` cassait sur les
   `must_not` : une négation évaluée à plat écarte un document dont une *autre*
   ligne satisfait la clause.
+- **Un `must_not` ne rend pas un `should` facultatif.** Le défaut de
+  `minimum_should_match` sous un `nested` valait 0 dès qu'il y avait un
+  `must_not` — le `should` était alors purement et simplement jeté. Un document
+  dont *une* ligne satisfait le `should` (mais tombe sous le `must_not`) et une
+  *autre* ne satisfait rien remontait quand même, là où ES ne le rend pas. Seule
+  une clause **obligatoire** (`must`, `filter`) rend le `should` facultatif,
+  parce que c'est Lucene qui l'exige : un booléen sans clause requise a besoin
+  d'au moins un `should`. Personne ne l'avait signalé — c'est d'avoir mesuré le
+  **voisinage** du `minimum_should_match` demandé, jusqu'à sa valeur par défaut,
+  qui l'a sorti.
 - **Écarter un index n'est pas neutre.** Sur un mapping hétérogène, la première
   version écartait l'index qui ignorait un champ de la requête. Vrai sur un
   `term` seul, faux dans un `bool` : `should: [term sur champ absent, match]`
@@ -268,7 +291,10 @@ La **recherche libre** d'une application — un `multi_match` qui balaie
 identifiant, référence et nom du client d'un coup — passe maintenant telle
 quelle : `lenient` écarte les champs dont le type ne sait pas lire ce qu'on
 tape, `type: phrase` et `type: phrase_prefix` cherchent l'expression exacte ou
-son début, et un champ pas encore mappé n'annule plus la clause.
+son début, et un champ pas encore mappé n'annule plus la clause. Le
+`minimum_should_match` qui l'accompagne — « au moins les trois quarts des
+critères », écrit `"75%"` — est calculé comme chez ES, dans ses quatre
+notations, sur un `bool` comme sous un `nested`.
 
 Ce qui reste, par ordre de gêne pour un projet réel : `rest_total_hits_as_int`,
 `_msearch`, `_stats`, les templates, `PUT /{index}/_settings`, l'agrégation

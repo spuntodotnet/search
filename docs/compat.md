@@ -386,7 +386,7 @@ suppression de données.
 | `dis_max` | ✅ | `queries`, `tie_breaker`, `boost` — voir [`src/dismax.rs`](../src/dismax.rs) |
 | `terms` | 🟡 | liste de valeurs, score constant comme chez ES. Sur un champ `date`, chaque valeur est une période, comme dans `term`. Les *terms lookup* sont ❌ |
 | `range` | 🟡 | `gte`, `gt`, `lte`, `lt`, `boost`, sur `keyword` / numérique / `date` / `boolean`. Sur un champ `date`, les bornes acceptent le **date math** (`now`, `now-1d/d`, `2026-03-15\|\|+1M`) et sont **arrondies selon leur côté** — voir [la section dédiée](#date-math-et-arrondi-des-bornes). `format` (lecture des bornes) ✅. Sur un champ `text` : ❌. `time_zone`, `relation` : ❌ |
-| `bool` | 🟡 | `must`, `should`, `filter`, `must_not`, `boost`, et `minimum_should_match` **sous forme entière** (les pourcentages et expressions sont ❌). `filter` ne contribue pas au score. Un `bool` qui n'a que des `must_not` matche tous les autres documents, comme chez ES |
+| `bool` | 🟡 | `must`, `should`, `filter`, `must_not`, `boost`, et `minimum_should_match` dans ses **quatre notations** — voir [la section dédiée](#minimum_should_match). `filter` ne contribue pas au score. Un `bool` qui n'a que des `must_not` matche tous les autres documents, comme chez ES. `_name` et `adjust_pure_negative` : ❌ |
 | `query_string`, `simple_query_string`, `function_score`, `boosting`, `intervals`, `terms_set`, `script`… | ❌ | `parsing_exception: unknown query [...]` |
 
 ### La recherche libre (`multi_match`)
@@ -408,7 +408,7 @@ premier client de ferrite.
 | `operator` sous `phrase` / `phrase_prefix` | 🟡 | accepté et sans effet — c'est ce que fait ES (mesuré) |
 
 Mesuré contre un ES 8.15.0, en documents **et en ordre**
-([`tests/compat/diff_relevance.py`](../tests/compat/diff_relevance.py), 207
+([`tests/compat/diff_relevance.py`](../tests/compat/diff_relevance.py), 213
 requêtes dont une quarantaine sur ces deux paramètres) :
 
 - avec `lenient`, la clause rend exactement ce que rendrait la même recherche
@@ -426,6 +426,41 @@ clause entière devienne vide : c'est ce que fait ES. C'était l'inverse jusqu'i
 — ferrite rendait **0 document en silence** dès qu'un des champs cités n'était
 pas mappé, le cas exact d'une barre de recherche qui balaie un champ qu'aucun
 document n'a encore rempli.
+
+### `minimum_should_match`
+
+Combien de clauses `should` doivent être satisfaites. Les quatre notations
+d'Elasticsearch sont acceptées, sur un `bool` comme sous un `nested` :
+
+| Notation | Exemple | Lecture |
+|---|---|---|
+| entier positif | `3` | exactement ce nombre |
+| entier négatif | `-1` | le nombre de clauses qu'on accepte de manquer |
+| pourcentage | `75%`, `-25%` | la fraction du total, **tronquée** |
+| conditions | `3<90%`, `2<-25% 9<-3` | « jusqu'à N clauses, toutes ; au-delà, cette formule » |
+
+Absent, le paramètre vaut 1 quand le `bool` n'a que des `should`, et 0 dès
+qu'il a une clause obligatoire (`must` ou `filter`) — un `must_not` **ne rend
+pas** le `should` facultatif.
+
+Les bords, tous mesurés contre un vrai ES 8.15
+([`tests/compat/sonde_msm.py`](../tests/compat/sonde_msm.py), **47/47
+identiques**), parce que ce sont exactement ceux que la documentation ne dit
+pas :
+
+- l'arrondi est une **troncature vers zéro**, pas un plancher : `-33%` de 3
+  clauses exige les 3 (`-0,99` tronqué vaut 0), là où un plancher en exigerait
+  2 ;
+- un minimum **supérieur** au nombre de clauses n'est pas ramené à ce nombre :
+  `150%` ou `5` sur 4 clauses ne rendent aucun document ;
+- le séparateur de la forme combinée est l'**espace**, pas la virgule ;
+- le `%` doit être le **dernier caractère** : `75%x` est une erreur ;
+- une clause `should` sur un champ **non mappé** compte quand même dans le
+  total : `100%` sur trois champs connus plus un inconnu ne rend rien.
+
+Toute notation qui n'est pas comprise est refusée en 400. C'est la règle du
+projet appliquée à son exemple canonique : ignorer ce paramètre rendrait **plus**
+de documents que demandé, sans que rien ne le signale.
 
 ### Corps et paramètres de `_search`
 
@@ -547,7 +582,7 @@ mesures : [`nested-join.md`](nested-join.md), `src/nested.rs`.
 | | État | Détail |
 |---|---|---|
 | `{"nested": {"path", "query"}}` | ✅ | `path` doit être un champ déclaré `nested` |
-| Clauses internes | 🟡 | `term`, `terms`, `match` (sur un champ non analysé), `range`, `exists`, `prefix`, `match_all`, `match_none`, et `bool` (`must` / `filter` / `should` + `minimum_should_match` entier / `must_not`) |
+| Clauses internes | 🟡 | `term`, `terms`, `match` (sur un champ non analysé), `range`, `exists`, `prefix`, `match_all`, `match_none`, et `bool` (`must` / `filter` / `should` + [`minimum_should_match`](#minimum_should_match) dans ses quatre notations / `must_not`). Le minimum s'y compte **par élément**, comme ES le compte par document caché |
 | Champ `text` dans une clause interne | ❌ | les colonnes portent la valeur, pas les termes analysés. Interroger son multi-field `.keyword`, ou sortir la clause du `nested` |
 | `nested` dans un `nested` | ❌ | il faudrait un indice d'élément par niveau |
 | `score_mode` | 🟡 | `none` et `avg` acceptés ; le score est celui de la requête interne évaluée à plat, il n'y a pas de score par élément. Les autres modes sont ❌ |

@@ -288,6 +288,22 @@ def requetes(docs):
                    {"term": {"actif": True}},
                    {"range": {"prix": {"lt": 100}}}],
         "minimum_should_match": 2}}, [{"prix": "asc"}]))
+    # Le meme minimum, ecrit en pourcentage : c'est la notation que produisent
+    # les barres de recherche (« au moins les trois quarts des mots »), et elle
+    # doit rendre les memes documents dans le meme ordre que sa forme entiere.
+    for spec in ["66%", "67%", "-1", "-34%", "2<50%"]:
+        q.append((f"bool should min={spec}", {"bool": {
+            "should": [{"term": {"categorie": "audio"}},
+                       {"term": {"actif": True}},
+                       {"range": {"prix": {"lt": 100}}}],
+            "minimum_should_match": spec}}, [{"prix": "asc"}]))
+    q.append(("bool must + should 50%", {"bool": {
+        "must": [{"match": {"corps": rng.choice(mots)}}],
+        "should": [{"term": {"categorie": "audio"}},
+                   {"term": {"marque": "Sony"}},
+                   {"range": {"note": {"gte": 3}}},
+                   {"range": {"stock": {"gt": 100}}}],
+        "minimum_should_match": "50%"}}, None))
     q.append(("bool multi_match + filtres", {"bool": {
         "must": [{"multi_match": {"query": "bluetooth reduction",
                                   "fields": ["titre^2", "corps"]}}],

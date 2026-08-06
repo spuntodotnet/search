@@ -31,6 +31,7 @@ pub mod dsl;
 pub mod engine;
 pub mod error;
 pub mod mapping;
+pub mod msm;
 pub mod nested;
 pub mod regexp;
 pub mod scroll;
