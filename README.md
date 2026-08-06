@@ -128,7 +128,7 @@ avec un mapping explicite, indexe des documents via `_bulk`, et les retrouve via
 `fuzzy`, `bool`, `constant_score`, `dis_max`, `match_all` — avec scoring BM25, `from`/`size`, tri, filtrage de
 `_source`, et le format de réponse exact d'ES.
 
-Sur un corpus de 600 documents et 207 requêtes, ferrite et un vrai
+Sur un corpus de 600 documents et 213 requêtes, ferrite et un vrai
 Elasticsearch 8.15 renvoient **les mêmes documents dans le même ordre**
 (`tests/compat/diff_relevance.py`).
 

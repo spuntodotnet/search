@@ -1642,6 +1642,105 @@ def recherche_bool(es):
 
 
 @scenario
+def minimum_should_match_en_notations(es):
+    """Les quatre notations de `minimum_should_match`.
+
+    Le cas signale par un vrai trafic applicatif : un `bool` a plusieurs
+    `should` et un « 75% », qui echouait en 400. Chaque attendu ci-dessous a
+    ete constate sur un ES 8.15 (`tests/compat/sonde_msm.py`).
+
+    Le decompte du corpus, sur ces quatre clauses : le document 1 les satisfait
+    toutes, le 3 en satisfait deux, le 2 une seule.
+    """
+    quatre = [{"term": {"auteur": "Maupassant"}},
+              {"term": {"dispo": True}},
+              {"range": {"annee": {"gte": 1886}}},
+              {"range": {"note": {"gte": 4.5}}}]
+
+    def avec(spec, clauses=None):
+        return sorted(ids(es.search(index=INDEX, query={"bool": {
+            "should": clauses or quatre, "minimum_should_match": spec}})))
+
+    assert avec("75%") == ["1"]
+    assert avec("50%") == ["1", "3"]
+    assert avec("25%") == ["1", "2", "3"]
+    assert avec("100%") == ["1"]
+    # L'arrondi est une troncature : 70% de 4 fait 2,8, donc 2.
+    assert avec("70%") == ["1", "3"]
+    # Un minimum plus grand que le nombre de clauses ne rend rien (il n'est
+    # pas ramene a ce nombre).
+    assert avec("150%") == []
+    # Un pourcentage negatif se compte a partir du total : « tout sauf un ».
+    assert avec("-25%") == ["1"]
+    assert avec(-1) == ["1"]
+    # Forme combinee : au-dela de 3 clauses, 90% ; ici 90% de 4 fait 3.
+    assert avec("3<90%") == ["1"]
+    # ... et en dessous de la borne, tout est exige.
+    assert avec("3<90%", quatre[:3]) == ["1"]
+    assert avec("67%", quatre[:3]) == ["1"]
+    assert avec("66%", quatre[:3]) == ["1", "2", "3"]
+
+    # Ce qui n'est pas une notation connue est refuse, jamais devine : ignorer
+    # le parametre rendrait plus de documents que demande, en silence.
+    for spec in ["abc", "75.5%", "2<25%,9<3", "75%x", 1.5]:
+        refused(lambda s=spec: es.search(index=INDEX, query={"bool": {
+            "should": quatre, "minimum_should_match": s}}),
+            contains="minimum_should_match")
+
+
+@scenario
+def minimum_should_match_sous_un_nested(es):
+    """Sous un `nested`, le minimum se compte **par element**.
+
+    C'est ce qui distingue `nested` d'un `object` : le document 2 satisfait les
+    deux clauses, mais jamais sur la meme ligne.
+    """
+    es.options(ignore_status=404).indices.delete(index="cmd3")
+    es.indices.create(index="cmd3", mappings={"properties": {
+        "lignes": {"type": "nested", "properties": {
+            "produit": {"type": "keyword"},
+            "quantite": {"type": "integer"},
+        }},
+    }})
+    es.bulk(operations=[
+        {"index": {"_index": "cmd3", "_id": "1"}},
+        {"lignes": [{"produit": "clou", "quantite": 12}]},
+        {"index": {"_index": "cmd3", "_id": "2"}},
+        {"lignes": [{"produit": "clou", "quantite": 3},
+                    {"produit": "vis", "quantite": 40}]},
+        {"index": {"_index": "cmd3", "_id": "3"}},
+        {"lignes": [{"produit": "vis", "quantite": 2}]},
+    ], refresh=True)
+
+    def hits(inner):
+        return sorted(h["_id"] for h in es.search(
+            index="cmd3", query={"nested": {"path": "lignes", "query": inner}},
+            size=10)["hits"]["hits"])
+
+    deux = [{"term": {"lignes.produit": "clou"}},
+            {"range": {"lignes.quantite": {"gte": 10}}}]
+    assert hits({"bool": {"should": deux,
+                          "minimum_should_match": "100%"}}) == ["1"]
+    assert hits({"bool": {"should": deux,
+                          "minimum_should_match": "50%"}}) == ["1", "2"]
+    assert hits({"bool": {"should": deux, "minimum_should_match": "-50%"}}) \
+        == ["1", "2"]
+
+    # Un `must_not` ne rend pas le `should` facultatif : il faut toujours un
+    # element qui satisfait les deux. Le document 3 n'a aucun `clou`, et la
+    # seule ligne `clou` du document 1 est trop grosse.
+    assert hits({"bool": {"should": [{"term": {"lignes.produit": "clou"}}],
+                          "must_not": [{"range": {"lignes.quantite": {"gte": 10}}}]}}) \
+        == ["2"]
+
+    refused(lambda: es.search(index="cmd3", query={"nested": {
+        "path": "lignes", "query": {"bool": {
+            "should": deux, "minimum_should_match": "abc"}}}}),
+        contains="minimum_should_match")
+    es.indices.delete(index="cmd3")
+
+
+@scenario
 def tri(es):
     r = es.search(index=INDEX, query={"match_all": {}}, sort=[{"annee": "desc"}])
     assert ids(r) == ["1", "2", "3"]
@@ -1886,10 +1985,9 @@ def parametre_de_clause_non_supporte_refuse(es):
     refused(lambda: es.search(index=INDEX, query={
         "match": {"titre": {"query": "bel", "fuzziness": "AUTO"}}}),
         contains="fuzziness")
-    refused(lambda: es.search(index=INDEX, query={"bool": {
-        "should": [{"term": {"auteur": "Zola"}}],
-        "minimum_should_match": "75%"}}),
-        contains="minimum_should_match")
+    refused(lambda: es.search(index=INDEX, query={"match": {
+        "titre": {"query": "bel", "zero_terms_query": "all"}}}),
+        contains="zero_terms_query")
 
 
 @scenario
