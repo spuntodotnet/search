@@ -49,13 +49,21 @@ garde entier — donc que *tout* texte français était mal indexé.
 Avant de conclure quoi que ce soit sur ferrite, **lancer l'outil contre un vrai
 Elasticsearch**. Le runner de conformance échouait sur 419 cas sur 643 à son
 premier passage : c'était le runner, pas ferrite. Quatre corrections plus tard,
-il passe 537/643 contre ES — et ses verdicts sur ferrite veulent enfin dire
+il passe 992/1173 contre ES — et ses verdicts sur ferrite veulent enfin dire
 quelque chose.
 
 Même piège deux fois : le nettoyage entre deux cas échouait (une fois sur un
 index en lecture seule côté ES, une fois sur un joker que ferrite refuse), et
 **tout cascadait ensuite en « index already exists »**. Un résultat massivement
 rouge est presque toujours un défaut d'outillage, pas une découverte.
+
+Même piège une troisième fois, plus discret, en passant de 22 à 107 domaines :
+un **template** laissé par un cas s'applique aux index que les suivants créent.
+`mget` lisait alors un `_type` là où le cas attendait `null`, et
+`indices.stats` refusait d'indexer — aucun de ces échecs ne ressemblait à une
+fuite d'état. Un index n'est pas le seul état qu'un cas laisse derrière lui :
+templates, pipelines, dépôts, snapshots et réglages de cluster survivent à la
+suppression des index. 46 échecs contre un vrai ES, ramenés à 3.
 
 ### 3. Séparer « ferrite est incomplet » de « ce n'est pas la même version »
 
@@ -65,12 +73,21 @@ contre trois serveurs (ferrite, ES 7.10.2, ES 8.15.0) exprès pour trancher ça.
 Sur 11 échecs d'un client 7.x, 6 casseraient à l'identique contre un ES 8 : ce
 sont des coûts de migration 7→8, pas des manques de ferrite.
 
-### 4. Prendre les tests des autres
+### 4. Prendre les tests des autres — et ne pas choisir lesquels
 
 Le harnais maison teste ce à quoi on a pensé. La suite REST d'Elasticsearch
 teste ce à quoi *Elastic* a pensé — et c'est elle qui a trouvé les deux vrais
 manques (création d'index à l'écriture, routes sans index) qu'aucun test écrit
 ici n'avait vus. Voir [`docs/conformance.md`](docs/conformance.md).
+
+Corollaire payé cher : **un dénominateur qu'on choisit soi-même ne prouve
+rien.** Le runner a porté une liste blanche de 22 domaines sur 107, avec une
+bonne raison (« les autres ne mesureraient rien ») et deux conséquences. La
+lisible : personne n'est obligé de croire un taux dont on a écrit le
+dénominateur. La coûteuse : les alias et `scroll` étaient dans les 85 domaines
+écartés, alors que ferrite déclare les tenir — et `indices.get_alias` échouait
+sur 10 de ses 31 cas. Le tri d'un cas se calcule sur ce que le serveur répond ;
+il ne s'obtient pas en n'envoyant pas la question.
 
 ### 5. Élargir le corpus avant de conclure « identique »
 
@@ -94,7 +111,7 @@ développement, pas de CI).
 
 | Commande | La question à laquelle elle répond |
 |---|---|
-| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**88/88**, dont l'export par `helpers.scan`, le date math et la recherche libre) |
+| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**89/89**, dont l'export par `helpers.scan`, le date math, la recherche libre et l'expression de noms d'alias) |
 | `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (212/213, 0 écart réel) |
 | `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (45/46 ; le seul écart est `_cluster/health`, toujours vert par choix) |
 | `tests/compat/diff_aggs.py` | les mêmes agrégations ? (45/45, `filter` comprise) |
@@ -104,7 +121,8 @@ développement, pas de CI).
 | `tests/compat/diff_multi_index.py` | `index=["a","b"]`, `logs-*`, les alias : **les mêmes index visés, fusionnés pareil** ? (87/87, 0 écart, plus aucune divergence assumée ; `--calibrer` : 87/87 contre deux ES) |
 | `tests/compat/sonde_msm.py` | les mêmes documents sur un **`minimum_should_match`** — entier, pourcentage, formes négatives, conditions `3<90%`, et sous un `nested` ? (47/47) |
 | `tests/compat/releve_mots_vides.py` | quelle est **vraiment** la liste de mots vides d'un analyzer d'ES ? |
-| `tests/compat/conformance_es.py` | que dit la suite de tests **d'Elastic** ? Son rapport est un fichier, pas une phrase : [`docs/conformance.json`](docs/conformance.json) (totaux, deux taux, détail par cas), régénéré par `--json`, tenu par un cliquet en CI (`--diff`) |
+| `tests/compat/sonde_alias.py` | les mêmes alias sur une **expression de noms** — liste, joker, exclusion, `_all` — et le même 404 ? (21/21, corps et message compris) |
+| `tests/compat/conformance_es.py` | que dit la suite de tests **d'Elastic** ? Ses **107 domaines**, sans liste blanche. Son rapport est un fichier, pas une phrase : [`docs/conformance.json`](docs/conformance.json) (totaux, deux taux, exclusions comptées, détail par cas), régénéré par `--json`, tenu par un cliquet en CI (`--diff`) |
 | `tests/compat/bench_vs_es.py` | mêmes résultats, **et à quel prix** ? (×3,6 en latence, ×6 en indexation) |
 | `tests/compat/probe_es7.py` | un **client** 7.x peut-il se brancher ? |
 | `tests/compat/diff_es7.py` | une **instance** 7.x peut-elle être reprise ? `--inventaire` liste ses types de champ |
@@ -297,10 +315,17 @@ critères », écrit `"75%"` — est calculé comme chez ES, dans ses quatre
 notations, sur un `bool` comme sous un `nested`.
 
 Ce qui reste, par ordre de gêne pour un projet réel : `rest_total_hits_as_int`,
-`_msearch`, `_stats`, les templates, `PUT /{index}/_settings`, l'agrégation
-`filters` (la sœur plurielle de `filter`), `time_zone` sur un `range` (refusé
-explicitement), les alias **filtrés** (`filter`, refusé explicitement), et les
-analyzers des autres langues.
+`_msearch`, `_stats`, les templates, `PUT /{index}/_settings`, `GET /_cat/aliases`
+et les colonnes `h` / `s` des `_cat`, `GET /{index}/_mapping/field/{champs}`,
+l'agrégation `filters` (la sœur plurielle de `filter`), `time_zone` sur un
+`range` (refusé explicitement), les alias **filtrés** (`filter`, refusé
+explicitement), et les analyzers des autres langues.
+
+Les trois derniers manques de cette liste à avoir été **mesurés** plutôt que
+supposés viennent des 85 domaines de conformance qu'on ne lançait pas :
+`_cat/aliases` (10 cas), `_mapping/field` (15 cas), et `remove_index` posé en
+même temps qu'un alias du même nom (1 cas). Voir
+[`docs/conformance.md`](docs/conformance.md).
 
 ## Ton, et forme des livrables
 

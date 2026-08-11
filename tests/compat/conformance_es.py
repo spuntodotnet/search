@@ -81,17 +81,6 @@ SPEC_DIR = os.path.abspath(os.path.join(RACINE, ".es-rest-spec"))
 VERSION = "7.10.2"
 TARBALL = f"https://github.com/elastic/elasticsearch/archive/refs/tags/v{VERSION}.tar.gz"
 
-# Les suites qui interrogent ce que ferrite pretend savoir faire. Les autres
-# (snapshots, ILM, cluster distribue, scripts...) sont hors perimetre declare :
-# les lancer ne mesurerait rien.
-SUITES_DECLAREES = [
-    "search", "search.aggregation", "count", "index", "create", "get",
-    "get_source", "exists", "delete", "update", "bulk", "mget",
-    "indices.create", "indices.delete", "indices.exists", "indices.get",
-    "indices.get_mapping", "indices.put_mapping", "indices.refresh",
-    "cluster.health", "cat.indices", "ping", "info",
-]
-
 # Les options a valeur consomment l'argument qui suit : sans ca, le chemin passe
 # a `--json` serait pris pour l'URL de la cible, et la mesure viserait un
 # serveur qui n'existe pas — en silence.
@@ -118,13 +107,14 @@ def lis_arguments(argv):
 POSITIONNELS, OPTIONS = lis_arguments(sys.argv[1:])
 URL = POSITIONNELS[0] if POSITIONNELS else "http://localhost:9200"
 VERBEUX = "--verbeux" in OPTIONS
-SUITES = (OPTIONS["--suites"].split(",") if "--suites" in OPTIONS
-          else list(SUITES_DECLAREES))
 SORTIE_JSON = OPTIONS.get("--json")
 RAPPORT_ANCIEN = OPTIONS.get("--diff")
+# Renseignes une fois la suite recuperee : on ne choisit pas les domaines, on
+# les lit sur le disque (voir `suites_disponibles`).
+SUITES = []
 # Un sous-ensemble de suites ne mesure pas la meme chose que la suite entiere :
 # le rapport le dit, et le cliquet refuse de trancher sur une mesure partielle.
-PARTIEL = SUITES != SUITES_DECLAREES
+PARTIEL = False
 
 # Le type d'erreur par lequel ferrite dit « Elasticsearch sait faire, moi pas ».
 REFUS_FERRITE = "not_implemented_in_ferrite_exception"
@@ -157,6 +147,20 @@ def assure_spec():
             with open(cible, "wb") as f:
                 f.write(t.extractfile(membre).read())
     print(f"   {sum(len(f) for _, _, f in os.walk(SPEC_DIR))} fichiers")
+
+
+def suites_disponibles():
+    """Tous les domaines de la suite, lus sur le disque.
+
+    Il n'y a **pas** de liste blanche ici, et c'est le point : choisir les
+    domaines qu'on joue, c'est choisir son denominateur. Un domaine entierement
+    hors perimetre (snapshots, ILM, scripts) doit apparaitre dans le rapport
+    avec ses cas ranges en « refuse » — visible plutot qu'absent. Le tri se fait
+    dans le rapport, a partir de ce que le serveur repond, pas par omission.
+    """
+    racine = os.path.join(SPEC_DIR, "test")
+    return sorted(n for n in os.listdir(racine)
+                  if os.path.isdir(os.path.join(racine, n)))
 
 
 # ---------------------------------------------------------------------------
@@ -278,6 +282,19 @@ CATCH = {
 # les exige est saute, et compte comme tel.
 FEATURES_CONNUES = {"stash_in_path", "default_shards"}
 
+# Les seules API qui posent un etat vivant **hors** d'un index — donc que la
+# suppression des index ne defait pas. La liste est exhaustive par construction :
+# un template, un pipeline, un depot ou un reglage de cluster ne peut naitre que
+# la. Voir `nettoie`.
+APIS_A_ETAT_GLOBAL = {
+    "indices.put_template", "indices.put_index_template",
+    "cluster.put_component_template", "ingest.put_pipeline",
+    "snapshot.create_repository", "cluster.put_settings",
+}
+# Vrai des qu'un cas a touche l'une d'elles : le nettoyage complet attend ce
+# signal plutot que de balayer a chaque cas ce qui n'existe pas.
+ETAT_GLOBAL_SALE = True
+
 
 # La suite est celle de la 7.10.2, et ses bornes `skip: version` sont ecrites
 # pour un serveur de cette version : c'est donc celle qu'on evalue, quel que
@@ -307,7 +324,17 @@ def dans_la_plage(plage):
 
 
 class Saute(Exception):
-    pass
+    """Le cas ne mesure pas la cible.
+
+    Deux motifs, qui ne disent pas la meme chose : `version`, c'est la suite
+    elle-meme qui declare le cas hors de la version evaluee ; `vocabulaire`,
+    c'est **ce runner** qui ne sait pas jouer le cas. Le second est une
+    exclusion de notre fait, donc a compter comme telle dans le rapport.
+    """
+
+    def __init__(self, raison, motif="vocabulaire"):
+        super().__init__(raison)
+        self.motif = motif
 
 
 class Echec(Exception):
@@ -390,7 +417,8 @@ def joue(serveur, actions, pile, corps_precedent=None):
                 raise Saute(f"exige {inconnues}")
             if "version" in arg:
                 if dans_la_plage(arg["version"]):
-                    raise Saute(arg.get("reason", f"skip {arg['version']}"))
+                    raise Saute(arg.get("reason", f"skip {arg['version']}"),
+                                "version")
             continue
 
         if verbe == "do":
@@ -403,6 +431,9 @@ def joue(serveur, actions, pile, corps_precedent=None):
             if not arg:
                 continue
             api, params = next(iter(arg.items()))
+            if api in APIS_A_ETAT_GLOBAL:
+                global ETAT_GLOBAL_SALE
+                ETAT_GLOBAL_SALE = True
             params = resous(params or {}, pile)
             try:
                 statut, reponse = serveur.appelle(api, params)
@@ -474,7 +505,55 @@ def nettoie(serveur):
     tombent en cascade sur « index already exists ». C'est ce qui a fait echouer
     ce runner contre un vrai Elasticsearch avant qu'il ne serve a mesurer quoi
     que ce soit.
+
+    Un index n'est pas le seul etat qu'un cas laisse derriere lui, et le reste
+    ment plus discretement. Un **template** survivant s'applique aux index que
+    les cas suivants creent : `mget` lisait alors un `_type` la ou le cas
+    attendait `null`, et `indices.stats` refusait d'indexer (« more than 1
+    type »), pour la seule raison qu'un template pose vingt cas plus tot donnait
+    un mapping `_doc` a tout index nomme `t*`. Rien dans ces echecs ne
+    ressemblait a une fuite d'etat — d'ou le nettoyage complet : templates,
+    pipelines, depots, et les reglages de cluster.
+
+    Cette seconde moitie ne se paye que quand elle sert. Seules les six API
+    listees dans `APIS_A_ETAT_GLOBAL` creent cet etat ; tant qu'aucune n'a ete
+    appelee, il n'y a rien a balayer, et le balayer quand meme coutait plus de
+    temps que la suite entiere n'en prend.
     """
+    global ETAT_GLOBAL_SALE
+    if not ETAT_GLOBAL_SALE:
+        return nettoie_les_index(serveur)
+    ETAT_GLOBAL_SALE = False
+    # Un depot desenregistre garde ses fichiers : le cas suivant qui reenregistre
+    # le meme chemin y retrouve les snapshots du precedent (« snapshot with the
+    # same name already exists »). Les snapshots se suppriment donc avant leur
+    # depot, et depot par depot — le joker n'est pas accepte sur le depot.
+    try:
+        _, depots = serveur.appelle("snapshot.get_repository", {})
+    except (KeyError, urllib.error.URLError, OSError):
+        depots = None
+    for nom in (depots if isinstance(depots, dict) and "error" not in depots else {}):
+        serveur.appelle("snapshot.delete", {"repository": nom, "snapshot": "*"})
+    for api, params in (
+        ("indices.delete_template", {"name": "*"}),
+        ("indices.delete_index_template", {"name": "*"}),
+        ("cluster.delete_component_template", {"name": "*"}),
+        ("ingest.delete_pipeline", {"id": "*"}),
+        ("snapshot.delete_repository", {"repository": "*"}),
+    ):
+        try:
+            serveur.appelle(api, params)
+        except (KeyError, urllib.error.URLError, OSError):
+            pass
+    # `"*": null` remet a leur defaut *tous* les reglages poses : sans ca, un
+    # `cluster.routing.allocation.enable: none` laisse par un cas se lit encore
+    # dans le cas suivant, qui le prend pour sa propre reponse.
+    serveur.appelle("cluster.put_settings", {
+        "body": {"transient": {"*": None}, "persistent": {"*": None}}})
+    return nettoie_les_index(serveur)
+
+
+def nettoie_les_index(serveur):
     serveur.appelle("indices.put_settings", {
         "index": "*", "expand_wildcards": "all", "ignore_unavailable": True,
         "body": {"index.blocks.read_only": None,
@@ -552,7 +631,40 @@ def taux_de(totaux):
     }
 
 
-def construis_rapport(cas, info):
+def exclusions_de(cas, with_types):
+    """Ce que le denominateur laisse dehors, et pourquoi.
+
+    Le denominateur (`totaux.cas`) porte tous les cas que ce runner sait jouer.
+    Restent deux exclusions, comptees ici plutot que passees sous silence : les
+    fichiers de l'API typee, jamais ouverts, et les cas que le vocabulaire du
+    runner ne sait pas jouer, ouverts mais non mesurables. La troisieme ligne
+    n'est pas une exclusion de notre fait — c'est la suite qui borne ses cas par
+    version — mais elle acheve de decomposer la colonne « sautes ».
+    """
+    def sautes(motif):
+        return sum(1 for c in cas
+                   if c["categorie"] == "saute" and c.get("motif") == motif)
+
+    return {
+        "fichiers_with_types": dict(with_types, pourquoi=
+            "l'API typee (/{index}/{type}/{id}) a disparu en 8.x : ces fichiers "
+            "decrivent une version d'ES que ferrite n'annonce pas. Jamais joues, "
+            "donc hors du denominateur"),
+        "cas_hors_vocabulaire": {
+            "cas": sautes("vocabulaire"),
+            "pourquoi": "le cas exige un verbe ou une feature que ce runner "
+                        "n'implemente pas. Comptes en « sautes »",
+        },
+        "cas_hors_version": {
+            "cas": sautes("version"),
+            "pourquoi": "la suite elle-meme borne le cas hors de la version "
+                        f"evaluee ({'.'.join(str(x) for x in VERSION_EVALUEE)}). "
+                        "Comptes en « sautes »",
+        },
+    }
+
+
+def construis_rapport(cas, info, with_types):
     totaux = {"cas": len(cas)}
     for categorie in CATEGORIES:
         totaux[PLURIEL[categorie]] = sum(1 for c in cas if c["categorie"] == categorie)
@@ -583,6 +695,7 @@ def construis_rapport(cas, info):
             },
             "suites": list(SUITES),
             "partiel": PARTIEL,
+            "exclusions": exclusions_de(cas, with_types),
         },
         "totaux": totaux,
         "taux": taux_de(totaux),
@@ -659,13 +772,29 @@ def repond(serveur):
         return None
 
 
+def compte_les_cas(chemin, yaml):
+    """Combien de cas porte un fichier qu'on ne joue pas.
+
+    Une exclusion sans son compte n'est pas verifiable : c'est la seule facon
+    de dire ce que le denominateur laisse dehors.
+    """
+    try:
+        with open(chemin) as f:
+            docs = [d for d in yaml.safe_load_all(f) if d]
+    except (OSError, yaml.YAMLError):
+        return 0
+    return sum(len(d) for d in docs if "setup" not in d and "teardown" not in d)
+
+
 def joue_la_suite(serveur, yaml):
     """Rejoue toutes les suites retenues et rend un enregistrement par cas."""
     resultats = []
+    with_types = {"fichiers": 0, "cas": 0}
 
-    def note(suite, fichier, nom, categorie, raison=""):
+    def note(suite, fichier, nom, categorie, raison="", motif=None):
         resultats.append({"suite": suite, "fichier": fichier, "cas": nom,
-                          "categorie": categorie, "raison": raison[:220]})
+                          "categorie": categorie, "raison": raison[:220]}
+                         | ({"motif": motif} if motif else {}))
 
     for suite in SUITES:
         dossier = os.path.join(SPEC_DIR, "test", suite)
@@ -674,11 +803,13 @@ def joue_la_suite(serveur, yaml):
         for fichier in sorted(os.listdir(dossier)):
             if not fichier.endswith(".yml"):
                 continue
+            chemin = os.path.join(dossier, fichier)
             if "_with_types" in fichier:
                 # L'API typee (`/{index}/{type}/{id}`) a disparu en 8.x : ces
                 # fichiers decrivent une version d'ES que ferrite n'annonce pas.
+                with_types["fichiers"] += 1
+                with_types["cas"] += compte_les_cas(chemin, yaml)
                 continue
-            chemin = os.path.join(dossier, fichier)
             with open(chemin) as f:
                 try:
                     docs = [d for d in yaml.safe_load_all(f) if d]
@@ -706,7 +837,7 @@ def joue_la_suite(serveur, yaml):
                     if VERBEUX:
                         print(f"  [refus] {suite}/{fichier}: {nom}\n          {e}")
                 except Saute as e:
-                    note(suite, fichier, nom, "saute", str(e))
+                    note(suite, fichier, nom, "saute", str(e), e.motif)
                 except (Echec, Exception) as e:  # noqa: BLE001
                     note(suite, fichier, nom, "echec", str(e))
                 finally:
@@ -714,7 +845,7 @@ def joue_la_suite(serveur, yaml):
                         joue(serveur, teardown, pile)
                     except Exception:  # noqa: BLE001
                         pass
-    return resultats
+    return resultats, with_types
 
 
 def affiche(rapport):
@@ -736,6 +867,13 @@ def affiche(rapport):
     print(f"\n  fidelite dans le perimetre declare : {pourcent(fidelite)}")
     print(f"  couverture brute                   : {pourcent(couverture)}")
 
+    ex = rapport["mesure"]["exclusions"]
+    print(f"\n  hors denominateur : {ex['fichiers_with_types']['cas']} cas dans "
+          f"{ex['fichiers_with_types']['fichiers']} fichiers *_with_types.yml")
+    print(f"  dont sautes       : {ex['cas_hors_vocabulaire']['cas']} hors "
+          f"vocabulaire du runner, {ex['cas_hors_version']['cas']} bornes par "
+          f"version")
+
     echecs = [c for c in rapport["cas"] if c["categorie"] == "echec"]
     if echecs:
         print(f"\n== {len(echecs)} echecs — ferrite repond, mais autre chose qu'ES")
@@ -746,12 +884,17 @@ def affiche(rapport):
 
 
 def main():
+    global SUITES, PARTIEL
     assure_spec()
     try:
         import yaml
     except ImportError:
         print("il manque PyYAML : pip install pyyaml", file=sys.stderr)
         return 2
+
+    toutes = suites_disponibles()
+    SUITES = OPTIONS["--suites"].split(",") if "--suites" in OPTIONS else toutes
+    PARTIEL = sorted(SUITES) != toutes
 
     ancien = None
     if RAPPORT_ANCIEN:
@@ -777,7 +920,8 @@ def main():
     print(f"== suite REST d'Elasticsearch {VERSION} (Apache 2.0), "
           f"{len(SUITES)} domaines\n")
 
-    rapport = construis_rapport(joue_la_suite(serveur, yaml), info)
+    resultats, with_types = joue_la_suite(serveur, yaml)
+    rapport = construis_rapport(resultats, info, with_types)
     affiche(rapport)
     nettoie(serveur)
 

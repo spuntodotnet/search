@@ -45,7 +45,7 @@ ne remonte pas.
 | `GET /_cat/indices`, `/_cat/indices/{index}` | 🟡 | texte aligné par défaut, `?format=json`, `?v`. `h`, `s`, `bytes` sont ❌ |
 | `GET /_cat/health` | 🟡 | idem |
 | `GET /_nodes`, `/_nodes/{spec}` | 🟡 | un nœud, champs d'identité et `http` ; pas de `settings`, `os`, `jvm`. `{spec}` accepte `_all`, `_local`, `_master` et l'identifiant du nœud ; les sous-ressources (`_nodes/stats`, `_nodes/hot_threads`…) sont ❌ |
-| Tout le reste de `_cluster/*`, `_cat/*`, `_nodes/*` | ❌ | `no handler found for uri [...]` |
+| Tout le reste de `_cluster/*`, `_cat/*`, `_nodes/*` | ❌ | `no handler found for uri [...]`. C'est la famille d'écarts la plus fournie de la suite de conformance d'Elastic — 229 de ses 400 échecs sont une route qu'ES a et que ferrite n'a pas |
 
 ## Index et mapping
 
@@ -58,6 +58,7 @@ ne remonte pas.
 | `HEAD /{index}` | ✅ | 200 dès que l'expression se résout, même sur zéro index — comme ES |
 | `GET /{index}` | ✅ | `aliases` / `mappings` / `settings`, une entrée par index visé |
 | `GET /{index}/_mapping` | ✅ | |
+| `GET /{index}/_mapping/field/{champs}` | ❌ | route absente (`no handler found`). ferrite a pourtant le mapping : c'est un manque, pas une impossibilité — 15 cas de la suite d'Elastic tombent dessus |
 | `GET /{index}/_settings` | ✅ | les réglages d'ES qu'un index a vraiment (`number_of_shards`, `uuid`, `creation_date`…), et `index.query.parse.allow_unmapped_fields` s'il a été posé |
 | `PUT /{index}/_settings` | ❌ | le seul réglage exploité se pose à la création : le changer à chaud demanderait de reconstruire la génération courante, et un client qui le croit changé chercherait longtemps |
 | `PUT /{index}/_mapping` | 🟡 | **ajoute** des champs (une nouvelle génération est construite). Changer le type d'un champ existant reste refusé, comme chez ES. Modifier `dynamic` : ❌ |
@@ -337,7 +338,7 @@ veulent dire quelque chose : 87/87.
 | `POST /_aliases` | 🟡 | `add`, `remove`, `remove_index` ; `index`/`indices` et `alias`/`aliases` au singulier comme au pluriel, motifs compris. Tout ou rien, comme chez ES — c'est ce qui rend une bascule atomique |
 | `PUT\|POST /{index}/_alias/{nom}` | ✅ | `{index}` est une expression, `{nom}` accepte une liste |
 | `DELETE /{index}/_alias/{nom}` | ✅ | `{nom}` accepte un motif |
-| `GET /_alias`, `/_alias/{nom}`, `/{index}/_alias`, `/{index}/_alias/{nom}` | ✅ | y compris le 404 « à corps de chaîne » d'ES (`{"error": "alias [x] missing", "status": 404}`) |
+| `GET /_alias`, `/_alias/{nom}`, `/{index}/_alias`, `/{index}/_alias/{nom}` | ✅ | `{nom}` est une **expression** (liste, jokers, exclusions, `_all`) — voir ci-dessous — y compris le 404 « à corps de chaîne » d'ES (`{"error": "alias [x] missing", "status": 404}`), qui porte quand même les alias trouvés |
 | `HEAD /_alias/{nom}`, `/{index}/_alias/{nom}` | ✅ | |
 | `aliases` dans `PUT /{index}` | ✅ | posé après la création ; un alias refusé annule la création plutôt que de laisser une demande à moitié faite |
 | `is_write_index` | ✅ | désigne l'index qui reçoit les écritures quand l'alias en couvre plusieurs |
@@ -352,6 +353,43 @@ Un index et un alias ne peuvent pas porter le même nom (la résolution ne saura
 plus lequel désigner) ; supprimer un index le retire de ses alias ; et
 `DELETE /{alias}` est refusé — effacer des index que le client n'a pas nommés
 n'est pas une suppression, c'est un accident.
+
+### L'expression de noms d'alias sur `GET /_alias/{nom}`
+
+`{nom}` s'écrit comme une expression d'index : `a,b*,-c`, plus `_all`. Elle se
+lit de gauche à droite — un terme ajoute ce qu'il désigne, un terme préfixé de
+`-` retire de ce qui a déjà été retenu — et le tiret n'est une exclusion qu'à
+partir du **deuxième** terme ; en première position il fait partie du nom.
+
+Le 404 obéit à une seconde règle, qui a l'air de contredire la première :
+
+```
+GET /_alias/test_alias_1,-test                       404  alias [-test] missing
+GET /_alias/test_blias_2,test_alias*,-test_alias_1   200
+```
+
+la même exclusion d'un alias qui existe, une fois refusée et une fois acceptée.
+Ce qui les sépare est le **joker**. Tant qu'aucun terme n'est un motif, ES
+compare la liste **écrite** à ce qu'il rend : une exclusion y figure telle
+quelle, tiret compris, donc elle manque. Dès qu'un motif apparaît, la liste
+écrite cède la place à une liste **résolue**, où ne restent que les noms ayant
+survécu aux exclusions. Le corps du 404 porte quand même les alias trouvés : il
+dit « il en manque », pas « il n'y a rien ».
+
+Rien de tout cela n'était devinable. `tests/compat/sonde_alias.py` pose 21
+expressions choisies pour séparer les lectures possibles de la règle :
+**21/21 identiques** à ES 8.15.0 et à ES 7.10.2, statut, corps et message
+compris.
+
+### Ce que la suite de conformance d'Elastic trouve encore sur les alias
+
+Mesuré, pas supposé — voir [`conformance.md`](conformance.md) :
+
+| Ce que c'est | État |
+|---|---|
+| `GET /_cat/aliases` | ❌ route absente (`no handler found`). Ses tests exigent aussi `h=`, `s=`, `help` sur les `_cat`, que ferrite n'a pas |
+| `remove_index` **et** `add` d'un alias du même nom dans le même `POST /_aliases` | ❌ refusé en 400 (« an index or data stream exists with the same name as the alias ») : ferrite applique les alias avant les suppressions, là où ES calcule tout l'état puis l'applique. C'est pourtant l'usage même de `remove_index` |
+| `GET /{index}/_alias` sur un index **fermé** | ❌ `_close` / `_open` sont hors périmètre |
 
 ## Réglages de cluster
 

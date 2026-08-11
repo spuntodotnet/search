@@ -316,27 +316,134 @@ async fn lire(
     p.done()?;
 
     let vus = collecter(&st, index.as_deref(), filtre.as_deref(), &opts)?;
-    // ES rend 404 quand un alias explicitement demande n'existe nulle part —
-    // et, sur cette route seulement, avec un `error` qui est une **chaine** et
-    // non l'objet habituel. Un client type le remarque.
-    if let Some(f) = &filtre {
-        if vus.values().all(|a| a.is_empty()) {
-            return Ok(Json(
-                StatusCode::NOT_FOUND,
-                json!({"error": format!("alias [{f}] missing"), "status": 404}),
-            ));
-        }
-    }
 
+    let mut rendus: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut out = Map::new();
     for (idx, aliases) in vus {
         let mut o = Map::new();
         for (nom, attache) in aliases {
+            rendus.insert(nom.clone());
             o.insert(nom, attache.to_json());
         }
         out.insert(idx, json!({"aliases": Value::Object(o)}));
     }
+
+    // ES rend 404 quand un alias explicitement demande n'est pas dans la
+    // reponse — et, sur cette route seulement, avec un `error` qui est une
+    // **chaine** et non l'objet habituel. Un client type le remarque. Le corps
+    // porte quand meme les alias trouves : le 404 dit « il en manque », pas
+    // « il n'y a rien ».
+    if let Some(f) = &filtre {
+        let manquants = manquants(&st.catalog.aliases().keys().cloned().collect(), f, &rendus);
+        if !manquants.is_empty() {
+            let mot = if manquants.len() == 1 {
+                "alias"
+            } else {
+                "aliases"
+            };
+            out.insert(
+                "error".into(),
+                Value::String(format!("{mot} [{}] missing", manquants.join(","))),
+            );
+            out.insert("status".into(), json!(404));
+            return Ok(Json(StatusCode::NOT_FOUND, Value::Object(out)));
+        }
+    }
     Ok(Json::ok(Value::Object(out)))
+}
+
+/// Les alias que designe une expression `a,b*,-c`.
+///
+/// L'expression se lit de gauche a droite : un terme ajoute ce qu'il designe,
+/// un terme prefixe de `-` retire de ce qui a deja ete retenu. Le tiret n'est
+/// une exclusion qu'a partir du **deuxieme** terme — en premiere position il
+/// fait partie du nom, comme partout ailleurs chez ES. C'est ce qui fait de
+/// `-test_alias_1,test_alias*,-test_alias_2` un 404 sur un nom qui n'existe pas
+/// plutot qu'une exclusion.
+fn selectionne(
+    tous: &std::collections::BTreeSet<String>,
+    expr: &str,
+) -> std::collections::BTreeSet<String> {
+    let mut retenus = std::collections::BTreeSet::new();
+    if designe_tout(expr) {
+        return tous.clone();
+    }
+    for (i, terme) in decouper(expr).iter().enumerate() {
+        let exclusion = i > 0 && terme.starts_with('-');
+        let motif = if exclusion {
+            &terme[1..]
+        } else {
+            terme.as_str()
+        };
+        for alias in tous.iter().filter(|a| glob_match(motif, a)) {
+            if exclusion {
+                retenus.remove(alias);
+            } else {
+                retenus.insert(alias.clone());
+            }
+        }
+    }
+    retenus
+}
+
+/// `_all` et `*` designent tous les alias : ES ne cherche alors aucun manquant.
+fn designe_tout(expr: &str) -> bool {
+    expr == "_all" || expr == "*"
+}
+
+/// Les noms d'alias qu'ES declare manquants pour l'expression `expr`.
+///
+/// Mesure, pas deduction : `test_alias_1,-test` rend 404 sur `-test` alors que
+/// `test_blias_2,test_alias*,-test_alias_1` rend 200 — la meme exclusion d'un
+/// alias qui existe. Ce qui les separe est le **joker**. Tant qu'aucun terme
+/// n'est un motif, ES compare la liste **ecrite** a ce qu'il rend : une
+/// exclusion y figure telle quelle, tiret compris, et manque forcement. Des
+/// qu'un motif apparait, la liste ecrite est remplacee par une liste
+/// **resolue** — les termes qui precedent le motif y entrent, les suivants s'y
+/// ajoutent ou s'en retirent — et ne contient donc plus que ce qui a survecu.
+///
+/// C'est ce basculement, et lui seul, qui explique les 21 reponses relevees sur
+/// ES 7.10.2 comme sur ES 8.15.0 (`tests/compat/sonde_alias.py`).
+fn manquants(
+    tous: &std::collections::BTreeSet<String>,
+    expr: &str,
+    rendus: &std::collections::BTreeSet<String>,
+) -> Vec<String> {
+    if designe_tout(expr) {
+        return Vec::new();
+    }
+    let termes = decouper(expr);
+    let mut resolue: Option<std::collections::BTreeSet<String>> = None;
+    for (i, terme) in termes.iter().enumerate() {
+        let exclusion = i > 0 && terme.starts_with('-');
+        let motif = if exclusion {
+            &terme[1..]
+        } else {
+            terme.as_str()
+        };
+        if !motif.contains('*') {
+            // Un nom simple avant le premier motif reste dans la liste ecrite :
+            // il n'y a pas encore de liste resolue ou l'inscrire.
+            if let Some(r) = resolue.as_mut() {
+                if exclusion {
+                    r.remove(motif);
+                } else {
+                    r.insert(motif.to_string());
+                }
+            }
+            continue;
+        }
+        let r = resolue.get_or_insert_with(|| termes[..i].iter().cloned().collect());
+        for alias in tous.iter().filter(|a| glob_match(motif, a)) {
+            if exclusion {
+                r.remove(alias);
+            } else {
+                r.insert(alias.clone());
+            }
+        }
+    }
+    let resolue = resolue.unwrap_or_else(|| termes.iter().cloned().collect());
+    resolue.difference(rendus).cloned().collect()
 }
 
 /// `HEAD /_alias/{nom}` et `HEAD /{index}/_alias/{nom}` — 200 ou 404.
@@ -374,7 +481,8 @@ fn collecter(
         Some(expr) => resoudre(&st.catalog, expr, opts)?,
         None => st.catalog.list(),
     };
-    let motifs: Option<Vec<String>> = filtre.map(decouper);
+    let tous: std::collections::BTreeSet<String> = registre.keys().cloned().collect();
+    let retenus: Option<std::collections::BTreeSet<String>> = filtre.map(|f| selectionne(&tous, f));
 
     let mut out = std::collections::BTreeMap::new();
     for idx in indices {
@@ -383,9 +491,9 @@ fn collecter(
             let Some(attache) = cibles.get(&idx.name) else {
                 continue;
             };
-            let retenu = match &motifs {
+            let retenu = match &retenus {
                 None => true,
-                Some(m) => m.iter().any(|p| glob_match(p, alias)),
+                Some(r) => r.contains(alias),
             };
             if retenu {
                 aliases.insert(alias.clone(), attache.clone());

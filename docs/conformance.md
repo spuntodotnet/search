@@ -11,6 +11,34 @@ python3 tests/compat/conformance_es.py http://localhost:9200 --json docs/conform
 python3 tests/compat/conformance_es.py http://localhost:9200 --diff docs/conformance.json
 ```
 
+## Le dénominateur n'est pas choisi
+
+Ce runner a longtemps porté une liste blanche de 22 domaines, choisis pour être
+ceux que ferrite prétend savoir faire. L'intention était bonne et le résultat
+mauvais : **un dénominateur qu'on choisit soi-même ne prouve rien.** Même
+documenté, « il n'a gardé que les suites qui l'arrangeaient » est la première
+chose qu'on lira. Et une suite écartée d'avance ne peut rien apprendre : `scroll`,
+les alias et `indices.get_field_mapping` exercent des capacités que ferrite
+déclare tenir, et n'étaient jamais lancés.
+
+Les 107 domaines de la suite sont donc **tous** joués. Le tri d'un cas — hors
+périmètre, non implémenté, échec — se calcule sur ce que le serveur répond ; il
+ne s'obtient pas en n'envoyant pas la question. Un domaine entièrement hors
+périmètre (snapshots, ILM, scripts, cluster distribué) apparaît dans le rapport
+avec ses cas rangés en `refus` ou en `echec` : visible plutôt qu'absent.
+
+Restent deux exclusions, et elles sont **comptées** dans le rapport
+(`mesure.exclusions`), pas seulement décrites :
+
+| Exclusion | Pourquoi |
+|---|---|
+| les fichiers `*_with_types.yml` | ils testent l'API typée (`/{index}/{type}/{id}`), supprimée en 8.x. Jamais ouverts, donc hors du dénominateur |
+| les cas que le vocabulaire du runner ne sait pas jouer | un verbe ou une `feature` du runner officiel qu'on n'implémente pas. Ouverts, comptés en `sautes` |
+
+Une troisième ligne y figure pour achever de décomposer la colonne `sautes` :
+les cas que la suite borne elle-même par `skip: {version}`. Ce n'est pas une
+exclusion de notre fait.
+
 ## La source des chiffres est un fichier, pas cette page
 
 Tant qu'un compte n'existe que sous forme de prose, personne d'autre ne peut le
@@ -101,10 +129,18 @@ lancé contre un **vrai Elasticsearch 7.10.2**, où il doit être quasi tout ver
 ```bash
 docker run -d --name es-ref-7102 -p 9202:9200 -e discovery.type=single-node \
   -e ES_JAVA_OPTS="-Xms512m -Xmx512m" \
+  -e node.attr.testattr=test -e path.repo=/tmp/repo \
   docker.elastic.co/elasticsearch/elasticsearch:7.10.2
+docker exec -u 0 es-ref-7102 sh -c 'mkdir -p /tmp/repo && chown 1000:0 /tmp/repo'
 python3 tests/compat/conformance_es.py http://localhost:9202 \
   --json docs/conformance-es7102.json
 ```
+
+Les deux réglages ne sont pas décoratifs : la suite d'Elastic est écrite pour
+**le cluster de test d'Elastic**, qui démarre avec `node.attr.testattr=test` et
+un `path.repo`. Sans eux, `cat.nodeattrs`, `cluster.put_settings` et les 22 cas
+de snapshot échouent contre un vrai ES — et on lirait ces échecs comme des
+défauts du runner.
 
 Le résultat est dans [`conformance-es7102.json`](conformance-es7102.json) — et
 les quelques échecs qui y restent sont ES lui-même (`distance_feature` sur
@@ -117,6 +153,29 @@ nettoyage qui échouait sur un index en lecture seule et faisait cascader 400
 faux échecs, le NDJSON pré-sérialisé, le paramètre `ignore` du runner officiel
 pris pour un paramètre d'API, et les réponses `_cat` en texte plutôt qu'en JSON.
 C'est exactement pour ça qu'on ne mesure pas avant d'avoir étalonné l'instrument.
+
+### Passer de 22 à 107 domaines a coûté quatre corrections de plus
+
+Toutes trouvées de la même façon, et toutes du même genre : **un cas laisse
+derrière lui un état que la suppression des index ne défait pas.**
+
+Le premier passage élargi rendait 949/1173 contre ES 7.10.2, 46 échecs. Après
+correction du runner : **992/1173, 3 échecs** — les 3 quirks du conteneur
+ci-dessus. Les 43 autres n'étaient pas des défauts d'ES.
+
+| Ce qui fuyait | Comment ça se présentait |
+|---|---|
+| un **template** posé vingt cas plus tôt | `mget` lisait un `_type` là où le cas attendait `null` ; `indices.stats` refusait d'indexer (« more than 1 type »). Rien qui ressemble à une fuite d'état : le template `t*` donnait un mapping `_doc` à tout index créé ensuite |
+| un **dépôt** désenregistré qui garde ses fichiers | le cas suivant qui réenregistre le même chemin y retrouve les snapshots du précédent (« snapshot with the same name already exists ») |
+| un **réglage de cluster** laissé en place | `cluster.put_settings` relisait le réglage du cas précédent |
+| des **snapshots** dans le dépôt | supprimés avant lui, et dépôt par dépôt : le joker n'est pas accepté sur le dépôt |
+
+Le nettoyage complet coûtait plus cher que la suite entière. Seules six API
+posent cet état (`indices.put_template`, `indices.put_index_template`,
+`cluster.put_component_template`, `ingest.put_pipeline`,
+`snapshot.create_repository`, `cluster.put_settings`) : le balayage attend
+qu'une d'elles ait été appelée. **3 min 26 pour 1173 cas**, contre 2 min 45
+pour 643 avant.
 
 ## Le cliquet, en CI
 
@@ -175,6 +234,32 @@ fonctionnalité peut être décisive pour un vrai projet — celle-ci débloque 
 export d'index — sans faire bouger un compteur global. C'est pour ça que ce
 fichier n'est pas la seule mesure du dépôt.
 
+### Ce que l'élargissement a montré
+
+Le dénominateur passe de 643 à 1173 cas. **530 cas apparaissent, et aucun cas
+déjà mesuré ne bouge** — les 22 domaines d'avant rendent exactement le même
+verdict qu'avant, ce qui est la preuve que l'élargissement n'a rien déplacé de
+ce qui était déjà mesuré. Les deux taux baissent, et c'est le but : ils portaient
+un dénominateur qu'on avait choisi.
+
+Sur le territoire que ferrite déclare tenir, l'élargissement a trouvé **un vrai
+manque, corrigé ici** : `indices.get_alias` échouait sur 10 de ses 31 cas —
+`_all` rendait 404, les exclusions n'étaient pas lues, et le 404 partiel rendait
+un corps vide. 9 des 10 sont corrigés (le dixième porte sur un index fermé, hors
+périmètre), et la règle mesurée est dans
+[`compat.md`](compat.md#lexpression-de-noms-dalias-sur-get-_aliasnom).
+
+Le reste de ce territoire tient : `indices.put_alias` 11/12, `indices.exists_alias`
+2/2, `indices.delete_alias` 11 refus explicites (tous sur le `routing` d'un
+alias, un ❌ assumé), `scroll` 11 refus explicites (`rest_total_hits_as_int`,
+`number_of_routing_shards`) et 1 échec (`search.default_keep_alive`, un réglage
+de cluster non reconnu).
+
+Deux manques francs sont **inscrits, pas corrigés** ici — ils demandent une
+route neuve, pas un correctif : `GET /_cat/aliases` (10 cas ; ses tests exigent
+aussi `h=`, `s=`, `help` sur les `_cat`) et `GET /{index}/_mapping/field/{champs}`
+(15 cas). Voir [`compat.md`](compat.md).
+
 ## Ce qui reste, et comment le compter soi-même
 
 Les familles d'échecs qui restent. Aucun compte n'est recopié ici — il serait
@@ -203,17 +288,16 @@ PY
 
 ## Ce que le runner ne fait pas
 
-- Les domaines hors périmètre déclaré ne sont pas lancés (snapshots, ILM,
-  cluster distribué, scripts…) : les mesurer ne dirait rien de plus que
-  `compat.md`. La liste exacte des domaines joués est dans le rapport
-  (`mesure.suites`).
 - Les fichiers `*_with_types.yml` sont ignorés : ils testent l'API typée
-  (`/{index}/{type}/{id}`), supprimée en 8.x.
+  (`/{index}/{type}/{id}`), supprimée en 8.x. Leur compte — fichiers **et** cas
+  — est dans `mesure.exclusions`.
+- Les cas qui exigent un verbe ou une `feature` que ce runner n'implémente pas
+  sont comptés en `sautes`, et leur nombre est isolé dans `mesure.exclusions`.
 - Les `skip: {version}` sont évalués **comme pour un serveur 7.10.2**, puisque
   c'est la version de la suite.
 - `--suites` ne joue qu'une partie des domaines : le rapport le dit
   (`mesure.partiel`), et `--diff` refuse alors de trancher — une mesure
   partielle ne se compare pas à la suite entière.
 
-Ces exclusions sont volontaires et comptées : le rapport porte le nombre exact
-de cas retenus, sur les ~1 500 du dépôt d'Elastic.
+Le rapport porte le nombre exact de cas joués, et ce qu'il laisse dehors avec
+son compte : une exclusion sans son compte n'est pas vérifiable.
