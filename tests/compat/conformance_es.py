@@ -651,6 +651,14 @@ def affiche_diff(ancien, chemin_ancien, diff):
               f"disparus : {len(diff['disparus'])}")
 
 
+def repond(serveur):
+    """La reponse de `GET /` de la cible, ou None si elle ne repond pas."""
+    try:
+        return serveur.appelle("info", {})[1] or {}
+    except (urllib.error.URLError, OSError):
+        return None
+
+
 def joue_la_suite(serveur, yaml):
     """Rejoue toutes les suites retenues et rend un enregistrement par cas."""
     resultats = []
@@ -761,7 +769,10 @@ def main():
             return 2
 
     serveur = Serveur(URL)
-    info = serveur.appelle("info", {})[1] or {}
+    info = repond(serveur)
+    if info is None:
+        print(f"la cible [{URL}] ne repond pas", file=sys.stderr)
+        return 2
     print(f"== cible : {URL} — {info.get('version', {}).get('number', '?')}")
     print(f"== suite REST d'Elasticsearch {VERSION} (Apache 2.0), "
           f"{len(SUITES)} domaines\n")
@@ -769,6 +780,14 @@ def main():
     rapport = construis_rapport(joue_la_suite(serveur, yaml), info)
     affiche(rapport)
     nettoie(serveur)
+
+    # Un serveur mort en cours de route rend tous les cas restants « echec » :
+    # le rapport serait faux, et un rapport faux ecrit sur disque se fait
+    # commiter. On refuse d'ecrire plutot que de mesurer un cadavre.
+    if repond(serveur) is None:
+        print(f"\nla cible [{URL}] a cesse de repondre pendant la mesure : "
+              f"rapport non ecrit", file=sys.stderr)
+        return 2
 
     if SORTIE_JSON:
         ecris_rapport(rapport, SORTIE_JSON)
