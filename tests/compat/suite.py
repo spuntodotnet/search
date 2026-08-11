@@ -980,6 +980,55 @@ def alias(es):
 
 
 @scenario
+def expression_de_noms_d_alias(es):
+    """Le nom d'alias est une expression : liste, joker, exclusion, `_all`.
+
+    Un client qui garde deux familles d'alias sous un meme prefixe les demande
+    par motif, et retire la ou les exceptions du lot. C'est aussi ce qui
+    decide du 404 — et ES y a deux regles qui se contredisent en apparence,
+    voir `tests/compat/sonde_alias.py`.
+    """
+    idx = "alx_index"
+    es.options(ignore_status=404).indices.delete(index=idx)
+    es.indices.create(index=idx, aliases={
+        "alx_lecture_1": {}, "alx_lecture_2": {},
+        "alx_ecriture_1": {}, "alx_ecriture_2": {}, "alx": {}})
+
+    def vus(nom):
+        # Un index sans alias retenu ne figure pas dans la reponse : `_alias`
+        # filtre est un « ce qui correspond », pas un « un objet par index ».
+        corps = es.indices.get_alias(name=nom).body
+        return set(corps.get(idx, {}).get("aliases", {}))
+
+    # `_all` et `*` designent tous les alias, sans 404.
+    assert vus("_all") == vus("*") == {
+        "alx_lecture_1", "alx_lecture_2", "alx_ecriture_1", "alx_ecriture_2", "alx"}
+
+    # Un motif, moins une exception : l'exclusion retire de ce qui precede.
+    assert vus("alx_lecture*,-alx_lecture_1") == {"alx_lecture_2"}
+    assert vus("alx_ecriture_2,alx_lecture*,-alx_lecture_1") == {
+        "alx_ecriture_2", "alx_lecture_2"}
+
+    # Un nom demande qui manque rend 404 — mais le corps porte quand meme les
+    # alias trouves : « il en manque », pas « il n'y a rien ». Sur cette route
+    # seulement, `error` est une **chaine** et non l'objet habituel : ce
+    # scenario ne peut donc pas passer par `refused`.
+    try:
+        es.indices.get_alias(name="alx_lecture_1,alx_absent")
+        raise AssertionError("l'appel aurait du rendre 404")
+    except ApiError as exc:
+        assert exc.meta.status == 404, exc.meta.status
+        assert exc.body["error"] == "alias [alx_absent] missing", exc.body
+        assert exc.body["status"] == 404, exc.body
+        assert set(exc.body[idx]["aliases"]) == {"alx_lecture_1"}, exc.body
+
+    # Un joker qui ne correspond a rien, lui, ne declenche pas de 404.
+    assert vus("alx_neant*") == set()
+
+    es.indices.delete(index=idx)
+
+
+@scenario
 def suppression_par_motif(es):
     """La purge d'une retention par index quotidien.
 
