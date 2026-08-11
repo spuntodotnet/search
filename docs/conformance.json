@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "mesure": {
-    "date": "2026-08-11T13:43:35Z",
-    "ferrite_sha": "02cd14910feb8e2b12a03b3b21102aa563dc3ed1",
+    "date": "2026-08-11T13:47:08Z",
+    "ferrite_sha": "8abfca578fb95f40df8b29cc183d7b7b2f42e115",
     "ferrite_arbre_modifie": false,
     "cible": {
       "url": "http://localhost:9200",
