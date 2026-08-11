@@ -18,18 +18,20 @@ Version d'API annoncée : **Elasticsearch 8.15.0** (`version.number`,
 `_nodes`). Toutes les réponses portent `X-elastic-product: Elasticsearch`.
 
 **La suite de conformance d'Elasticsearch elle-même** (`tests/compat/conformance_es.py`,
-643 cas de la 7.10.2 — la dernière version Apache 2.0) donne l'état d'ensemble :
+la 7.10.2 — la dernière version Apache 2.0) donne l'état d'ensemble. Ses chiffres
+ne sont pas recopiés ici : ils vivent dans [`conformance.json`](conformance.json),
+régénéré par le runner et commité (l'étalonnage du runner contre un vrai
+Elasticsearch 7.10.2 est dans [`conformance-es7102.json`](conformance-es7102.json)).
 
-| | ferrite | ES 7.10.2 (validation du runner) |
-|---|---|---|
-| réussis | 66 | 537 |
-| refusés explicitement (hors périmètre) | 325 | 0 |
-| sautés (version, fonctionnalité du runner) | 98 | 103 |
-| **échecs** | **154** | 3 |
+```bash
+python3 -c "import json; print(json.load(open('docs/conformance.json'))['totaux'])"
+```
 
-Les 154 échecs sont l'inventaire des écarts qui restent — les plus gros sont
-listés dans [`conformance.md`](conformance.md). C'est la mesure la moins
-complaisante du projet : les cas viennent d'Elastic, pas de nous.
+La colonne « échecs » de ce rapport est l'inventaire des écarts qui restent — les
+familles sont listées dans [`conformance.md`](conformance.md), avec de quoi les
+compter soi-même. C'est la mesure la moins complaisante du projet : les cas
+viennent d'Elastic, pas de nous. La CI en fait un cliquet : le nombre d'échecs
+ne remonte pas.
 
 ---
 

@@ -104,7 +104,7 @@ développement, pas de CI).
 | `tests/compat/diff_multi_index.py` | `index=["a","b"]`, `logs-*`, les alias : **les mêmes index visés, fusionnés pareil** ? (87/87, 0 écart, plus aucune divergence assumée ; `--calibrer` : 87/87 contre deux ES) |
 | `tests/compat/sonde_msm.py` | les mêmes documents sur un **`minimum_should_match`** — entier, pourcentage, formes négatives, conditions `3<90%`, et sous un `nested` ? (47/47) |
 | `tests/compat/releve_mots_vides.py` | quelle est **vraiment** la liste de mots vides d'un analyzer d'ES ? |
-| `tests/compat/conformance_es.py` | que dit la suite de tests **d'Elastic** ? (66 réussis, 325 refus explicites, 154 échecs / 643) |
+| `tests/compat/conformance_es.py` | que dit la suite de tests **d'Elastic** ? Son rapport est un fichier, pas une phrase : [`docs/conformance.json`](docs/conformance.json) (totaux, deux taux, détail par cas), régénéré par `--json`, tenu par un cliquet en CI (`--diff`) |
 | `tests/compat/bench_vs_es.py` | mêmes résultats, **et à quel prix** ? (×3,6 en latence, ×6 en indexation) |
 | `tests/compat/probe_es7.py` | un **client** 7.x peut-il se brancher ? |
 | `tests/compat/diff_es7.py` | une **instance** 7.x peut-elle être reprise ? `--inventaire` liste ses types de champ |

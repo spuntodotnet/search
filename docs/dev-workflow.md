@@ -46,7 +46,7 @@ Toutes depuis la **racine** du repo.
 | `python3 tests/compat/probe_es7.py [URL]` | Exerce le serveur avec le client officiel **7.x** (code écrit pour un ES 7) : ce qu'un projet resté en 7.10.2 peut brancher tel quel — voir [`compat-es7.md`](compat-es7.md) |
 | `python3 tests/compat/diff_es7.py [ferrite] [es7]` | Rejoue les **index, documents et requêtes** d'une instance **7.x** sur ferrite : ce qui s'héberge, ce qui se transfère, ce qui rend les mêmes résultats. Ne lit que l'instance (`--sans-ecriture` pour n'y rien écrire du tout ; `--inventaire URL` pour se contenter de lister les types de champ qu'elle utilise) |
 | `python3 tests/compat/bench_vs_es.py [ferrite] [es]` | **Le banc** : mêmes documents et mêmes requêtes des deux côtés, puis indexation, latence, débit — et le compte des requêtes qui rendent le même résultat. Sans client Elasticsearch (HTTP brut), donc utilisable contre un ES 7.x comme 8.x |
-| `python3 tests/compat/conformance_es.py [URL]` | Rejoue la **suite de conformance REST d'Elasticsearch lui-même** (7.10.2, Apache 2.0, téléchargée à la demande dans `.es-rest-spec/`). Les cas ne viennent pas de nous : c'est ce qui attrape ce qu'on ne sait pas qu'on ignore |
+| `python3 tests/compat/conformance_es.py [URL] [--json <fichier>] [--diff <ancien.json>]` | Rejoue la **suite de conformance REST d'Elasticsearch lui-même** (7.10.2, Apache 2.0, téléchargée à la demande dans `.es-rest-spec/`). Les cas ne viennent pas de nous : c'est ce qui attrape ce qu'on ne sait pas qu'on ignore. `--json` écrit le rapport machine ([`docs/conformance.json`](conformance.json), commité, source de tous les chiffres publiés) ; `--diff` dit ce qui a bougé depuis un rapport et fait du code de sortie un **cliquet** (celui du job CI `conformance`) |
 | `./tests/compat/measure_container.sh [tag]` | Ne construit rien, mesure une image déjà buildée : taille, RSS au repos, temps de démarrage |
 | `docker build -t ferrite .` | Image minimale (`scratch` + binaire statique musl) |
 
@@ -87,7 +87,7 @@ Deux comparateurs, qui ne cherchent pas la même chose :
 | `tests/compat/diff_multi_index.py` | les **expressions d'index** et le multi-index — `es.search(index=["a","b"])`, `logs-*`, `_all`, exclusions, alias, `is_write_index`, purge en `DELETE /logs-2026.07.*` : total, ordre des `(_index, _id)`, `_shards`, agrégations fusionnées, statut et type d'erreur |
 | `tests/compat/probe_es7.py` | ce qu'un **client 7.x** obtient — le même fichier se lance contre ferrite, contre un `elasticsearch:7.10.2` et contre un `elasticsearch:8.15.0`, ce qui sépare « ferrite est incomplet » de « la 8 a supprimé ça » |
 | `tests/compat/bench_vs_es.py` | le **prix** de ces résultats — indexation, latence médiane et p95, débit à 8 requêtes en vol, mesurés sur les deux serveurs avec la même batterie |
-| `tests/compat/conformance_es.py` | les tests d'**Elastic**, pas les nôtres — 643 cas de la suite REST officielle. Se valide en le lançant contre un vrai ES 7.10.2, où il doit être quasi tout vert (537/643, 3 échecs côté ES) |
+| `tests/compat/conformance_es.py` | les tests d'**Elastic**, pas les nôtres — la suite REST officielle. Se valide en le lançant contre un vrai ES 7.10.2, où il doit être quasi tout vert ([`docs/conformance-es7102.json`](conformance-es7102.json)). Sa mesure sur ferrite est [`docs/conformance.json`](conformance.json) : totaux, taux, détail par cas |
 | `tests/compat/diff_es7.py` | ce qu'une **instance 7.x** peut céder à ferrite — ses index (rejoués), ses documents (`scan` + `bulk`), ses requêtes (même corpus, même ordre attendu) |
 
 Le second est celui qui compte pour un moteur de recherche : l'ordre des
@@ -100,6 +100,13 @@ Le corpus vit dans `tests/compat/corpus.py` et est généré avec une graine fix
 un écart constaté est toujours reproductible.
 
 Ce sont des outils de développement, pas des tests de CI : ils exigent Docker.
+
+Une exception : `conformance_es.py` n'a besoin que de ferrite et de la suite
+d'Elastic (téléchargée, mise en cache). Le job CI `conformance` le lance donc
+contre un ferrite fraîchement compilé et compare au rapport commité
+`docs/conformance.json` — c'est un **cliquet** : il échoue si le nombre d'échecs
+augmente, ou si un cas passe de réussi à échec. Une PR qui fait bouger la mesure
+régénère le rapport dans la même PR (`--json docs/conformance.json`).
 
 ## La règle qui prime sur tout : la compatibilité se prouve, elle ne se déclare pas
 
