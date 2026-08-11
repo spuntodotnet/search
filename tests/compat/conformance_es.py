@@ -2,6 +2,8 @@
 """Faire passer a ferrite la suite de conformance **d'Elasticsearch lui-meme**.
 
     python3 tests/compat/conformance_es.py [URL] [--suites search,get,...] [--verbeux]
+    python3 tests/compat/conformance_es.py [URL] --json docs/conformance.json
+    python3 tests/compat/conformance_es.py [URL] --diff docs/conformance.json
 
 Le harnais de ce repo compare ferrite a un vrai ES sur des cas qu'on a ecrits.
 Celui-ci change de nature : les cas viennent d'**Elastic**, pas de nous. C'est
@@ -30,19 +32,46 @@ n'est code en dur ici.
 
 # Comment lire le resultat
 
-Trois colonnes, et c'est la distinction qui compte :
+Quatre categories, et c'est la distinction qui compte :
 
   reussis      ferrite repond comme Elasticsearch
   refuses      ferrite refuse explicitement (hors perimetre) — attendu, pas un bug
+  sautes       le cas ne mesure pas la cible (borne de version, verbe du runner)
   echecs       ferrite repond, mais autre chose : **ce sont les vrais**
+
+Deux taux en sortent, qui ne repondent pas a la meme question :
+
+  fidelite dans le perimetre declare   reussis / (reussis + echecs)
+      Parmi les cas qui n'exercent que des capacites declarees supportees —
+      ceux que ferrite n'a ni refuses ni fait sauter — combien passent.
+  couverture brute                     reussis / total
+      Quelle part de la suite d'Elastic passe, perimetre non declare compris.
+
+Le premier dit « est-ce que ce qu'on annonce est juste », le second « quelle
+part d'Elasticsearch on couvre ». Confondre les deux, c'est soit se flatter,
+soit se punir.
+
+# Le rapport machine
+
+`--json <fichier>` ecrit le rapport complet (metadonnees de la mesure, totaux,
+detail par suite et par cas). C'est lui la source : `docs/conformance.md` le
+cite plutot que de recopier des chiffres a la main, et la CI le compare.
+
+`--diff <ancien.json>` rejoue la suite puis dit ce qui a bouge depuis ce
+rapport : les cas passes d'echec a reussi, et l'inverse. Avec `--diff`, le code
+de sortie devient un **cliquet** : 0 tant que le nombre d'echecs n'augmente pas
+et qu'aucun cas ne regresse de reussi a echec, 1 sinon. Sans `--diff`, il vaut
+1 des qu'il reste un echec (le comportement d'origine).
 
 Le runner lui-meme se verifie en le lancant contre un vrai Elasticsearch 7.10.2 :
 il doit y etre pratiquement tout vert. Un runner qui echoue partout contre ES ne
 prouve rien sur ferrite.
 """
+import datetime
 import json
 import os
 import re
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -55,7 +84,7 @@ TARBALL = f"https://github.com/elastic/elasticsearch/archive/refs/tags/v{VERSION
 # Les suites qui interrogent ce que ferrite pretend savoir faire. Les autres
 # (snapshots, ILM, cluster distribue, scripts...) sont hors perimetre declare :
 # les lancer ne mesurerait rien.
-SUITES = [
+SUITES_DECLAREES = [
     "search", "search.aggregation", "count", "index", "create", "get",
     "get_source", "exists", "delete", "update", "bulk", "mget",
     "indices.create", "indices.delete", "indices.exists", "indices.get",
@@ -63,11 +92,39 @@ SUITES = [
     "cluster.health", "cat.indices", "ping", "info",
 ]
 
-ARGS = [a for a in sys.argv[1:] if not a.startswith("-")]
-URL = ARGS[0] if ARGS else "http://localhost:9200"
-VERBEUX = "--verbeux" in sys.argv
-if "--suites" in sys.argv:
-    SUITES = sys.argv[sys.argv.index("--suites") + 1].split(",")
+# Les options a valeur consomment l'argument qui suit : sans ca, le chemin passe
+# a `--json` serait pris pour l'URL de la cible, et la mesure viserait un
+# serveur qui n'existe pas — en silence.
+A_VALEUR = {"--suites", "--json", "--diff"}
+
+
+def lis_arguments(argv):
+    positionnels, options = [], {}
+    reste = list(argv)
+    while reste:
+        a = reste.pop(0)
+        if a in A_VALEUR:
+            if not reste:
+                print(f"il manque la valeur de [{a}]", file=sys.stderr)
+                sys.exit(2)
+            options[a] = reste.pop(0)
+        elif a.startswith("--"):
+            options[a] = True
+        else:
+            positionnels.append(a)
+    return positionnels, options
+
+
+POSITIONNELS, OPTIONS = lis_arguments(sys.argv[1:])
+URL = POSITIONNELS[0] if POSITIONNELS else "http://localhost:9200"
+VERBEUX = "--verbeux" in OPTIONS
+SUITES = (OPTIONS["--suites"].split(",") if "--suites" in OPTIONS
+          else list(SUITES_DECLAREES))
+SORTIE_JSON = OPTIONS.get("--json")
+RAPPORT_ANCIEN = OPTIONS.get("--diff")
+# Un sous-ensemble de suites ne mesure pas la meme chose que la suite entiere :
+# le rapport le dit, et le cliquet refuse de trancher sur une mesure partielle.
+PARTIEL = SUITES != SUITES_DECLAREES
 
 # Le type d'erreur par lequel ferrite dit « Elasticsearch sait faire, moi pas ».
 REFUS_FERRITE = "not_implemented_in_ferrite_exception"
@@ -439,28 +496,181 @@ def nettoie(serveur):
             serveur.appelle("indices.delete", {"index": nom, "ignore_unavailable": True})
 
 
-def main():
-    assure_spec()
-    try:
-        import yaml
-    except ImportError:
-        print("il manque PyYAML : pip install pyyaml", file=sys.stderr)
-        return 2
+# ---------------------------------------------------------------------------
+# Le rapport machine
+# ---------------------------------------------------------------------------
 
-    serveur = Serveur(URL)
-    info = serveur.appelle("info", {})[1] or {}
-    print(f"== cible : {URL} — {info.get('version', {}).get('number', '?')}")
-    print(f"== suite REST d'Elasticsearch {VERSION} (Apache 2.0), "
-          f"{len(SUITES)} domaines\n")
+# Version du format de `docs/conformance.json`. Un lecteur qui ne connait pas
+# le numero qu'il trouve doit s'arreter, pas deviner.
+SCHEMA = 1
 
-    total = reussis = refuses = sautes = 0
-    echecs = []
+CATEGORIES = ("reussi", "refus", "saute", "echec")
+PLURIEL = {"reussi": "reussis", "refus": "refuses", "saute": "sautes",
+           "echec": "echecs"}
+
+
+def cle_de(cas):
+    """L'identite d'un cas, stable d'un rapport a l'autre."""
+    return f"{cas['suite']}/{cas['fichier']}::{cas['cas']}"
+
+
+def etat_du_depot():
+    """Le commit mesure. Sans lui, un rapport ne dit pas de quoi il parle."""
+    def git(*a):
+        try:
+            r = subprocess.run(["git", "-C", RACINE, *a], capture_output=True,
+                               text=True, timeout=10)
+            return r.stdout.strip() if r.returncode == 0 else ""
+        except (OSError, subprocess.SubprocessError):
+            return ""
+    # `-uno` : un fichier non suivi (le venv, un rapport de travail) ne rend pas
+    # la mesure douteuse ; une modification non commitee, si.
+    return git("rev-parse", "HEAD") or None, bool(git("status", "--porcelain", "-uno"))
+
+
+def taux_de(totaux):
+    """Les deux taux, avec de quoi les recalculer — un taux sans son
+    denominateur n'est pas verifiable."""
+    perimetre = totaux["reussis"] + totaux["echecs"]
+    return {
+        "fidelite_perimetre": {
+            "valeur": round(totaux["reussis"] / perimetre, 4) if perimetre else None,
+            "numerateur": totaux["reussis"],
+            "denominateur": perimetre,
+            "definition": "reussis / (reussis + echecs) — parmi les cas qui "
+                          "n'exercent que des capacites declarees supportees "
+                          "(ni refuses explicitement, ni sautes), la part qui "
+                          "repond comme Elasticsearch",
+        },
+        "couverture_brute": {
+            "valeur": round(totaux["reussis"] / totaux["cas"], 4) if totaux["cas"] else None,
+            "numerateur": totaux["reussis"],
+            "denominateur": totaux["cas"],
+            "definition": "reussis / total — la part de la suite d'Elastic qui "
+                          "passe, perimetre non declare compris",
+        },
+    }
+
+
+def construis_rapport(cas, info):
+    totaux = {"cas": len(cas)}
+    for categorie in CATEGORIES:
+        totaux[PLURIEL[categorie]] = sum(1 for c in cas if c["categorie"] == categorie)
     par_suite = {}
+    for c in cas:
+        compte = par_suite.setdefault(
+            c["suite"], {PLURIEL[k]: 0 for k in CATEGORIES} | {"cas": 0})
+        compte[PLURIEL[c["categorie"]]] += 1
+        compte["cas"] += 1
+    sha, sale = etat_du_depot()
+    version_cible = (info.get("version") or {}) if isinstance(info, dict) else {}
+    return {
+        "schema": SCHEMA,
+        "mesure": {
+            "date": datetime.datetime.now(datetime.timezone.utc)
+                    .strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "ferrite_sha": sha,
+            "ferrite_arbre_modifie": sale,
+            "cible": {
+                "url": URL,
+                "version_annoncee": version_cible.get("number"),
+                "build_hash": version_cible.get("build_hash"),
+            },
+            "suite_rest": {
+                "version": VERSION,
+                "licence": "Apache-2.0",
+                "source": TARBALL,
+            },
+            "suites": list(SUITES),
+            "partiel": PARTIEL,
+        },
+        "totaux": totaux,
+        "taux": taux_de(totaux),
+        "par_suite": dict(sorted(par_suite.items())),
+        "cas": sorted(cas, key=lambda c: (c["suite"], c["fichier"], c["cas"])),
+    }
+
+
+def ecris_rapport(rapport, chemin):
+    with open(chemin, "w") as f:
+        json.dump(rapport, f, indent=2, ensure_ascii=False, sort_keys=False)
+        f.write("\n")
+    print(f"\n== rapport machine ecrit : {chemin}")
+
+
+def lis_rapport(chemin):
+    with open(chemin) as f:
+        ancien = json.load(f)
+    if ancien.get("schema") != SCHEMA:
+        raise ValueError(f"schema {ancien.get('schema')} inconnu "
+                         f"(ce runner ecrit le {SCHEMA})")
+    return ancien
+
+
+def compare_rapports(ancien, nouveau):
+    """Ce qui a bouge entre deux rapports, cas par cas."""
+    av = {cle_de(c): c for c in ancien["cas"]}
+    ap = {cle_de(c): c for c in nouveau["cas"]}
+    mouvements = {}
+    for cle in sorted(set(av) & set(ap)):
+        a, b = av[cle]["categorie"], ap[cle]["categorie"]
+        if a != b:
+            mouvements.setdefault(f"{a} -> {b}", []).append((cle, ap[cle].get("raison", "")))
+    return {
+        "mouvements": mouvements,
+        "corriges": mouvements.get("echec -> reussi", []),
+        "regressions": mouvements.get("reussi -> echec", []),
+        "apparus": sorted(set(ap) - set(av)),
+        "disparus": sorted(set(av) - set(ap)),
+        "echecs_avant": ancien["totaux"]["echecs"],
+        "echecs_apres": nouveau["totaux"]["echecs"],
+    }
+
+
+def affiche_diff(ancien, chemin_ancien, diff):
+    d = ancien["mesure"]
+    print(f"\n== diff contre {chemin_ancien} "
+          f"(mesure du {d.get('date')}, ferrite {(d.get('ferrite_sha') or '?')[:12]})")
+    delta = diff["echecs_apres"] - diff["echecs_avant"]
+    print(f"   echecs : {diff['echecs_avant']} -> {diff['echecs_apres']} "
+          f"({delta:+d})")
+    for titre, liste in (("corriges (echec -> reussi)", diff["corriges"]),
+                         ("regressions (reussi -> echec)", diff["regressions"])):
+        print(f"   {titre} : {len(liste)}")
+        for cle, raison in liste[: (10_000 if VERBEUX else 20)]:
+            print(f"     {cle}" + (f"\n         {raison}" if raison else ""))
+        if not VERBEUX and len(liste) > 20:
+            print(f"     ... et {len(liste) - 20} autres (--verbeux pour tout voir)")
+    autres = {k: len(v) for k, v in sorted(diff["mouvements"].items())
+              if k not in ("echec -> reussi", "reussi -> echec")}
+    if autres:
+        print("   autres mouvements : "
+              + ", ".join(f"{k} {n}" for k, n in autres.items()))
+    if diff["apparus"] or diff["disparus"]:
+        print(f"   cas apparus : {len(diff['apparus'])}, "
+              f"disparus : {len(diff['disparus'])}")
+
+
+def repond(serveur):
+    """La reponse de `GET /` de la cible, ou None si elle ne repond pas."""
+    try:
+        return serveur.appelle("info", {})[1] or {}
+    except (urllib.error.URLError, OSError):
+        return None
+
+
+def joue_la_suite(serveur, yaml):
+    """Rejoue toutes les suites retenues et rend un enregistrement par cas."""
+    resultats = []
+
+    def note(suite, fichier, nom, categorie, raison=""):
+        resultats.append({"suite": suite, "fichier": fichier, "cas": nom,
+                          "categorie": categorie, "raison": raison[:220]})
+
     for suite in SUITES:
         dossier = os.path.join(SPEC_DIR, "test", suite)
         if not os.path.isdir(dossier):
             continue
-        compte = [0, 0, 0, 0]  # reussis, refuses, sautes, echecs
         for fichier in sorted(os.listdir(dossier)):
             if not fichier.endswith(".yml"):
                 continue
@@ -473,7 +683,7 @@ def main():
                 try:
                     docs = [d for d in yaml.safe_load_all(f) if d]
                 except yaml.YAMLError as e:
-                    echecs.append((f"{suite}/{fichier}", "-", f"YAML illisible : {e}"))
+                    note(suite, fichier, "-", "echec", f"YAML illisible : {e}")
                     continue
             setup = teardown = []
             cas = []
@@ -485,47 +695,115 @@ def main():
                 else:
                     cas.extend(doc.items())
             for nom, actions in cas:
-                total += 1
                 pile = {}
                 nettoie(serveur)
                 try:
                     joue(serveur, setup, pile)
                     joue(serveur, actions, pile)
-                    reussis += 1
-                    compte[0] += 1
+                    note(suite, fichier, nom, "reussi")
                 except Refus as e:
-                    refuses += 1
-                    compte[1] += 1
+                    note(suite, fichier, nom, "refus", str(e))
                     if VERBEUX:
                         print(f"  [refus] {suite}/{fichier}: {nom}\n          {e}")
                 except Saute as e:
-                    sautes += 1
-                    compte[2] += 1
+                    note(suite, fichier, nom, "saute", str(e))
                 except (Echec, Exception) as e:  # noqa: BLE001
-                    echecs.append((f"{suite}/{fichier}", nom, str(e)[:220]))
-                    compte[3] += 1
+                    note(suite, fichier, nom, "echec", str(e))
                 finally:
                     try:
                         joue(serveur, teardown, pile)
                     except Exception:  # noqa: BLE001
                         pass
-        par_suite[suite] = compte
+    return resultats
 
+
+def affiche(rapport):
     print(f"  {'suite':<24} {'reussis':>8} {'refuses':>8} {'sautes':>7} {'echecs':>7}")
-    for suite, c in par_suite.items():
-        if sum(c):
-            print(f"  {suite:<24} {c[0]:>8} {c[1]:>8} {c[2]:>7} {c[3]:>7}")
-    print(f"  {'TOTAL':<24} {reussis:>8} {refuses:>8} {sautes:>7} {len(echecs):>7}"
-          f"   sur {total} cas")
+    for suite, c in rapport["par_suite"].items():
+        if c["cas"]:
+            print(f"  {suite:<24} {c['reussis']:>8} {c['refuses']:>8} "
+                  f"{c['sautes']:>7} {c['echecs']:>7}")
+    t = rapport["totaux"]
+    print(f"  {'TOTAL':<24} {t['reussis']:>8} {t['refuses']:>8} {t['sautes']:>7} "
+          f"{t['echecs']:>7}   sur {t['cas']} cas")
 
+    def pourcent(taux):
+        v = taux["valeur"]
+        return (f"{v * 100:.1f}% ({taux['numerateur']}/{taux['denominateur']})"
+                if v is not None else "n/a")
+
+    fidelite, couverture = rapport["taux"]["fidelite_perimetre"], rapport["taux"]["couverture_brute"]
+    print(f"\n  fidelite dans le perimetre declare : {pourcent(fidelite)}")
+    print(f"  couverture brute                   : {pourcent(couverture)}")
+
+    echecs = [c for c in rapport["cas"] if c["categorie"] == "echec"]
     if echecs:
         print(f"\n== {len(echecs)} echecs — ferrite repond, mais autre chose qu'ES")
-        for fichier, nom, detail in echecs[: (10_000 if VERBEUX else 40)]:
-            print(f"  {fichier}: {nom}\n      {detail}")
+        for c in echecs[: (10_000 if VERBEUX else 40)]:
+            print(f"  {c['suite']}/{c['fichier']}: {c['cas']}\n      {c['raison']}")
         if not VERBEUX and len(echecs) > 40:
             print(f"  ... et {len(echecs) - 40} autres (--verbeux pour tout voir)")
+
+
+def main():
+    assure_spec()
+    try:
+        import yaml
+    except ImportError:
+        print("il manque PyYAML : pip install pyyaml", file=sys.stderr)
+        return 2
+
+    ancien = None
+    if RAPPORT_ANCIEN:
+        # Lu **avant** la mesure : un rapport de reference illisible doit
+        # arreter le runner tout de suite, pas apres dix minutes de suite REST.
+        try:
+            ancien = lis_rapport(RAPPORT_ANCIEN)
+        except (OSError, ValueError, json.JSONDecodeError) as e:
+            print(f"rapport de reference illisible [{RAPPORT_ANCIEN}] : {e}",
+                  file=sys.stderr)
+            return 2
+        if PARTIEL or ancien["mesure"].get("partiel"):
+            print("--diff exige deux mesures completes : une selection de suites "
+                  "ne se compare pas a la suite entiere", file=sys.stderr)
+            return 2
+
+    serveur = Serveur(URL)
+    info = repond(serveur)
+    if info is None:
+        print(f"la cible [{URL}] ne repond pas", file=sys.stderr)
+        return 2
+    print(f"== cible : {URL} — {info.get('version', {}).get('number', '?')}")
+    print(f"== suite REST d'Elasticsearch {VERSION} (Apache 2.0), "
+          f"{len(SUITES)} domaines\n")
+
+    rapport = construis_rapport(joue_la_suite(serveur, yaml), info)
+    affiche(rapport)
     nettoie(serveur)
-    return 1 if echecs else 0
+
+    # Un serveur mort en cours de route rend tous les cas restants « echec » :
+    # le rapport serait faux, et un rapport faux ecrit sur disque se fait
+    # commiter. On refuse d'ecrire plutot que de mesurer un cadavre.
+    if repond(serveur) is None:
+        print(f"\nla cible [{URL}] a cesse de repondre pendant la mesure : "
+              f"rapport non ecrit", file=sys.stderr)
+        return 2
+
+    if SORTIE_JSON:
+        ecris_rapport(rapport, SORTIE_JSON)
+
+    if ancien is not None:
+        diff = compare_rapports(ancien, rapport)
+        affiche_diff(ancien, RAPPORT_ANCIEN, diff)
+        # Le cliquet : un cran qui ne remonte pas. Ce n'est pas une cible — il
+        # ne dit rien du nombre d'echecs, seulement qu'il n'a pas augmente.
+        if diff["echecs_apres"] > diff["echecs_avant"] or diff["regressions"]:
+            print("\n   cliquet : REGRESSION")
+            return 1
+        print("\n   cliquet : ok")
+        return 0
+
+    return 1 if rapport["totaux"]["echecs"] else 0
 
 
 if __name__ == "__main__":

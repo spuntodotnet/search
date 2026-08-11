@@ -61,6 +61,69 @@ jobs:
       - name: tests/compat/run.sh
         run: ./tests/compat/run.sh
 
+  conformance:
+    name: conformance (cliquet anti-regression)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: PyYAML (le runner lit les cas d'Elastic au format YAML)
+        run: pip install pyyaml
+
+      # La suite REST d'Elastic n'est pas recopiee dans ce depot : elle est
+      # telechargee a la demande. Le cache evite de retirer l'archive de la
+      # 7.10.2 a chaque CI ; la cle porte la version, donc en changer invalide.
+      - name: cache de la suite REST d'Elasticsearch
+        uses: actions/cache@v4
+        with:
+          path: .es-rest-spec
+          key: es-rest-spec-7.10.2
+
+      - name: cargo build --release
+        run: cargo build --release
+
+      # La sortie du serveur part dans un fichier : un processus d'arriere-plan
+      # qui garde la sortie de l'etape ouverte fait attendre le job.
+      - name: demarrage de ferrite
+        run: |
+          FERRITE_BIND=127.0.0.1:9200 FERRITE_DATA="$(mktemp -d)" \
+            nohup ./target/release/ferrite > ferrite.log 2>&1 &
+          pret=0
+          for _ in $(seq 1 100); do
+            if curl -sf http://127.0.0.1:9200/ >/dev/null; then pret=1; break; fi
+            sleep 0.2
+          done
+          if [ "$pret" != 1 ]; then
+            echo "ferrite n'a pas demarre" >&2
+            cat ferrite.log >&2
+            exit 1
+          fi
+          curl -s http://127.0.0.1:9200/ | head -c 200; echo
+
+      # Un cliquet, pas une cible : le job ne dit rien du nombre d'echecs, il
+      # echoue si ce nombre augmente ou si un cas passe de reussi a echec.
+      # `docs/conformance.json` est la reference, et il est commite.
+      - name: suite de conformance, compare au rapport commite
+        run: |
+          python3 tests/compat/conformance_es.py http://127.0.0.1:9200 \
+            --json conformance-mesure.json --diff docs/conformance.json
+
+      - name: rapport de la mesure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-mesure
+          path: conformance-mesure.json
+          if-no-files-found: warn
+
   docker:
     name: image minimale
     runs-on: ubuntu-latest

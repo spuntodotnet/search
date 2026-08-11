@@ -1,0 +1,4731 @@
+{
+  "schema": 1,
+  "mesure": {
+    "date": "2026-08-11T13:45:05Z",
+    "ferrite_sha": "02cd14910feb8e2b12a03b3b21102aa563dc3ed1",
+    "ferrite_arbre_modifie": false,
+    "cible": {
+      "url": "http://localhost:9202",
+      "version_annoncee": "7.10.2",
+      "build_hash": "747e1cc71def077253878a59143c1f785afa92b9"
+    },
+    "suite_rest": {
+      "version": "7.10.2",
+      "licence": "Apache-2.0",
+      "source": "https://github.com/elastic/elasticsearch/archive/refs/tags/v7.10.2.tar.gz"
+    },
+    "suites": [
+      "search",
+      "search.aggregation",
+      "count",
+      "index",
+      "create",
+      "get",
+      "get_source",
+      "exists",
+      "delete",
+      "update",
+      "bulk",
+      "mget",
+      "indices.create",
+      "indices.delete",
+      "indices.exists",
+      "indices.get",
+      "indices.get_mapping",
+      "indices.put_mapping",
+      "indices.refresh",
+      "cluster.health",
+      "cat.indices",
+      "ping",
+      "info"
+    ],
+    "partiel": false
+  },
+  "totaux": {
+    "cas": 643,
+    "reussis": 537,
+    "refuses": 0,
+    "sautes": 103,
+    "echecs": 3
+  },
+  "taux": {
+    "fidelite_perimetre": {
+      "valeur": 0.9944,
+      "numerateur": 537,
+      "denominateur": 540,
+      "definition": "reussis / (reussis + echecs) — parmi les cas qui n'exercent que des capacites declarees supportees (ni refuses explicitement, ni sautes), la part qui repond comme Elasticsearch"
+    },
+    "couverture_brute": {
+      "valeur": 0.8351,
+      "numerateur": 537,
+      "denominateur": 643,
+      "definition": "reussis / total — la part de la suite d'Elastic qui passe, perimetre non declare compris"
+    }
+  },
+  "par_suite": {
+    "bulk": {
+      "reussis": 15,
+      "refuses": 0,
+      "sautes": 2,
+      "echecs": 0,
+      "cas": 17
+    },
+    "cat.indices": {
+      "reussis": 12,
+      "refuses": 0,
+      "sautes": 1,
+      "echecs": 0,
+      "cas": 13
+    },
+    "cluster.health": {
+      "reussis": 10,
+      "refuses": 0,
+      "sautes": 1,
+      "echecs": 0,
+      "cas": 11
+    },
+    "count": {
+      "reussis": 4,
+      "refuses": 0,
+      "sautes": 0,
+      "echecs": 0,
+      "cas": 4
+    },
+    "create": {
+      "reussis": 9,
+      "refuses": 0,
+      "sautes": 0,
+      "echecs": 0,
+      "cas": 9
+    },
+    "delete": {
+      "reussis": 13,
+      "refuses": 0,
+      "sautes": 0,
+      "echecs": 0,
+      "cas": 13
+    },
+    "exists": {
+      "reussis": 4,
+      "refuses": 0,
+      "sautes": 0,
+      "echecs": 0,
+      "cas": 4
+    },
+    "get": {
+      "reussis": 10,
+      "refuses": 0,
+      "sautes": 1,
+      "echecs": 0,
+      "cas": 11
+    },
+    "get_source": {
+      "reussis": 7,
+      "refuses": 0,
+      "sautes": 2,
+      "echecs": 0,
+      "cas": 9
+    },
+    "index": {
+      "reussis": 14,
+      "refuses": 0,
+      "sautes": 0,
+      "echecs": 0,
+      "cas": 14
+    },
+    "indices.create": {
+      "reussis": 9,
+      "refuses": 0,
+      "sautes": 4,
+      "echecs": 0,
+      "cas": 13
+    },
+    "indices.delete": {
+      "reussis": 8,
+      "refuses": 0,
+      "sautes": 0,
+      "echecs": 0,
+      "cas": 8
+    },
+    "indices.exists": {
+      "reussis": 3,
+      "refuses": 0,
+      "sautes": 0,
+      "echecs": 0,
+      "cas": 3
+    },
+    "indices.get": {
+      "reussis": 12,
+      "refuses": 0,
+      "sautes": 0,
+      "echecs": 0,
+      "cas": 12
+    },
+    "indices.get_mapping": {
+      "reussis": 26,
+      "refuses": 0,
+      "sautes": 0,
+      "echecs": 0,
+      "cas": 26
+    },
+    "indices.put_mapping": {
+      "reussis": 12,
+      "refuses": 0,
+      "sautes": 0,
+      "echecs": 0,
+      "cas": 12
+    },
+    "indices.refresh": {
+      "reussis": 3,
+      "refuses": 0,
+      "sautes": 0,
+      "echecs": 0,
+      "cas": 3
+    },
+    "info": {
+      "reussis": 2,
+      "refuses": 0,
+      "sautes": 0,
+      "echecs": 0,
+      "cas": 2
+    },
+    "mget": {
+      "reussis": 18,
+      "refuses": 0,
+      "sautes": 1,
+      "echecs": 0,
+      "cas": 19
+    },
+    "ping": {
+      "reussis": 1,
+      "refuses": 0,
+      "sautes": 0,
+      "echecs": 0,
+      "cas": 1
+    },
+    "search": {
+      "reussis": 130,
+      "refuses": 0,
+      "sautes": 78,
+      "echecs": 2,
+      "cas": 210
+    },
+    "search.aggregation": {
+      "reussis": 198,
+      "refuses": 0,
+      "sautes": 12,
+      "echecs": 1,
+      "cas": 211
+    },
+    "update": {
+      "reussis": 17,
+      "refuses": 0,
+      "sautes": 1,
+      "echecs": 0,
+      "cas": 18
+    }
+  },
+  "cas": [
+    {
+      "suite": "bulk",
+      "fichier": "10_basic.yml",
+      "cas": "Array of objects",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "bulk",
+      "fichier": "10_basic.yml",
+      "cas": "Empty _id",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "bulk",
+      "fichier": "10_basic.yml",
+      "cas": "Empty _id with op_type create",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "bulk",
+      "fichier": "10_basic.yml",
+      "cas": "Return item-level error when no write index defined for an alias",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "bulk",
+      "fichier": "10_basic.yml",
+      "cas": "When setting require_alias flag",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "bulk",
+      "fichier": "10_basic.yml",
+      "cas": "When setting require_alias flag per request",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "bulk",
+      "fichier": "10_basic.yml",
+      "cas": "empty action",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "bulk",
+      "fichier": "20_list_of_strings.yml",
+      "cas": "List of strings",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "bulk",
+      "fichier": "30_big_string.yml",
+      "cas": "One big string",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "bulk",
+      "fichier": "40_source.yml",
+      "cas": "Source filtering",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "bulk",
+      "fichier": "50_refresh.yml",
+      "cas": "refresh=empty string immediately makes changes are visible in search",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "bulk",
+      "fichier": "50_refresh.yml",
+      "cas": "refresh=true immediately makes changes are visible in search",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "bulk",
+      "fichier": "50_refresh.yml",
+      "cas": "refresh=wait_for waits until changes are visible in search",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "bulk",
+      "fichier": "60_deprecated.yml",
+      "cas": "Deprecated parameters should fail in Bulk query",
+      "categorie": "saute",
+      "raison": "exige ['warnings']"
+    },
+    {
+      "suite": "bulk",
+      "fichier": "70_mix_typeless_typeful.yml",
+      "cas": "bulk without types on an index that has types",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "bulk",
+      "fichier": "80_cas.yml",
+      "cas": "Compare And Swap Sequence Numbers",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "bulk",
+      "fichier": "90_pipeline.yml",
+      "cas": "One request has pipeline and another not",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "cat.indices",
+      "fichier": "10_basic.yml",
+      "cas": "Test cat indices output",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "cat.indices",
+      "fichier": "10_basic.yml",
+      "cas": "Test cat indices output (no indices)",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "cat.indices",
+      "fichier": "10_basic.yml",
+      "cas": "Test cat indices output for closed index",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "cat.indices",
+      "fichier": "10_basic.yml",
+      "cas": "Test cat indices output for closed index (pre 7.2.0)",
+      "categorie": "saute",
+      "raison": "closed indices are replicated starting version 7.2.0"
+    },
+    {
+      "suite": "cat.indices",
+      "fichier": "10_basic.yml",
+      "cas": "Test cat indices sort",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "cat.indices",
+      "fichier": "10_basic.yml",
+      "cas": "Test cat indices using health status",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "cat.indices",
+      "fichier": "10_basic.yml",
+      "cas": "Test cat indices using wildcards",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "cat.indices",
+      "fichier": "10_basic.yml",
+      "cas": "Test cat indices with invalid health parameter",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "cat.indices",
+      "fichier": "20_hidden.yml",
+      "cas": "Test cat indices output for dot-hidden index and dot-prefixed pattern",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "cat.indices",
+      "fichier": "20_hidden.yml",
+      "cas": "Test cat indices output for hidden index",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "cat.indices",
+      "fichier": "20_hidden.yml",
+      "cas": "Test cat indices output with a hidden index with a hidden alias",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "cat.indices",
+      "fichier": "20_hidden.yml",
+      "cas": "Test cat indices output with a hidden index with a visible alias",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "cat.indices",
+      "fichier": "20_hidden.yml",
+      "cas": "Test cat indices output with a hidden index, dot-hidden alias and dot pattern",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "cluster.health",
+      "fichier": "10_basic.yml",
+      "cas": "cluster health basic test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "cluster.health",
+      "fichier": "10_basic.yml",
+      "cas": "cluster health basic test, one index",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "cluster.health",
+      "fichier": "10_basic.yml",
+      "cas": "cluster health basic test, one index with wait for active shards",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "cluster.health",
+      "fichier": "10_basic.yml",
+      "cas": "cluster health basic test, one index with wait for all active shards",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "cluster.health",
+      "fichier": "10_basic.yml",
+      "cas": "cluster health basic test, one index with wait for no initializing shards",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "cluster.health",
+      "fichier": "10_basic.yml",
+      "cas": "cluster health levels",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "cluster.health",
+      "fichier": "10_basic.yml",
+      "cas": "cluster health with closed index",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "cluster.health",
+      "fichier": "10_basic.yml",
+      "cas": "cluster health with closed index (pre 7.2.0)",
+      "categorie": "saute",
+      "raison": "closed indices are replicated starting version 7.2.0"
+    },
+    {
+      "suite": "cluster.health",
+      "fichier": "20_request_timeout.yml",
+      "cas": "cluster health request timeout on waiting for nodes",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "cluster.health",
+      "fichier": "20_request_timeout.yml",
+      "cas": "cluster health request timeout waiting for active shards",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "cluster.health",
+      "fichier": "30_indices_options.yml",
+      "cas": "cluster health with expand_wildcards",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "count",
+      "fichier": "10_basic.yml",
+      "cas": "count body without query element",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "count",
+      "fichier": "10_basic.yml",
+      "cas": "count with body",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "count",
+      "fichier": "10_basic.yml",
+      "cas": "count with empty body",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "count",
+      "fichier": "20_query_string.yml",
+      "cas": "count with query_string parameters",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "create",
+      "fichier": "10_with_id.yml",
+      "cas": "Create with ID",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "create",
+      "fichier": "15_without_id.yml",
+      "cas": "Create without ID",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "create",
+      "fichier": "35_external_version.yml",
+      "cas": "External version",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "create",
+      "fichier": "40_routing.yml",
+      "cas": "Routing",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "create",
+      "fichier": "60_refresh.yml",
+      "cas": "Refresh",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "create",
+      "fichier": "60_refresh.yml",
+      "cas": "When refresh url parameter is an empty string that means \"refresh immediately\"",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "create",
+      "fichier": "60_refresh.yml",
+      "cas": "refresh=wait_for waits until changes are visible in search",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "create",
+      "fichier": "70_nested.yml",
+      "cas": "Indexing a doc with No. nested objects less or equal to index.mapping.nested_objects.limit should succeed",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "create",
+      "fichier": "70_nested.yml",
+      "cas": "Indexing a doc with No. nested objects more than index.mapping.nested_objects.limit should fail",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "delete",
+      "fichier": "10_basic.yml",
+      "cas": "Basic",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "delete",
+      "fichier": "11_shard_header.yml",
+      "cas": "Delete check shard header",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "delete",
+      "fichier": "12_result.yml",
+      "cas": "Delete result field",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "delete",
+      "fichier": "20_cas.yml",
+      "cas": "Internal version",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "delete",
+      "fichier": "25_external_version.yml",
+      "cas": "External version",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "delete",
+      "fichier": "26_external_gte_version.yml",
+      "cas": "External GTE version",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "delete",
+      "fichier": "30_routing.yml",
+      "cas": "Routing",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "delete",
+      "fichier": "50_refresh.yml",
+      "cas": "Refresh",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "delete",
+      "fichier": "50_refresh.yml",
+      "cas": "When refresh url parameter is an empty string that means \"refresh immediately\"",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "delete",
+      "fichier": "50_refresh.yml",
+      "cas": "refresh=wait_for waits until changes are visible in search",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "delete",
+      "fichier": "60_missing.yml",
+      "cas": "Missing document with catch",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "delete",
+      "fichier": "60_missing.yml",
+      "cas": "Missing document with ignore",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "delete",
+      "fichier": "70_mix_typeless_typeful.yml",
+      "cas": "DELETE with typeless API on an index that has types",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "exists",
+      "fichier": "10_basic.yml",
+      "cas": "Basic",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "exists",
+      "fichier": "40_routing.yml",
+      "cas": "Routing",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "exists",
+      "fichier": "60_realtime_refresh.yml",
+      "cas": "Realtime Refresh",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "exists",
+      "fichier": "70_defaults.yml",
+      "cas": "Client-side default type",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "get",
+      "fichier": "100_mix_typeless_typeful.yml",
+      "cas": "GET with typeless API on an index that has types",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "get",
+      "fichier": "10_basic.yml",
+      "cas": "Basic",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "get",
+      "fichier": "15_default_values.yml",
+      "cas": "Default values",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "get",
+      "fichier": "20_stored_fields.yml",
+      "cas": "Stored fields",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "get",
+      "fichier": "40_routing.yml",
+      "cas": "Routing",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "get",
+      "fichier": "50_with_headers.yml",
+      "cas": "REST test with headers",
+      "categorie": "saute",
+      "raison": "exige ['headers', 'yaml']"
+    },
+    {
+      "suite": "get",
+      "fichier": "60_realtime_refresh.yml",
+      "cas": "Realtime Refresh",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "get",
+      "fichier": "70_source_filtering.yml",
+      "cas": "Source filtering",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "get",
+      "fichier": "80_missing.yml",
+      "cas": "Missing document with catch",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "get",
+      "fichier": "80_missing.yml",
+      "cas": "Missing document with ignore",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "get",
+      "fichier": "90_versions.yml",
+      "cas": "Versions",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "get_source",
+      "fichier": "10_basic.yml",
+      "cas": "Basic",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "get_source",
+      "fichier": "15_default_values.yml",
+      "cas": "Default values",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "get_source",
+      "fichier": "40_routing.yml",
+      "cas": "Routing",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "get_source",
+      "fichier": "60_realtime_refresh.yml",
+      "cas": "Realtime",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "get_source",
+      "fichier": "70_source_filtering.yml",
+      "cas": "Source filtering",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "get_source",
+      "fichier": "80_missing.yml",
+      "cas": "Missing document with catch",
+      "categorie": "saute",
+      "raison": "exige ['warnings']"
+    },
+    {
+      "suite": "get_source",
+      "fichier": "80_missing.yml",
+      "cas": "Missing document with ignore",
+      "categorie": "saute",
+      "raison": "exige ['warnings']"
+    },
+    {
+      "suite": "get_source",
+      "fichier": "85_source_missing.yml",
+      "cas": "Missing document source with catch",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "get_source",
+      "fichier": "85_source_missing.yml",
+      "cas": "Missing document source with ignore",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "index",
+      "fichier": "10_with_id.yml",
+      "cas": "Index with ID",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "index",
+      "fichier": "12_result.yml",
+      "cas": "Index result field",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "index",
+      "fichier": "15_without_id.yml",
+      "cas": "Index without ID",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "index",
+      "fichier": "20_optype.yml",
+      "cas": "Optype",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "index",
+      "fichier": "30_cas.yml",
+      "cas": "Compare And Swap Sequence Numbers",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "index",
+      "fichier": "35_external_version.yml",
+      "cas": "External version",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "index",
+      "fichier": "36_external_gte_version.yml",
+      "cas": "External GTE version",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "index",
+      "fichier": "40_routing.yml",
+      "cas": "Routing",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "index",
+      "fichier": "60_refresh.yml",
+      "cas": "Refresh",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "index",
+      "fichier": "60_refresh.yml",
+      "cas": "When refresh url parameter is an empty string that means \"refresh immediately\"",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "index",
+      "fichier": "60_refresh.yml",
+      "cas": "refresh=wait_for waits until changes are visible in search",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "index",
+      "fichier": "70_mix_typeless_typeful.yml",
+      "cas": "Index call that introduces new field mappings",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "index",
+      "fichier": "70_mix_typeless_typeful.yml",
+      "cas": "Index with typeless API on an index that has types",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "index",
+      "fichier": "70_require_alias.yml",
+      "cas": "Set require_alias flag",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.create",
+      "fichier": "10_basic.yml",
+      "cas": "Create index",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.create",
+      "fichier": "10_basic.yml",
+      "cas": "Create index with aliases",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.create",
+      "fichier": "10_basic.yml",
+      "cas": "Create index with explicit _doc type",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.create",
+      "fichier": "10_basic.yml",
+      "cas": "Create index with invalid mappings",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.create",
+      "fichier": "10_basic.yml",
+      "cas": "Create index with mappings",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.create",
+      "fichier": "10_basic.yml",
+      "cas": "Create index with settings",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.create",
+      "fichier": "10_basic.yml",
+      "cas": "Create index with wait_for_active_shards set to all",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.create",
+      "fichier": "10_basic.yml",
+      "cas": "Create index with write aliases",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.create",
+      "fichier": "10_basic.yml",
+      "cas": "Create index without soft deletes",
+      "categorie": "saute",
+      "raison": "exige ['warnings']"
+    },
+    {
+      "suite": "indices.create",
+      "fichier": "20_mix_typeless_typeful.yml",
+      "cas": "Create a typed index while there is a typeless template",
+      "categorie": "saute",
+      "raison": "exige ['allowed_warnings']"
+    },
+    {
+      "suite": "indices.create",
+      "fichier": "20_mix_typeless_typeful.yml",
+      "cas": "Create a typeless index while there is a typed template",
+      "categorie": "saute",
+      "raison": "exige ['allowed_warnings']"
+    },
+    {
+      "suite": "indices.create",
+      "fichier": "20_mix_typeless_typeful.yml",
+      "cas": "Implicitly create a typed index while there is a typeless template",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.create",
+      "fichier": "20_mix_typeless_typeful.yml",
+      "cas": "Implicitly create a typeless index while there is a typed template",
+      "categorie": "saute",
+      "raison": "exige ['allowed_warnings']"
+    },
+    {
+      "suite": "indices.delete",
+      "fichier": "10_basic.yml",
+      "cas": "Delete index against alias",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.delete",
+      "fichier": "10_basic.yml",
+      "cas": "Delete index against alias -  ignore unavailable - multiple indices",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.delete",
+      "fichier": "10_basic.yml",
+      "cas": "Delete index against alias -  multiple indices",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.delete",
+      "fichier": "10_basic.yml",
+      "cas": "Delete index against alias - ignore unavailable",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.delete",
+      "fichier": "10_basic.yml",
+      "cas": "Delete index against wildcard matching alias",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.delete",
+      "fichier": "10_basic.yml",
+      "cas": "Delete index against wildcard matching alias - disallow no indices",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.delete",
+      "fichier": "10_basic.yml",
+      "cas": "Delete index against wildcard matching alias - disallow no indices - multiple indices",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.delete",
+      "fichier": "10_basic.yml",
+      "cas": "Delete index against wildcard matching alias - multiple indices",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.exists",
+      "fichier": "10_basic.yml",
+      "cas": "Test indices.exists",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.exists",
+      "fichier": "10_basic.yml",
+      "cas": "Test indices.exists with local flag",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.exists",
+      "fichier": "20_read_only_index.yml",
+      "cas": "Test indices.exists on a read only index",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get",
+      "fichier": "10_basic.yml",
+      "cas": "Get index infos",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get",
+      "fichier": "10_basic.yml",
+      "cas": "Get index infos by default shouldn't return index creation date and version in readable format",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get",
+      "fichier": "10_basic.yml",
+      "cas": "Get index infos should work for wildcards",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get",
+      "fichier": "10_basic.yml",
+      "cas": "Get index infos with human settings should return index creation date and version in readable format",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get",
+      "fichier": "10_basic.yml",
+      "cas": "Missing index should return empty object if ignore_unavailable",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get",
+      "fichier": "10_basic.yml",
+      "cas": "Missing index should throw an Error",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get",
+      "fichier": "10_basic.yml",
+      "cas": "Should return an exception when querying invalid indices",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get",
+      "fichier": "10_basic.yml",
+      "cas": "Should return empty object if allow_no_indices",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get",
+      "fichier": "10_basic.yml",
+      "cas": "Should return test_index_2 and test_index_3 if expand_wildcards=open,closed",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get",
+      "fichier": "10_basic.yml",
+      "cas": "Should return test_index_2 if expand_wildcards=open",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get",
+      "fichier": "10_basic.yml",
+      "cas": "Should return test_index_3 if expand_wildcards=closed",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get",
+      "fichier": "10_basic.yml",
+      "cas": "Should throw error if allow_no_indices=false",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get_mapping",
+      "fichier": "10_basic.yml",
+      "cas": "Get /*/_mapping",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get_mapping",
+      "fichier": "10_basic.yml",
+      "cas": "Get /_all/_mapping",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get_mapping",
+      "fichier": "10_basic.yml",
+      "cas": "Get /_mapping",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get_mapping",
+      "fichier": "10_basic.yml",
+      "cas": "Get /index*/_mapping/",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get_mapping",
+      "fichier": "10_basic.yml",
+      "cas": "Get /index,index/_mapping",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get_mapping",
+      "fichier": "10_basic.yml",
+      "cas": "Get /{index}/_mapping",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get_mapping",
+      "fichier": "10_basic.yml",
+      "cas": "Get /{index}/_mapping with empty mappings",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get_mapping",
+      "fichier": "20_missing_type.yml",
+      "cas": "Existent and non-existent type returns 404 and the existing type",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get_mapping",
+      "fichier": "20_missing_type.yml",
+      "cas": "Existent and non-existent types returns 404 and the existing type",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get_mapping",
+      "fichier": "20_missing_type.yml",
+      "cas": "No type matching pattern returns 404",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get_mapping",
+      "fichier": "20_missing_type.yml",
+      "cas": "Non-existent type returns 404",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get_mapping",
+      "fichier": "20_missing_type.yml",
+      "cas": "Type missing when no types exist",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get_mapping",
+      "fichier": "30_missing_index.yml",
+      "cas": "Index missing, ignore_unavailable=true",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get_mapping",
+      "fichier": "30_missing_index.yml",
+      "cas": "Index missing, ignore_unavailable=true, allow_no_indices=false",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get_mapping",
+      "fichier": "30_missing_index.yml",
+      "cas": "Index missing, no indexes",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get_mapping",
+      "fichier": "30_missing_index.yml",
+      "cas": "Raise 404 when index doesn't exist",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get_mapping",
+      "fichier": "40_aliases.yml",
+      "cas": "Getting mapping for aliases should return the real index as key",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get_mapping",
+      "fichier": "50_wildcard_expansion.yml",
+      "cas": "Get test-* with defaults",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get_mapping",
+      "fichier": "50_wildcard_expansion.yml",
+      "cas": "Get test-* with wildcard_expansion=all",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get_mapping",
+      "fichier": "50_wildcard_expansion.yml",
+      "cas": "Get test-* with wildcard_expansion=closed",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get_mapping",
+      "fichier": "50_wildcard_expansion.yml",
+      "cas": "Get test-* with wildcard_expansion=none",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get_mapping",
+      "fichier": "50_wildcard_expansion.yml",
+      "cas": "Get test-* with wildcard_expansion=none allow_no_indices=false",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get_mapping",
+      "fichier": "50_wildcard_expansion.yml",
+      "cas": "Get test-* with wildcard_expansion=open",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get_mapping",
+      "fichier": "50_wildcard_expansion.yml",
+      "cas": "Get test-* with wildcard_expansion=open,closed",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get_mapping",
+      "fichier": "60_empty.yml",
+      "cas": "Check empty mapping when getting all mappings via /_mapping",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.get_mapping",
+      "fichier": "70_mix_typeless_typeful.yml",
+      "cas": "GET mapping with typeless API on an index that has types",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.put_mapping",
+      "fichier": "10_basic.yml",
+      "cas": "Create index with invalid mappings",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.put_mapping",
+      "fichier": "10_basic.yml",
+      "cas": "Put mappings with explicit _doc type",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.put_mapping",
+      "fichier": "10_basic.yml",
+      "cas": "Test Create and update mapping",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.put_mapping",
+      "fichier": "10_basic.yml",
+      "cas": "Update per-field metadata",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.put_mapping",
+      "fichier": "20_mix_typeless_typeful.yml",
+      "cas": "PUT mapping with _doc on an index that has types",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.put_mapping",
+      "fichier": "20_mix_typeless_typeful.yml",
+      "cas": "PUT mapping with typeless API on an index that has types",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.put_mapping",
+      "fichier": "all_path_options.yml",
+      "cas": "post a mapping with default analyzer twice",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.put_mapping",
+      "fichier": "all_path_options.yml",
+      "cas": "put mapping in * index",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.put_mapping",
+      "fichier": "all_path_options.yml",
+      "cas": "put mapping in _all index",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.put_mapping",
+      "fichier": "all_path_options.yml",
+      "cas": "put mapping in list of indices",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.put_mapping",
+      "fichier": "all_path_options.yml",
+      "cas": "put mapping in prefix* index",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.put_mapping",
+      "fichier": "all_path_options.yml",
+      "cas": "put one mapping per index",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.refresh",
+      "fichier": "10_basic.yml",
+      "cas": "Indices refresh test _all",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.refresh",
+      "fichier": "10_basic.yml",
+      "cas": "Indices refresh test empty array",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.refresh",
+      "fichier": "10_basic.yml",
+      "cas": "Indices refresh test no-match wildcard",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "info",
+      "fichier": "10_info.yml",
+      "cas": "Info",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "info",
+      "fichier": "20_lucene_version.yml",
+      "cas": "Lucene Version",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "mget",
+      "fichier": "10_basic.yml",
+      "cas": "Basic multi-get",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "mget",
+      "fichier": "11_default_index_type.yml",
+      "cas": "Default index/type",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "mget",
+      "fichier": "12_non_existent_index.yml",
+      "cas": "Non-existent index",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "mget",
+      "fichier": "13_missing_metadata.yml",
+      "cas": "Missing metadata",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "mget",
+      "fichier": "14_alias_to_multiple_indices.yml",
+      "cas": "Multi Get with alias that resolves to multiple indices",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "mget",
+      "fichier": "15_ids.yml",
+      "cas": "IDs",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "mget",
+      "fichier": "17_default_index.yml",
+      "cas": "Default index/type",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "mget",
+      "fichier": "20_stored_fields.yml",
+      "cas": "Stored fields",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "mget",
+      "fichier": "40_routing.yml",
+      "cas": "Routing",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "mget",
+      "fichier": "60_realtime_refresh.yml",
+      "cas": "Realtime Refresh",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "mget",
+      "fichier": "70_source_filtering.yml",
+      "cas": "Source filtering -  exclude field",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "mget",
+      "fichier": "70_source_filtering.yml",
+      "cas": "Source filtering -  ids and exclude field",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "mget",
+      "fichier": "70_source_filtering.yml",
+      "cas": "Source filtering -  ids and include field",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "mget",
+      "fichier": "70_source_filtering.yml",
+      "cas": "Source filtering -  ids and include nested field",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "mget",
+      "fichier": "70_source_filtering.yml",
+      "cas": "Source filtering -  ids and true/false",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "mget",
+      "fichier": "70_source_filtering.yml",
+      "cas": "Source filtering -  include field",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "mget",
+      "fichier": "70_source_filtering.yml",
+      "cas": "Source filtering -  include nested field",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "mget",
+      "fichier": "70_source_filtering.yml",
+      "cas": "Source filtering -  true/false",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "mget",
+      "fichier": "80_deprecated.yml",
+      "cas": "Deprecated parameters should fail in Multi Get query",
+      "categorie": "saute",
+      "raison": "exige ['warnings']"
+    },
+    {
+      "suite": "ping",
+      "fichier": "10_ping.yml",
+      "cas": "Ping",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "100_stored_fields.yml",
+      "cas": "Stored fields",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "10_source_filtering.yml",
+      "cas": "_source field1 field2",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "10_source_filtering.yml",
+      "cas": "_source filtering on bigint",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "10_source_filtering.yml",
+      "cas": "_source in body",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "10_source_filtering.yml",
+      "cas": "_source include on bigint",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "10_source_filtering.yml",
+      "cas": "_source includes and excludes",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "10_source_filtering.yml",
+      "cas": "_source.include field1 field2",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "10_source_filtering.yml",
+      "cas": "_source: false",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "10_source_filtering.yml",
+      "cas": "_source: true",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "10_source_filtering.yml",
+      "cas": "_source_excludes",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "10_source_filtering.yml",
+      "cas": "_source_includes",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "10_source_filtering.yml",
+      "cas": "_source_includes and _source in body",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "10_source_filtering.yml",
+      "cas": "docvalue_fields",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "10_source_filtering.yml",
+      "cas": "docvalue_fields - double",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "10_source_filtering.yml",
+      "cas": "docvalue_fields as url param",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "10_source_filtering.yml",
+      "cas": "docvalue_fields with default format",
+      "categorie": "saute",
+      "raison": "exige ['warnings']"
+    },
+    {
+      "suite": "search",
+      "fichier": "10_source_filtering.yml",
+      "cas": "docvalue_fields with explicit format",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "10_source_filtering.yml",
+      "cas": "fields in body",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "10_source_filtering.yml",
+      "cas": "fields in body with source",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "10_source_filtering.yml",
+      "cas": "multiple docvalue_fields",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "10_source_filtering.yml",
+      "cas": "no filtering",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "110_field_collapsing.yml",
+      "cas": "field collapsing",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "110_field_collapsing.yml",
+      "cas": "field collapsing and from",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "110_field_collapsing.yml",
+      "cas": "field collapsing and inner_hits",
+      "categorie": "saute",
+      "raison": "Awaits fix: https://github.com/elastic/elasticsearch/issues/52416"
+    },
+    {
+      "suite": "search",
+      "fichier": "110_field_collapsing.yml",
+      "cas": "field collapsing and multiple inner_hits",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "110_field_collapsing.yml",
+      "cas": "field collapsing and rescore",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "110_field_collapsing.yml",
+      "cas": "field collapsing and scroll",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "110_field_collapsing.yml",
+      "cas": "field collapsing and search_after",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "110_field_collapsing.yml",
+      "cas": "field collapsing on a field alias",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "110_field_collapsing.yml",
+      "cas": "field collapsing, inner_hits and maxConcurrentGroupRequests",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "110_field_collapsing.yml",
+      "cas": "field collapsing, inner_hits and seq_no",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "110_field_collapsing.yml",
+      "cas": "field collapsing, inner_hits and version",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "110_field_collapsing.yml",
+      "cas": "field collapsing, inner_hits, and fields",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "110_field_collapsing.yml",
+      "cas": "no hits and inner_hits",
+      "categorie": "saute",
+      "raison": "Awaits fix: https://github.com/elastic/elasticsearch/issues/52416"
+    },
+    {
+      "suite": "search",
+      "fichier": "110_field_collapsing.yml",
+      "cas": "no hits and inner_hits max_score null",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "115_multiple_field_collapsing.yml",
+      "cas": "two levels fields collapsing",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "120_batch_reduce_size.yml",
+      "cas": "batched_reduce_size 2 with 5 shards",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "120_batch_reduce_size.yml",
+      "cas": "batched_reduce_size lower limit",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "140_pre_filter_search_shards.yml",
+      "cas": "pre_filter_shard_size with invalid parameter",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "140_pre_filter_search_shards.yml",
+      "cas": "pre_filter_shard_size with shards that have no hit",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "150_rewrite_on_coordinator.yml",
+      "cas": "Ensure that we fetch the document only once",
+      "categorie": "saute",
+      "raison": "exige ['allowed_warnings']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on _id field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on _index field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on _routing field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on _seq_no field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on _source field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on _type field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on _version field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on binary field in empty index",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on boolean field in empty index",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on byte field in empty index",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on date field in empty index",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on double field in empty index",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on float field in empty index",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on geo_point field in empty index",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on half_float field in empty index",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on integer field in empty index",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on ip field in empty index",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on keyword field in empty index",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on long field in empty index",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped binary field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped binary field with no doc values",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped boolean field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped boolean field with no doc values",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped byte field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped byte field with no doc values",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped date field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped date field with no doc values",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped double field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped double field with no doc values",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped float field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped float field with no doc values",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped geo_point field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped geo_point field with no doc values",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped half_float field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped half_float field with no doc values",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped integer field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped integer field with no doc values",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped ip field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped ip field with no doc values",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped keyword field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped keyword field with no doc values",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped long field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped long field with no doc values",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped object field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped object field with no doc values",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped object inner field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped object inner field with no doc values",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped short field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped short field with no doc values",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped text field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on mapped text field with no doc values",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on object field in empty index",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on object inner field in empty index",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on short field in empty index",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on text field in empty index",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on unmapped binary field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on unmapped boolean field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on unmapped byte field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on unmapped date field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on unmapped double field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on unmapped float field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on unmapped geo_point field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on unmapped half_float field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on unmapped integer field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on unmapped ip field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on unmapped keyword field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on unmapped long field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on unmapped object field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on unmapped object inner field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on unmapped short field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "160_exists_query.yml",
+      "cas": "Test exists query on unmapped text field",
+      "categorie": "saute",
+      "raison": "exige ['headers']"
+    },
+    {
+      "suite": "search",
+      "fichier": "170_terms_query.yml",
+      "cas": "Terms Query with No.of terms exceeding index.max_terms_count should FAIL",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "180_locale_dependent_mapping.yml",
+      "cas": "Test Index and Search locale dependent mappings / dates",
+      "categorie": "saute",
+      "raison": "Awaits fix: https://github.com/elastic/elasticsearch/issues/49719"
+    },
+    {
+      "suite": "search",
+      "fichier": "190_index_prefix_search.yml",
+      "cas": "search index prefixes with span_multi",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "190_index_prefix_search.yml",
+      "cas": "search with index prefixes",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "200_ignore_malformed.yml",
+      "cas": "Exists on _ignored",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "200_ignore_malformed.yml",
+      "cas": "Search on _ignored with term",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "200_ignore_malformed.yml",
+      "cas": "Search on _ignored with terms",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "200_ignore_malformed.yml",
+      "cas": "_ignored is returned by default",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "200_ignore_malformed.yml",
+      "cas": "_ignored is still returned with explicit list of stored fields",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "200_index_phrase_search.yml",
+      "cas": "search with indexed phrases",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "20_default_values.yml",
+      "cas": "Basic search",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "20_default_values.yml",
+      "cas": "Search body without query element",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "20_default_values.yml",
+      "cas": "Search with new response format",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "210_rescore_explain.yml",
+      "cas": "Score should match explanation in rescore",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "220_total_hits_object.yml",
+      "cas": "hits.total as an object",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "220_total_hits_object.yml",
+      "cas": "track_total_hits with rest_total_hits_as_int",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "230_interval_query.yml",
+      "cas": "Test after",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "230_interval_query.yml",
+      "cas": "Test before",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "230_interval_query.yml",
+      "cas": "Test block combination",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "230_interval_query.yml",
+      "cas": "Test contained_by",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "230_interval_query.yml",
+      "cas": "Test containing",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "230_interval_query.yml",
+      "cas": "Test default unordered matching",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "230_interval_query.yml",
+      "cas": "Test explicit unordered matching",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "230_interval_query.yml",
+      "cas": "Test fuzzy match",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "230_interval_query.yml",
+      "cas": "Test not containing",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "230_interval_query.yml",
+      "cas": "Test not_contained_by",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "230_interval_query.yml",
+      "cas": "Test not_overlapping",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "230_interval_query.yml",
+      "cas": "Test ordered combination",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "230_interval_query.yml",
+      "cas": "Test ordered combination with disjunction",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "230_interval_query.yml",
+      "cas": "Test ordered combination with max_gaps",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "230_interval_query.yml",
+      "cas": "Test ordered matching",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "230_interval_query.yml",
+      "cas": "Test ordered max_gaps matching",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "230_interval_query.yml",
+      "cas": "Test overlapping",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "230_interval_query.yml",
+      "cas": "Test phrase matching",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "230_interval_query.yml",
+      "cas": "Test prefix",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "230_interval_query.yml",
+      "cas": "Test unordered combination",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "230_interval_query.yml",
+      "cas": "Test unordered max_gaps matching",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "230_interval_query.yml",
+      "cas": "Test wildcard",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "240_date_nanos.yml",
+      "cas": "date histogram aggregation with date and date_nanos mapping",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "240_date_nanos.yml",
+      "cas": "date_nanos requires dates after 1970 and before 2262",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "240_date_nanos.yml",
+      "cas": "doc value fields are working as expected across date and date_nanos fields",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "240_date_nanos.yml",
+      "cas": "test sorting against date_nanos only fields",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "250_distance_feature.yml",
+      "cas": "test distance_feature query on date type",
+      "categorie": "echec",
+      "raison": "[search] 400 : all shards failed"
+    },
+    {
+      "suite": "search",
+      "fichier": "250_distance_feature.yml",
+      "cas": "test distance_feature query on date_nanos type",
+      "categorie": "echec",
+      "raison": "[search] 400 : all shards failed"
+    },
+    {
+      "suite": "search",
+      "fichier": "250_distance_feature.yml",
+      "cas": "test distance_feature query on geo_point type",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "300_sequence_numbers.yml",
+      "cas": "sequence numbers are not returned if not requested",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "300_sequence_numbers.yml",
+      "cas": "sequence numbers are returned if requested from body",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "300_sequence_numbers.yml",
+      "cas": "sequence numbers are returned if requested from url",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "30_limits.yml",
+      "cas": "Docvalues_fields size limit",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "30_limits.yml",
+      "cas": "Regexp length limit",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "30_limits.yml",
+      "cas": "Request window limits with scroll",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "30_limits.yml",
+      "cas": "Request window limits without scroll",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "30_limits.yml",
+      "cas": "Request with negative from value",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "30_limits.yml",
+      "cas": "Rescore window limits",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "30_limits.yml",
+      "cas": "Script_fields size limit",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "310_match_bool_prefix.yml",
+      "cas": "analyzer",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "310_match_bool_prefix.yml",
+      "cas": "fuzziness",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "310_match_bool_prefix.yml",
+      "cas": "minimum should match",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "310_match_bool_prefix.yml",
+      "cas": "multi_match multiple fields complete term",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "310_match_bool_prefix.yml",
+      "cas": "multi_match multiple fields partial term",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "310_match_bool_prefix.yml",
+      "cas": "multi_match multiple fields with analyzer",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "310_match_bool_prefix.yml",
+      "cas": "multi_match multiple fields with boost",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "310_match_bool_prefix.yml",
+      "cas": "multi_match multiple fields with cutoff_frequency throws exception",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "310_match_bool_prefix.yml",
+      "cas": "multi_match multiple fields with fuzziness",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "310_match_bool_prefix.yml",
+      "cas": "multi_match multiple fields with minimum_should_match",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "310_match_bool_prefix.yml",
+      "cas": "multi_match multiple fields with slop throws exception",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "310_match_bool_prefix.yml",
+      "cas": "multi_match single field complete term",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "310_match_bool_prefix.yml",
+      "cas": "multi_match single field partial term",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "310_match_bool_prefix.yml",
+      "cas": "operator",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "310_match_bool_prefix.yml",
+      "cas": "scoring complete term",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "310_match_bool_prefix.yml",
+      "cas": "scoring partial term",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "320_disallow_queries.yml",
+      "cas": "Test disallow expensive queries",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "330_distributed_sort.yml",
+      "cas": "test distributed sort can rewrite query to match no docs",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "330_fetch_fields.yml",
+      "cas": "Test basic field retrieval",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "330_fetch_fields.yml",
+      "cas": "Test date formatting",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "330_fetch_fields.yml",
+      "cas": "Test disable _source loading",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "330_fetch_fields.yml",
+      "cas": "Test disable source",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "330_fetch_fields.yml",
+      "cas": "Test ignore malformed",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "330_fetch_fields.yml",
+      "cas": "Test search rewrite",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "330_fetch_fields.yml",
+      "cas": "Test token count",
+      "categorie": "saute",
+      "raison": "support for token_count isn't yet backported"
+    },
+    {
+      "suite": "search",
+      "fichier": "40_indices_boost.yml",
+      "cas": "Indices boost for nonexistent index/alias",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "40_indices_boost.yml",
+      "cas": "Indices boost using array",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "40_indices_boost.yml",
+      "cas": "Indices boost using array multiple match",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "40_indices_boost.yml",
+      "cas": "Indices boost using array with alias",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "40_indices_boost.yml",
+      "cas": "Indices boost using array with wildcard",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "40_indices_boost.yml",
+      "cas": "Indices boost using object",
+      "categorie": "saute",
+      "raison": "exige ['warnings']"
+    },
+    {
+      "suite": "search",
+      "fichier": "60_query_string.yml",
+      "cas": "search with query_string parameters",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "70_response_filtering.yml",
+      "cas": "Search results filtered using both includes and excludes filters",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "70_response_filtering.yml",
+      "cas": "Search with response filtering",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "80_indices_options.yml",
+      "cas": "Closed index",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "80_indices_options.yml",
+      "cas": "Missing index",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "80_indices_options.yml",
+      "cas": "Missing index date math with catch",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "90_search_after.yml",
+      "cas": "date",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "90_search_after.yml",
+      "cas": "date_nanos",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "90_search_after.yml",
+      "cas": "search with search_after parameter",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "issue4895.yml",
+      "cas": "Test with _local preference placed in query body - should fail",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "issue9606.yml",
+      "cas": "Test search_type=dfs_query_and_fetch not supported from REST layer",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search",
+      "fichier": "issue9606.yml",
+      "cas": "Test search_type=query_and_fetch not supported from REST layer",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "100_avg_metric.yml",
+      "cas": "Aggregating wrong datatype test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "100_avg_metric.yml",
+      "cas": "Basic test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "100_avg_metric.yml",
+      "cas": "Filtered test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "100_avg_metric.yml",
+      "cas": "Metadata test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "100_avg_metric.yml",
+      "cas": "Missing field with missing param",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "100_avg_metric.yml",
+      "cas": "Missing field without missing param",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "100_avg_metric.yml",
+      "cas": "Only aggs test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "10_histogram.yml",
+      "cas": "Basic test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "10_histogram.yml",
+      "cas": "Deprecated _time order",
+      "categorie": "saute",
+      "raison": "exige ['warnings']"
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "10_histogram.yml",
+      "cas": "Format test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "10_histogram.yml",
+      "cas": "date_histogram",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "10_histogram.yml",
+      "cas": "date_histogram on range",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "10_histogram.yml",
+      "cas": "date_histogram on range with offset",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "10_histogram.yml",
+      "cas": "date_histogram profiler",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "10_histogram.yml",
+      "cas": "date_histogram with offset",
+      "categorie": "saute",
+      "raison": "AwaitsFix https://github.com/elastic/elasticsearch/issues/51525"
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "10_histogram.yml",
+      "cas": "date_histogram with pre-epoch daylight savings time transition",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "10_histogram.yml",
+      "cas": "histogram profiler",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "10_histogram.yml",
+      "cas": "histogram with hard bounds",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "110_max_metric.yml",
+      "cas": "Aggregating wrong datatype test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "110_max_metric.yml",
+      "cas": "Basic test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "110_max_metric.yml",
+      "cas": "Filtered test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "110_max_metric.yml",
+      "cas": "Metadata test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "110_max_metric.yml",
+      "cas": "Missing field with missing param",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "110_max_metric.yml",
+      "cas": "Missing field without missing param",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "110_max_metric.yml",
+      "cas": "Only aggs test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "120_min_metric.yml",
+      "cas": "Aggregating wrong datatype test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "120_min_metric.yml",
+      "cas": "Basic test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "120_min_metric.yml",
+      "cas": "Filtered test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "120_min_metric.yml",
+      "cas": "Metadata test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "120_min_metric.yml",
+      "cas": "Missing field with missing param",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "120_min_metric.yml",
+      "cas": "Missing field without missing param",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "120_min_metric.yml",
+      "cas": "Only aggs test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "130_sum_metric.yml",
+      "cas": "Aggregating wrong datatype test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "130_sum_metric.yml",
+      "cas": "Basic test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "130_sum_metric.yml",
+      "cas": "Filtered test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "130_sum_metric.yml",
+      "cas": "Metadata test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "130_sum_metric.yml",
+      "cas": "Missing field with missing param",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "130_sum_metric.yml",
+      "cas": "Missing field without missing param",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "130_sum_metric.yml",
+      "cas": "Only aggs test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "140_value_count_metric.yml",
+      "cas": "Basic test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "140_value_count_metric.yml",
+      "cas": "Filtered test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "140_value_count_metric.yml",
+      "cas": "Metadata test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "140_value_count_metric.yml",
+      "cas": "Missing field with missing param",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "140_value_count_metric.yml",
+      "cas": "Missing field without missing param",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "140_value_count_metric.yml",
+      "cas": "Only aggs test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "150_stats_metric.yml",
+      "cas": "Basic test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "150_stats_metric.yml",
+      "cas": "Filtered test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "150_stats_metric.yml",
+      "cas": "Metadata test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "150_stats_metric.yml",
+      "cas": "Missing field with missing param",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "150_stats_metric.yml",
+      "cas": "Missing field without missing param",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "150_stats_metric.yml",
+      "cas": "Only aggs test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "160_extended_stats_metric.yml",
+      "cas": "Bad sigma test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "160_extended_stats_metric.yml",
+      "cas": "Basic test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "160_extended_stats_metric.yml",
+      "cas": "Filtered test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "160_extended_stats_metric.yml",
+      "cas": "Metadata test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "160_extended_stats_metric.yml",
+      "cas": "Missing field with missing param",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "160_extended_stats_metric.yml",
+      "cas": "Missing field without missing param",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "160_extended_stats_metric.yml",
+      "cas": "Only aggs test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "160_extended_stats_metric.yml",
+      "cas": "Sigma test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "170_cardinality_metric.yml",
+      "cas": "Basic test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "170_cardinality_metric.yml",
+      "cas": "Filtered test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "170_cardinality_metric.yml",
+      "cas": "Invalid Precision test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "170_cardinality_metric.yml",
+      "cas": "Metadata test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "170_cardinality_metric.yml",
+      "cas": "Missing field with missing param",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "170_cardinality_metric.yml",
+      "cas": "Missing field without missing param",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "170_cardinality_metric.yml",
+      "cas": "Only aggs test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "170_cardinality_metric.yml",
+      "cas": "profiler double",
+      "categorie": "saute",
+      "raison": "new info added in 8.0.0 to be backported to 7.10.0"
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "170_cardinality_metric.yml",
+      "cas": "profiler int",
+      "categorie": "saute",
+      "raison": "new info added in 8.0.0 to be backported to 7.10.0"
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "170_cardinality_metric.yml",
+      "cas": "profiler string",
+      "categorie": "saute",
+      "raison": "new info added in 8.0.0 to be backported to 7.10.0"
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "180_percentiles_tdigest_metric.yml",
+      "cas": "Basic test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "180_percentiles_tdigest_metric.yml",
+      "cas": "Explicit Percents test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "180_percentiles_tdigest_metric.yml",
+      "cas": "Filtered test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "180_percentiles_tdigest_metric.yml",
+      "cas": "Invalid params test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "180_percentiles_tdigest_metric.yml",
+      "cas": "Metadata test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "180_percentiles_tdigest_metric.yml",
+      "cas": "Missing field with missing param",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "180_percentiles_tdigest_metric.yml",
+      "cas": "Missing field without missing param",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "180_percentiles_tdigest_metric.yml",
+      "cas": "Non-keyed test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "180_percentiles_tdigest_metric.yml",
+      "cas": "Only aggs test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "190_percentiles_hdr_metric.yml",
+      "cas": "Basic test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "190_percentiles_hdr_metric.yml",
+      "cas": "Explicit Percents test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "190_percentiles_hdr_metric.yml",
+      "cas": "Filtered test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "190_percentiles_hdr_metric.yml",
+      "cas": "Invalid params test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "190_percentiles_hdr_metric.yml",
+      "cas": "Metadata test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "190_percentiles_hdr_metric.yml",
+      "cas": "Missing field with missing param",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "190_percentiles_hdr_metric.yml",
+      "cas": "Missing field without missing param",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "190_percentiles_hdr_metric.yml",
+      "cas": "Negative values test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "190_percentiles_hdr_metric.yml",
+      "cas": "Non-keyed test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "190_percentiles_hdr_metric.yml",
+      "cas": "Only aggs test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "200_top_hits_metric.yml",
+      "cas": "top_hits aggregation with nested documents",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "200_top_hits_metric.yml",
+      "cas": "top_hits aggregation with nested documents and disabled _source",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "200_top_hits_metric.yml",
+      "cas": "top_hits aggregation with sequence numbers",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "20_terms.yml",
+      "cas": "Basic test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "20_terms.yml",
+      "cas": "Boolean test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "20_terms.yml",
+      "cas": "Date test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "20_terms.yml",
+      "cas": "Deprecated _term order",
+      "categorie": "saute",
+      "raison": "exige ['warnings']"
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "20_terms.yml",
+      "cas": "Double test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "20_terms.yml",
+      "cas": "Global ordinals are loaded with the global_ordinals execution hint",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "20_terms.yml",
+      "cas": "Global ordinals are not loaded with the map execution hint",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "20_terms.yml",
+      "cas": "IP test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "20_terms.yml",
+      "cas": "Integer test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "20_terms.yml",
+      "cas": "Mixing longs and doubles",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "20_terms.yml",
+      "cas": "No field or script",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "20_terms.yml",
+      "cas": "Partitioned integer test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "20_terms.yml",
+      "cas": "Partitioned string test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "20_terms.yml",
+      "cas": "Unmapped booleans",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "20_terms.yml",
+      "cas": "Unmapped dates",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "20_terms.yml",
+      "cas": "Unmapped doubles",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "20_terms.yml",
+      "cas": "Unmapped longs",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "20_terms.yml",
+      "cas": "Unmapped strings",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "20_terms.yml",
+      "cas": "min_doc_count",
+      "categorie": "saute",
+      "raison": "broken in 7.9.1, not yet backported"
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "20_terms.yml",
+      "cas": "numeric profiler",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "20_terms.yml",
+      "cas": "string profiler via global ordinals",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "20_terms.yml",
+      "cas": "string profiler via map",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "220_filters_bucket.yml",
+      "cas": "Anonymous filters test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "220_filters_bucket.yml",
+      "cas": "Bad params",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "220_filters_bucket.yml",
+      "cas": "Basic test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "220_filters_bucket.yml",
+      "cas": "Filtered test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "220_filters_bucket.yml",
+      "cas": "Metadata test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "220_filters_bucket.yml",
+      "cas": "Only aggs test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "230_composite.yml",
+      "cas": "Aggregate After",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "230_composite.yml",
+      "cas": "Aggregate After Missing",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "230_composite.yml",
+      "cas": "Composite aggregation and array size",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "230_composite.yml",
+      "cas": "Composite aggregation with after_key in the response",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "230_composite.yml",
+      "cas": "Composite aggregation with date_histogram offset",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "230_composite.yml",
+      "cas": "Composite aggregation with format",
+      "categorie": "saute",
+      "raison": "exige ['warnings']"
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "230_composite.yml",
+      "cas": "Composite aggregation with format and calendar_interval",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "230_composite.yml",
+      "cas": "Composite aggregation with nested parent",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "230_composite.yml",
+      "cas": "Composite aggregation with unmapped field",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "230_composite.yml",
+      "cas": "Duplicate sources",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "230_composite.yml",
+      "cas": "Invalid Composite aggregation",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "230_composite.yml",
+      "cas": "Missing source",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "230_composite.yml",
+      "cas": "Mixed ip and unmapped fields",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "230_composite.yml",
+      "cas": "Nested Composite aggregation",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "230_composite.yml",
+      "cas": "Simple Composite aggregation",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "230_composite.yml",
+      "cas": "Simple Composite aggregation with GeoTile grid",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "230_composite.yml",
+      "cas": "Simple Composite aggregation with geotile grid add aggregate after",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "230_composite.yml",
+      "cas": "Terms source from part of sorted",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "230_composite.yml",
+      "cas": "Terms source from sorted",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "230_composite.yml",
+      "cas": "date_histogram on date_nanos",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "230_composite.yml",
+      "cas": "date_histogram with time_zone",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "240_max_buckets.yml",
+      "cas": "Max bucket",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "250_moving_fn.yml",
+      "cas": "Bad window",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "250_moving_fn.yml",
+      "cas": "Bad window deprecated interval",
+      "categorie": "saute",
+      "raison": "exige ['warnings']"
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "250_moving_fn.yml",
+      "cas": "Not under date_histo",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "260_weighted_avg.yml",
+      "cas": "Basic test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "270_median_absolute_deviation_metric.yml",
+      "cas": "bad arguments",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "270_median_absolute_deviation_metric.yml",
+      "cas": "basic test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "270_median_absolute_deviation_metric.yml",
+      "cas": "missing value",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "270_median_absolute_deviation_metric.yml",
+      "cas": "no documents",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "270_median_absolute_deviation_metric.yml",
+      "cas": "with setting compression",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "280_geohash_grid.yml",
+      "cas": "Basic test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "280_rare_terms.yml",
+      "cas": "Basic test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "280_rare_terms.yml",
+      "cas": "Boolean test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "280_rare_terms.yml",
+      "cas": "Date test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "280_rare_terms.yml",
+      "cas": "IP test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "280_rare_terms.yml",
+      "cas": "Integer test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "280_rare_terms.yml",
+      "cas": "Unmapped booleans",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "280_rare_terms.yml",
+      "cas": "Unmapped dates",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "280_rare_terms.yml",
+      "cas": "Unmapped longs",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "280_rare_terms.yml",
+      "cas": "Unmapped strings",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "280_rare_terms.yml",
+      "cas": "avg_bucket",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "280_rare_terms.yml",
+      "cas": "sub aggs",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "290_geotile_grid.yml",
+      "cas": "Basic test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "300_pipeline.yml",
+      "cas": "Max pipeline on percentiles agg without specifying percent",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "300_pipeline.yml",
+      "cas": "Max pipeline on terms agg",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "300_pipeline.yml",
+      "cas": "Max pipeline through terms agg",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "300_pipeline.yml",
+      "cas": "Top level bucket_sort",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "300_pipeline.yml",
+      "cas": "deep cumulative sum",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "30_sig_terms.yml",
+      "cas": "Default index",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "30_sig_terms.yml",
+      "cas": "IP test",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "30_sig_terms.yml",
+      "cas": "Misspelled fields get \"did you mean\"",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "310_date_agg_per_day_of_week.yml",
+      "cas": "Date aggregation per day of week",
+      "categorie": "saute",
+      "raison": "exige ['spi_on_classpath_jdk9']"
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "320_missing.yml",
+      "cas": "match all",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "320_missing.yml",
+      "cas": "match none",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "320_missing.yml",
+      "cas": "match some",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "320_missing.yml",
+      "cas": "missing param",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "330_auto_date_histogram.yml",
+      "cas": "avg_bucket",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "330_auto_date_histogram.yml",
+      "cas": "basic",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "330_auto_date_histogram.yml",
+      "cas": "profile at top level",
+      "categorie": "saute",
+      "raison": "Debug information added in 8.0.0 (to be backported to 7.9.0)"
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "340_geo_distance.yml",
+      "cas": "avg_bucket",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "340_geo_distance.yml",
+      "cas": "basic",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "350_variable_width_histogram.yml",
+      "cas": "basic",
+      "categorie": "saute",
+      "raison": "added in 8.0.0 (to be backported to 7.9.0)"
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "360_date_histogram.yml",
+      "cas": "date_histogram on range with hard bounds",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "40_range.yml",
+      "cas": "Date Range Missing",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "40_range.yml",
+      "cas": "Date range",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "40_range.yml",
+      "cas": "Date range unmapped with children",
+      "categorie": "echec",
+      "raison": "[search] 400 : all shards failed"
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "40_range.yml",
+      "cas": "Double range",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "40_range.yml",
+      "cas": "IP Range Key Generation",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "40_range.yml",
+      "cas": "IP Range avg_bucket",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "40_range.yml",
+      "cas": "IP range",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "50_filter.yml",
+      "cas": "As a child of terms",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "50_filter.yml",
+      "cas": "Filter aggs no lookup and ensure it's cached",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "50_filter.yml",
+      "cas": "Filter aggs with terms lookup and ensure it's cached",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "50_filter.yml",
+      "cas": "Sorting terms",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "70_adjacency_matrix.yml",
+      "cas": "Filters intersections",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "70_adjacency_matrix.yml",
+      "cas": "Terms lookup",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "80_typed_keys.yml",
+      "cas": "Test typed keys parameter for avg aggregation",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "80_typed_keys.yml",
+      "cas": "Test typed keys parameter for cardinality aggregation",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "80_typed_keys.yml",
+      "cas": "Test typed keys parameter for date_histogram aggregation and max_bucket pipeline aggregation",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "80_typed_keys.yml",
+      "cas": "Test typed keys parameter for extended_stats aggregation",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "80_typed_keys.yml",
+      "cas": "Test typed keys parameter for max aggregation",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "80_typed_keys.yml",
+      "cas": "Test typed keys parameter for min aggregation",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "80_typed_keys.yml",
+      "cas": "Test typed keys parameter for percentile_ranks aggregation",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "80_typed_keys.yml",
+      "cas": "Test typed keys parameter for percentiles aggregation",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "80_typed_keys.yml",
+      "cas": "Test typed keys parameter for stats aggregation",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "80_typed_keys.yml",
+      "cas": "Test typed keys parameter for sum aggregation",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "80_typed_keys.yml",
+      "cas": "Test typed keys parameter for terms aggregation",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "80_typed_keys.yml",
+      "cas": "Test typed keys parameter for terms and top_hits aggregation",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "80_typed_keys.yml",
+      "cas": "Test typed keys parameter for value_count aggregation",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "90_sig_text.yml",
+      "cas": "Dedup noise",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "search.aggregation",
+      "fichier": "90_sig_text.yml",
+      "cas": "Default index",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "update",
+      "fichier": "10_doc.yml",
+      "cas": "Partial document",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "update",
+      "fichier": "11_shard_header.yml",
+      "cas": "Update check shard header",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "update",
+      "fichier": "12_result.yml",
+      "cas": "Update result field",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "update",
+      "fichier": "13_legacy_doc.yml",
+      "cas": "Partial document",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "update",
+      "fichier": "16_noop.yml",
+      "cas": "Noop",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "update",
+      "fichier": "20_doc_upsert.yml",
+      "cas": "Doc upsert",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "update",
+      "fichier": "22_doc_as_upsert.yml",
+      "cas": "Doc as upsert",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "update",
+      "fichier": "35_if_seq_no.yml",
+      "cas": "Update with if_seq_no",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "update",
+      "fichier": "40_routing.yml",
+      "cas": "Routing",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "update",
+      "fichier": "60_refresh.yml",
+      "cas": "Refresh",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "update",
+      "fichier": "60_refresh.yml",
+      "cas": "When refresh url parameter is an empty string that means \"refresh immediately\"",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "update",
+      "fichier": "60_refresh.yml",
+      "cas": "refresh=wait_for waits until changes are visible in search",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "update",
+      "fichier": "80_source_filtering.yml",
+      "cas": "Source filtering",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "update",
+      "fichier": "85_fields_meta.yml",
+      "cas": "Metadata Fields",
+      "categorie": "saute",
+      "raison": "Update doesn't return metadata fields, waiting for #3259"
+    },
+    {
+      "suite": "update",
+      "fichier": "90_error.yml",
+      "cas": "Misspelled fields get \"did you mean\"",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "update",
+      "fichier": "90_mix_typeless_typeful.yml",
+      "cas": "Update call that introduces new field mappings",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "update",
+      "fichier": "90_mix_typeless_typeful.yml",
+      "cas": "Update with typeless API on an index that has types",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "update",
+      "fichier": "95_require_alias.yml",
+      "cas": "Set require_alias flag",
+      "categorie": "reussi",
+      "raison": ""
+    }
+  ]
+}
