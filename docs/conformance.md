@@ -28,6 +28,11 @@ utilisée, la date de la mesure, le SHA du dépôt mesuré (et s'il était modif
 la version annoncée par la cible, puis les totaux, le détail **par suite** et
 **par cas** (fichier, nom du cas, catégorie, et pour un échec la raison courte).
 
+Ce SHA est celui du commit **mesuré**, donc forcément antérieur au commit qui
+range le rapport — un rapport ne peut pas citer le commit qui le contient. Ce
+qui compte est `ferrite_arbre_modifie` : à `false`, la mesure vient d'un arbre
+de travail propre, donc d'un code qu'on peut retrouver.
+
 Les totaux et les deux taux, sans rien installer :
 
 ```bash
