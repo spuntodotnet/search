@@ -160,19 +160,30 @@ tous invisibles tant que les 400 échecs étaient anonymes :
 | `_cluster/health` 🟡, seul `level` refusé | tous les `wait_for_*` d'attente de shards sont refusés eux aussi (9 cas), ce qui est juste sur un mono-nœud — mais n'était écrit nulle part |
 | `_cat/indices` / `_cat/health` 🟡 | `help` et `ts` sont refusés en plus de `h` et `s` |
 
-Et un vrai défaut, celui-là à corriger : **une recherche qui ne vise aucun index
-ne valide pas son corps.** `POST /_search` sur un cluster vide (ou un motif qui
-ne correspond à rien) rend 200 avec une clause que ferrite refuse partout
-ailleurs — `{"aggs": {"a": {"significant_terms": …}}}`, `{"query": {"intervals":
-…}}` — parce que la traduction du Query DSL se fait index par index. C'est le
-seul endroit connu où la règle « jamais d'échec silencieux » ne tient pas ; il a
+Et un vrai défaut, celui-là à corriger — **corrigé depuis** : *une recherche qui
+ne vise aucun index ne validait pas son corps.* `POST /_search` sur un cluster
+vide (ou un motif qui ne correspond à rien) rendait 200 avec une clause que
+ferrite refuse partout ailleurs — `{"aggs": {"a": {"significant_terms": …}}}`,
+`{"query": {"intervals": …}}` — parce que la traduction du Query DSL se fait
+index par index, donc zéro index voulait dire zéro traduction. C'était le seul
+endroit connu où la règle « jamais d'échec silencieux » ne tenait pas, et il a
 été trouvé par un cas d'agrégation d'Elastic qui attendait une erreur et a reçu
-un 200.
+un 200. Le corps est maintenant traduit contre un **schéma vide** avant qu'on
+conclue qu'il n'y a rien à chercher ; seuls restent suspendus les verdicts
+qu'aucun mapping ne peut prononcer, qu'ES diffère lui aussi à l'exécution d'un
+shard. Deux petits frères de la même famille, trouvés dans la foulée et
+corrigés avec lui : `include_defaults` et `flat_settings` étaient **acceptés et
+ignorés** par `GET /{index}/_settings` (ES rend un bloc `defaults`, ou des clés
+aplaties) ; ils sont désormais refusés, sur les réglages d'index comme sur ceux
+du cluster.
 
-Deux petits frères de la même famille, trouvés dans la foulée :
-`include_defaults` et `flat_settings` sont **acceptés et ignorés** par
-`GET /{index}/_settings` (ES rend un bloc `defaults`, ou des clés aplaties). Les
-trois sont comptés en régressions dans le rapport — c'est bien ce qu'ils sont.
+Ces trois-là comptaient en **régressions** dans le rapport — c'est bien ce
+qu'ils étaient, et c'est ainsi qu'ils ont été trouvés. Ils en sont sortis avec
+le correctif : quatre cas quittent cette colonne et sept passent d'« échec » à
+« refusé » (les comptes exacts sont dans [`conformance.json`](conformance.json),
+pas ici). La frontière avec ES sur un serveur vide est désormais tenue par
+[`tests/compat/sonde_vide.py`](../tests/compat/sonde_vide.py), qui refuse de
+tourner si l'un des deux serveurs n'est pas vide.
 
 ## D'où viennent ces tests, et pourquoi on a le droit
 

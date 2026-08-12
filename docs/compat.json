@@ -306,7 +306,9 @@
         "refuses": [
           "GET /_settings sans index",
           "/{index}/_settings/{nom}",
-          "local"
+          "local",
+          "flat_settings",
+          "include_defaults"
         ]
       }
     },
@@ -1145,7 +1147,9 @@
           "action.destructive_requires_name"
         ],
         "refuses": [
-          "tout autre réglage"
+          "tout autre réglage",
+          "flat_settings",
+          "include_defaults"
         ]
       }
     },
@@ -1542,7 +1546,7 @@
       "nom_texte": "POST|GET /{index}/_search, POST|GET /_search",
       "etat": "supporte",
       "poids": null,
-      "detail": "`{index}` est une **expression** au sens d'ES (voir [Expressions d'index](#expressions-dindex-listes-motifs-alias)) ; sans index, la recherche porte sur tout, comme `_all`"
+      "detail": "`{index}` est une **expression** au sens d'ES (voir [Expressions d'index](#expressions-dindex-listes-motifs-alias)) ; sans index, la recherche porte sur tout, comme `_all`. Une recherche qui ne vise **aucun** index (cluster vide, motif sans correspondance) valide quand même son corps : requête, agrégations et tri sont lus contre un schéma vide avant qu'on conclue qu'il n'y a rien à chercher"
     },
     {
       "id": "recherche.query",

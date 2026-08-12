@@ -66,6 +66,16 @@ pub struct QueryCtx<'a> {
     /// connait pas ne correspond a rien au lieu d'echouer — voir
     /// [`crate::mapping::Mapping::allow_unmapped_fields`].
     pub champs_inconnus_toleres: bool,
+    /// La requete est traduite **sans qu'aucun index ne soit vise** : c'est une
+    /// validation, pas une recherche (voir [`crate::engine::sans_index`]).
+    ///
+    /// Les quelques verdicts qui ne peuvent pas se prononcer sans mapping
+    /// (`nested` sur un chemin, `has_child` sur un champ `join`) sont alors
+    /// suspendus au lieu d'echouer — ES les rend a l'execution d'un shard, et
+    /// il n'y a pas de shard. Les suspendre plutot que de laisser l'erreur
+    /// sortir n'est pas une politesse : elle masquerait tout ce qui est
+    /// **sous** la clause, qui est justement ce qu'on vient valider.
+    pub aucun_index_vise: bool,
 }
 
 /// L'ensemble vide, pour les appels qui ne visent qu'un index.
@@ -84,7 +94,15 @@ impl<'a> QueryCtx<'a> {
             // Le defaut d'Elasticsearch. Le reglage de l'index le resserre, via
             // [`QueryCtx::selon_le_mapping`].
             champs_inconnus_toleres: true,
+            aucun_index_vise: false,
         }
+    }
+
+    /// Marque le contexte comme « aucun index vise » : la traduction ne sert
+    /// qu'a valider le corps (voir [`QueryCtx::aucun_index_vise`]).
+    pub fn sans_index_vise(mut self) -> Self {
+        self.aucun_index_vise = true;
+        self
     }
 
     /// L'instant que `now` designe : le meme pour tous les index d'une meme
@@ -1536,7 +1554,9 @@ fn nested_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         .get("path")
         .and_then(Value::as_str)
         .ok_or_else(|| EsError::parsing("[nested] : cle [path] manquante"))?;
-    if !ctx.fields.nested.contains(path) {
+    // Sans index vise, aucun mapping ne peut dire si ce chemin est `nested` :
+    // le verdict est suspendu pour que la requete interne, elle, soit lue.
+    if !ctx.aucun_index_vise && !ctx.fields.nested.contains(path) {
         return Err(EsError::new(
             axum::http::StatusCode::BAD_REQUEST,
             "query_shard_exception",
@@ -1919,6 +1939,17 @@ fn join_query(body: &Value, ctx: &QueryCtx, sens: Sens) -> EsResult<Box<dyn Quer
         }
     }
 
+    // Sans index vise, il n'y a pas de champ [join] ou chercher la relation :
+    // reste a lire la requete interne, qui est tout ce qui peut encore etre
+    // faux dans ce corps.
+    if ctx.aucun_index_vise {
+        let interne = obj
+            .get("query")
+            .ok_or_else(|| EsError::parsing(format!("[{nom_clause}] : cle [query] manquante")))?;
+        build_query(interne, ctx)?;
+        return Ok(Box::new(EmptyQuery));
+    }
+
     let (join, f_nom, f_parent) = infos_join(ctx, nom_clause)?;
     let relation = obj
         .get(cle_type)
@@ -1992,11 +2023,21 @@ fn parent_id_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
             "ferrite ne supporte pas [ignore_unmapped] dans [parent_id]",
         ));
     }
-    let (join, f_nom, f_parent) = infos_join(ctx, "parent_id")?;
     let relation = obj
         .get("type")
         .and_then(Value::as_str)
         .ok_or_else(|| EsError::parsing("[parent_id] : cle [type] manquante"))?;
+    let id = match obj.get("id") {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Number(n)) => n.to_string(),
+        _ => return Err(EsError::parsing("[parent_id] : cle [id] manquante")),
+    };
+    // Sans index vise, il n'y a pas de champ [join] ou verifier la relation ;
+    // les deux cles du corps, elles, viennent d'etre lues.
+    if ctx.aucun_index_vise {
+        return Ok(Box::new(EmptyQuery));
+    }
+    let (join, f_nom, f_parent) = infos_join(ctx, "parent_id")?;
     if join.parent_de(relation).is_none() {
         return Err(EsError::new(
             axum::http::StatusCode::BAD_REQUEST,
@@ -2007,11 +2048,6 @@ fn parent_id_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
             ),
         ));
     }
-    let id = match obj.get("id") {
-        Some(Value::String(s)) => s.clone(),
-        Some(Value::Number(n)) => n.to_string(),
-        _ => return Err(EsError::parsing("[parent_id] : cle [id] manquante")),
-    };
     let inner: Box<dyn Query> = Box::new(ConstScoreQuery::new(
         Box::new(BooleanQuery::new(vec![
             (

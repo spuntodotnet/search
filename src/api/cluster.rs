@@ -43,8 +43,7 @@ pub async fn settings_get(State(st): State<SharedState>, uri: Uri) -> EsResult<J
     let mut p = Params::parse(&uri);
     p.opt("master_timeout");
     p.opt("timeout");
-    p.opt("flat_settings");
-    p.opt("include_defaults");
+    super::refuser_reglages_non_supportes(&mut p, "GET /_cluster/settings")?;
     p.done()?;
     let (persistants, transitoires) = st.catalog.reglages();
     Ok(Json::ok(json!({
@@ -67,7 +66,7 @@ pub async fn settings_put(
     let mut p = Params::parse(&uri);
     p.opt("master_timeout");
     p.opt("timeout");
-    p.opt("flat_settings");
+    super::refuser_reglages_non_supportes(&mut p, "PUT /_cluster/settings")?;
     p.done()?;
 
     let body = super::parse_body(&body)?;

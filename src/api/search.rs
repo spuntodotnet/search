@@ -153,6 +153,23 @@ pub async fn search(
         (None, None) => None,
     };
 
+    // `now` est resolu une fois pour toute la recherche, comme ES le fait sur
+    // son noeud coordinateur : les index vises doivent tous repondre a la meme
+    // question.
+    let maintenant = crate::datemath::maintenant();
+
+    // Aucun index vise : la boucle ci-dessous ne tourne pas, donc rien du corps
+    // ne serait lu. Il est valide a part, contre un schema vide.
+    if generations.is_empty() {
+        valider_sans_index(
+            body_obj.get("query"),
+            aggs.as_ref(),
+            param_sort.as_deref(),
+            body_obj.get("sort"),
+            maintenant,
+        )?;
+    }
+
     // Une cible par index vise, chacune avec sa requete, ses cles de tri et son
     // verdict sur les agregations.
     let mut cibles: Vec<Cible> = Vec::new();
@@ -162,16 +179,12 @@ pub async fn search(
     // Les index qui n'ont pas pu repondre, au format `_shards.failures` d'ES.
     let mut echecs: Vec<Value> = Vec::new();
     let nb_index = generations.len();
-    // `now` est resolu une fois pour toute la recherche, comme ES le fait sur
-    // son noeud coordinateur : les index vises doivent tous repondre a la meme
-    // question.
-    let maintenant = crate::datemath::maintenant();
 
     for (nom, uuid, gen) in generations {
         let sort = match param_sort.as_ref() {
-            Some(list) => parse_sort_params(list, &gen),
+            Some(list) => parse_sort_params(list, &gen.fields),
             None => match body_obj.get("sort") {
-                Some(v) => parse_sort_body(v, &gen),
+                Some(v) => parse_sort_body(v, &gen.fields),
                 None => Ok(Vec::new()),
             },
         };
@@ -215,7 +228,7 @@ pub async fn search(
         // champ agrege n'a aucune valeur a y verser.
         let (agrege, filtres) = match &aggs {
             None => (false, crate::aggs::Filtres::default()),
-            Some(a) => match crate::aggs::validate(a, &gen, &ctx) {
+            Some(a) => match crate::aggs::validate(a, Some(&gen.fields), &ctx) {
                 Ok(filtres) => (true, filtres),
                 Err(e) if e.champ_inconnu.is_some() => {
                     agg_ignore.get_or_insert(e);
@@ -254,7 +267,10 @@ pub async fn search(
     }
 
     let req = SearchRequest {
-        aggs,
+        // Sans index vise, ES ne rend pas de section `aggregations` du tout,
+        // pas meme vide (mesure contre ES 8.15) — et le corps vient d'etre
+        // valide, il n'y a plus rien a calculer.
+        aggs: if nb_index == 0 { None } else { aggs },
         from,
         size,
         sort_asc,
@@ -325,6 +341,63 @@ pub async fn search(
     Ok(Json::ok(Value::Object(reponse)))
 }
 
+/// Valide le corps d'une recherche qui ne vise **aucun** index.
+///
+/// Sans index, il n'y a aucune generation ou traduire la requete : le corps
+/// n'etait donc pas lu du tout, et `{"aggs": {"a": {"significant_terms": …}}}`
+/// rendait 200 et des agregations vides la ou le premier index venu le refuse.
+/// C'etait le seul echec silencieux connu du projet.
+///
+/// La traduction est donc exercee contre un schema vide
+/// ([`crate::engine::sans_index`]) et seule l'erreur compte : ce qui en sort
+/// est jete.
+///
+/// Ce qui n'en sort pas : les verdicts qui dependent d'un mapping (« champ
+/// inconnu », `nested` sur un chemin, `has_child` sans champ `join`). ES les
+/// rend a l'execution d'un shard, et il n'y a pas de shard — mesure contre ES
+/// 8.15 sur un cluster vide, qui rend 200 sur `{"sort": ["absent"]}` comme sur
+/// `{"query": {"term": {"absent": "x"}}}`, et 400 sur `unknown query
+/// [pas_une_query]` comme sur `Unknown aggregation type [pas_une_agg]`.
+fn valider_sans_index(
+    query: Option<&Value>,
+    aggs: Option<&Value>,
+    param_sort: Option<&[String]>,
+    body_sort: Option<&Value>,
+    maintenant: i64,
+) -> EsResult<()> {
+    let vide = crate::engine::sans_index();
+    let searcher = vide.searcher();
+    let ctx = QueryCtx::new(&vide.fields, &vide.index, &searcher)
+        .avec_maintenant(maintenant)
+        .selon_le_mapping(&vide.mapping)
+        .sans_index_vise();
+
+    match (param_sort, body_sort) {
+        (Some(list), _) => sans_verdict_de_mapping(parse_sort_params(list, &vide.fields))?,
+        (None, Some(v)) => sans_verdict_de_mapping(parse_sort_body(v, &vide.fields))?,
+        (None, None) => {}
+    }
+    if let Some(v) = query {
+        sans_verdict_de_mapping(build_query(v, &ctx))?;
+    }
+    if let Some(a) = aggs {
+        sans_verdict_de_mapping(crate::aggs::validate(a, None, &ctx))?;
+    }
+    Ok(())
+}
+
+/// Jette ce qu'une validation sans index a produit, et avec lui les erreurs
+/// qu'aucun mapping ne peut trancher (voir [`valider_sans_index`]).
+fn sans_verdict_de_mapping<T>(r: EsResult<T>) -> EsResult<()> {
+    match r {
+        Ok(_) => Ok(()),
+        // `query_shard_exception` est precisement le type qu'ES reserve a ce
+        // qu'un shard decide : sans shard, il n'y a pas de verdict a rendre.
+        Err(e) if e.ty == "query_shard_exception" || e.champ_inconnu.is_some() => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 /// Le corps commun d'une reponse de recherche : `took`, `_shards`, `hits`.
 ///
 /// Une page de `scroll` a exactement la meme forme qu'une reponse de `_search`,
@@ -359,7 +432,10 @@ fn reponse_de_page(
             // `total` est un objet {value, relation}, pas un entier : un client
             // type le remarque immediatement.
             "total": {"value": total, "relation": "eq"},
-            "max_score": max_score.map(round_score),
+            // `null` dit « aucun document n'a ete score » ; sans le moindre
+            // shard, ES rend `0.0` (mesure contre ES 8.15 sur un cluster vide,
+            // ou il rend `null` des qu'un index existe).
+            "max_score": if nb_index == 0 { Some(0.0) } else { max_score.map(round_score) },
             "hits": hits,
         }),
     );
@@ -553,6 +629,11 @@ pub async fn count(
     let mut prets: Vec<(std::sync::Arc<Generation>, Box<dyn tantivy::query::Query>)> = Vec::new();
     let mut ignore: Option<EsError> = None;
     let maintenant = crate::datemath::maintenant();
+    // Meme trou qu'en recherche : sans index, la boucle ne tourne pas et la
+    // requete n'est jamais lue (voir [`valider_sans_index`]).
+    if generations.is_empty() {
+        valider_sans_index(body_obj.get("query"), None, None, None, maintenant)?;
+    }
     for (_, _, gen) in &generations {
         let gen = gen.clone();
         let query = {
@@ -766,7 +847,7 @@ fn parse_source_body(v: &Value) -> EsResult<SourceFilter> {
 // sort
 // ---------------------------------------------------------------------------
 
-fn parse_sort_body(v: &Value, gen: &crate::engine::Generation) -> EsResult<Vec<SortSpec>> {
+fn parse_sort_body(v: &Value, champs: &crate::mapping::Fields) -> EsResult<Vec<SortSpec>> {
     let entries: Vec<&Value> = match v {
         Value::Array(a) => a.iter().collect(),
         other => vec![other],
@@ -774,7 +855,7 @@ fn parse_sort_body(v: &Value, gen: &crate::engine::Generation) -> EsResult<Vec<S
     let mut specs = Vec::new();
     for entry in entries {
         match entry {
-            Value::String(s) => specs.push(sort_spec(s, None, gen)?),
+            Value::String(s) => specs.push(sort_spec(s, None, champs)?),
             Value::Object(o) => {
                 for (field, spec) in o {
                     let order = match spec {
@@ -792,7 +873,7 @@ fn parse_sort_body(v: &Value, gen: &crate::engine::Generation) -> EsResult<Vec<S
                             ))
                         }
                     };
-                    specs.push(sort_spec(field, order.as_deref(), gen)?);
+                    specs.push(sort_spec(field, order.as_deref(), champs)?);
                 }
             }
             _ => return Err(EsError::illegal_argument("[sort] : entree invalide")),
@@ -802,11 +883,11 @@ fn parse_sort_body(v: &Value, gen: &crate::engine::Generation) -> EsResult<Vec<S
 }
 
 /// `?sort=annee:desc,titre`
-fn parse_sort_params(list: &[String], gen: &crate::engine::Generation) -> EsResult<Vec<SortSpec>> {
+fn parse_sort_params(list: &[String], champs: &crate::mapping::Fields) -> EsResult<Vec<SortSpec>> {
     list.iter()
         .map(|entry| match entry.split_once(':') {
-            Some((field, order)) => sort_spec(field, Some(order), gen),
-            None => sort_spec(entry, None, gen),
+            Some((field, order)) => sort_spec(field, Some(order), champs),
+            None => sort_spec(entry, None, champs),
         })
         .collect()
 }
@@ -814,13 +895,28 @@ fn parse_sort_params(list: &[String], gen: &crate::engine::Generation) -> EsResu
 fn sort_spec(
     field: &str,
     order: Option<&str>,
-    gen: &crate::engine::Generation,
+    champs: &crate::mapping::Fields,
 ) -> EsResult<SortSpec> {
+    // L'ordre se lit **avant** le champ : c'est une faute de corps, pas un
+    // verdict de mapping, et ES la rend en premier lui aussi. Le lire apres
+    // laissait `{"sort": [{"absent": {"order": "nawak"}}]}` passer en silence
+    // quand aucun index n'etait vise (mesure : ES rend 400 sur un cluster
+    // vide, ferrite rendait 200).
+    let ordre = match order {
+        None => None,
+        Some(s) if s.eq_ignore_ascii_case("asc") => Some(true),
+        Some(s) if s.eq_ignore_ascii_case("desc") => Some(false),
+        Some(s) => {
+            return Err(EsError::illegal_argument(format!(
+                "[sort] : ordre [{s}] invalide (asc|desc)"
+            )))
+        }
+    };
     let key = match field {
         "_score" => SortKey::Score,
         "_doc" => SortKey::Doc,
         name => {
-            let mapped = gen.fields.get(name).ok_or_else(|| {
+            let mapped = champs.get(name).ok_or_else(|| {
                 // Le type d'ES, et le marqueur qui permet a une recherche
                 // multi-index de n'echouer que sur **cet** index.
                 EsError::new(
@@ -843,16 +939,6 @@ fn sort_spec(
         }
     };
     // Defaut d'ES : `desc` sur `_score`, `asc` partout ailleurs.
-    let default_asc = !matches!(key, SortKey::Score);
-    let asc = match order {
-        None => default_asc,
-        Some(s) if s.eq_ignore_ascii_case("asc") => true,
-        Some(s) if s.eq_ignore_ascii_case("desc") => false,
-        Some(s) => {
-            return Err(EsError::illegal_argument(format!(
-                "[sort] : ordre [{s}] invalide (asc|desc)"
-            )))
-        }
-    };
+    let asc = ordre.unwrap_or(!matches!(key, SortKey::Score));
     Ok(SortSpec { key, asc })
 }

@@ -445,6 +445,26 @@ pub fn expect_only(
     Ok(())
 }
 
+/// Refuse `flat_settings` et `include_defaults`, que ferrite n'applique pas.
+///
+/// Les deux changent la **forme** de la reponse chez ES : `flat_settings`
+/// aplatit les cles (`index.number_of_shards` au lieu de l'arborescence),
+/// `include_defaults` ajoute une section `defaults` de plusieurs dizaines de
+/// reglages. Les accepter puis les ignorer rend une reponse que personne n'a
+/// demandee, sans le dire — c'est exactement l'echec silencieux que ce projet
+/// refuse.
+pub fn refuser_reglages_non_supportes(p: &mut Params, route: &str) -> EsResult<()> {
+    for param in ["flat_settings", "include_defaults"] {
+        if p.opt(param).is_some() {
+            return Err(EsError::unsupported(format!(
+                "ferrite ne supporte pas [{param}] sur [{route}] : il changerait la forme de la \
+                 reponse, et ferrite la rendrait inchangee (voir docs/compat.md)"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Les tolerances de resolution d'une expression d'index, lues dans la query
 /// string sous les noms d'Elasticsearch.
 ///

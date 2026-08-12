@@ -319,8 +319,7 @@ pub async fn get_settings(
     let mut p = Params::parse(&uri);
     let opts = selection_options(&mut p)?;
     p.opt("master_timeout");
-    p.flag("flat_settings", false)?;
-    p.flag("include_defaults", false)?;
+    super::refuser_reglages_non_supportes(&mut p, "/{index}/_settings")?;
     p.done()?;
 
     let mut out = serde_json::Map::new();

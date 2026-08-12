@@ -1427,6 +1427,55 @@ fn rebuild_doc_table(gen: &Generation) -> EsResult<(HashMap<String, DocMeta>, u6
     Ok((docs, next_seq))
 }
 
+/// Le schema d'« aucun index » : un index tantivy vide, en memoire, avec le
+/// mapping par defaut.
+///
+/// Il n'est jamais interroge — il n'a aucun document et n'en aura jamais. Il
+/// existe pour **valider** : une recherche qui ne vise aucun index (cluster
+/// vide, motif sans correspondance) n'avait aucune generation ou exercer la
+/// traduction du Query DSL, donc son corps n'etait pas lu du tout et une
+/// requete invalide rendait 200. C'etait le seul endroit connu ou la regle
+/// « jamais d'echec silencieux » ne tenait pas.
+pub struct SansIndex {
+    pub mapping: Mapping,
+    pub fields: Fields,
+    pub index: Index,
+    reader: IndexReader,
+}
+
+impl SansIndex {
+    pub fn searcher(&self) -> Searcher {
+        self.reader.searcher()
+    }
+}
+
+/// Le schema d'« aucun index », construit une seule fois pour tout le
+/// processus (voir [`SansIndex`]).
+///
+/// Pas de `writer` : rien n'y sera jamais ecrit, et un `IndexWriter` couterait
+/// un budget memoire et un thread pour un index qui ne sert qu'a lire une
+/// requete.
+pub fn sans_index() -> &'static SansIndex {
+    static VIDE: std::sync::LazyLock<SansIndex> = std::sync::LazyLock::new(|| {
+        let mapping = Mapping::default();
+        let (schema, fields) = mapping::build_schema(&mapping);
+        let index = Index::create_in_ram(schema);
+        crate::analysis::register_all(index.tokenizers());
+        let reader = index
+            .reader_builder()
+            .reload_policy(ReloadPolicy::Manual)
+            .try_into()
+            .expect("reader sur un index en memoire");
+        SansIndex {
+            mapping,
+            fields,
+            index,
+            reader,
+        }
+    });
+    &VIDE
+}
+
 /// Les regles de nommage d'index d'ES. Elles font aussi office de garde-fou :
 /// le nom devient un nom de repertoire.
 pub fn validate_index_name(name: &str) -> EsResult<()> {
