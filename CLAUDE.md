@@ -141,7 +141,7 @@ bouger**, pas après.
   de vérité de trois endroits. La source est maintenant
   [`compat.yaml`](compat.yaml) ; la doc et sa forme machine en sont générées, et
   le rapport de conformance **croise** chaque cas échoué avec elle. C'est ce qui
-  transforme « 400 échecs » en « 41 régressions et 359 coûts de périmètre » :
+  transforme « 400 échecs » en « 42 régressions et 358 coûts de périmètre » :
   la différence entre un chiffre qu'on subit et un chiffre qu'on pilote. Le
   garde-fou est le troisième verdict : un cas qu'aucune capacité ne réclame
   compte **contre** nous, sinon oublier de déclarer une capacité ferait monter

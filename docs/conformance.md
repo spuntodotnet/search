@@ -143,6 +143,12 @@ l'API typée (`/{index}/{type}/{id}`, disparue en 8.x) — le fait que le cas ai
 demandé une URL qui la porte. Le rapport garde ces éléments par cas (`api`,
 `capacite`, `perimetre`, `mise_en_place`), donc chaque verdict se vérifie.
 
+Un cas peut changer de verdict d'une mesure à l'autre sans que le nombre
+d'échecs bouge : `indices.stats/11_metric.yml::Metric - multi` échoue tantôt sur
+sa mise en place (« no such index »), tantôt sur `_stats`, et le verdict suit
+l'endroit où il bute. Le partage régressions / coûts de périmètre se lit donc à
+un cas près ; le cliquet, lui, porte sur les catégories, qui ne bougent pas.
+
 ### Ce que le croisement a trouvé du premier coup
 
 Trois écarts entre ce que `docs/compat.md` déclarait et ce que ferrite fait,
