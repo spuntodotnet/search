@@ -81,11 +81,16 @@ def valide(doc):
     if doc.get("schema") != 1:
         raise Invalide(f"schema {doc.get('schema')} inconnu (ce generateur lit le 1)")
     etats, motifs = doc["etats"], doc["motifs"]
-    vus, tables_vues, apis_vues = {}, set(), {}
-    for table, cap in capacites(doc):
-        if table["id"] in tables_vues and table["capacites"][0] is not cap:
-            pass
+    tables_vues = set()
+    for table in doc["tables"]:
+        if table["id"] in tables_vues:
+            raise Invalide(f"deux tables portent l'identifiant [{table['id']}]")
         tables_vues.add(table["id"])
+        if not table.get("capacites"):
+            raise Invalide(f"la table [{table['id']}] est vide : une table sans "
+                           f"capacite ne dit rien, et son marqueur non plus")
+    vus, apis_vues = {}, {}
+    for table, cap in capacites(doc):
         cid = cap.get("id")
         if not cid:
             raise Invalide(f"une capacite de [{table['id']}] n'a pas d'identifiant")
@@ -121,8 +126,6 @@ def valide(doc):
                 re.compile(motif)
             except re.error as e:
                 raise Invalide(f"[{cid}] : motif d'erreur illisible [{motif}] : {e}") from e
-    if len(tables_vues) != len(doc["tables"]):
-        raise Invalide("deux tables portent le meme identifiant")
 
 
 # ---------------------------------------------------------------------------

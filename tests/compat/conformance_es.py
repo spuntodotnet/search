@@ -652,10 +652,13 @@ def taux_de(totaux, perimetre_totaux=None):
             "valeur": round(totaux["reussis"] / perimetre, 4) if perimetre else None,
             "numerateur": totaux["reussis"],
             "denominateur": perimetre,
-            "definition": "reussis / (reussis + echecs) — parmi les cas qui "
-                          "n'exercent que des capacites declarees supportees "
-                          "(ni refuses explicitement, ni sautes), la part qui "
-                          "repond comme Elasticsearch",
+            "definition": "reussis / (reussis + echecs) — la part des cas que "
+                          "ferrite n'a ni refuses ni fait sauter qui repond "
+                          "comme Elasticsearch. Un pis-aller : une partie des "
+                          "echecs sont des refus dont le type d'erreur imite "
+                          "celui d'ES au lieu de porter le marqueur, donc ils "
+                          "gonflent le denominateur alors qu'ils sont hors "
+                          "perimetre. Voir [fidelite_perimetre_declare]",
         },
         "couverture_brute": {
             "valeur": round(totaux["reussis"] / totaux["cas"], 4) if totaux["cas"] else None,
