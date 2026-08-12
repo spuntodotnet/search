@@ -1,5 +1,13 @@
 # compat — ce que ferrite sait faire, et ce qu'il refuse
 
+> **Ce fichier est généré.** Sa source est [`compat.yaml`](../compat.yaml) à la
+> racine — une entrée par capacité, avec son état, ses paramètres et, pour un
+> refus, son motif. Le texte long, lui, est écrit à la main dans
+> [`compat.gabarit.md`](compat.gabarit.md), où un marqueur dit où va chaque
+> table. Pour regénérer les deux fichiers dérivés :
+> `python3 tests/compat/genere_compat.py` — la CI échoue si le résultat diffère
+> de ce qui est commité.
+
 Inventaire du support de l'API Elasticsearch par ferrite. **Mis à jour dans la
 PR qui change le comportement, pas après.**
 
@@ -8,6 +16,16 @@ PR qui change le comportement, pas après.**
 | ✅ | supporté, vérifié par le harnais de compat (`tests/compat/`) |
 | 🟡 | partiel — la partie supportée est décrite, le reste est refusé |
 | ❌ | refusé **explicitement**, avec une erreur au format d'Elasticsearch |
+
+Un ❌ porte toujours son **motif**, parce que « je ne sais pas encore faire » et
+« je refuse exprès » ne se corrigent pas de la même façon :
+
+| Motif | Ce qu'il veut dire |
+|---|---|
+| **hors périmètre assumé** | ferrite ne le fera pas : c'est ce qui fait le coût d'Elasticsearch, et ce dont un déploiement mono-conteneur n'a pas besoin |
+| **pas encore** | rien ne s'y oppose, ce n'est pas écrit. Un manque, pas une impossibilité |
+| **divergence de moteur** | tantivy ne fait pas exactement ce que fait Lucene ; l'accepter quand même rendrait d'autres résultats qu'Elasticsearch, en silence |
+| **comme Elasticsearch** | un refus qui **est** la compatibilité : Elasticsearch refuse aussi, et ferrite reproduit son erreur |
 
 La règle qui prime : **jamais d'échec silencieux**. Rien de ce qui figure en ❌
 ne renvoie « 0 résultat » ou un résultat partiel — tout produit une erreur
@@ -41,11 +59,36 @@ ne remonte pas.
 |---|---|---|
 | `GET /` | ✅ | `name`, `cluster_name`, `cluster_uuid`, bloc `version` complet, `tagline` |
 | `HEAD /` (`ping`) | ✅ | |
-| `GET /_cluster/health`, `/_cluster/health/{index}` | 🟡 | toujours `green`, 1 nœud, 0 shard non assigné. `wait_for_status` et `timeout` sont acceptés et sans objet (déjà vert) ; `level` est ❌ (il change la forme de la réponse) |
-| `GET /_cat/indices`, `/_cat/indices/{index}` | 🟡 | texte aligné par défaut, `?format=json`, `?v`. `h`, `s`, `bytes` sont ❌ |
-| `GET /_cat/health` | 🟡 | idem |
-| `GET /_nodes`, `/_nodes/{spec}` | 🟡 | un nœud, champs d'identité et `http` ; pas de `settings`, `os`, `jvm`. `{spec}` accepte `_all`, `_local`, `_master` et l'identifiant du nœud ; les sous-ressources (`_nodes/stats`, `_nodes/hot_threads`…) sont ❌ |
-| Tout le reste de `_cluster/*`, `_cat/*`, `_nodes/*` | ❌ | `no handler found for uri [...]`. C'est la famille d'écarts la plus fournie de la suite de conformance d'Elastic — 229 de ses 400 échecs sont une route qu'ES a et que ferrite n'a pas |
+| `GET /_cluster/health`, `/_cluster/health/{index}` | 🟡 | toujours `green`, 1 nœud, 0 shard non assigné. Supporté : `wait_for_status` (accepté et sans objet, déjà vert), `timeout` (accepté et sans objet, déjà vert). Refusé : `level` (il change la forme de la réponse), `wait_for_active_shards`, `wait_for_nodes`, `wait_for_events`, `wait_for_no_relocating_shards`, `wait_for_no_initializing_shards`, `local` (il n'y a qu'un nœud, donc rien de local à opposer au maître) |
+| `GET /_cat/indices`, `/_cat/indices/{index}` | 🟡 | texte aligné par défaut. Supporté : `format=json`, `v`. Refusé : `h`, `s`, `bytes`, `help` |
+| `GET /_cat/health` | 🟡 | idem. Supporté : `format=json`, `v`. Refusé : `h`, `s`, `help`, `ts` |
+| `GET /_nodes`, `/_nodes/{spec}` | 🟡 | un nœud, champs d'identité et `http` ; pas de `settings`, `os`, `jvm`. `{spec}` accepte `_all`, `_local`, `_master` et l'identifiant du nœud. Refusé : les sous-ressources (`_nodes/stats`, `_nodes/hot_threads`…) |
+
+## Hors périmètre déclaré
+
+Les familles de routes qu'Elasticsearch a et que ferrite n'a pas. Elles étaient
+jusqu'ici décrites en une phrase du README (« sharding, réplication, consensus…
+Painless ») : elles sont désormais **déclarées**, une famille à la fois, avec
+son motif. C'est ce qui permet au rapport de conformance de trancher — un cas
+qui échoue sur `_snapshot` n'est pas le même événement qu'un cas qui échoue sur
+`_search`.
+
+| Famille de routes | État | Pourquoi |
+|---|---|---|
+| Cluster distribué — `_cluster/state`, `_cluster/stats`, `_cluster/reroute`, `_cluster/allocation/explain`, `_cluster/pending_tasks`, `_remote/info`, `_nodes/stats`, `_tasks` | ❌ | **hors périmètre assumé** — ferrite est mono-nœud et mono-shard : il n'y a ni allocation, ni réallocation, ni tâche distribuée à rapporter, et une réponse plausible inventée pour ces routes serait un mensonge sur la nature du serveur |
+| Les `_cat/*` autres que `_cat/indices` et `_cat/health` | ❌ | **pas encore** — ce sont des vues de texte sur un état que ferrite a pour la plupart ; elles ne sont pas écrites, et leurs tests exigent en plus les colonnes `h`, `s` et `help` que les deux `_cat` existants n'ont pas non plus |
+| Snapshots, dépôts, restauration — `_snapshot/*` | ❌ | **hors périmètre assumé** — la sauvegarde d'un ferrite est la copie de son répertoire de données, ou l'export par `scroll` ; un dépôt de snapshots répliqué est de la mécanique de cluster |
+| Cycle de vie d'un index — `_close`, `_open`, `_stats`, `_forcemerge`, `_shrink`, `_split`, `_clone`, `_rollover`, `_recovery`, `_segments`, `_flush`, `_upgrade`, `_cache/clear`, `_shard_stores`, `_resolve/index` | ❌ | **pas encore** — la moitié de ces routes n'a pas de sens sans shards (`_shrink`, `_split`, `_recovery`, `_shard_stores`) ; l'autre moitié est un manque, `_stats` en tête, que réclament les tableaux de bord |
+| Les autres routes de recherche — `_field_caps`, `_search_shards`, `_termvectors`, `_mtermvectors`, `_suggest`, `_source` | ❌ | **pas encore** — aucune n'est demandée par le code client qu'on cherche à servir ; `_field_caps` est celle qui manquerait le plus, un Kibana s'en sert pour découvrir les champs |
+| L'API typée — un `{type}` dans l'URL, un `_type` dans la réponse, `include_type_name` | ❌ | **comme Elasticsearch** — elle a disparu en 8.x, la version que ferrite annonce : un vrai Elasticsearch 8 échoue au même endroit, et la rendre reviendrait à annoncer une version qu'on ne sert pas |
+| Scripting — `_scripts`, `_search/template`, `_render/template`, Painless | ❌ | **hors périmètre assumé** — un moteur de script est un langage à embarquer, à isoler et à maintenir : c'est exactement le genre de poids que ferrite existe pour ne pas porter |
+
+C'est de loin la famille d'écarts la plus fournie de la suite de conformance
+d'Elastic : l'écrasante majorité de ses échecs est un `no handler found for uri
+[...]`, c'est-à-dire une route qu'ES a et que ferrite n'a pas. Le compte du jour
+se lit dans [`conformance.json`](conformance.json), qui range désormais chaque
+échec en **régression** (une capacité déclarée supportée) ou en **coût de
+périmètre** (une capacité déclarée refusée).
 
 ## Index et mapping
 
@@ -53,20 +96,20 @@ ne remonte pas.
 |---|---|---|
 | Création à l'écriture | ✅ | indexer dans un index absent le **crée**, comme ES (`action.auto_create_index`) : `index`, `create`, `update`, et le `_bulk`. La lecture, la recherche et la suppression rendent toujours 404 |
 | Expressions d'index (`a,b`, `logs-*`, `_all`, exclusions, alias) | ✅ | sur **toutes** les routes, recherche comprise — voir la section dédiée |
-| `PUT /{index}` | 🟡 | `mappings` est **optionnel** (les champs viendront des documents). `settings` limité à `number_of_shards` / `number_of_replicas` (acceptés, sans effet : ferrite est mono-shard) et à `index.query.parse.allow_unmapped_fields` (voir plus bas), à plat comme imbriqué. `aliases` ✅ |
+| `PUT /{index}` | 🟡 | `mappings` est **optionnel** (les champs viendront des documents) ; `settings` s'écrit à plat comme imbriqué. Supporté : `mappings`, `aliases`, `settings.number_of_shards` (accepté, sans effet : ferrite est mono-shard), `settings.number_of_replicas` (accepté, sans effet), `settings.index.query.parse.allow_unmapped_fields` (voir plus bas). Refusé : tout autre réglage (refusé plutôt qu'ignoré) |
 | `DELETE /{index}` | ✅ | listes et motifs, sous `action.destructive_requires_name` (voir plus bas). `ignore_unavailable` honoré |
 | `HEAD /{index}` | ✅ | 200 dès que l'expression se résout, même sur zéro index — comme ES |
 | `GET /{index}` | ✅ | `aliases` / `mappings` / `settings`, une entrée par index visé |
 | `GET /{index}/_mapping` | ✅ | |
-| `GET /{index}/_mapping/field/{champs}` | ❌ | route absente (`no handler found`). ferrite a pourtant le mapping : c'est un manque, pas une impossibilité — 15 cas de la suite d'Elastic tombent dessus |
-| `GET /{index}/_settings` | ✅ | les réglages d'ES qu'un index a vraiment (`number_of_shards`, `uuid`, `creation_date`…), et `index.query.parse.allow_unmapped_fields` s'il a été posé |
-| `PUT /{index}/_settings` | ❌ | le seul réglage exploité se pose à la création : le changer à chaud demanderait de reconstruire la génération courante, et un client qui le croit changé chercherait longtemps |
-| `PUT /{index}/_mapping` | 🟡 | **ajoute** des champs (une nouvelle génération est construite). Changer le type d'un champ existant reste refusé, comme chez ES. Modifier `dynamic` : ❌ |
+| `GET /{index}/_mapping/field/{champs}` | ❌ | **pas encore** — route absente (`no handler found`) : ferrite a pourtant le mapping, c'est un manque et pas une impossibilité — 15 cas de la suite d'Elastic tombent dessus |
+| `GET /{index}/_settings` | 🟡 | les réglages d'ES qu'un index a vraiment (`number_of_shards`, `uuid`, `creation_date`…), et `index.query.parse.allow_unmapped_fields` s'il a été posé. Refusé : `GET /_settings` sans index (le nom est pris pour celui d'un index, d'où un `invalid_index_name_exception` qui trompe), `/{index}/_settings/{nom}` (filtrer par nom de réglage), `local` |
+| `PUT /{index}/_settings` | ❌ | **pas encore** — le seul réglage exploité se pose à la création : le changer à chaud demanderait de reconstruire la génération courante, et un client qui le croit changé chercherait longtemps |
+| `PUT /{index}/_mapping` | 🟡 | **ajoute** des champs (une nouvelle génération est construite). Changer le type d'un champ existant reste refusé, comme chez ES. Refusé : `dynamic` (le modifier après coup) |
 | `POST /{index}/_refresh` | ✅ | |
-| `POST\|GET /_analyze`, `/{index}/_analyze` | 🟡 | `text` (chaîne ou liste), `analyzer`, `field`. `tokenizer` / `filter` / `char_filter` explicites : ❌ |
+| `POST\|GET /_analyze`, `/{index}/_analyze` | 🟡 | Supporté : `text` (chaîne ou liste), `analyzer`, `field`. Refusé : `tokenizer`, `filter`, `char_filter` |
 | Mapping dynamique | ✅ | `dynamic` : `true` (défaut), `false`, `strict`. `runtime` ❌. Voir plus bas |
 | Alias | ✅ | voir la section dédiée |
-| Templates, ILM, `_stats`, `_close`, `_open` | ❌ | |
+| Templates, ILM, `_stats`, `_close`, `_open` | ❌ | **pas encore** — un template applique un mapping à un index qui n'existe pas encore ; rien ne s'y oppose ici, ce n'est pas écrit — et `_close` / `_open` supposent un index qu'on peut arrêter de servir sans le supprimer, état que ferrite n'a pas |
 
 ### Mapping dynamique
 
@@ -115,16 +158,16 @@ Chaque analyzer intégré est comparé **token par token** à son homonyme d'ES 
 **210 textes** français et anglais (`tests/compat/diff_analyzers.py`) : des
 phrases, et surtout un vocabulaire qui balaie les familles de suffixes.
 
-| Analyzer | État |
-|---|---|
-| `standard` (défaut) | ✅ identique à ES sur les 28 textes |
-| `simple` | ✅ identique |
-| `whitespace` | ✅ identique |
-| `keyword` | ✅ identique |
-| `stop` | ✅ identique |
-| `english` | ✅ identique — Porter porté depuis Lucene, filtre possessif compris |
-| `french` | ✅ identique — stemmer léger de Savoy, élision, mots vides relevés |
-| `german`, `spanish`, `snowball` et les autres langues | ❌ leur stemmer n'est pas porté |
+| Analyzer | État | Détail |
+|---|---|---|
+| `standard` (défaut) | ✅ | identique à ES sur les 210 textes |
+| `simple` | ✅ | identique |
+| `whitespace` | ✅ | identique |
+| `keyword` | ✅ | identique |
+| `stop` | ✅ | identique |
+| `english` | ✅ | identique — Porter porté depuis Lucene, filtre possessif compris |
+| `french` | ✅ | identique — stemmer léger de Savoy, élision, mots vides relevés |
+| `german`, `spanish`, `snowball` et les autres langues | ❌ | **divergence de moteur** — leur stemmer n'est pas porté, et livrer sous le nom d'ES un analyzer qui indexe autre chose changerait silencieusement les résultats d'un mapping existant |
 | Analyzers sur mesure (`settings.analysis`) | ✅ | voir ci-dessous |
 
 **Les stemmers de Lucene sont portés** (`src/stemmer.rs`) : le stemmer Porter
@@ -160,10 +203,10 @@ briques que ferrite a :
 | | État | Détail |
 |---|---|---|
 | `analysis.analyzer` de type `custom` | ✅ | `tokenizer` + liste de `filter` |
-| Tokenizers | 🟡 | `standard`, `whitespace`, `keyword`, `letter`, `lowercase`. Les tokenizers définis dans `analysis.tokenizer` (n-grams, `pattern`…) : ❌ |
-| Filtres | 🟡 | `lowercase`, `asciifolding`, `stop` (liste explicite ou `_english_`). Tout filtre à base de stemmer : ❌, pour la même raison que les analyzers de langue |
-| `char_filter` | ❌ | |
-| Un analyzer de type autre que `custom` (`french`, `standard` paramétré…) | ❌ | |
+| Tokenizers | 🟡 | Supporté : `standard`, `whitespace`, `keyword`, `letter`, `lowercase`. Refusé : `analysis.tokenizer` (un tokenizer défini par l'index — n-grams, `pattern`…) |
+| Filtres | 🟡 | Supporté : `lowercase`, `asciifolding`, `stop` (liste explicite ou `_english_`). Refusé : tout filtre à base de stemmer (même raison que les analyzers de langue) |
+| `char_filter` | ❌ | **pas encore** — aucun mapping venu d'une instance réelle n'en a encore demandé ; c'est une brique à écrire, pas un obstacle |
+| Un analyzer de type autre que `custom` (`french`, `standard` paramétré…) | ❌ | **pas encore** — paramétrer un analyzer intégré (`stopwords`, `stem_exclusion`) demande de reproduire sa composition interne exacte, qui n'est mesurée que dans sa forme par défaut |
 
 Le nom déclaré est celui que rend `_mapping`, et un analyzer sur mesure n'existe
 que dans son index — `_analyze` sans index ne connaît que les intégrés.
@@ -189,37 +232,37 @@ différemment. ferrite applique désormais les frontières de mots d'Unicode
 | `byte`, `short`, `integer`, `long` | ✅ | `i64` indexé + fast. Les bornes du type sont vérifiées à l'indexation |
 | `float`, `double` | ✅ | `f64` indexé + fast |
 | `boolean` | ✅ | `bool` indexé + fast |
-| `date` | 🟡 | `date` (millisecondes) indexé + fast. **`format` supporté** : motifs Java (`yyyy`, `yy`, `MM`, `dd`, `HH`, `hh`, `mm`, `ss`, `SSS`, `a`, `Z`, texte entre apostrophes), alternatives `\|\|`, et les noms prédéfinis courants (`strict_date_optional_time`, `epoch_millis`, `epoch_second`, `date`, `date_time`, `basic_date`…). Le format sert à lire (indexation, bornes d'un `range`, ancre d'une expression de date math) **et** à rendre (`*_as_string`). Une lettre non traduite (`G`, `w`, `e`…) est refusée explicitement plutôt qu'ignorée |
+| `date` | 🟡 | `date` (millisecondes) indexé + fast. **`format` supporté** : motifs Java (`yyyy`, `yy`, `MM`, `dd`, `HH`, `hh`, `mm`, `ss`, `SSS`, `a`, `Z`, texte entre apostrophes), alternatives `\|\|`, et les noms prédéfinis courants (`strict_date_optional_time`, `epoch_millis`, `epoch_second`, `date`, `date_time`, `basic_date`…). Le format sert à lire (indexation, bornes d'un `range`, ancre d'une expression de date math) **et** à rendre (`*_as_string`). Refusé : les lettres de motif non traduites (`G`, `w`, `e`… refusées explicitement plutôt qu'ignorées) |
 | Tableaux de valeurs | ✅ | tout champ accepte une valeur ou un tableau |
 | `null` | ✅ | ignoré à l'indexation, comme chez ES (pas de `null_value`) |
 | `object` (sous-objet), déclaré ou deviné | ✅ | indexé par **chemins pointés** (`client.ville`), comme ES. Un objet n'est pas un champ : il n'existe que par ses feuilles. `GET /_mapping` re-niche les chemins. Un tableau d'objets est aplati — comme ES, la correspondance entre sous-champs d'un même élément est perdue (c'est ce que `nested` corrige) |
 | `nested` | 🟡 | voir [la section dédiée](#nested) |
 | `join` (parent/enfant) | 🟡 | voir [la section dédiée](#join-parentenfant) |
-| Tout autre type (`geo_point`, `ip`, `binary`…) | ❌ | |
-| `analyzer` | 🟡 | sur un champ `text` : `standard` (défaut), `simple`, `whitespace`, `keyword`, `stop` — voir la section dédiée |
+| Tout autre type (`geo_point`, `ip`, `binary`…) | ❌ | **pas encore** — chacun demande son propre encodage et ses propres requêtes ; aucun n'est apparu dans les mappings des instances reprises jusqu'ici |
+| `analyzer` | 🟡 | sur un champ `text` — voir la section dédiée. Supporté : `standard`, `simple`, `whitespace`, `keyword`, `stop`, `english`, `french`. Refusé : `search_analyzer`, les analyzers des autres langues |
 | Multi-fields (`fields`) | ✅ | un seul niveau, comme ES. `titre.keyword` s'interroge et se trie comme un champ à part entière |
 | `ignore_above` | ✅ | sur un `keyword` : au-delà, la valeur reste dans `_source` sans être indexée |
-| Autres paramètres de champ (`index`, `null_value`, `doc_values`…) | ❌ | acceptés : `type`, `analyzer`, `fields`, `ignore_above`, `format` |
-| Noms de champ pointés (`a.b`) ou préfixés `_` | ❌ | |
+| Autres paramètres de champ (`index`, `null_value`, `doc_values`…) | ❌ | **pas encore** — les paramètres acceptés sont `type`, `analyzer`, `fields`, `ignore_above` et `format` ; les autres sont refusés plutôt qu'acceptés sans effet, faute de quoi un `index: false` laisserait croire qu'un champ n'est pas interrogeable |
+| Noms de champ pointés (`a.b`) ou préfixés `_` | ❌ | **divergence de moteur** — un point est le séparateur de chemin d'un objet et un `_` initial est réservé aux métadonnées : accepter ces noms rendrait ambigu ce qu'un `client.ville` désigne |
 
 ## Ingestion
 
 | Route | État | Détail |
 |---|---|---|
-| `PUT\|POST /{index}/_doc/{id}` | ✅ | `_version`, `result`, `_seq_no`, `_primary_term`, `_shards`. `op_type=create` honoré |
+| `PUT\|POST /{index}/_doc/{id}` | 🟡 | `_version`, `result`, `_seq_no`, `_primary_term`, `_shards`. `op_type=create` honoré. Refusé : `require_alias` (n'écrire que si la cible est un alias), `forced_refresh` (le champ de la réponse ; ES le rend sous `refresh=wait_for`) |
 | `POST /{index}/_doc` | ✅ | identifiant généré par le serveur |
 | `PUT\|POST /{index}/_create/{id}` | ✅ | 409 `version_conflict_engine_exception` si présent |
 | `GET /{index}/_doc/{id}` | ✅ | temps réel : une écriture non rafraîchie est visible. `_source_includes` / `_source_excludes` / `_source` supportés |
 | `HEAD /{index}/_doc/{id}` | ✅ | |
 | `DELETE /{index}/_doc/{id}` | ✅ | 404 + `result: not_found` si absent, `_version` reste monotone |
-| `POST\|PUT /_bulk`, `/{index}/_bulk` | 🟡 | NDJSON, actions `index` / `create` / `delete` / `update`, statut et erreur **par item**. Métadonnées acceptées : `_index`, `_id` ; les autres (`_routing`, `if_seq_no`, `pipeline`…) sont ❌ |
+| `POST\|PUT /_bulk`, `/{index}/_bulk` | 🟡 | NDJSON, actions `index` / `create` / `delete` / `update`, statut et erreur **par item**. Supporté : `_index` (métadonnée d'action), `_id` (métadonnée d'action). Refusé : les autres métadonnées (`_routing`, `if_seq_no`, `pipeline`…), `require_alias` |
 | `refresh` (`true` / `false` / `wait_for`) | ✅ | `wait_for` est traité comme `true` : le commit est synchrone et mono-shard |
-| `POST /{index}/_update/{id}` | 🟡 | `doc` (fusion partielle), `upsert`, `doc_as_upsert`, `detect_noop`. Les scripts : ❌ |
+| `POST /{index}/_update/{id}` | 🟡 | Supporté : `doc` (fusion partielle), `upsert`, `doc_as_upsert`, `detect_noop`. Refusé : `script` (voir le scripting, hors périmètre), `_source` (filtrer la réponse d'un `_update`), `require_alias` |
 | `GET\|POST /_mget`, `/{index}/_mget` | ✅ | formes `ids` et `docs`, filtrage de `_source`, erreur par document |
 | `GET\|POST /{index}/_count` | ✅ | avec ou sans `query` |
 | Versionnage optimiste `if_seq_no` / `if_primary_term` | ✅ | 409 `version_conflict_engine_exception` si le document a bougé |
-| `version` / `version_type` externes | ❌ | |
-| `_update_by_query`, `_delete_by_query`, `_reindex`, pipelines d'ingestion | ❌ | |
+| `version` / `version_type` externes | ❌ | **pas encore** — la version d'un document est gérée par ferrite ; l'imposer de l'extérieur demande de tenir un ordre que le serveur ne contrôle plus, et rien ne l'a encore réclamé |
+| `_update_by_query`, `_delete_by_query`, `_reindex`, pipelines d'ingestion | ❌ | **pas encore** — ce sont des tâches longues, donc l'API `_tasks` et son suivi ; le même travail s'écrit aujourd'hui côté client avec `scroll` + `_bulk` |
 
 Sans `refresh`, une écriture devient visible **au plus tard après 1 seconde**
 (équivalent du `index.refresh_interval` d'ES). Avec `refresh`, la visibilité est
@@ -243,8 +286,8 @@ export : sans lui, une sauvegarde d'index échoue au premier appel.
 | `POST\|GET /_search/scroll` | ✅ | `{"scroll_id": "...", "scroll": "1m"}`, ou en query string. Le `keep_alive` est repoussé à chaque page |
 | `POST\|GET /_search/scroll/{scroll_id}` | ✅ | la forme héritée, identifiant dans l'URL |
 | `DELETE /_search/scroll`, `/_search/scroll/{scroll_id}` | ✅ | une liste d'identifiants ou `_all` ; `{"succeeded": true, "num_freed": n}`. Fermer deux fois n'est pas une erreur |
-| `from` avec `scroll` | ❌ | comme ES : `action_request_validation_exception` |
-| Contexte expiré, fermé, ou jamais ouvert | ❌ | **404** `search_phase_execution_exception`, cause `search_context_missing_exception` — la forme exacte d'ES, celle que les clients reconnaissent |
+| `from` avec `scroll` | ❌ | **comme Elasticsearch** — comme ES : `action_request_validation_exception` |
+| Contexte expiré, fermé, ou jamais ouvert | ❌ | **comme Elasticsearch** — **404** `search_phase_execution_exception`, cause `search_context_missing_exception` — la forme exacte d'ES, celle que les clients reconnaissent |
 
 Ce que le contexte garantit, et comment :
 
@@ -282,7 +325,7 @@ un motif veut donc dire la même chose pour `_search`, `_count`, `_refresh`,
 | `audits-*,-audits-2026.07.*` | ✅ | les premiers, moins les seconds |
 | `ignore_unavailable` | ✅ | un nom concret absent est ignoré au lieu d'être une erreur |
 | `allow_no_indices` | ✅ | défaut `true` : un motif sans correspondance rend 0 résultat, pas 404 |
-| `expand_wildcards` | 🟡 | `open`, `hidden`, `all` sont équivalents (ferrite n'a ni index fermé ni index caché) ; `closed` seul ne désigne donc rien ; `none` est ❌ |
+| `expand_wildcards` | 🟡 | ferrite n'a ni index fermé ni index caché : `closed` seul ne désigne donc rien. Supporté : `open`, `hidden`, `all`, `closed` (accepté, ne désigne rien). Refusé : `none` |
 
 Un nom concret absent reste une erreur (`index_not_found_exception`), un nom
 réservé aussi (`invalid_index_name_exception` sur un `_` initial) : ES fait la
@@ -335,14 +378,15 @@ veulent dire quelque chose : 87/87.
 
 | Route | État | Détail |
 |---|---|---|
-| `POST /_aliases` | 🟡 | `add`, `remove`, `remove_index` ; `index`/`indices` et `alias`/`aliases` au singulier comme au pluriel, motifs compris. Tout ou rien, comme chez ES — c'est ce qui rend une bascule atomique |
+| `POST /_aliases` | 🟡 | `index`/`indices` et `alias`/`aliases` au singulier comme au pluriel, motifs compris. Tout ou rien, comme chez ES — c'est ce qui rend une bascule atomique. Supporté : `add`, `remove`, `remove_index`. Refusé : `filter`, `routing` (`index_routing`, `search_routing`) |
 | `PUT\|POST /{index}/_alias/{nom}` | ✅ | `{index}` est une expression, `{nom}` accepte une liste |
 | `DELETE /{index}/_alias/{nom}` | ✅ | `{nom}` accepte un motif |
 | `GET /_alias`, `/_alias/{nom}`, `/{index}/_alias`, `/{index}/_alias/{nom}` | ✅ | `{nom}` est une **expression** (liste, jokers, exclusions, `_all`) — voir ci-dessous — y compris le 404 « à corps de chaîne » d'ES (`{"error": "alias [x] missing", "status": 404}`), qui porte quand même les alias trouvés |
 | `HEAD /_alias/{nom}`, `/{index}/_alias/{nom}` | ✅ | |
 | `aliases` dans `PUT /{index}` | ✅ | posé après la création ; un alias refusé annule la création plutôt que de laisser une demande à moitié faite |
 | `is_write_index` | ✅ | désigne l'index qui reçoit les écritures quand l'alias en couvre plusieurs |
-| `filter`, `routing`, `index_routing`, `search_routing` sur un alias | ❌ | un alias filtré dont le filtre n'est pas appliqué rendrait précisément les documents qu'il est censé cacher ; le routage n'a rien à choisir sur un mono-shard |
+| `DELETE /{alias}` | ❌ | **comme Elasticsearch** — effacer des index que le client n'a pas nommés n'est pas une suppression, c'est un accident ; ES 8 refuse de la même façon (« The provided expression [x] matches an alias, specify the corresponding concrete indices instead ») |
+| `filter`, `routing`, `index_routing`, `search_routing` sur un alias | ❌ | **pas encore** — un alias filtré dont le filtre n'est pas appliqué rendrait précisément les documents qu'il est censé cacher ; le routage, lui, n'a rien à choisir sur un mono-shard |
 
 Écrire à travers un alias qui couvre plusieurs index est refusé tant qu'aucun
 `is_write_index` ne tranche — choisir à la place du client écrirait
@@ -385,17 +429,17 @@ compris.
 
 Mesuré, pas supposé — voir [`conformance.md`](conformance.md) :
 
-| Ce que c'est | État |
-|---|---|
-| `GET /_cat/aliases` | ❌ route absente (`no handler found`). Ses tests exigent aussi `h=`, `s=`, `help` sur les `_cat`, que ferrite n'a pas |
-| `remove_index` **et** `add` d'un alias du même nom dans le même `POST /_aliases` | ❌ refusé en 400 (« an index or data stream exists with the same name as the alias ») : ferrite applique les alias avant les suppressions, là où ES calcule tout l'état puis l'applique. C'est pourtant l'usage même de `remove_index` |
-| `GET /{index}/_alias` sur un index **fermé** | ❌ `_close` / `_open` sont hors périmètre |
+| Ce que c'est | État | Détail |
+|---|---|---|
+| `GET /_cat/aliases` | ❌ | **pas encore** — route absente (`no handler found`) ; ses tests exigent en plus `h=`, `s=` et `help` sur les `_cat`, que ferrite n'a pas — 10 cas de la suite d'Elastic tombent dessus |
+| `remove_index` **et** `add` d'un alias du même nom dans le même `POST /_aliases` | ❌ | **pas encore** — refusé en 400 (« an index or data stream exists with the same name as the alias ») : ferrite applique les alias avant les suppressions, là où ES calcule tout l'état puis l'applique — c'est pourtant l'usage même de `remove_index` |
+| `GET /{index}/_alias` sur un index **fermé** | ❌ | **pas encore** — `_close` / `_open` sont hors périmètre, donc un index fermé n'existe pas ici |
 
 ## Réglages de cluster
 
 | | État | Détail |
 |---|---|---|
-| `GET\|PUT /_cluster/settings` | 🟡 | `persistent` et `transient` (le second l'emporte), écriture plate ou imbriquée. Seul `action.destructive_requires_name` est reconnu ; tout autre réglage est refusé avec le message d'ES (`not recognized`) |
+| `GET\|PUT /_cluster/settings` | 🟡 | `persistent` et `transient` (le second l'emporte), écriture plate ou imbriquée. Supporté : `action.destructive_requires_name`. Refusé : tout autre réglage (refusé avec le message d'ES (`not recognized`)) |
 | `action.destructive_requires_name` | ✅ | `true` par défaut, **comme ES depuis la 8.0** |
 
 Conséquence : `DELETE /audits-2026.07.*` et `DELETE /_all` sont **refusés par
@@ -411,23 +455,23 @@ suppression de données.
 |---|---|---|
 | `match_all` | ✅ | `boost` |
 | `match_none` | ✅ | |
-| `match` | 🟡 | `query`, `operator` (`or` / `and`), `boost`, `lenient` (voir [la recherche libre](#la-recherche-libre-multi_match)). Sur un champ non analysé, se comporte comme `term`. `fuzziness`, `minimum_should_match`, `analyzer`, `zero_terms_query`, `prefix_length` : ❌ |
-| `multi_match` | 🟡 | `query`, `fields` (**obligatoire**, avec la pondération `champ^3`), `type` `best_fields` (défaut), `most_fields`, `phrase` et `phrase_prefix`, `operator`, `tie_breaker`, `lenient`, `max_expansions`, `boost` — voir [la recherche libre](#la-recherche-libre-multi_match). `cross_fields`, `bool_prefix`, `slop` et les motifs de champ (`tit*`) : ❌ |
-| `match_phrase` | 🟡 | les termes dans l'ordre, adjacents. `boost`. `slop` : ❌ (voir les divergences) |
-| `match_phrase_prefix` | 🟡 | les termes dans l'ordre, le dernier n'étant qu'un début de mot. `query`, `max_expansions` (défaut 50, comme ES), `boost`. Sur un champ `keyword`, refusée avec le message d'ES (« Can only use phrase prefix queries on text fields »). `slop`, `analyzer`, `zero_terms_query` : ❌ |
+| `match` | 🟡 | sur un champ non analysé, se comporte comme `term`. Voir [la recherche libre](#la-recherche-libre-multi_match) pour `lenient`. Supporté : `query`, `operator` (`or` / `and`), `boost`, `lenient`. Refusé : `fuzziness`, `minimum_should_match`, `analyzer`, `zero_terms_query`, `prefix_length` |
+| `multi_match` | 🟡 | voir [la recherche libre](#la-recherche-libre-multi_match). Supporté : `query`, `fields` (**obligatoire**, avec la pondération `champ^3`), `type` (`best_fields` (défaut), `most_fields`, `phrase`, `phrase_prefix`), `operator`, `tie_breaker`, `lenient`, `max_expansions`, `boost`. Refusé : `type: cross_fields`, `type: bool_prefix`, `slop`, les motifs de champ (`tit*`) |
+| `match_phrase` | 🟡 | les termes dans l'ordre, adjacents. Supporté : `query`, `boost`. Refusé : `slop` (voir les divergences) |
+| `match_phrase_prefix` | 🟡 | les termes dans l'ordre, le dernier n'étant qu'un début de mot. Sur un champ `keyword`, refusée avec le message d'ES (« Can only use phrase prefix queries on text fields »). Supporté : `query`, `max_expansions` (défaut 50, comme ES), `boost`. Refusé : `slop`, `analyzer`, `zero_terms_query` |
 | `exists` | ✅ | sur tous les types, y compris `text`. Un champ absent, `null`, ou un tableau vide compte comme absent, comme chez ES |
 | `term` | ✅ | forme courte et forme `{value, boost}`. Sur un champ `date`, la valeur désigne la **période** qu'elle couvre, pas un instant, et le date math y est accepté (comme chez ES). `case_insensitive` ❌ |
 | `ids` | ✅ | `values`, `boost` |
-| `prefix` | 🟡 | non analysée comme chez ES. `case_insensitive` (repliement ASCII, comme ES). `rewrite` : ❌ |
-| `wildcard` | 🟡 | `*`, `?`, et `\` qui échappe le caractère suivant. `case_insensitive`. `rewrite` : ❌ |
-| `regexp` | 🟡 | syntaxe **Lucene**, ancrée des deux côtés (voir les divergences). `value`, `flags`, `case_insensitive`, `boost`. Opérateurs `~` (complément), `&` (intersection), `<n-m>` (intervalle) et `#` (langage vide) : ❌, explicitement. `rewrite` / `max_determinized_states` : ❌ |
-| `fuzzy` | 🟡 | `fuzziness` (`AUTO` ou distance entière), `transpositions`, `boost`. `prefix_length` / `max_expansions` / `rewrite` : ❌ |
+| `prefix` | 🟡 | non analysée comme chez ES. Supporté : `value`, `case_insensitive` (repliement ASCII, comme ES), `boost`. Refusé : `rewrite` |
+| `wildcard` | 🟡 | `*`, `?`, et `\` qui échappe le caractère suivant. Supporté : `value`, `case_insensitive`, `boost`. Refusé : `rewrite` |
+| `regexp` | 🟡 | syntaxe **Lucene**, ancrée des deux côtés (voir les divergences). Supporté : `value`, `flags`, `case_insensitive`, `boost`. Refusé : les opérateurs `~`, `&`, `<n-m>`, `#` (refusés explicitement, jamais pris pour des littéraux), `rewrite`, `max_determinized_states` |
+| `fuzzy` | 🟡 | Supporté : `fuzziness` (`AUTO` ou distance entière), `transpositions`, `boost`. Refusé : `prefix_length`, `max_expansions`, `rewrite` |
 | `constant_score` | ✅ | `filter`, `boost` |
 | `dis_max` | ✅ | `queries`, `tie_breaker`, `boost` — voir [`src/dismax.rs`](../src/dismax.rs) |
-| `terms` | 🟡 | liste de valeurs, score constant comme chez ES. Sur un champ `date`, chaque valeur est une période, comme dans `term`. Les *terms lookup* sont ❌ |
-| `range` | 🟡 | `gte`, `gt`, `lte`, `lt`, `boost`, sur `keyword` / numérique / `date` / `boolean`. Sur un champ `date`, les bornes acceptent le **date math** (`now`, `now-1d/d`, `2026-03-15\|\|+1M`) et sont **arrondies selon leur côté** — voir [la section dédiée](#date-math-et-arrondi-des-bornes). `format` (lecture des bornes) ✅. Sur un champ `text` : ❌. `time_zone`, `relation` : ❌ |
-| `bool` | 🟡 | `must`, `should`, `filter`, `must_not`, `boost`, et `minimum_should_match` dans ses **quatre notations** — voir [la section dédiée](#minimum_should_match). `filter` ne contribue pas au score. Un `bool` qui n'a que des `must_not` matche tous les autres documents, comme chez ES. `_name` et `adjust_pure_negative` : ❌ |
-| `query_string`, `simple_query_string`, `function_score`, `boosting`, `intervals`, `terms_set`, `script`… | ❌ | `parsing_exception: unknown query [...]` |
+| `terms` | 🟡 | liste de valeurs, score constant comme chez ES. Sur un champ `date`, chaque valeur est une période, comme dans `term`. Refusé : les *terms lookup* (lire la liste des valeurs dans un autre document) |
+| `range` | 🟡 | sur `keyword` / numérique / `date` / `boolean`. Sur un champ `date`, les bornes acceptent le **date math** (`now`, `now-1d/d`, `2026-03-15\|\|+1M`) et sont **arrondies selon leur côté** — voir [la section dédiée](#date-math-et-arrondi-des-bornes). Supporté : `gte`, `gt`, `lte`, `lt`, `boost`, `format` (lecture des bornes). Refusé : `time_zone`, `relation`, un `range` sur un champ `text` |
+| `bool` | 🟡 | `filter` ne contribue pas au score. Un `bool` qui n'a que des `must_not` matche tous les autres documents, comme chez ES. Supporté : `must`, `should`, `filter`, `must_not`, `boost`, `minimum_should_match` (ses **quatre notations**, voir [la section dédiée](#minimum_should_match)). Refusé : `_name`, `adjust_pure_negative` |
+| `query_string`, `simple_query_string`, `function_score`, `boosting`, `intervals`, `terms_set`, `script`… | ❌ | **pas encore** — `parsing_exception: unknown query [...]`, avec la liste des clauses connues — la plus regrettée est `query_string`, dont la syntaxe est un langage à part entière |
 
 ### La recherche libre (`multi_match`)
 
@@ -443,8 +487,8 @@ premier client de ferrite.
 | `type: most_fields` | ✅ | les scores s'additionnent ; `tie_breaker` y est refusé (il n'y a pas de meilleur champ à départager) |
 | `type: phrase` | ✅ | `match_phrase` répété sur chaque champ, puis `dis_max` — exactement comme `best_fields` est `match` répété. `tie_breaker` s'applique |
 | `type: phrase_prefix` | ✅ | idem, le dernier mot n'étant qu'un début de mot. `max_expansions` (défaut 50, comme ES) |
-| `type: cross_fields`, `bool_prefix` | ❌ | refusés explicitement : le premier demande des statistiques de termes fusionnées entre champs, le second un scoring de suggestion |
-| `slop` | ❌ | refusé quel que soit le type, pour la raison qui le fait refuser dans `match_phrase` (divergence n° 2) |
+| `type: cross_fields`, `bool_prefix` | ❌ | **divergence de moteur** — le premier demande des statistiques de termes fusionnées entre champs, le second un scoring de suggestion : les approcher rendrait un autre classement que celui qu'un client attend |
+| `slop` | ❌ | **divergence de moteur** — refusé quel que soit le type, pour la raison qui le fait refuser dans `match_phrase` (divergence n° 2) |
 | `operator` sous `phrase` / `phrase_prefix` | 🟡 | accepté et sans effet — c'est ce que fait ES (mesuré) |
 
 Mesuré contre un ES 8.15.0, en documents **et en ordre**
@@ -506,21 +550,23 @@ de documents que demandé, sans que rien ne le signale.
 
 | | État | Détail |
 |---|---|---|
+| `POST\|GET /{index}/_search`, `POST\|GET /_search` | ✅ | `{index}` est une **expression** au sens d'ES (voir [Expressions d'index](#expressions-dindex-listes-motifs-alias)) ; sans index, la recherche porte sur tout, comme `_all` |
 | `query` | ✅ | |
 | `from` / `size` | ✅ | corps ou query string. `from + size > 10000` ❌ (`max_result_window`) |
-| `sort` | 🟡 | multi-clés, `asc` / `desc`, sur `keyword` / numérique / `date` / `boolean`, plus `_score` et `_doc`. Valeurs manquantes en dernier (`missing: _last`). Le tableau `sort` est rendu dans chaque hit. En multi-index, un champ non mappé par un des index donne un échec **de ce shard**, comme chez ES. Tri sur un champ `text` ❌ ; `missing`, `mode`, `nested`, `unmapped_type`, tri par script ❌ |
+| `sort` | 🟡 | multi-clés, `asc` / `desc`, sur `keyword` / numérique / `date` / `boolean`, plus `_score` et `_doc`. Valeurs manquantes en dernier (`missing: _last`). Le tableau `sort` est rendu dans chaque hit. En multi-index, un champ non mappé par un des index donne un échec **de ce shard**, comme chez ES. Refusé : `missing`, `mode`, `nested`, `unmapped_type`, le tri par script, le tri sur un champ `text` |
 | `_source` | ✅ | `true` / `false`, chaîne, liste, `{includes, excludes}`, motifs `*`. Aussi via `_source_includes` / `_source_excludes` en query string |
-| `track_total_hits` | 🟡 | le total est **toujours exact** (`relation: "eq"`), donc `true` et une valeur numérique sont acceptés ; `false` est ❌ |
+| `track_total_hits` | 🟡 | le total est **toujours exact** (`relation: "eq"`). Supporté : `true`, une valeur numérique. Refusé : `false` (il n'y a rien à économiser sur un total déjà exact) |
 | Scoring | ✅ | BM25 (tantivy), `_score` et `max_score` renseignés ; `null` quand un tri est demandé, comme chez ES |
 | Format de réponse | ✅ | `took`, `timed_out`, `_shards` (avec `failures[]` quand un index n'a pas su répondre), `hits.total.{value,relation}`, `hits.max_score`, `hits.hits[]` avec `_index` / `_id` / `_score` / `_source` / `sort` |
 | `preference` | 🟡 | accepté, sans objet : il n'y a qu'un shard |
 | `aggs` / `aggregations` | 🟡 | voir la section dédiée |
 | `scroll` | ✅ | `?scroll=1m` ouvre un contexte figé et rend un `_scroll_id` — voir la section dédiée |
-| `highlight`, `search_after`, PIT, `collapse`, `knn`, `explain`, `fields`, `post_filter`, `min_score`, `suggest`, `rescore`, `track_scores`, `q` | ❌ | |
+| `highlight`, `search_after`, PIT, `collapse`, `knn`, `explain`, `fields`, `docvalue_fields`, `stored_fields`, `seq_no_primary_term`, `post_filter`, `min_score`, `suggest`, `rescore`, `track_scores`, `q` | ❌ | **pas encore** — aucun n'est un obstacle de moteur ; `highlight` et `search_after` sont les deux qui manquent le plus, le premier pour une liste de résultats, le second pour paginer au-delà de 10 000 |
 | `ignore_unavailable`, `allow_no_indices`, `expand_wildcards` | ✅ | voir [Expressions d'index](#expressions-dindex-listes-motifs-alias) — `expand_wildcards=none` reste ❌ |
-| `routing`, `filter_path`, `typed_keys` | ❌ | ferrite est mono-shard (`routing` n'a rien à choisir) ; les deux autres changent la forme de la réponse |
-| `rest_total_hits_as_int` | ❌ | il change la forme de `hits.total` (nombre au lieu d'objet). Accepté par ES 8, refusé ici : du code venu de la 6.x/7.x s'en sert encore, voir [`compat-es7.md`](compat-es7.md) |
-| `_msearch`, `_search/template`, `_explain`, `_validate` | ❌ | |
+| `routing`, `filter_path`, `typed_keys` | ❌ | **hors périmètre assumé** — ferrite est mono-shard, `routing` n'a rien à choisir ; les deux autres changent la forme de la réponse, et une forme qui dépend d'un paramètre est une seconde API à mesurer |
+| `search_type`, `max_concurrent_shard_requests`, `pre_filter_shard_size`, `batched_reduce_size` | ❌ | **hors périmètre assumé** — ils reglent la façon dont une recherche se distribue entre shards ; il n'y en a qu'un, donc rien à distribuer et rien à régler |
+| `rest_total_hits_as_int` | ❌ | **pas encore** — il change la forme de `hits.total` (nombre au lieu d'objet) ; ES 8 l'accepte encore et du code venu de la 6.x/7.x s'en sert, voir [`compat-es7.md`](compat-es7.md) |
+| `_msearch`, `_search/template`, `_explain`, `_validate` | ❌ | **pas encore** — `_msearch` est le plus regretté : un tableau de bord qui pose six facettes fait six appels au lieu d'un. Les trois autres sont des outils de mise au point |
 
 Les paramètres purement cosmétiques `pretty`, `human` et `error_trace` sont
 acceptés partout ; `pretty` est implémenté (indentation de la réponse).
@@ -549,8 +595,8 @@ Tout ce qui suit est mesuré contre un ES 8.15.0
 | date partielle (`2026-03-15`, `2026-03`, `2026-03-15T12`) | ✅ | les champs d'heure absents sont remplis au maximum sous une borne haute (`lte: "2026-03-15"` couvre la journée), les champs de **date** absents restent au minimum (`2026-03` → le 1er, pas le 31) |
 | `format` sur `range` | ✅ | remplace le format du champ pour **lire les bornes** ; il ne s'applique pas à `now` |
 | dans `term`, `terms`, `match`, et sous un `nested` | ✅ | une date y désigne la période qu'elle couvre : `{"term": {"d": "2026-03-15"}}` rend toute la journée, comme chez ES |
-| à l'indexation | ❌ | `{"d": "now"}` est refusé, comme chez ES : le document porterait une date qui dépend de l'instant où il a été écrit |
-| `time_zone` | ❌ | il déplace les arrondis, donc les résultats ; l'accepter sans l'appliquer rendrait les mauvais documents en silence |
+| à l'indexation | ❌ | **comme Elasticsearch** — `{"d": "now"}` est refusé, comme chez ES : le document porterait une date qui dépend de l'instant où il a été écrit |
+| `time_zone` | ❌ | **pas encore** — il déplace les arrondis, donc les résultats ; l'accepter sans l'appliquer rendrait les mauvais documents en silence |
 
 Une expression malformée est refusée avec **le message d'ES, mot pour mot**
 (`unit [q] not supported for date math [-1q]`, `truncated date math [/]`,
@@ -567,14 +613,14 @@ Comparées champ par champ à un vrai ES 8.15 sur 45 requêtes
 | Agrégation | État | Détail |
 |---|---|---|
 | `min`, `max`, `sum`, `avg`, `value_count`, `stats` | ✅ | `field`, `missing`. Sur un champ `date`, la valeur est en millisecondes et le `*_as_string` est rendu comme chez ES |
-| `terms` | 🟡 | `field`, `size`, `shard_size`, `min_doc_count`, `order` (`_count` / `_key` seulement). `doc_count_error_upper_bound` et `sum_other_doc_count` sont renseignés. `include` / `exclude` / ordre par sous-agrégation : ❌ |
+| `terms` | 🟡 | `doc_count_error_upper_bound` et `sum_other_doc_count` sont renseignés. Supporté : `field`, `size`, `shard_size`, `min_doc_count`, `order` (`_count` / `_key` seulement). Refusé : `include`, `exclude`, l'ordre par sous-agrégation |
 | `range` | ✅ | `ranges` avec `from` / `to` / `key`, `keyed` |
 | `histogram` | ✅ | `interval`, `offset`, `min_doc_count`, `hard_bounds`, `extended_bounds`, `keyed` |
-| `date_histogram` | 🟡 | `fixed_interval` et les mêmes paramètres. `calendar_interval` ❌ (mois et années civils n'ont pas d'équivalent dans tantivy) |
+| `date_histogram` | 🟡 | Supporté : `fixed_interval`, `offset`, `min_doc_count`, `hard_bounds`, `extended_bounds`, `keyed` (comme `histogram`). Refusé : `calendar_interval` (mois et années civils n'ont pas d'équivalent dans tantivy) |
 | Sous-agrégations | ✅ | sur tous les types de buckets, vérifiées jusqu'à trois niveaux |
-| `cardinality` | ❌ | **refus assumé** : l'estimation de tantivy diffère de celle d'ES (mesuré : 582 valeurs distinctes annoncées là où ES en compte 598), y compris sous le seuil où ES est exact |
-| `filter` | 🟡 | n'importe quelle requête du Query DSL, avec ses sous-agrégations. **Exécutée par ferrite**, pas par tantivy : compter les documents qui correspondent à la recherche *et* au filtre, c'est exécuter l'intersection des deux requêtes (voir les divergences). Sous une agrégation de buckets : ❌, explicitement |
-| `percentiles`, `extended_stats`, `top_hits`, `composite`, `filters`, `nested`, `significant_terms`, `date_range`, `ip_range`… | ❌ | |
+| `cardinality` | ❌ | **divergence de moteur** — l'estimation de tantivy diffère de celle d'ES (mesuré : 582 valeurs distinctes annoncées là où ES en compte 598), y compris sous le seuil où ES est exact — un compte approché sous le nom d'ES serait faux sans le dire |
+| `filter` | 🟡 | n'importe quelle requête du Query DSL, avec ses sous-agrégations. **Exécutée par ferrite**, pas par tantivy : compter les documents qui correspondent à la recherche *et* au filtre, c'est exécuter l'intersection des deux requêtes (voir les divergences). Refusé : sous une agrégation de buckets (il faudrait rejouer sa requête bucket par bucket) |
+| `percentiles`, `extended_stats`, `top_hits`, `composite`, `filters`, `nested`, `significant_terms`, `date_range`, `ip_range`… | ❌ | **pas encore** — `filters` (la sœur plurielle de `filter`) et `top_hits` sont les deux qui manquent le plus ; aucune n'est un obstacle de moteur |
 
 Agréger sur un champ `text` est refusé, comme chez ES (`Fielddata is disabled`) :
 utiliser son multi-field `.keyword`.
@@ -622,13 +668,13 @@ mesures : [`nested-join.md`](nested-join.md), `src/nested.rs`.
 | | État | Détail |
 |---|---|---|
 | `{"nested": {"path", "query"}}` | ✅ | `path` doit être un champ déclaré `nested` |
-| Clauses internes | 🟡 | `term`, `terms`, `match` (sur un champ non analysé), `range`, `exists`, `prefix`, `match_all`, `match_none`, et `bool` (`must` / `filter` / `should` + [`minimum_should_match`](#minimum_should_match) dans ses quatre notations / `must_not`). Le minimum s'y compte **par élément**, comme ES le compte par document caché |
-| Champ `text` dans une clause interne | ❌ | les colonnes portent la valeur, pas les termes analysés. Interroger son multi-field `.keyword`, ou sortir la clause du `nested` |
-| `nested` dans un `nested` | ❌ | il faudrait un indice d'élément par niveau |
-| `score_mode` | 🟡 | `none` et `avg` acceptés ; le score est celui de la requête interne évaluée à plat, il n'y a pas de score par élément. Les autres modes sont ❌ |
-| `inner_hits`, `ignore_unmapped` | ❌ | |
+| Clauses internes | 🟡 | le minimum s'y compte **par élément**, comme ES le compte par document caché. Supporté : `term`, `terms`, `range`, `exists`, `prefix`, `match_all`, `match_none`, `match` (sur un champ non analysé), `bool` (`must` / `filter` / `should` + [`minimum_should_match`](#minimum_should_match) dans ses quatre notations / `must_not`) |
+| Champ `text` dans une clause interne | ❌ | **divergence de moteur** — les colonnes portent la valeur, pas les termes analysés : interroger son multi-field `.keyword`, ou sortir la clause du `nested` |
+| `nested` dans un `nested` | ❌ | **pas encore** — il faudrait un indice d'élément par niveau |
+| `score_mode` | 🟡 | le score est celui de la requête interne évaluée à plat, il n'y a pas de score par élément. Supporté : `none`, `avg`. Refusé : `max`, `min`, `sum` |
+| `inner_hits`, `ignore_unmapped` | ❌ | **pas encore** — `inner_hits` demande de rendre l'élément qui a correspondu : ferrite le sait (c'est la colonne jumelle), il ne l'expose simplement pas |
 | Champs devinés sous un `nested` | ✅ | le mapping dynamique fonctionne, et la corrélation avec |
-| Tri et agrégations sur un champ `nested` | ❌ | ils porteraient sur les valeurs à plat, donc sur autre chose que ce que la requête a filtré |
+| Tri et agrégations sur un champ `nested` | ❌ | **divergence de moteur** — ils porteraient sur les valeurs à plat, donc sur autre chose que ce que la requête a filtré |
 
 ### `join` (parent/enfant)
 
@@ -643,11 +689,10 @@ distribué ; mono-shard, parent et enfant sont forcément au même endroit.
 |---|---|---|
 | `{"type": "join", "relations": {...}}` | ✅ | un seul champ `join` par index, plusieurs relations et plusieurs enfants par parent |
 | Indexation | ✅ | `"lien": "article"` ou `{"name": "commentaire", "parent": "a1"}`. Un enfant sans `parent`, un parent avec, ou une relation non déclarée : refus explicite |
-| `has_child`, `has_parent` | 🟡 | avec n'importe quelle requête interne. `score_mode` : `none` seulement (la jointure rend un score constant) |
+| `has_child`, `has_parent` | 🟡 | avec n'importe quelle requête interne. Supporté : `score_mode` (`none` seulement — la jointure rend un score constant). Refusé : `min_children`, `max_children`, `inner_hits`, `ignore_unmapped` |
 | `parent_id` | ✅ | |
 | `{"term": {"lien": "article"}}` | ✅ | le champ `join` se filtre comme un `keyword`, sous son propre nom, comme chez ES |
 | `routing` | 🟡 | accepté et sans objet : il n'y a qu'un shard, donc rien à co-localiser. C'est **une contrainte d'ES en moins** |
-| `inner_hits`, `min_children`, `max_children`, `ignore_unmapped` | ❌ | |
 
 ## Erreurs
 

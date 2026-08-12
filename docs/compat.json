@@ -1,0 +1,2066 @@
+{
+  "schema": 1,
+  "genere_par": "tests/compat/genere_compat.py",
+  "source": "compat.yaml",
+  "api_cible": "8.15.0",
+  "etats": {
+    "supporte": {
+      "icone": "✅",
+      "legende": "supporté, vérifié par le harnais de compat (`tests/compat/`)"
+    },
+    "partiel": {
+      "icone": "🟡",
+      "legende": "partiel — la partie supportée est décrite, le reste est refusé"
+    },
+    "refuse": {
+      "icone": "❌",
+      "legende": "refusé **explicitement**, avec une erreur au format d'Elasticsearch"
+    }
+  },
+  "motifs": {
+    "hors_perimetre": {
+      "titre": "hors périmètre assumé",
+      "legende": "ferrite ne le fera pas : c'est ce qui fait le coût d'Elasticsearch, et ce dont un déploiement mono-conteneur n'a pas besoin"
+    },
+    "pas_encore": {
+      "titre": "pas encore",
+      "legende": "rien ne s'y oppose, ce n'est pas écrit. Un manque, pas une impossibilité"
+    },
+    "divergence_moteur": {
+      "titre": "divergence de moteur",
+      "legende": "tantivy ne fait pas exactement ce que fait Lucene ; l'accepter quand même rendrait d'autres résultats qu'Elasticsearch, en silence"
+    },
+    "comme_es": {
+      "titre": "comme Elasticsearch",
+      "legende": "un refus qui **est** la compatibilité : Elasticsearch refuse aussi, et ferrite reproduit son erreur"
+    }
+  },
+  "totaux": {
+    "capacites": 178,
+    "supporte": 94,
+    "partiel": 43,
+    "refuse": 41,
+    "poids_renseignes": 0
+  },
+  "capacites": [
+    {
+      "id": "cluster.racine",
+      "table": "cluster",
+      "nom": "`GET /`",
+      "nom_texte": "GET /",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "`name`, `cluster_name`, `cluster_uuid`, bloc `version` complet, `tagline`"
+    },
+    {
+      "id": "cluster.ping",
+      "table": "cluster",
+      "nom": "`HEAD /` (`ping`)",
+      "nom_texte": "HEAD / (ping)",
+      "etat": "supporte",
+      "poids": null
+    },
+    {
+      "id": "cluster.health",
+      "table": "cluster",
+      "nom": "`GET /_cluster/health`, `/_cluster/health/{index}`",
+      "nom_texte": "GET /_cluster/health, /_cluster/health/{index}",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "toujours `green`, 1 nœud, 0 shard non assigné",
+      "parametres": {
+        "supportes": [
+          "wait_for_status",
+          "timeout"
+        ],
+        "refuses": [
+          "level",
+          "wait_for_active_shards",
+          "wait_for_nodes",
+          "wait_for_events",
+          "wait_for_no_relocating_shards",
+          "wait_for_no_initializing_shards",
+          "local"
+        ]
+      }
+    },
+    {
+      "id": "cluster.cat_indices",
+      "table": "cluster",
+      "nom": "`GET /_cat/indices`, `/_cat/indices/{index}`",
+      "nom_texte": "GET /_cat/indices, /_cat/indices/{index}",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "texte aligné par défaut",
+      "parametres": {
+        "supportes": [
+          "format=json",
+          "v"
+        ],
+        "refuses": [
+          "h",
+          "s",
+          "bytes",
+          "help"
+        ]
+      }
+    },
+    {
+      "id": "cluster.cat_health",
+      "table": "cluster",
+      "nom": "`GET /_cat/health`",
+      "nom_texte": "GET /_cat/health",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "idem",
+      "parametres": {
+        "supportes": [
+          "format=json",
+          "v"
+        ],
+        "refuses": [
+          "h",
+          "s",
+          "help",
+          "ts"
+        ]
+      }
+    },
+    {
+      "id": "cluster.nodes",
+      "table": "cluster",
+      "nom": "`GET /_nodes`, `/_nodes/{spec}`",
+      "nom_texte": "GET /_nodes, /_nodes/{spec}",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "un nœud, champs d'identité et `http` ; pas de `settings`, `os`, `jvm`. `{spec}` accepte `_all`, `_local`, `_master` et l'identifiant du nœud",
+      "parametres": {
+        "refuses": [
+          "les sous-ressources"
+        ]
+      }
+    },
+    {
+      "id": "hors.cluster_distribue",
+      "table": "hors_perimetre",
+      "nom": "Cluster distribué — `_cluster/state`, `_cluster/stats`, `_cluster/reroute`, `_cluster/allocation/explain`, `_cluster/pending_tasks`, `_remote/info`, `_nodes/stats`, `_tasks`",
+      "nom_texte": "Cluster distribué — _cluster/state, _cluster/stats, _cluster/reroute, _cluster/allocation/explain, _cluster/pending_tasks, _remote/info, _nodes/stats, _tasks",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "hors_perimetre",
+      "raison": "ferrite est mono-nœud et mono-shard : il n'y a ni allocation, ni réallocation, ni tâche distribuée à rapporter, et une réponse plausible inventée pour ces routes serait un mensonge sur la nature du serveur."
+    },
+    {
+      "id": "hors.cat",
+      "table": "hors_perimetre",
+      "nom": "Les `_cat/*` autres que `_cat/indices` et `_cat/health`",
+      "nom_texte": "Les _cat/* autres que _cat/indices et _cat/health",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "pas_encore",
+      "raison": "ce sont des vues de texte sur un état que ferrite a pour la plupart ; elles ne sont pas écrites, et leurs tests exigent en plus les colonnes `h`, `s` et `help` que les deux `_cat` existants n'ont pas non plus."
+    },
+    {
+      "id": "hors.snapshots",
+      "table": "hors_perimetre",
+      "nom": "Snapshots, dépôts, restauration — `_snapshot/*`",
+      "nom_texte": "Snapshots, dépôts, restauration — _snapshot/*",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "hors_perimetre",
+      "raison": "la sauvegarde d'un ferrite est la copie de son répertoire de données, ou l'export par `scroll` ; un dépôt de snapshots répliqué est de la mécanique de cluster."
+    },
+    {
+      "id": "hors.cycle_de_vie",
+      "table": "hors_perimetre",
+      "nom": "Cycle de vie d'un index — `_close`, `_open`, `_stats`, `_forcemerge`, `_shrink`, `_split`, `_clone`, `_rollover`, `_recovery`, `_segments`, `_flush`, `_upgrade`, `_cache/clear`, `_shard_stores`, `_resolve/index`",
+      "nom_texte": "Cycle de vie d'un index — _close, _open, _stats, _forcemerge, _shrink, _split, _clone, _rollover, _recovery, _segments, _flush, _upgrade, _cache/clear, _shard_stores, _resolve/index",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "pas_encore",
+      "raison": "la moitié de ces routes n'a pas de sens sans shards (`_shrink`, `_split`, `_recovery`, `_shard_stores`) ; l'autre moitié est un manque, `_stats` en tête, que réclament les tableaux de bord."
+    },
+    {
+      "id": "hors.autres_recherches",
+      "table": "hors_perimetre",
+      "nom": "Les autres routes de recherche — `_field_caps`, `_search_shards`, `_termvectors`, `_mtermvectors`, `_suggest`, `_source`",
+      "nom_texte": "Les autres routes de recherche — _field_caps, _search_shards, _termvectors, _mtermvectors, _suggest, _source",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "pas_encore",
+      "raison": "aucune n'est demandée par le code client qu'on cherche à servir ; `_field_caps` est celle qui manquerait le plus, un Kibana s'en sert pour découvrir les champs."
+    },
+    {
+      "id": "hors.api_typee",
+      "table": "hors_perimetre",
+      "nom": "L'API typée — un `{type}` dans l'URL, un `_type` dans la réponse, `include_type_name`",
+      "nom_texte": "L'API typée — un {type} dans l'URL, un _type dans la réponse, include_type_name",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "comme_es",
+      "raison": "elle a disparu en 8.x, la version que ferrite annonce : un vrai Elasticsearch 8 échoue au même endroit, et la rendre reviendrait à annoncer une version qu'on ne sert pas."
+    },
+    {
+      "id": "hors.scripts",
+      "table": "hors_perimetre",
+      "nom": "Scripting — `_scripts`, `_search/template`, `_render/template`, Painless",
+      "nom_texte": "Scripting — _scripts, _search/template, _render/template, Painless",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "hors_perimetre",
+      "raison": "un moteur de script est un langage à embarquer, à isoler et à maintenir : c'est exactement le genre de poids que ferrite existe pour ne pas porter."
+    },
+    {
+      "id": "index.creation_a_lecriture",
+      "table": "index",
+      "nom": "Création à l'écriture",
+      "nom_texte": "Création à l'écriture",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "indexer dans un index absent le **crée**, comme ES (`action.auto_create_index`) : `index`, `create`, `update`, et le `_bulk`. La lecture, la recherche et la suppression rendent toujours 404"
+    },
+    {
+      "id": "index.expressions",
+      "table": "index",
+      "nom": "Expressions d'index (`a,b`, `logs-*`, `_all`, exclusions, alias)",
+      "nom_texte": "Expressions d'index (a,b, logs-*, _all, exclusions, alias)",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "sur **toutes** les routes, recherche comprise — voir la section dédiée"
+    },
+    {
+      "id": "index.creation",
+      "table": "index",
+      "nom": "`PUT /{index}`",
+      "nom_texte": "PUT /{index}",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "`mappings` est **optionnel** (les champs viendront des documents) ; `settings` s'écrit à plat comme imbriqué",
+      "parametres": {
+        "supportes": [
+          "mappings",
+          "aliases",
+          "settings.number_of_shards",
+          "settings.number_of_replicas",
+          "settings.index.query.parse.allow_unmapped_fields"
+        ],
+        "refuses": [
+          "tout autre réglage"
+        ]
+      }
+    },
+    {
+      "id": "index.suppression",
+      "table": "index",
+      "nom": "`DELETE /{index}`",
+      "nom_texte": "DELETE /{index}",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "listes et motifs, sous `action.destructive_requires_name` (voir plus bas). `ignore_unavailable` honoré"
+    },
+    {
+      "id": "index.existe",
+      "table": "index",
+      "nom": "`HEAD /{index}`",
+      "nom_texte": "HEAD /{index}",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "200 dès que l'expression se résout, même sur zéro index — comme ES"
+    },
+    {
+      "id": "index.lecture",
+      "table": "index",
+      "nom": "`GET /{index}`",
+      "nom_texte": "GET /{index}",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "`aliases` / `mappings` / `settings`, une entrée par index visé"
+    },
+    {
+      "id": "index.mapping",
+      "table": "index",
+      "nom": "`GET /{index}/_mapping`",
+      "nom_texte": "GET /{index}/_mapping",
+      "etat": "supporte",
+      "poids": null
+    },
+    {
+      "id": "index.mapping_field",
+      "table": "index",
+      "nom": "`GET /{index}/_mapping/field/{champs}`",
+      "nom_texte": "GET /{index}/_mapping/field/{champs}",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "pas_encore",
+      "raison": "route absente (`no handler found`) : ferrite a pourtant le mapping, c'est un manque et pas une impossibilité — 15 cas de la suite d'Elastic tombent dessus."
+    },
+    {
+      "id": "index.settings_lecture",
+      "table": "index",
+      "nom": "`GET /{index}/_settings`",
+      "nom_texte": "GET /{index}/_settings",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "les réglages d'ES qu'un index a vraiment (`number_of_shards`, `uuid`, `creation_date`…), et `index.query.parse.allow_unmapped_fields` s'il a été posé",
+      "parametres": {
+        "refuses": [
+          "GET /_settings sans index",
+          "/{index}/_settings/{nom}",
+          "local"
+        ]
+      }
+    },
+    {
+      "id": "index.settings_ecriture",
+      "table": "index",
+      "nom": "`PUT /{index}/_settings`",
+      "nom_texte": "PUT /{index}/_settings",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "pas_encore",
+      "raison": "le seul réglage exploité se pose à la création : le changer à chaud demanderait de reconstruire la génération courante, et un client qui le croit changé chercherait longtemps."
+    },
+    {
+      "id": "index.mapping_ecriture",
+      "table": "index",
+      "nom": "`PUT /{index}/_mapping`",
+      "nom_texte": "PUT /{index}/_mapping",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "**ajoute** des champs (une nouvelle génération est construite). Changer le type d'un champ existant reste refusé, comme chez ES",
+      "parametres": {
+        "refuses": [
+          "dynamic"
+        ]
+      }
+    },
+    {
+      "id": "index.refresh",
+      "table": "index",
+      "nom": "`POST /{index}/_refresh`",
+      "nom_texte": "POST /{index}/_refresh",
+      "etat": "supporte",
+      "poids": null
+    },
+    {
+      "id": "index.analyze",
+      "table": "index",
+      "nom": "`POST|GET /_analyze`, `/{index}/_analyze`",
+      "nom_texte": "POST|GET /_analyze, /{index}/_analyze",
+      "etat": "partiel",
+      "poids": null,
+      "parametres": {
+        "supportes": [
+          "text",
+          "analyzer",
+          "field"
+        ],
+        "refuses": [
+          "tokenizer",
+          "filter",
+          "char_filter"
+        ]
+      }
+    },
+    {
+      "id": "index.mapping_dynamique",
+      "table": "index",
+      "nom": "Mapping dynamique",
+      "nom_texte": "Mapping dynamique",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "`dynamic` : `true` (défaut), `false`, `strict`. `runtime` ❌. Voir plus bas"
+    },
+    {
+      "id": "index.alias",
+      "table": "index",
+      "nom": "Alias",
+      "nom_texte": "Alias",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "voir la section dédiée"
+    },
+    {
+      "id": "index.templates",
+      "table": "index",
+      "nom": "Templates, ILM, `_stats`, `_close`, `_open`",
+      "nom_texte": "Templates, ILM, _stats, _close, _open",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "pas_encore",
+      "raison": "un template applique un mapping à un index qui n'existe pas encore ; rien ne s'y oppose ici, ce n'est pas écrit — et `_close` / `_open` supposent un index qu'on peut arrêter de servir sans le supprimer, état que ferrite n'a pas."
+    },
+    {
+      "id": "analyzer.standard",
+      "table": "analyzers",
+      "nom": "`standard` (défaut)",
+      "nom_texte": "standard (défaut)",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "identique à ES sur les 210 textes"
+    },
+    {
+      "id": "analyzer.simple",
+      "table": "analyzers",
+      "nom": "`simple`",
+      "nom_texte": "simple",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "identique"
+    },
+    {
+      "id": "analyzer.whitespace",
+      "table": "analyzers",
+      "nom": "`whitespace`",
+      "nom_texte": "whitespace",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "identique"
+    },
+    {
+      "id": "analyzer.keyword",
+      "table": "analyzers",
+      "nom": "`keyword`",
+      "nom_texte": "keyword",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "identique"
+    },
+    {
+      "id": "analyzer.stop",
+      "table": "analyzers",
+      "nom": "`stop`",
+      "nom_texte": "stop",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "identique"
+    },
+    {
+      "id": "analyzer.english",
+      "table": "analyzers",
+      "nom": "`english`",
+      "nom_texte": "english",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "identique — Porter porté depuis Lucene, filtre possessif compris"
+    },
+    {
+      "id": "analyzer.french",
+      "table": "analyzers",
+      "nom": "`french`",
+      "nom_texte": "french",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "identique — stemmer léger de Savoy, élision, mots vides relevés"
+    },
+    {
+      "id": "analyzer.autres_langues",
+      "table": "analyzers",
+      "nom": "`german`, `spanish`, `snowball` et les autres langues",
+      "nom_texte": "german, spanish, snowball et les autres langues",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "divergence_moteur",
+      "raison": "leur stemmer n'est pas porté, et livrer sous le nom d'ES un analyzer qui indexe autre chose changerait silencieusement les résultats d'un mapping existant."
+    },
+    {
+      "id": "analyzer.sur_mesure",
+      "table": "analyzers",
+      "nom": "Analyzers sur mesure (`settings.analysis`)",
+      "nom_texte": "Analyzers sur mesure (settings.analysis)",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "voir ci-dessous"
+    },
+    {
+      "id": "analyse.custom",
+      "table": "analyzers_sur_mesure",
+      "nom": "`analysis.analyzer` de type `custom`",
+      "nom_texte": "analysis.analyzer de type custom",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "`tokenizer` + liste de `filter`"
+    },
+    {
+      "id": "analyse.tokenizers",
+      "table": "analyzers_sur_mesure",
+      "nom": "Tokenizers",
+      "nom_texte": "Tokenizers",
+      "etat": "partiel",
+      "poids": null,
+      "parametres": {
+        "supportes": [
+          "standard",
+          "whitespace",
+          "keyword",
+          "letter",
+          "lowercase"
+        ],
+        "refuses": [
+          "analysis.tokenizer"
+        ]
+      }
+    },
+    {
+      "id": "analyse.filtres",
+      "table": "analyzers_sur_mesure",
+      "nom": "Filtres",
+      "nom_texte": "Filtres",
+      "etat": "partiel",
+      "poids": null,
+      "parametres": {
+        "supportes": [
+          "lowercase",
+          "asciifolding",
+          "stop"
+        ],
+        "refuses": [
+          "tout filtre à base de stemmer"
+        ]
+      }
+    },
+    {
+      "id": "analyse.char_filter",
+      "table": "analyzers_sur_mesure",
+      "nom": "`char_filter`",
+      "nom_texte": "char_filter",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "pas_encore",
+      "raison": "aucun mapping venu d'une instance réelle n'en a encore demandé ; c'est une brique à écrire, pas un obstacle."
+    },
+    {
+      "id": "analyse.analyzer_parametre",
+      "table": "analyzers_sur_mesure",
+      "nom": "Un analyzer de type autre que `custom` (`french`, `standard` paramétré…)",
+      "nom_texte": "Un analyzer de type autre que custom (french, standard paramétré…)",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "pas_encore",
+      "raison": "paramétrer un analyzer intégré (`stopwords`, `stem_exclusion`) demande de reproduire sa composition interne exacte, qui n'est mesurée que dans sa forme par défaut."
+    },
+    {
+      "id": "type.text",
+      "table": "types_champ",
+      "nom": "`text`",
+      "nom_texte": "text",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "champ indexé tokenisé (positions + fréquences), tokenizer `default`"
+    },
+    {
+      "id": "type.keyword",
+      "table": "types_champ",
+      "nom": "`keyword`",
+      "nom_texte": "keyword",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "champ indexé non tokenisé (`raw`) + fast field (tri)"
+    },
+    {
+      "id": "type.entiers",
+      "table": "types_champ",
+      "nom": "`byte`, `short`, `integer`, `long`",
+      "nom_texte": "byte, short, integer, long",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "`i64` indexé + fast. Les bornes du type sont vérifiées à l'indexation"
+    },
+    {
+      "id": "type.flottants",
+      "table": "types_champ",
+      "nom": "`float`, `double`",
+      "nom_texte": "float, double",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "`f64` indexé + fast"
+    },
+    {
+      "id": "type.boolean",
+      "table": "types_champ",
+      "nom": "`boolean`",
+      "nom_texte": "boolean",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "`bool` indexé + fast"
+    },
+    {
+      "id": "type.date",
+      "table": "types_champ",
+      "nom": "`date`",
+      "nom_texte": "date",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "`date` (millisecondes) indexé + fast. **`format` supporté** : motifs Java (`yyyy`, `yy`, `MM`, `dd`, `HH`, `hh`, `mm`, `ss`, `SSS`, `a`, `Z`, texte entre apostrophes), alternatives `||`, et les noms prédéfinis courants (`strict_date_optional_time`, `epoch_millis`, `epoch_second`, `date`, `date_time`, `basic_date`…). Le format sert à lire (indexation, bornes d'un `range`, ancre d'une expression de date math) **et** à rendre (`*_as_string`)",
+      "parametres": {
+        "refuses": [
+          "les lettres de motif non traduites"
+        ]
+      }
+    },
+    {
+      "id": "type.tableaux",
+      "table": "types_champ",
+      "nom": "Tableaux de valeurs",
+      "nom_texte": "Tableaux de valeurs",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "tout champ accepte une valeur ou un tableau"
+    },
+    {
+      "id": "type.null",
+      "table": "types_champ",
+      "nom": "`null`",
+      "nom_texte": "null",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "ignoré à l'indexation, comme chez ES (pas de `null_value`)"
+    },
+    {
+      "id": "type.object",
+      "table": "types_champ",
+      "nom": "`object` (sous-objet), déclaré ou deviné",
+      "nom_texte": "object (sous-objet), déclaré ou deviné",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "indexé par **chemins pointés** (`client.ville`), comme ES. Un objet n'est pas un champ : il n'existe que par ses feuilles. `GET /_mapping` re-niche les chemins. Un tableau d'objets est aplati — comme ES, la correspondance entre sous-champs d'un même élément est perdue (c'est ce que `nested` corrige)"
+    },
+    {
+      "id": "type.nested",
+      "table": "types_champ",
+      "nom": "`nested`",
+      "nom_texte": "nested",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "voir [la section dédiée](#nested)"
+    },
+    {
+      "id": "type.join",
+      "table": "types_champ",
+      "nom": "`join` (parent/enfant)",
+      "nom_texte": "join (parent/enfant)",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "voir [la section dédiée](#join-parentenfant)"
+    },
+    {
+      "id": "type.autres",
+      "table": "types_champ",
+      "nom": "Tout autre type (`geo_point`, `ip`, `binary`…)",
+      "nom_texte": "Tout autre type (geo_point, ip, binary…)",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "pas_encore",
+      "raison": "chacun demande son propre encodage et ses propres requêtes ; aucun n'est apparu dans les mappings des instances reprises jusqu'ici."
+    },
+    {
+      "id": "type.analyzer",
+      "table": "types_champ",
+      "nom": "`analyzer`",
+      "nom_texte": "analyzer",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "sur un champ `text` — voir la section dédiée",
+      "parametres": {
+        "supportes": [
+          "standard",
+          "simple",
+          "whitespace",
+          "keyword",
+          "stop",
+          "english",
+          "french"
+        ],
+        "refuses": [
+          "search_analyzer",
+          "les analyzers des autres langues"
+        ]
+      }
+    },
+    {
+      "id": "type.multi_fields",
+      "table": "types_champ",
+      "nom": "Multi-fields (`fields`)",
+      "nom_texte": "Multi-fields (fields)",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "un seul niveau, comme ES. `titre.keyword` s'interroge et se trie comme un champ à part entière"
+    },
+    {
+      "id": "type.ignore_above",
+      "table": "types_champ",
+      "nom": "`ignore_above`",
+      "nom_texte": "ignore_above",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "sur un `keyword` : au-delà, la valeur reste dans `_source` sans être indexée"
+    },
+    {
+      "id": "type.autres_parametres",
+      "table": "types_champ",
+      "nom": "Autres paramètres de champ (`index`, `null_value`, `doc_values`…)",
+      "nom_texte": "Autres paramètres de champ (index, null_value, doc_values…)",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "pas_encore",
+      "raison": "les paramètres acceptés sont `type`, `analyzer`, `fields`, `ignore_above` et `format` ; les autres sont refusés plutôt qu'acceptés sans effet, faute de quoi un `index: false` laisserait croire qu'un champ n'est pas interrogeable."
+    },
+    {
+      "id": "type.noms_reserves",
+      "table": "types_champ",
+      "nom": "Noms de champ pointés (`a.b`) ou préfixés `_`",
+      "nom_texte": "Noms de champ pointés (a.b) ou préfixés _",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "divergence_moteur",
+      "raison": "un point est le séparateur de chemin d'un objet et un `_` initial est réservé aux métadonnées : accepter ces noms rendrait ambigu ce qu'un `client.ville` désigne."
+    },
+    {
+      "id": "ingestion.index_doc",
+      "table": "ingestion",
+      "nom": "`PUT|POST /{index}/_doc/{id}`",
+      "nom_texte": "PUT|POST /{index}/_doc/{id}",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "`_version`, `result`, `_seq_no`, `_primary_term`, `_shards`. `op_type=create` honoré",
+      "parametres": {
+        "refuses": [
+          "require_alias",
+          "forced_refresh"
+        ]
+      }
+    },
+    {
+      "id": "ingestion.index_doc_sans_id",
+      "table": "ingestion",
+      "nom": "`POST /{index}/_doc`",
+      "nom_texte": "POST /{index}/_doc",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "identifiant généré par le serveur"
+    },
+    {
+      "id": "ingestion.create",
+      "table": "ingestion",
+      "nom": "`PUT|POST /{index}/_create/{id}`",
+      "nom_texte": "PUT|POST /{index}/_create/{id}",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "409 `version_conflict_engine_exception` si présent"
+    },
+    {
+      "id": "ingestion.get",
+      "table": "ingestion",
+      "nom": "`GET /{index}/_doc/{id}`",
+      "nom_texte": "GET /{index}/_doc/{id}",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "temps réel : une écriture non rafraîchie est visible. `_source_includes` / `_source_excludes` / `_source` supportés"
+    },
+    {
+      "id": "ingestion.exists",
+      "table": "ingestion",
+      "nom": "`HEAD /{index}/_doc/{id}`",
+      "nom_texte": "HEAD /{index}/_doc/{id}",
+      "etat": "supporte",
+      "poids": null
+    },
+    {
+      "id": "ingestion.delete",
+      "table": "ingestion",
+      "nom": "`DELETE /{index}/_doc/{id}`",
+      "nom_texte": "DELETE /{index}/_doc/{id}",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "404 + `result: not_found` si absent, `_version` reste monotone"
+    },
+    {
+      "id": "ingestion.bulk",
+      "table": "ingestion",
+      "nom": "`POST|PUT /_bulk`, `/{index}/_bulk`",
+      "nom_texte": "POST|PUT /_bulk, /{index}/_bulk",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "NDJSON, actions `index` / `create` / `delete` / `update`, statut et erreur **par item**",
+      "parametres": {
+        "supportes": [
+          "_index",
+          "_id"
+        ],
+        "refuses": [
+          "les autres métadonnées",
+          "require_alias"
+        ]
+      }
+    },
+    {
+      "id": "ingestion.refresh",
+      "table": "ingestion",
+      "nom": "`refresh` (`true` / `false` / `wait_for`)",
+      "nom_texte": "refresh (true / false / wait_for)",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "`wait_for` est traité comme `true` : le commit est synchrone et mono-shard"
+    },
+    {
+      "id": "ingestion.update",
+      "table": "ingestion",
+      "nom": "`POST /{index}/_update/{id}`",
+      "nom_texte": "POST /{index}/_update/{id}",
+      "etat": "partiel",
+      "poids": null,
+      "parametres": {
+        "supportes": [
+          "doc",
+          "upsert",
+          "doc_as_upsert",
+          "detect_noop"
+        ],
+        "refuses": [
+          "script",
+          "_source",
+          "require_alias"
+        ]
+      }
+    },
+    {
+      "id": "ingestion.mget",
+      "table": "ingestion",
+      "nom": "`GET|POST /_mget`, `/{index}/_mget`",
+      "nom_texte": "GET|POST /_mget, /{index}/_mget",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "formes `ids` et `docs`, filtrage de `_source`, erreur par document"
+    },
+    {
+      "id": "ingestion.count",
+      "table": "ingestion",
+      "nom": "`GET|POST /{index}/_count`",
+      "nom_texte": "GET|POST /{index}/_count",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "avec ou sans `query`"
+    },
+    {
+      "id": "ingestion.versionnage",
+      "table": "ingestion",
+      "nom": "Versionnage optimiste `if_seq_no` / `if_primary_term`",
+      "nom_texte": "Versionnage optimiste if_seq_no / if_primary_term",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "409 `version_conflict_engine_exception` si le document a bougé"
+    },
+    {
+      "id": "ingestion.version_externe",
+      "table": "ingestion",
+      "nom": "`version` / `version_type` externes",
+      "nom_texte": "version / version_type externes",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "pas_encore",
+      "raison": "la version d'un document est gérée par ferrite ; l'imposer de l'extérieur demande de tenir un ordre que le serveur ne contrôle plus, et rien ne l'a encore réclamé."
+    },
+    {
+      "id": "ingestion.reecriture_en_masse",
+      "table": "ingestion",
+      "nom": "`_update_by_query`, `_delete_by_query`, `_reindex`, pipelines d'ingestion",
+      "nom_texte": "_update_by_query, _delete_by_query, _reindex, pipelines d'ingestion",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "pas_encore",
+      "raison": "ce sont des tâches longues, donc l'API `_tasks` et son suivi ; le même travail s'écrit aujourd'hui côté client avec `scroll` + `_bulk`."
+    },
+    {
+      "id": "scroll.ouverture",
+      "table": "scroll",
+      "nom": "`?scroll=1m` sur `_search`",
+      "nom_texte": "?scroll=1m sur _search",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "ouvre un contexte et rend `_scroll_id`. Durées d'ES (`30s`, `1m`, `2h`, `500ms`…) ; sans unité, ❌ avec le message d'ES"
+    },
+    {
+      "id": "scroll.page",
+      "table": "scroll",
+      "nom": "`POST|GET /_search/scroll`",
+      "nom_texte": "POST|GET /_search/scroll",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "`{\"scroll_id\": \"...\", \"scroll\": \"1m\"}`, ou en query string. Le `keep_alive` est repoussé à chaque page"
+    },
+    {
+      "id": "scroll.page_heritee",
+      "table": "scroll",
+      "nom": "`POST|GET /_search/scroll/{scroll_id}`",
+      "nom_texte": "POST|GET /_search/scroll/{scroll_id}",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "la forme héritée, identifiant dans l'URL"
+    },
+    {
+      "id": "scroll.fermeture",
+      "table": "scroll",
+      "nom": "`DELETE /_search/scroll`, `/_search/scroll/{scroll_id}`",
+      "nom_texte": "DELETE /_search/scroll, /_search/scroll/{scroll_id}",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "une liste d'identifiants ou `_all` ; `{\"succeeded\": true, \"num_freed\": n}`. Fermer deux fois n'est pas une erreur"
+    },
+    {
+      "id": "scroll.from",
+      "table": "scroll",
+      "nom": "`from` avec `scroll`",
+      "nom_texte": "from avec scroll",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "comme_es",
+      "raison": "comme ES : `action_request_validation_exception`."
+    },
+    {
+      "id": "scroll.contexte_absent",
+      "table": "scroll",
+      "nom": "Contexte expiré, fermé, ou jamais ouvert",
+      "nom_texte": "Contexte expiré, fermé, ou jamais ouvert",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "comme_es",
+      "raison": "**404** `search_phase_execution_exception`, cause `search_context_missing_exception` — la forme exacte d'ES, celle que les clients reconnaissent."
+    },
+    {
+      "id": "expr.nom",
+      "table": "expressions_index",
+      "nom": "`catalogue`",
+      "nom_texte": "catalogue",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "l'index, ou l'alias, de ce nom"
+    },
+    {
+      "id": "expr.liste",
+      "table": "expressions_index",
+      "nom": "`produits,marques`",
+      "nom_texte": "produits,marques",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "les deux — c'est ce qu'envoie `es.search(index=[\"produits\",\"marques\"])`"
+    },
+    {
+      "id": "expr.joker",
+      "table": "expressions_index",
+      "nom": "`audits-2026.08.*`",
+      "nom_texte": "audits-2026.08.*",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "les index **et les alias** dont le nom correspond"
+    },
+    {
+      "id": "expr.all",
+      "table": "expressions_index",
+      "nom": "`_all`, `*`, URL sans index",
+      "nom_texte": "_all, *, URL sans index",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "tous les index"
+    },
+    {
+      "id": "expr.exclusion",
+      "table": "expressions_index",
+      "nom": "`audits-*,-audits-2026.07.*`",
+      "nom_texte": "audits-*,-audits-2026.07.*",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "les premiers, moins les seconds"
+    },
+    {
+      "id": "expr.ignore_unavailable",
+      "table": "expressions_index",
+      "nom": "`ignore_unavailable`",
+      "nom_texte": "ignore_unavailable",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "un nom concret absent est ignoré au lieu d'être une erreur"
+    },
+    {
+      "id": "expr.allow_no_indices",
+      "table": "expressions_index",
+      "nom": "`allow_no_indices`",
+      "nom_texte": "allow_no_indices",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "défaut `true` : un motif sans correspondance rend 0 résultat, pas 404"
+    },
+    {
+      "id": "expr.expand_wildcards",
+      "table": "expressions_index",
+      "nom": "`expand_wildcards`",
+      "nom_texte": "expand_wildcards",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "ferrite n'a ni index fermé ni index caché : `closed` seul ne désigne donc rien",
+      "parametres": {
+        "supportes": [
+          "open",
+          "hidden",
+          "all",
+          "closed"
+        ],
+        "refuses": [
+          "none"
+        ]
+      }
+    },
+    {
+      "id": "alias.aliases",
+      "table": "alias",
+      "nom": "`POST /_aliases`",
+      "nom_texte": "POST /_aliases",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "`index`/`indices` et `alias`/`aliases` au singulier comme au pluriel, motifs compris. Tout ou rien, comme chez ES — c'est ce qui rend une bascule atomique",
+      "parametres": {
+        "supportes": [
+          "add",
+          "remove",
+          "remove_index"
+        ],
+        "refuses": [
+          "filter",
+          "routing"
+        ]
+      }
+    },
+    {
+      "id": "alias.put",
+      "table": "alias",
+      "nom": "`PUT|POST /{index}/_alias/{nom}`",
+      "nom_texte": "PUT|POST /{index}/_alias/{nom}",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "`{index}` est une expression, `{nom}` accepte une liste"
+    },
+    {
+      "id": "alias.delete",
+      "table": "alias",
+      "nom": "`DELETE /{index}/_alias/{nom}`",
+      "nom_texte": "DELETE /{index}/_alias/{nom}",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "`{nom}` accepte un motif"
+    },
+    {
+      "id": "alias.get",
+      "table": "alias",
+      "nom": "`GET /_alias`, `/_alias/{nom}`, `/{index}/_alias`, `/{index}/_alias/{nom}`",
+      "nom_texte": "GET /_alias, /_alias/{nom}, /{index}/_alias, /{index}/_alias/{nom}",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "`{nom}` est une **expression** (liste, jokers, exclusions, `_all`) — voir ci-dessous — y compris le 404 « à corps de chaîne » d'ES (`{\"error\": \"alias [x] missing\", \"status\": 404}`), qui porte quand même les alias trouvés"
+    },
+    {
+      "id": "alias.head",
+      "table": "alias",
+      "nom": "`HEAD /_alias/{nom}`, `/{index}/_alias/{nom}`",
+      "nom_texte": "HEAD /_alias/{nom}, /{index}/_alias/{nom}",
+      "etat": "supporte",
+      "poids": null
+    },
+    {
+      "id": "alias.a_la_creation",
+      "table": "alias",
+      "nom": "`aliases` dans `PUT /{index}`",
+      "nom_texte": "aliases dans PUT /{index}",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "posé après la création ; un alias refusé annule la création plutôt que de laisser une demande à moitié faite"
+    },
+    {
+      "id": "alias.is_write_index",
+      "table": "alias",
+      "nom": "`is_write_index`",
+      "nom_texte": "is_write_index",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "désigne l'index qui reçoit les écritures quand l'alias en couvre plusieurs"
+    },
+    {
+      "id": "alias.suppression_par_alias",
+      "table": "alias",
+      "nom": "`DELETE /{alias}`",
+      "nom_texte": "DELETE /{alias}",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "comme_es",
+      "raison": "effacer des index que le client n'a pas nommés n'est pas une suppression, c'est un accident ; ES 8 refuse de la même façon (« The provided expression [x] matches an alias, specify the corresponding concrete indices instead »)."
+    },
+    {
+      "id": "alias.filtre_et_routage",
+      "table": "alias",
+      "nom": "`filter`, `routing`, `index_routing`, `search_routing` sur un alias",
+      "nom_texte": "filter, routing, index_routing, search_routing sur un alias",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "pas_encore",
+      "raison": "un alias filtré dont le filtre n'est pas appliqué rendrait précisément les documents qu'il est censé cacher ; le routage, lui, n'a rien à choisir sur un mono-shard."
+    },
+    {
+      "id": "alias.cat_aliases",
+      "table": "alias_conformance",
+      "nom": "`GET /_cat/aliases`",
+      "nom_texte": "GET /_cat/aliases",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "pas_encore",
+      "raison": "route absente (`no handler found`) ; ses tests exigent en plus `h=`, `s=` et `help` sur les `_cat`, que ferrite n'a pas — 10 cas de la suite d'Elastic tombent dessus."
+    },
+    {
+      "id": "alias.remove_index_et_add",
+      "table": "alias_conformance",
+      "nom": "`remove_index` **et** `add` d'un alias du même nom dans le même `POST /_aliases`",
+      "nom_texte": "remove_index et add d'un alias du même nom dans le même POST /_aliases",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "pas_encore",
+      "raison": "refusé en 400 (« an index or data stream exists with the same name as the alias ») : ferrite applique les alias avant les suppressions, là où ES calcule tout l'état puis l'applique — c'est pourtant l'usage même de `remove_index`."
+    },
+    {
+      "id": "alias.index_ferme",
+      "table": "alias_conformance",
+      "nom": "`GET /{index}/_alias` sur un index **fermé**",
+      "nom_texte": "GET /{index}/_alias sur un index fermé",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "pas_encore",
+      "raison": "`_close` / `_open` sont hors périmètre, donc un index fermé n'existe pas ici."
+    },
+    {
+      "id": "reglages.route",
+      "table": "reglages_cluster",
+      "nom": "`GET|PUT /_cluster/settings`",
+      "nom_texte": "GET|PUT /_cluster/settings",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "`persistent` et `transient` (le second l'emporte), écriture plate ou imbriquée",
+      "parametres": {
+        "supportes": [
+          "action.destructive_requires_name"
+        ],
+        "refuses": [
+          "tout autre réglage"
+        ]
+      }
+    },
+    {
+      "id": "reglages.destructive_requires_name",
+      "table": "reglages_cluster",
+      "nom": "`action.destructive_requires_name`",
+      "nom_texte": "action.destructive_requires_name",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "`true` par défaut, **comme ES depuis la 8.0**"
+    },
+    {
+      "id": "dsl.match_all",
+      "table": "dsl",
+      "nom": "`match_all`",
+      "nom_texte": "match_all",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "`boost`"
+    },
+    {
+      "id": "dsl.match_none",
+      "table": "dsl",
+      "nom": "`match_none`",
+      "nom_texte": "match_none",
+      "etat": "supporte",
+      "poids": null
+    },
+    {
+      "id": "dsl.match",
+      "table": "dsl",
+      "nom": "`match`",
+      "nom_texte": "match",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "sur un champ non analysé, se comporte comme `term`. Voir [la recherche libre](#la-recherche-libre-multi_match) pour `lenient`",
+      "parametres": {
+        "supportes": [
+          "query",
+          "operator",
+          "boost",
+          "lenient"
+        ],
+        "refuses": [
+          "fuzziness",
+          "minimum_should_match",
+          "analyzer",
+          "zero_terms_query",
+          "prefix_length"
+        ]
+      }
+    },
+    {
+      "id": "dsl.multi_match",
+      "table": "dsl",
+      "nom": "`multi_match`",
+      "nom_texte": "multi_match",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "voir [la recherche libre](#la-recherche-libre-multi_match)",
+      "parametres": {
+        "supportes": [
+          "query",
+          "fields",
+          "type",
+          "operator",
+          "tie_breaker",
+          "lenient",
+          "max_expansions",
+          "boost"
+        ],
+        "refuses": [
+          "type: cross_fields",
+          "type: bool_prefix",
+          "slop",
+          "les motifs de champ"
+        ]
+      }
+    },
+    {
+      "id": "dsl.match_phrase",
+      "table": "dsl",
+      "nom": "`match_phrase`",
+      "nom_texte": "match_phrase",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "les termes dans l'ordre, adjacents",
+      "parametres": {
+        "supportes": [
+          "query",
+          "boost"
+        ],
+        "refuses": [
+          "slop"
+        ]
+      }
+    },
+    {
+      "id": "dsl.match_phrase_prefix",
+      "table": "dsl",
+      "nom": "`match_phrase_prefix`",
+      "nom_texte": "match_phrase_prefix",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "les termes dans l'ordre, le dernier n'étant qu'un début de mot. Sur un champ `keyword`, refusée avec le message d'ES (« Can only use phrase prefix queries on text fields »)",
+      "parametres": {
+        "supportes": [
+          "query",
+          "max_expansions",
+          "boost"
+        ],
+        "refuses": [
+          "slop",
+          "analyzer",
+          "zero_terms_query"
+        ]
+      }
+    },
+    {
+      "id": "dsl.exists",
+      "table": "dsl",
+      "nom": "`exists`",
+      "nom_texte": "exists",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "sur tous les types, y compris `text`. Un champ absent, `null`, ou un tableau vide compte comme absent, comme chez ES"
+    },
+    {
+      "id": "dsl.term",
+      "table": "dsl",
+      "nom": "`term`",
+      "nom_texte": "term",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "forme courte et forme `{value, boost}`. Sur un champ `date`, la valeur désigne la **période** qu'elle couvre, pas un instant, et le date math y est accepté (comme chez ES). `case_insensitive` ❌"
+    },
+    {
+      "id": "dsl.ids",
+      "table": "dsl",
+      "nom": "`ids`",
+      "nom_texte": "ids",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "`values`, `boost`"
+    },
+    {
+      "id": "dsl.prefix",
+      "table": "dsl",
+      "nom": "`prefix`",
+      "nom_texte": "prefix",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "non analysée comme chez ES",
+      "parametres": {
+        "supportes": [
+          "value",
+          "case_insensitive",
+          "boost"
+        ],
+        "refuses": [
+          "rewrite"
+        ]
+      }
+    },
+    {
+      "id": "dsl.wildcard",
+      "table": "dsl",
+      "nom": "`wildcard`",
+      "nom_texte": "wildcard",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "`*`, `?`, et `\\` qui échappe le caractère suivant",
+      "parametres": {
+        "supportes": [
+          "value",
+          "case_insensitive",
+          "boost"
+        ],
+        "refuses": [
+          "rewrite"
+        ]
+      }
+    },
+    {
+      "id": "dsl.regexp",
+      "table": "dsl",
+      "nom": "`regexp`",
+      "nom_texte": "regexp",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "syntaxe **Lucene**, ancrée des deux côtés (voir les divergences)",
+      "parametres": {
+        "supportes": [
+          "value",
+          "flags",
+          "case_insensitive",
+          "boost"
+        ],
+        "refuses": [
+          "les opérateurs ~, &, <n-m>, #",
+          "rewrite",
+          "max_determinized_states"
+        ]
+      }
+    },
+    {
+      "id": "dsl.fuzzy",
+      "table": "dsl",
+      "nom": "`fuzzy`",
+      "nom_texte": "fuzzy",
+      "etat": "partiel",
+      "poids": null,
+      "parametres": {
+        "supportes": [
+          "fuzziness",
+          "transpositions",
+          "boost"
+        ],
+        "refuses": [
+          "prefix_length",
+          "max_expansions",
+          "rewrite"
+        ]
+      }
+    },
+    {
+      "id": "dsl.constant_score",
+      "table": "dsl",
+      "nom": "`constant_score`",
+      "nom_texte": "constant_score",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "`filter`, `boost`"
+    },
+    {
+      "id": "dsl.dis_max",
+      "table": "dsl",
+      "nom": "`dis_max`",
+      "nom_texte": "dis_max",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "`queries`, `tie_breaker`, `boost` — voir [`src/dismax.rs`](../src/dismax.rs)"
+    },
+    {
+      "id": "dsl.terms",
+      "table": "dsl",
+      "nom": "`terms`",
+      "nom_texte": "terms",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "liste de valeurs, score constant comme chez ES. Sur un champ `date`, chaque valeur est une période, comme dans `term`",
+      "parametres": {
+        "refuses": [
+          "les *terms lookup*"
+        ]
+      }
+    },
+    {
+      "id": "dsl.range",
+      "table": "dsl",
+      "nom": "`range`",
+      "nom_texte": "range",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "sur `keyword` / numérique / `date` / `boolean`. Sur un champ `date`, les bornes acceptent le **date math** (`now`, `now-1d/d`, `2026-03-15||+1M`) et sont **arrondies selon leur côté** — voir [la section dédiée](#date-math-et-arrondi-des-bornes)",
+      "parametres": {
+        "supportes": [
+          "gte",
+          "gt",
+          "lte",
+          "lt",
+          "boost",
+          "format"
+        ],
+        "refuses": [
+          "time_zone",
+          "relation",
+          "un range sur un champ text"
+        ]
+      }
+    },
+    {
+      "id": "dsl.bool",
+      "table": "dsl",
+      "nom": "`bool`",
+      "nom_texte": "bool",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "`filter` ne contribue pas au score. Un `bool` qui n'a que des `must_not` matche tous les autres documents, comme chez ES",
+      "parametres": {
+        "supportes": [
+          "must",
+          "should",
+          "filter",
+          "must_not",
+          "boost",
+          "minimum_should_match"
+        ],
+        "refuses": [
+          "_name",
+          "adjust_pure_negative"
+        ]
+      }
+    },
+    {
+      "id": "dsl.non_supportees",
+      "table": "dsl",
+      "nom": "`query_string`, `simple_query_string`, `function_score`, `boosting`, `intervals`, `terms_set`, `script`…",
+      "nom_texte": "query_string, simple_query_string, function_score, boosting, intervals, terms_set, script…",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "pas_encore",
+      "raison": "`parsing_exception: unknown query [...]`, avec la liste des clauses connues — la plus regrettée est `query_string`, dont la syntaxe est un langage à part entière."
+    },
+    {
+      "id": "libre.lenient",
+      "table": "recherche_libre",
+      "nom": "`lenient`",
+      "nom_texte": "lenient",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "un champ dont le **type ne sait pas lire la valeur** cherchée est écarté de la clause au lieu de faire échouer la recherche (`\"alice\"` sur un `long`, une date illisible, une phrase à préfixe sur un `keyword`). Accepté sur `multi_match` et `match` — et seulement là, comme chez ES (`match_phrase`, `term`, `range` le refusent des deux côtés)"
+    },
+    {
+      "id": "libre.best_fields",
+      "table": "recherche_libre",
+      "nom": "`type: best_fields` (défaut)",
+      "nom_texte": "type: best_fields (défaut)",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "le meilleur champ l'emporte (`dis_max`), `tie_breaker` optionnel"
+    },
+    {
+      "id": "libre.most_fields",
+      "table": "recherche_libre",
+      "nom": "`type: most_fields`",
+      "nom_texte": "type: most_fields",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "les scores s'additionnent ; `tie_breaker` y est refusé (il n'y a pas de meilleur champ à départager)"
+    },
+    {
+      "id": "libre.phrase",
+      "table": "recherche_libre",
+      "nom": "`type: phrase`",
+      "nom_texte": "type: phrase",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "`match_phrase` répété sur chaque champ, puis `dis_max` — exactement comme `best_fields` est `match` répété. `tie_breaker` s'applique"
+    },
+    {
+      "id": "libre.phrase_prefix",
+      "table": "recherche_libre",
+      "nom": "`type: phrase_prefix`",
+      "nom_texte": "type: phrase_prefix",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "idem, le dernier mot n'étant qu'un début de mot. `max_expansions` (défaut 50, comme ES)"
+    },
+    {
+      "id": "libre.cross_fields",
+      "table": "recherche_libre",
+      "nom": "`type: cross_fields`, `bool_prefix`",
+      "nom_texte": "type: cross_fields, bool_prefix",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "divergence_moteur",
+      "raison": "le premier demande des statistiques de termes fusionnées entre champs, le second un scoring de suggestion : les approcher rendrait un autre classement que celui qu'un client attend."
+    },
+    {
+      "id": "libre.slop",
+      "table": "recherche_libre",
+      "nom": "`slop`",
+      "nom_texte": "slop",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "divergence_moteur",
+      "raison": "refusé quel que soit le type, pour la raison qui le fait refuser dans `match_phrase` (divergence n° 2)."
+    },
+    {
+      "id": "libre.operator_phrase",
+      "table": "recherche_libre",
+      "nom": "`operator` sous `phrase` / `phrase_prefix`",
+      "nom_texte": "operator sous phrase / phrase_prefix",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "accepté et sans effet — c'est ce que fait ES (mesuré)"
+    },
+    {
+      "id": "recherche.route",
+      "table": "corps_search",
+      "nom": "`POST|GET /{index}/_search`, `POST|GET /_search`",
+      "nom_texte": "POST|GET /{index}/_search, POST|GET /_search",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "`{index}` est une **expression** au sens d'ES (voir [Expressions d'index](#expressions-dindex-listes-motifs-alias)) ; sans index, la recherche porte sur tout, comme `_all`"
+    },
+    {
+      "id": "recherche.query",
+      "table": "corps_search",
+      "nom": "`query`",
+      "nom_texte": "query",
+      "etat": "supporte",
+      "poids": null
+    },
+    {
+      "id": "recherche.from_size",
+      "table": "corps_search",
+      "nom": "`from` / `size`",
+      "nom_texte": "from / size",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "corps ou query string. `from + size > 10000` ❌ (`max_result_window`)"
+    },
+    {
+      "id": "recherche.sort",
+      "table": "corps_search",
+      "nom": "`sort`",
+      "nom_texte": "sort",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "multi-clés, `asc` / `desc`, sur `keyword` / numérique / `date` / `boolean`, plus `_score` et `_doc`. Valeurs manquantes en dernier (`missing: _last`). Le tableau `sort` est rendu dans chaque hit. En multi-index, un champ non mappé par un des index donne un échec **de ce shard**, comme chez ES",
+      "parametres": {
+        "refuses": [
+          "missing",
+          "mode",
+          "nested",
+          "unmapped_type",
+          "le tri par script",
+          "le tri sur un champ text"
+        ]
+      }
+    },
+    {
+      "id": "recherche.source",
+      "table": "corps_search",
+      "nom": "`_source`",
+      "nom_texte": "_source",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "`true` / `false`, chaîne, liste, `{includes, excludes}`, motifs `*`. Aussi via `_source_includes` / `_source_excludes` en query string"
+    },
+    {
+      "id": "recherche.track_total_hits",
+      "table": "corps_search",
+      "nom": "`track_total_hits`",
+      "nom_texte": "track_total_hits",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "le total est **toujours exact** (`relation: \"eq\"`)",
+      "parametres": {
+        "supportes": [
+          "true",
+          "une valeur numérique"
+        ],
+        "refuses": [
+          "false"
+        ]
+      }
+    },
+    {
+      "id": "recherche.scoring",
+      "table": "corps_search",
+      "nom": "Scoring",
+      "nom_texte": "Scoring",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "BM25 (tantivy), `_score` et `max_score` renseignés ; `null` quand un tri est demandé, comme chez ES"
+    },
+    {
+      "id": "recherche.format_reponse",
+      "table": "corps_search",
+      "nom": "Format de réponse",
+      "nom_texte": "Format de réponse",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "`took`, `timed_out`, `_shards` (avec `failures[]` quand un index n'a pas su répondre), `hits.total.{value,relation}`, `hits.max_score`, `hits.hits[]` avec `_index` / `_id` / `_score` / `_source` / `sort`"
+    },
+    {
+      "id": "recherche.preference",
+      "table": "corps_search",
+      "nom": "`preference`",
+      "nom_texte": "preference",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "accepté, sans objet : il n'y a qu'un shard"
+    },
+    {
+      "id": "recherche.aggs",
+      "table": "corps_search",
+      "nom": "`aggs` / `aggregations`",
+      "nom_texte": "aggs / aggregations",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "voir la section dédiée"
+    },
+    {
+      "id": "recherche.scroll",
+      "table": "corps_search",
+      "nom": "`scroll`",
+      "nom_texte": "scroll",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "`?scroll=1m` ouvre un contexte figé et rend un `_scroll_id` — voir la section dédiée"
+    },
+    {
+      "id": "recherche.non_supportes",
+      "table": "corps_search",
+      "nom": "`highlight`, `search_after`, PIT, `collapse`, `knn`, `explain`, `fields`, `docvalue_fields`, `stored_fields`, `seq_no_primary_term`, `post_filter`, `min_score`, `suggest`, `rescore`, `track_scores`, `q`",
+      "nom_texte": "highlight, search_after, PIT, collapse, knn, explain, fields, docvalue_fields, stored_fields, seq_no_primary_term, post_filter, min_score, suggest, rescore, track_scores, q",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "pas_encore",
+      "raison": "aucun n'est un obstacle de moteur ; `highlight` et `search_after` sont les deux qui manquent le plus, le premier pour une liste de résultats, le second pour paginer au-delà de 10 000."
+    },
+    {
+      "id": "recherche.expressions_index",
+      "table": "corps_search",
+      "nom": "`ignore_unavailable`, `allow_no_indices`, `expand_wildcards`",
+      "nom_texte": "ignore_unavailable, allow_no_indices, expand_wildcards",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "voir [Expressions d'index](#expressions-dindex-listes-motifs-alias) — `expand_wildcards=none` reste ❌"
+    },
+    {
+      "id": "recherche.routing_filter_path",
+      "table": "corps_search",
+      "nom": "`routing`, `filter_path`, `typed_keys`",
+      "nom_texte": "routing, filter_path, typed_keys",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "hors_perimetre",
+      "raison": "ferrite est mono-shard, `routing` n'a rien à choisir ; les deux autres changent la forme de la réponse, et une forme qui dépend d'un paramètre est une seconde API à mesurer."
+    },
+    {
+      "id": "recherche.reglages_de_shards",
+      "table": "corps_search",
+      "nom": "`search_type`, `max_concurrent_shard_requests`, `pre_filter_shard_size`, `batched_reduce_size`",
+      "nom_texte": "search_type, max_concurrent_shard_requests, pre_filter_shard_size, batched_reduce_size",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "hors_perimetre",
+      "raison": "ils reglent la façon dont une recherche se distribue entre shards ; il n'y en a qu'un, donc rien à distribuer et rien à régler."
+    },
+    {
+      "id": "recherche.rest_total_hits_as_int",
+      "table": "corps_search",
+      "nom": "`rest_total_hits_as_int`",
+      "nom_texte": "rest_total_hits_as_int",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "pas_encore",
+      "raison": "il change la forme de `hits.total` (nombre au lieu d'objet) ; ES 8 l'accepte encore et du code venu de la 6.x/7.x s'en sert, voir [`compat-es7.md`](compat-es7.md)."
+    },
+    {
+      "id": "recherche.msearch",
+      "table": "corps_search",
+      "nom": "`_msearch`, `_search/template`, `_explain`, `_validate`",
+      "nom_texte": "_msearch, _search/template, _explain, _validate",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "pas_encore",
+      "raison": "`_msearch` est le plus regretté : un tableau de bord qui pose six facettes fait six appels au lieu d'un. Les trois autres sont des outils de mise au point."
+    },
+    {
+      "id": "datemath.now",
+      "table": "datemath",
+      "nom": "`now`",
+      "nom_texte": "now",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "résolu **une fois par recherche**, comme ES sur son nœud coordinateur : deux bornes de la même requête parlent du même instant"
+    },
+    {
+      "id": "datemath.decalage",
+      "table": "datemath",
+      "nom": "`now±<n><unité>`",
+      "nom_texte": "now±<n><unité>",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "unités `y`, `M`, `w`, `d`, `h` et `H`, `m`, `s`. `+1M` sur le 31 janvier donne le 28 février (le jour est ramené au dernier du mois), comme Java"
+    },
+    {
+      "id": "datemath.arrondi",
+      "table": "datemath",
+      "nom": "`now/<unité>`",
+      "nom_texte": "now/<unité>",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "arrondi ; `/w` arrondit au **lundi**. Sous une borne haute (`gt`, `lte`), chaque `/` rend le **dernier instant** de la période (`2026-03-15||/M` sous `lte` = 31 mars 23:59:59.999)"
+    },
+    {
+      "id": "datemath.ancre",
+      "table": "datemath",
+      "nom": "`<ancre>||<opérations>`",
+      "nom_texte": "<ancre>||<opérations>",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "l'ancre est lue avec le `format` du champ (ou celui de la requête), et toujours **arrondie vers le bas**, même sous un `lte`"
+    },
+    {
+      "id": "datemath.date_partielle",
+      "table": "datemath",
+      "nom": "date partielle (`2026-03-15`, `2026-03`, `2026-03-15T12`)",
+      "nom_texte": "date partielle (2026-03-15, 2026-03, 2026-03-15T12)",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "les champs d'heure absents sont remplis au maximum sous une borne haute (`lte: \"2026-03-15\"` couvre la journée), les champs de **date** absents restent au minimum (`2026-03` → le 1er, pas le 31)"
+    },
+    {
+      "id": "datemath.format",
+      "table": "datemath",
+      "nom": "`format` sur `range`",
+      "nom_texte": "format sur range",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "remplace le format du champ pour **lire les bornes** ; il ne s'applique pas à `now`"
+    },
+    {
+      "id": "datemath.autres_clauses",
+      "table": "datemath",
+      "nom": "dans `term`, `terms`, `match`, et sous un `nested`",
+      "nom_texte": "dans term, terms, match, et sous un nested",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "une date y désigne la période qu'elle couvre : `{\"term\": {\"d\": \"2026-03-15\"}}` rend toute la journée, comme chez ES"
+    },
+    {
+      "id": "datemath.indexation",
+      "table": "datemath",
+      "nom": "à l'indexation",
+      "nom_texte": "à l'indexation",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "comme_es",
+      "raison": "`{\"d\": \"now\"}` est refusé, comme chez ES : le document porterait une date qui dépend de l'instant où il a été écrit."
+    },
+    {
+      "id": "datemath.time_zone",
+      "table": "datemath",
+      "nom": "`time_zone`",
+      "nom_texte": "time_zone",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "pas_encore",
+      "raison": "il déplace les arrondis, donc les résultats ; l'accepter sans l'appliquer rendrait les mauvais documents en silence."
+    },
+    {
+      "id": "agg.metriques",
+      "table": "aggs",
+      "nom": "`min`, `max`, `sum`, `avg`, `value_count`, `stats`",
+      "nom_texte": "min, max, sum, avg, value_count, stats",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "`field`, `missing`. Sur un champ `date`, la valeur est en millisecondes et le `*_as_string` est rendu comme chez ES"
+    },
+    {
+      "id": "agg.terms",
+      "table": "aggs",
+      "nom": "`terms`",
+      "nom_texte": "terms",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "`doc_count_error_upper_bound` et `sum_other_doc_count` sont renseignés",
+      "parametres": {
+        "supportes": [
+          "field",
+          "size",
+          "shard_size",
+          "min_doc_count",
+          "order"
+        ],
+        "refuses": [
+          "include",
+          "exclude",
+          "l'ordre par sous-agrégation"
+        ]
+      }
+    },
+    {
+      "id": "agg.range",
+      "table": "aggs",
+      "nom": "`range`",
+      "nom_texte": "range",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "`ranges` avec `from` / `to` / `key`, `keyed`"
+    },
+    {
+      "id": "agg.histogram",
+      "table": "aggs",
+      "nom": "`histogram`",
+      "nom_texte": "histogram",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "`interval`, `offset`, `min_doc_count`, `hard_bounds`, `extended_bounds`, `keyed`"
+    },
+    {
+      "id": "agg.date_histogram",
+      "table": "aggs",
+      "nom": "`date_histogram`",
+      "nom_texte": "date_histogram",
+      "etat": "partiel",
+      "poids": null,
+      "parametres": {
+        "supportes": [
+          "fixed_interval",
+          "offset, min_doc_count, hard_bounds, extended_bounds, keyed"
+        ],
+        "refuses": [
+          "calendar_interval"
+        ]
+      }
+    },
+    {
+      "id": "agg.sous_agregations",
+      "table": "aggs",
+      "nom": "Sous-agrégations",
+      "nom_texte": "Sous-agrégations",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "sur tous les types de buckets, vérifiées jusqu'à trois niveaux"
+    },
+    {
+      "id": "agg.cardinality",
+      "table": "aggs",
+      "nom": "`cardinality`",
+      "nom_texte": "cardinality",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "divergence_moteur",
+      "raison": "l'estimation de tantivy diffère de celle d'ES (mesuré : 582 valeurs distinctes annoncées là où ES en compte 598), y compris sous le seuil où ES est exact — un compte approché sous le nom d'ES serait faux sans le dire."
+    },
+    {
+      "id": "agg.filter",
+      "table": "aggs",
+      "nom": "`filter`",
+      "nom_texte": "filter",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "n'importe quelle requête du Query DSL, avec ses sous-agrégations. **Exécutée par ferrite**, pas par tantivy : compter les documents qui correspondent à la recherche *et* au filtre, c'est exécuter l'intersection des deux requêtes (voir les divergences)",
+      "parametres": {
+        "refuses": [
+          "sous une agrégation de buckets"
+        ]
+      }
+    },
+    {
+      "id": "agg.non_supportees",
+      "table": "aggs",
+      "nom": "`percentiles`, `extended_stats`, `top_hits`, `composite`, `filters`, `nested`, `significant_terms`, `date_range`, `ip_range`…",
+      "nom_texte": "percentiles, extended_stats, top_hits, composite, filters, nested, significant_terms, date_range, ip_range…",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "pas_encore",
+      "raison": "`filters` (la sœur plurielle de `filter`) et `top_hits` sont les deux qui manquent le plus ; aucune n'est un obstacle de moteur."
+    },
+    {
+      "id": "nested.clause",
+      "table": "nested",
+      "nom": "`{\"nested\": {\"path\", \"query\"}}`",
+      "nom_texte": "{\"nested\": {\"path\", \"query\"}}",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "`path` doit être un champ déclaré `nested`"
+    },
+    {
+      "id": "nested.clauses_internes",
+      "table": "nested",
+      "nom": "Clauses internes",
+      "nom_texte": "Clauses internes",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "le minimum s'y compte **par élément**, comme ES le compte par document caché",
+      "parametres": {
+        "supportes": [
+          "term, terms, range, exists, prefix, match_all, match_none",
+          "match",
+          "bool"
+        ]
+      }
+    },
+    {
+      "id": "nested.champ_text",
+      "table": "nested",
+      "nom": "Champ `text` dans une clause interne",
+      "nom_texte": "Champ text dans une clause interne",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "divergence_moteur",
+      "raison": "les colonnes portent la valeur, pas les termes analysés : interroger son multi-field `.keyword`, ou sortir la clause du `nested`."
+    },
+    {
+      "id": "nested.imbrique",
+      "table": "nested",
+      "nom": "`nested` dans un `nested`",
+      "nom_texte": "nested dans un nested",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "pas_encore",
+      "raison": "il faudrait un indice d'élément par niveau."
+    },
+    {
+      "id": "nested.score_mode",
+      "table": "nested",
+      "nom": "`score_mode`",
+      "nom_texte": "score_mode",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "le score est celui de la requête interne évaluée à plat, il n'y a pas de score par élément",
+      "parametres": {
+        "supportes": [
+          "none",
+          "avg"
+        ],
+        "refuses": [
+          "max",
+          "min",
+          "sum"
+        ]
+      }
+    },
+    {
+      "id": "nested.inner_hits",
+      "table": "nested",
+      "nom": "`inner_hits`, `ignore_unmapped`",
+      "nom_texte": "inner_hits, ignore_unmapped",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "pas_encore",
+      "raison": "`inner_hits` demande de rendre l'élément qui a correspondu : ferrite le sait (c'est la colonne jumelle), il ne l'expose simplement pas."
+    },
+    {
+      "id": "nested.champs_devines",
+      "table": "nested",
+      "nom": "Champs devinés sous un `nested`",
+      "nom_texte": "Champs devinés sous un nested",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "le mapping dynamique fonctionne, et la corrélation avec"
+    },
+    {
+      "id": "nested.tri_et_aggs",
+      "table": "nested",
+      "nom": "Tri et agrégations sur un champ `nested`",
+      "nom_texte": "Tri et agrégations sur un champ nested",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "divergence_moteur",
+      "raison": "ils porteraient sur les valeurs à plat, donc sur autre chose que ce que la requête a filtré."
+    },
+    {
+      "id": "join.type",
+      "table": "join",
+      "nom": "`{\"type\": \"join\", \"relations\": {...}}`",
+      "nom_texte": "{\"type\": \"join\", \"relations\": {...}}",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "un seul champ `join` par index, plusieurs relations et plusieurs enfants par parent"
+    },
+    {
+      "id": "join.indexation",
+      "table": "join",
+      "nom": "Indexation",
+      "nom_texte": "Indexation",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "`\"lien\": \"article\"` ou `{\"name\": \"commentaire\", \"parent\": \"a1\"}`. Un enfant sans `parent`, un parent avec, ou une relation non déclarée : refus explicite"
+    },
+    {
+      "id": "join.has_child",
+      "table": "join",
+      "nom": "`has_child`, `has_parent`",
+      "nom_texte": "has_child, has_parent",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "avec n'importe quelle requête interne",
+      "parametres": {
+        "supportes": [
+          "score_mode"
+        ],
+        "refuses": [
+          "min_children",
+          "max_children",
+          "inner_hits",
+          "ignore_unmapped"
+        ]
+      }
+    },
+    {
+      "id": "join.parent_id",
+      "table": "join",
+      "nom": "`parent_id`",
+      "nom_texte": "parent_id",
+      "etat": "supporte",
+      "poids": null
+    },
+    {
+      "id": "join.term",
+      "table": "join",
+      "nom": "`{\"term\": {\"lien\": \"article\"}}`",
+      "nom_texte": "{\"term\": {\"lien\": \"article\"}}",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "le champ `join` se filtre comme un `keyword`, sous son propre nom, comme chez ES"
+    },
+    {
+      "id": "join.routing",
+      "table": "join",
+      "nom": "`routing`",
+      "nom_texte": "routing",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "accepté et sans objet : il n'y a qu'un shard, donc rien à co-localiser. C'est **une contrainte d'ES en moins**"
+    }
+  ]
+}
