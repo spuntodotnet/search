@@ -39,17 +39,25 @@ Quatre categories, et c'est la distinction qui compte :
   sautes       le cas ne mesure pas la cible (borne de version, verbe du runner)
   echecs       ferrite repond, mais autre chose : **ce sont les vrais**
 
-Deux taux en sortent, qui ne repondent pas a la meme question :
+Trois taux en sortent, qui ne repondent pas a la meme question :
 
-  fidelite dans le perimetre declare   reussis / (reussis + echecs)
-      Parmi les cas qui n'exercent que des capacites declarees supportees —
-      ceux que ferrite n'a ni refuses ni fait sauter — combien passent.
+  fidelite                             reussis / (reussis + echecs)
+      Un pis-aller : une partie des echecs sont des refus, mais dont le type
+      d'erreur imite Elasticsearch au lieu de porter le marqueur. Ils gonflent
+      le denominateur alors qu'ils sont hors perimetre.
+  fidelite dans le perimetre declare   reussis / (reussis + regressions + indetermines)
+      Le meme, en croisant chaque echec avec `compat.yaml` : un echec sur une
+      capacite declaree **refusee** sort du denominateur (c'est le cout affiche
+      du perimetre), un echec sur une capacite declaree **supportee** y reste
+      (c'est une regression). Un cas qu'aucune capacite ne reclame y reste
+      aussi : un trou dans la declaration ne doit pas flatter le taux.
   couverture brute                     reussis / total
       Quelle part de la suite d'Elastic passe, perimetre non declare compris.
 
-Le premier dit « est-ce que ce qu'on annonce est juste », le second « quelle
+Le premier dit « est-ce que ce qu'on annonce est juste », le dernier « quelle
 part d'Elasticsearch on couvre ». Confondre les deux, c'est soit se flatter,
-soit se punir.
+soit se punir. Le rattachement est explique dans `perimetre.py` ; il est mesure
+par ce que le serveur repond, pas decide ici.
 
 # Le rapport machine
 
@@ -75,6 +83,10 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import genere_compat  # noqa: E402
+import perimetre as perimetre_declare  # noqa: E402
 
 RACINE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
 SPEC_DIR = os.path.abspath(os.path.join(RACINE, ".es-rest-spec"))
@@ -185,6 +197,8 @@ def decode(brut, content_type):
 class Serveur:
     def __init__(self, base):
         self.base = base.rstrip("/")
+        # Vrai quand le dernier appel a resolu une URL de l'API typee.
+        self.derniere_url_typee = False
         self.api = {}
         for nom in os.listdir(os.path.join(SPEC_DIR, "api")):
             if not nom.endswith(".json") or nom.startswith("_"):
@@ -210,7 +224,11 @@ class Serveur:
             url = url.replace("{" + nom + "}", urllib.request.quote(v, safe=",*"))
         reste = {k: v for k, v in params.items() if k not in choisi.get("parts", {})}
         methode = choisi["methods"][0]
-        return url, methode, reste
+        # L'API typee (`/{index}/{type}/{id}`) a disparu en 8.x : un cas qui la
+        # demande ne mesure pas la version que ferrite annonce. Ca se lit sur le
+        # chemin choisi, pas sur le message d'erreur — « no handler found for
+        # uri [/logs-1/test/1] » ne se distingue pas d'une route manquante.
+        return url, methode, reste, "{type}" in choisi["path"]
 
     def appelle(self, api, params):
         params = dict(params)
@@ -219,7 +237,8 @@ class Serveur:
         # pas a l'API : il ne doit pas partir en query string.
         tolere = params.pop("ignore", None)
         tolere = [tolere] if isinstance(tolere, int) else (tolere or [])
-        url, methode, qs = self.url_de(api, params)
+        url, methode, qs, typee = self.url_de(api, params)
+        self.derniere_url_typee = typee
         if corps is not None and methode == "GET":
             methode = "POST"
         query = []
@@ -402,7 +421,13 @@ def compare(attendu, obtenu):
     return attendu == obtenu
 
 
-def joue(serveur, actions, pile, corps_precedent=None):
+def joue(serveur, actions, pile, trace, corps_precedent=None):
+    """Rejoue une liste d'actions.
+
+    `trace` retient l'API du dernier `do` : sans elle, un echec ne dit pas
+    **sur quoi** il porte, et le rapport ne peut pas le rattacher au perimetre
+    declare (voir `perimetre.py`).
+    """
     reponse = corps_precedent
     for action in actions:
         if not isinstance(action, dict) or not action:
@@ -423,6 +448,7 @@ def joue(serveur, actions, pile, corps_precedent=None):
 
         if verbe == "do":
             arg = dict(arg)
+            trace["api"] = None
             attrape = arg.pop("catch", None)
             arg.pop("headers", None)
             arg.pop("warnings", None)
@@ -431,12 +457,15 @@ def joue(serveur, actions, pile, corps_precedent=None):
             if not arg:
                 continue
             api, params = next(iter(arg.items()))
+            trace["api"] = api
+            trace["api_typee"] = False
             if api in APIS_A_ETAT_GLOBAL:
                 global ETAT_GLOBAL_SALE
                 ETAT_GLOBAL_SALE = True
             params = resous(params or {}, pile)
             try:
                 statut, reponse = serveur.appelle(api, params)
+                trace["api_typee"] = serveur.derniere_url_typee
             except KeyError as e:
                 # Aucun chemin ne correspond : un vrai client refuserait aussi.
                 # C'est une reponse valable quand le test attend une erreur.
@@ -581,7 +610,14 @@ def nettoie_les_index(serveur):
 
 # Version du format de `docs/conformance.json`. Un lecteur qui ne connait pas
 # le numero qu'il trouve doit s'arreter, pas deviner.
-SCHEMA = 1
+#
+#   1  totaux, deux taux, detail par suite et par cas
+#   2  chaque echec est rattache au perimetre declare (`compat.yaml`) :
+#      regression / cout de perimetre / indetermine, et le troisieme taux
+SCHEMA = 2
+
+VERDICTS = (perimetre_declare.REGRESSION, perimetre_declare.COUT,
+            perimetre_declare.INDETERMINE)
 
 CATEGORIES = ("reussi", "refus", "saute", "echec")
 PLURIEL = {"reussi": "reussis", "refus": "refuses", "saute": "sautes",
@@ -607,19 +643,22 @@ def etat_du_depot():
     return git("rev-parse", "HEAD") or None, bool(git("status", "--porcelain", "-uno"))
 
 
-def taux_de(totaux):
-    """Les deux taux, avec de quoi les recalculer — un taux sans son
-    denominateur n'est pas verifiable."""
+def taux_de(totaux, perimetre_totaux=None):
+    """Les taux, avec de quoi les recalculer — un taux sans son denominateur
+    n'est pas verifiable."""
     perimetre = totaux["reussis"] + totaux["echecs"]
-    return {
+    taux = {
         "fidelite_perimetre": {
             "valeur": round(totaux["reussis"] / perimetre, 4) if perimetre else None,
             "numerateur": totaux["reussis"],
             "denominateur": perimetre,
-            "definition": "reussis / (reussis + echecs) — parmi les cas qui "
-                          "n'exercent que des capacites declarees supportees "
-                          "(ni refuses explicitement, ni sautes), la part qui "
-                          "repond comme Elasticsearch",
+            "definition": "reussis / (reussis + echecs) — la part des cas que "
+                          "ferrite n'a ni refuses ni fait sauter qui repond "
+                          "comme Elasticsearch. Un pis-aller : une partie des "
+                          "echecs sont des refus dont le type d'erreur imite "
+                          "celui d'ES au lieu de porter le marqueur, donc ils "
+                          "gonflent le denominateur alors qu'ils sont hors "
+                          "perimetre. Voir [fidelite_perimetre_declare]",
         },
         "couverture_brute": {
             "valeur": round(totaux["reussis"] / totaux["cas"], 4) if totaux["cas"] else None,
@@ -629,6 +668,23 @@ def taux_de(totaux):
                           "passe, perimetre non declare compris",
         },
     }
+    if perimetre_totaux:
+        # Le denominateur ne retire que ce qui est **declare** refuse dans
+        # compat.yaml. Les indetermines y restent : un trou dans la declaration
+        # ne doit pas flatter le taux.
+        dedans = (totaux["reussis"] + perimetre_totaux["regressions"]
+                  + perimetre_totaux["indetermines"])
+        taux["fidelite_perimetre_declare"] = {
+            "valeur": round(totaux["reussis"] / dedans, 4) if dedans else None,
+            "numerateur": totaux["reussis"],
+            "denominateur": dedans,
+            "definition": "reussis / (reussis + regressions + indetermines) — "
+                          "le taux precedent, mais en sortant du denominateur "
+                          "les echecs qui portent sur une capacite declaree "
+                          "refusee dans compat.yaml (le cout du perimetre). Les "
+                          "cas qu'aucune capacite ne reclame restent dedans",
+        }
+    return taux
 
 
 def exclusions_de(cas, with_types):
@@ -664,6 +720,44 @@ def exclusions_de(cas, with_types):
     }
 
 
+def croise_avec_le_perimetre(cas):
+    """Range chaque echec : regression, cout de perimetre, ou indetermine.
+
+    C'est ce qui separe un chiffre qu'on subit d'un chiffre qu'on pilote. Un
+    echec sur `_snapshot` (declare hors perimetre) et un echec sur `_search`
+    (declare supporte) pesaient jusqu'ici pareil dans le taux de fidelite.
+
+    Un cas qu'aucune capacite ne reclame est compte `indetermine`, **contre**
+    nous : sinon, oublier de declarer une capacite ferait monter le taux.
+    """
+    try:
+        index = perimetre_declare.Perimetre()
+    except (OSError, genere_compat.Invalide) as e:
+        print(f"compat.yaml illisible, le croisement est saute : {e}", file=sys.stderr)
+        return None
+    compte = {v: 0 for v in VERDICTS}
+    par_capacite = {}
+    for c in cas:
+        if c["categorie"] != "echec":
+            continue
+        marqueurs = ["api_typee"] if c.get("api_typee") else []
+        verdict, cid, _ = index.verdict(c.get("api"), c.get("raison"), marqueurs)
+        c["perimetre"] = verdict
+        if cid:
+            c["capacite"] = cid
+        compte[verdict] += 1
+        cle = cid or "(non declaree)"
+        par_capacite[cle] = par_capacite.get(cle, 0) + 1
+    return {
+        "regressions": compte[perimetre_declare.REGRESSION],
+        "couts_perimetre": compte[perimetre_declare.COUT],
+        "indetermines": compte[perimetre_declare.INDETERMINE],
+        "par_capacite": dict(sorted(par_capacite.items(),
+                                    key=lambda kv: (-kv[1], kv[0]))),
+        "source": "compat.yaml",
+    }
+
+
 def construis_rapport(cas, info, with_types):
     totaux = {"cas": len(cas)}
     for categorie in CATEGORIES:
@@ -674,6 +768,7 @@ def construis_rapport(cas, info, with_types):
             c["suite"], {PLURIEL[k]: 0 for k in CATEGORIES} | {"cas": 0})
         compte[PLURIEL[c["categorie"]]] += 1
         compte["cas"] += 1
+    perimetre = croise_avec_le_perimetre(cas)
     sha, sale = etat_du_depot()
     version_cible = (info.get("version") or {}) if isinstance(info, dict) else {}
     return {
@@ -698,7 +793,8 @@ def construis_rapport(cas, info, with_types):
             "exclusions": exclusions_de(cas, with_types),
         },
         "totaux": totaux,
-        "taux": taux_de(totaux),
+        "taux": taux_de(totaux, perimetre),
+        "perimetre": perimetre,
         "par_suite": dict(sorted(par_suite.items())),
         "cas": sorted(cas, key=lambda c: (c["suite"], c["fichier"], c["cas"])),
     }
@@ -791,10 +887,22 @@ def joue_la_suite(serveur, yaml):
     resultats = []
     with_types = {"fichiers": 0, "cas": 0}
 
-    def note(suite, fichier, nom, categorie, raison="", motif=None):
-        resultats.append({"suite": suite, "fichier": fichier, "cas": nom,
-                          "categorie": categorie, "raison": raison[:220]}
-                         | ({"motif": motif} if motif else {}))
+    def note(suite, fichier, nom, categorie, raison="", motif=None, trace=None):
+        entree = {"suite": suite, "fichier": fichier, "cas": nom,
+                  "categorie": categorie, "raison": raison[:220]}
+        if motif:
+            entree["motif"] = motif
+        # L'API du `do` qui a echoue, et si c'etait dans la mise en place : sans
+        # ces deux-la, un echec ne se rattache a rien (voir `perimetre.py`), et
+        # « l'echec n'est pas sur ce que le cas mesure » reste invisible.
+        if categorie == "echec" and trace:
+            if trace.get("api"):
+                entree["api"] = trace["api"]
+            if trace.get("phase") == "mise en place":
+                entree["mise_en_place"] = True
+            if trace.get("api_typee"):
+                entree["api_typee"] = True
+        resultats.append(entree)
 
     for suite in SUITES:
         dossier = os.path.join(SPEC_DIR, "test", suite)
@@ -828,9 +936,11 @@ def joue_la_suite(serveur, yaml):
             for nom, actions in cas:
                 pile = {}
                 nettoie(serveur)
+                trace = {"api": None, "phase": "mise en place"}
                 try:
-                    joue(serveur, setup, pile)
-                    joue(serveur, actions, pile)
+                    joue(serveur, setup, pile, trace)
+                    trace["phase"] = "cas"
+                    joue(serveur, actions, pile, trace)
                     note(suite, fichier, nom, "reussi")
                 except Refus as e:
                     note(suite, fichier, nom, "refus", str(e))
@@ -839,10 +949,10 @@ def joue_la_suite(serveur, yaml):
                 except Saute as e:
                     note(suite, fichier, nom, "saute", str(e), e.motif)
                 except (Echec, Exception) as e:  # noqa: BLE001
-                    note(suite, fichier, nom, "echec", str(e))
+                    note(suite, fichier, nom, "echec", str(e), trace=trace)
                 finally:
                     try:
-                        joue(serveur, teardown, pile)
+                        joue(serveur, teardown, pile, {"api": None})
                     except Exception:  # noqa: BLE001
                         pass
     return resultats, with_types
@@ -863,9 +973,25 @@ def affiche(rapport):
         return (f"{v * 100:.1f}% ({taux['numerateur']}/{taux['denominateur']})"
                 if v is not None else "n/a")
 
-    fidelite, couverture = rapport["taux"]["fidelite_perimetre"], rapport["taux"]["couverture_brute"]
-    print(f"\n  fidelite dans le perimetre declare : {pourcent(fidelite)}")
-    print(f"  couverture brute                   : {pourcent(couverture)}")
+    taux = rapport["taux"]
+    print(f"\n  fidelite (reussis / reussis+echecs) : {pourcent(taux['fidelite_perimetre'])}")
+    if "fidelite_perimetre_declare" in taux:
+        print(f"  fidelite dans le perimetre declare : "
+              f"{pourcent(taux['fidelite_perimetre_declare'])}")
+    print(f"  couverture brute                   : {pourcent(taux['couverture_brute'])}")
+
+    p = rapport.get("perimetre")
+    if p:
+        print(f"\n  les {rapport['totaux']['echecs']} echecs, croises avec compat.yaml :")
+        print(f"    regressions      {p['regressions']:>4}  une capacite declaree "
+              f"supportee ne repond pas comme ES")
+        print(f"    cout de perimetre{p['couts_perimetre']:>5}  une capacite declaree "
+              f"refusee — attendu")
+        print(f"    indetermines     {p['indetermines']:>4}  aucune capacite ne les "
+              f"reclame : a declarer dans compat.yaml")
+        premiers = list(p["par_capacite"].items())[: (10_000 if VERBEUX else 12)]
+        for cid, n in premiers:
+            print(f"      {n:>4}  {cid}")
 
     ex = rapport["mesure"]["exclusions"]
     print(f"\n  hors denominateur : {ex['fichiers_with_types']['cas']} cas dans "

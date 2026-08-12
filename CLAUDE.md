@@ -122,6 +122,8 @@ développement, pas de CI).
 | `tests/compat/sonde_msm.py` | les mêmes documents sur un **`minimum_should_match`** — entier, pourcentage, formes négatives, conditions `3<90%`, et sous un `nested` ? (47/47) |
 | `tests/compat/releve_mots_vides.py` | quelle est **vraiment** la liste de mots vides d'un analyzer d'ES ? |
 | `tests/compat/sonde_alias.py` | les mêmes alias sur une **expression de noms** — liste, joker, exclusion, `_all` — et le même 404 ? (21/21, corps et message compris) |
+| `tests/compat/genere_compat.py` | le périmètre déclaré et la doc disent-ils la **même chose** ? [`compat.yaml`](compat.yaml) est la source (une entrée par capacité : état, paramètres, motif du refus, poids d'usage) ; [`docs/compat.md`](docs/compat.md) et [`docs/compat.json`](docs/compat.json) en sont **générés**, et la CI échoue s'ils divergent |
+| `tests/compat/perimetre.py` | ce cas qui échoue, il porte sur quoi ? Il rattache un échec de conformance à une capacité déclarée : **régression** si elle est annoncée supportée, **coût de périmètre** si elle est annoncée refusée |
 | `tests/compat/conformance_es.py` | que dit la suite de tests **d'Elastic** ? Ses **107 domaines**, sans liste blanche. Son rapport est un fichier, pas une phrase : [`docs/conformance.json`](docs/conformance.json) (totaux, deux taux, exclusions comptées, détail par cas), régénéré par `--json`, tenu par un cliquet en CI (`--diff`) |
 | `tests/compat/bench_vs_es.py` | mêmes résultats, **et à quel prix** ? (×3,6 en latence, ×6 en indexation) |
 | `tests/compat/probe_es7.py` | un **client** 7.x peut-il se brancher ? |
@@ -132,6 +134,19 @@ bouger**, pas après.
 
 ## Les décisions déjà prises (ne pas les rejouer sans raison)
 
+- **Le périmètre déclaré est une donnée, pas une prose.** `docs/compat.md`
+  était une table tenue à la main de 756 lignes : excellente, et dérivante — la
+  page de présentation annonçait encore « scroll : pas encore » des mois après
+  sa livraison, parce qu'une table écrite à la main ne peut pas être la source
+  de vérité de trois endroits. La source est maintenant
+  [`compat.yaml`](compat.yaml) ; la doc et sa forme machine en sont générées, et
+  le rapport de conformance **croise** chaque cas échoué avec elle. C'est ce qui
+  transforme « 400 échecs » en « 41 régressions et 359 coûts de périmètre »
+  (la mesure du jour, dans [`docs/conformance.json`](docs/conformance.json)) :
+  la différence entre un chiffre qu'on subit et un chiffre qu'on pilote. Le
+  garde-fou est le troisième verdict : un cas qu'aucune capacité ne réclame
+  compte **contre** nous, sinon oublier de déclarer une capacité ferait monter
+  le taux.
 - **Un objet n'est pas un champ.** `object` est indexé par chemins pointés
   (`client.ville`), exactement comme le fait Elasticsearch. C'est ce qui a rendu
   le chantier petit : `Fields.mapped` était déjà une table `chemin → champ`.
@@ -320,6 +335,16 @@ et les colonnes `h` / `s` des `_cat`, `GET /{index}/_mapping/field/{champs}`,
 l'agrégation `filters` (la sœur plurielle de `filter`), `time_zone` sur un
 `range` (refusé explicitement), les alias **filtrés** (`filter`, refusé
 explicitement), et les analyzers des autres langues.
+
+Un défaut connu, trouvé par le croisement du rapport de conformance avec
+`compat.yaml` et **non corrigé** : une recherche qui ne vise **aucun index**
+(cluster vide, ou motif sans correspondance) rend 200 sans valider son corps —
+`{"aggs": {"a": {"significant_terms": …}}}` et `{"query": {"intervals": …}}` y
+passent en silence, là où ils sont refusés dès qu'un index existe, parce que la
+traduction du Query DSL se fait index par index. C'est le seul endroit connu où
+la règle « jamais d'échec silencieux » ne tient pas. Deux petits frères, même
+famille : `include_defaults` et `flat_settings` sont acceptés et ignorés par
+`GET /{index}/_settings`.
 
 Les trois derniers manques de cette liste à avoir été **mesurés** plutôt que
 supposés viennent des 85 domaines de conformance qu'on ne lançait pas :

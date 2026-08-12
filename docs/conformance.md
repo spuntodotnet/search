@@ -61,7 +61,7 @@ range le rapport — un rapport ne peut pas citer le commit qui le contient. Ce
 qui compte est `ferrite_arbre_modifie` : à `false`, la mesure vient d'un arbre
 de travail propre, donc d'un code qu'on peut retrouver.
 
-Les totaux et les deux taux, sans rien installer :
+Les totaux et les trois taux, sans rien installer :
 
 ```bash
 python3 - <<'PY'
@@ -69,12 +69,14 @@ import json
 r = json.load(open("docs/conformance.json"))
 print(r["mesure"]["date"], r["mesure"]["cible"]["version_annoncee"])
 print(r["totaux"])
+print(r["perimetre"]["regressions"], "regressions,",
+      r["perimetre"]["couts_perimetre"], "couts de perimetre")
 for nom, t in r["taux"].items():
     print(f'{nom}: {t["numerateur"]}/{t["denominateur"]}')
 PY
 ```
 
-## Quatre catégories, deux taux
+## Quatre catégories, trois taux
 
 Les catégories ne mesurent pas la même chose, et c'est la distinction qui
 compte :
@@ -86,26 +88,91 @@ compte :
 | `saute` | le cas ne mesure pas la cible — borne de version de la suite, ou verbe que ce runner n'implémente pas |
 | `echec` | ferrite répond **autre chose** qu'Elasticsearch : ce sont les seuls vrais écarts |
 
-D'où deux taux, qui ne répondent pas à la même question :
+D'où trois taux, qui ne répondent pas à la même question :
 
-- **fidélité dans le périmètre déclaré** = `reussis / (reussis + echecs)`.
-  Parmi les cas qui n'exercent que des capacités déclarées supportées — ceux que
-  ferrite n'a ni refusés ni fait sauter — combien passent. C'est le taux qui dit
-  si **ce qu'on annonce est juste**.
+- **fidélité** = `reussis / (reussis + echecs)`. Un pis-aller, et il faut dire
+  pourquoi : une partie des `echec` sont en réalité des refus, mais dont le type
+  d'erreur imite Elasticsearch (`parsing_exception` sur `unknown query
+  [intervals]`, ou `illegal_argument_exception` sur un paramètre non reconnu) au
+  lieu de porter le marqueur `not_implemented_in_ferrite_exception`. Ils
+  gonflent donc le dénominateur alors qu'ils sont hors périmètre. Compter
+  « juste » en trichant sur le type d'erreur serait pire : on préfère la
+  fidélité du message.
+- **fidélité dans le périmètre déclaré** = `reussis / (reussis + regressions +
+  indetermines)`. Le même, mais chaque échec est d'abord **croisé avec
+  [`compat.yaml`](../compat.yaml)** — voir ci-dessous. C'est le taux qui dit si
+  **ce qu'on annonce est juste**.
 - **couverture brute** = `reussis / total`. Quelle part de la suite d'Elastic
   passe, périmètre non déclaré compris. C'est le taux qui dit **quelle part
   d'Elasticsearch on couvre**.
 
-Confondre les deux, c'est se flatter (ne citer que le premier) ou se punir (ne
-citer que le second). Le JSON porte les deux, chacun avec son numérateur et son
-dénominateur, pour qu'ils se recalculent.
+Confondre les deux extrêmes, c'est se flatter (ne citer que le deuxième) ou se
+punir (ne citer que le dernier). Le JSON porte les trois, chacun avec son
+numérateur et son dénominateur, pour qu'ils se recalculent.
 
-Un biais assumé : une partie des `echec` sont en réalité des refus, mais dont le
-type d'erreur imite Elasticsearch (`parsing_exception` sur `unknown query
-[intervals]`, par exemple) au lieu de porter le marqueur
-`not_implemented_in_ferrite_exception`. Ils comptent donc contre la fidélité.
-Compter « juste » demanderait de mentir sur le type d'erreur ; on préfère la
-fidélité du message et une colonne moins flatteuse.
+## Un échec sur quoi ? Le croisement avec le périmètre déclaré
+
+Un échec sur `_snapshot` et un échec sur `_search` pesaient jusqu'ici pareil.
+Ce n'est pourtant pas le même événement : le premier est le prix d'un périmètre
+qu'on a **choisi**, le second un défaut de ce qu'on **annonce**. Depuis que le
+périmètre est une donnée ([`compat.yaml`](../compat.yaml)), le runner peut
+trancher, cas par cas :
+
+| Verdict | Ce que c'est |
+|---|---|
+| `regression` | le cas exerce une capacité déclarée **supportée** — c'est un vrai écart, il compte |
+| `cout_perimetre` | le cas exerce une capacité déclarée **refusée** — attendu, c'est le prix affiché du périmètre |
+| `indetermine` | aucune capacité ne réclame ce cas. Il compte **contre nous**, comme une régression |
+
+Le troisième verdict est le garde-fou : si un cas non rattaché sortait du
+dénominateur, oublier de déclarer une capacité ferait monter le taux — le
+fichier deviendrait un outil pour se flatter, exactement ce que la liste blanche
+de 22 domaines faisait avant lui.
+
+Le rattachement est expliqué dans [`../tests/compat/perimetre.py`](../tests/compat/perimetre.py),
+qui se lance seul pour éprouver une attribution :
+
+```bash
+python3 tests/compat/perimetre.py                      # l'index, tel qu'il est lu
+python3 tests/compat/perimetre.py search "unknown query [intervals] ..."
+```
+
+Il repose sur trois signaux, et aucun n'est un jugement porté ici : l'API
+appelée par le `do` qui a échoué, le message d'erreur du serveur, et — pour
+l'API typée (`/{index}/{type}/{id}`, disparue en 8.x) — le fait que le cas ait
+demandé une URL qui la porte. Le rapport garde ces éléments par cas (`api`,
+`capacite`, `perimetre`, `mise_en_place`), donc chaque verdict se vérifie.
+
+Un cas peut changer de verdict d'une mesure à l'autre sans que le nombre
+d'échecs bouge : `indices.stats/11_metric.yml::Metric - multi` échoue tantôt sur
+sa mise en place (« no such index »), tantôt sur `_stats`, et le verdict suit
+l'endroit où il bute. Le partage régressions / coûts de périmètre se lit donc à
+un cas près ; le cliquet, lui, porte sur les catégories, qui ne bougent pas.
+
+### Ce que le croisement a trouvé du premier coup
+
+Trois écarts entre ce que `docs/compat.md` déclarait et ce que ferrite fait,
+tous invisibles tant que les 400 échecs étaient anonymes :
+
+| Ce que la doc disait | Ce que la mesure dit |
+|---|---|
+| `GET /{index}/_settings` ✅ | 15 cas y échouent : `GET /_settings` sans index rend `invalid_index_name_exception`, `/{index}/_settings/{nom}` n'existe pas, `local` est refusé. La capacité est **partielle**, elle est déclarée telle |
+| `_cluster/health` 🟡, seul `level` refusé | tous les `wait_for_*` d'attente de shards sont refusés eux aussi (9 cas), ce qui est juste sur un mono-nœud — mais n'était écrit nulle part |
+| `_cat/indices` / `_cat/health` 🟡 | `help` et `ts` sont refusés en plus de `h` et `s` |
+
+Et un vrai défaut, celui-là à corriger : **une recherche qui ne vise aucun index
+ne valide pas son corps.** `POST /_search` sur un cluster vide (ou un motif qui
+ne correspond à rien) rend 200 avec une clause que ferrite refuse partout
+ailleurs — `{"aggs": {"a": {"significant_terms": …}}}`, `{"query": {"intervals":
+…}}` — parce que la traduction du Query DSL se fait index par index. C'est le
+seul endroit connu où la règle « jamais d'échec silencieux » ne tient pas ; il a
+été trouvé par un cas d'agrégation d'Elastic qui attendait une erreur et a reçu
+un 200.
+
+Deux petits frères de la même famille, trouvés dans la foulée :
+`include_defaults` et `flat_settings` sont **acceptés et ignorés** par
+`GET /{index}/_settings` (ES rend un bloc `defaults`, ou des clés aplaties). Les
+trois sont comptés en régressions dans le rapport — c'est bien ce qu'ils sont.
 
 ## D'où viennent ces tests, et pourquoi on a le droit
 
@@ -279,7 +346,7 @@ PY
 
 | Ce que c'est | Verdict |
 |---|---|
-| `unknown query [intervals]`, `unrecognized parameter: [version]`… | des refus **réels**, mais dont le type d'erreur imite celui d'Elasticsearch au lieu de porter le marqueur `not_implemented_in_ferrite_exception` |
+| `unknown query [intervals]`, `unrecognized parameter: [version]`… | des refus **réels**, mais dont le type d'erreur imite celui d'Elasticsearch au lieu de porter le marqueur `not_implemented_in_ferrite_exception`. Le croisement avec `compat.yaml` les range en coût de périmètre : c'est ce que le motif d'erreur déclaré sur la capacité sert à dire |
 | `include_type_name`, `_type` attendu dans la réponse | la suite est celle de la 7.10 ; ces cas testent ce que la **8.x a supprimé**. Un vrai ES 8 y échoue aussi |
 | `indices.get` bloqués sur `_close` dans leur **mise en place** | l'échec n'est pas sur ce qu'ils mesurent |
 | `_close` / `_open` | hors périmètre déclaré |

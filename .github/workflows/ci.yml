@@ -39,6 +39,26 @@ jobs:
       - name: cargo build --release
         run: cargo build --release
 
+  perimetre:
+    name: le perimetre declare (compat.yaml -> docs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: PyYAML
+        run: pip install pyyaml
+
+      # `docs/compat.md` et `docs/compat.json` sont **generes** depuis
+      # `compat.yaml`. Une table tenue a la main derive : elle a annonce
+      # « scroll : pas encore » des mois apres sa livraison. Cette etape echoue
+      # si le fichier commite ne correspond plus a sa source.
+      - name: docs/compat.md et docs/compat.json a jour
+        run: python3 tests/compat/genere_compat.py --verifie
+
   compat:
     name: harnais de compatibilite (client officiel)
     runs-on: ubuntu-latest

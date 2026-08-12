@@ -178,6 +178,15 @@ est dans [`docs/compat.md`](docs/compat.md). Rien de ce qui n'est pas supporté
 n'échoue en silence : chaque clause, type ou route inconnu produit une erreur
 explicite au format d'Elasticsearch.
 
+Cet inventaire n'est plus écrit à la main : sa source est
+[`compat.yaml`](compat.yaml) à la racine — une entrée par capacité, avec son
+état et, pour un refus, son **motif** (hors périmètre assumé / pas encore /
+divergence de moteur / comme ES). `docs/compat.md` et sa forme machine
+[`docs/compat.json`](docs/compat.json) en sont générés, et la CI échoue s'ils
+ne correspondent plus. C'est le même fichier que lit le rapport de conformance
+pour dire, d'un cas qui échoue, s'il porte sur une capacité qu'on **annonce**
+(une régression) ou sur une capacité qu'on **refuse** (le coût du périmètre).
+
 Le fonctionnement du pipeline idée→prod est décrit dans
 [`docs/dev-workflow.md`](docs/dev-workflow.md).
 
