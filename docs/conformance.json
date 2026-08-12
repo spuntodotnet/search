@@ -1,8 +1,8 @@
 {
   "schema": 2,
   "mesure": {
-    "date": "2026-08-12T05:19:25Z",
-    "ferrite_sha": "4f995a232244e2451e0cb66f2db6cc8461a8e249",
+    "date": "2026-08-12T05:30:09Z",
+    "ferrite_sha": "0be4cd5a5e9825bae05244026739f5d095bd8327",
     "ferrite_arbre_modifie": false,
     "cible": {
       "url": "http://127.0.0.1:9200",
@@ -152,7 +152,7 @@
       "valeur": 0.2218,
       "numerateur": 114,
       "denominateur": 514,
-      "definition": "reussis / (reussis + echecs) — parmi les cas qui n'exercent que des capacites declarees supportees (ni refuses explicitement, ni sautes), la part qui repond comme Elasticsearch"
+      "definition": "reussis / (reussis + echecs) — la part des cas que ferrite n'a ni refuses ni fait sauter qui repond comme Elasticsearch. Un pis-aller : une partie des echecs sont des refus dont le type d'erreur imite celui d'ES au lieu de porter le marqueur, donc ils gonflent le denominateur alors qu'ils sont hors perimetre. Voir [fidelite_perimetre_declare]"
     },
     "couverture_brute": {
       "valeur": 0.0972,
@@ -161,18 +161,18 @@
       "definition": "reussis / total — la part de la suite d'Elastic qui passe, perimetre non declare compris"
     },
     "fidelite_perimetre_declare": {
-      "valeur": 0.7308,
+      "valeur": 0.7355,
       "numerateur": 114,
-      "denominateur": 156,
+      "denominateur": 155,
       "definition": "reussis / (reussis + regressions + indetermines) — le taux precedent, mais en sortant du denominateur les echecs qui portent sur une capacite declaree refusee dans compat.yaml (le cout du perimetre). Les cas qu'aucune capacite ne reclame restent dedans"
     }
   },
   "perimetre": {
-    "regressions": 42,
-    "couts_perimetre": 358,
+    "regressions": 41,
+    "couts_perimetre": 359,
     "indetermines": 0,
     "par_capacite": {
-      "index.templates": 86,
+      "index.templates": 87,
       "hors.api_typee": 48,
       "hors.cluster_distribue": 32,
       "hors.cat": 31,
@@ -188,11 +188,11 @@
       "index.mapping": 7,
       "reglages.route": 6,
       "hors.autres_recherches": 5,
-      "ingestion.index_doc": 4,
       "ingestion.reecriture_en_masse": 4,
       "ingestion.update": 4,
       "cluster.cat_health": 3,
       "cluster.cat_indices": 3,
+      "ingestion.index_doc": 3,
       "recherche.msearch": 3,
       "alias.suppression_par_alias": 2,
       "hors.scripts": 2,
@@ -5452,11 +5452,10 @@
       "fichier": "11_metric.yml",
       "cas": "Metric - multi",
       "categorie": "echec",
-      "raison": "[index] 404 : no such index [test1]",
-      "api": "index",
-      "mise_en_place": true,
-      "perimetre": "regression",
-      "capacite": "ingestion.index_doc"
+      "raison": "[indices.stats] 400 : no handler found for uri [/_stats/store,get,merge] and method [GET]",
+      "api": "indices.stats",
+      "perimetre": "cout_perimetre",
+      "capacite": "index.templates"
     },
     {
       "suite": "indices.stats",
