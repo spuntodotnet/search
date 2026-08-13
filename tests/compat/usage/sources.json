@@ -1,0 +1,58 @@
+{
+  "collecte": "2026-08-13T17:49:05Z",
+  "spec_api": "v8.15.0",
+  "sources": {
+    "rally": {
+      "requetes": 861,
+      "doublons_ecartes": 65,
+      "depot": "https://github.com/elastic/rally-tracks",
+      "revision": "b1cc31cd1afd68dbc0a0bebfef3a17ebd3747d79",
+      "licence": "Apache-2.0"
+    },
+    "doc": {
+      "requetes": 3969,
+      "doublons_ecartes": 226,
+      "depot": "https://github.com/elastic/elasticsearch",
+      "revision": "1a77947f34deddb41af25e6f0ddb8e830159c179",
+      "licence": "Apache-2.0"
+    },
+    "clients": {
+      "requetes": 143,
+      "doublons_ecartes": 75,
+      "depots": {
+        "py": {
+          "depot": "https://github.com/elastic/elasticsearch-py",
+          "revision": "f3e788b801778dea8bae1d5cc982c5557b61d3fc"
+        },
+        "js": {
+          "depot": "https://github.com/elastic/elasticsearch-js",
+          "revision": "8ae1fa35d9d8904aa9507ff048c1b3194fa2b0da"
+        },
+        "go": {
+          "depot": "https://github.com/elastic/go-elasticsearch",
+          "revision": "78315f14c12efbb1ca47fe6f2292b027b8de53bf"
+        },
+        "rb": {
+          "depot": "https://github.com/elastic/elasticsearch-ruby",
+          "revision": "73acacbe682415c38cb9167f6a2c4ea0f3f7f355"
+        }
+      }
+    },
+    "github": {
+      "requetes": 338,
+      "doublons_ecartes": 90,
+      "requetes_de_recherche": [
+        "\"es.search(index=\" language:python",
+        "\"client.search(index=\" language:python",
+        "\"es.search(body=\" language:python",
+        "\"elasticsearch.search(index=\" language:python",
+        "\".search(index=\" \"aggs\" language:python",
+        "\"Elasticsearch(\" \".search(\" language:python",
+        "\"es.count(index=\" language:python",
+        "\"helpers.scan(\" language:python"
+      ]
+    }
+  },
+  "doublons_ecartes": 456,
+  "total": 5311
+}

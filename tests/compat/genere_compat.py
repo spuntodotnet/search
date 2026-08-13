@@ -102,8 +102,16 @@ def valide(doc):
         if "poids" not in cap:
             raise Invalide(f"[{cid}] : il manque [poids] (null tant qu'il n'est pas mesure)")
         poids = cap["poids"]
-        if poids is not None and not (isinstance(poids, int) and 0 <= poids <= 100):
-            raise Invalide(f"[{cid}] : poids [{poids}] hors de 0-100")
+        # Un poids est une **part de requetes**, en pour-cent a une decimale :
+        # il n'est jamais ecrit a la main (voir `ponderation.py --poids`), et
+        # arrondir a l'entier ferait un 0 de tout ce qui compte moins d'une
+        # requete sur deux cents — c'est-a-dire de la moitie du backlog.
+        if poids is not None:
+            if isinstance(poids, bool) or not isinstance(poids, (int, float)):
+                raise Invalide(f"[{cid}] : poids [{poids}] n'est pas un nombre")
+            if not 0 <= poids <= 100 or round(poids, 1) != poids:
+                raise Invalide(f"[{cid}] : poids [{poids}] hors de 0-100, "
+                               f"ou plus precis qu'une decimale")
         if cap["etat"] == "refuse":
             if cap.get("motif") not in motifs:
                 raise Invalide(f"[{cid}] : un refus porte un motif ({'/'.join(motifs)})")
@@ -204,6 +212,26 @@ def rend_motifs(doc):
     return "\n".join(lignes)
 
 
+def rend_ponderation(doc, combien=20):
+    """Les capacites que le corpus d'usage exerce le plus.
+
+    Cette table n'est pas un doublon des autres : elle repond a « qu'est-ce qui
+    est reclame », la ou les autres repondent « qu'est-ce qui est tenu ». Les
+    poids viennent de [`usage.json`](usage.json), ecrits dans compat.yaml par
+    `ponderation.py --poids`.
+    """
+    pesees = [(t, cap) for t, cap in capacites(doc) if cap["poids"] is not None]
+    if not pesees:
+        return "_Aucun poids mesuré : lancer `python3 tests/compat/ponderation.py --poids`._"
+    pesees.sort(key=lambda tc: (-tc[1]["poids"], tc[1]["id"]))
+    lignes = [ligne(["Capacité", "Part des requêtes du corpus", "État"]), "|---|---|---|"]
+    for _, cap in pesees[:combien]:
+        icone = doc["etats"][cap["etat"]]["icone"]
+        lignes.append(ligne([echappe(" ".join(cap["nom"].split())),
+                             f"{cap['poids']:.1f} %".replace(".", ","), icone]))
+    return "\n".join(lignes)
+
+
 def rend_markdown(doc, gabarit):
     tables = {t["id"]: t for t in doc["tables"]}
     manquants = []
@@ -214,6 +242,8 @@ def rend_markdown(doc, gabarit):
             return rend_legende(doc)
         if nom == "motifs":
             return rend_motifs(doc)
+        if nom == "ponderation":
+            return rend_ponderation(doc)
         if nom not in tables:
             manquants.append(nom)
             return m.group(0)
