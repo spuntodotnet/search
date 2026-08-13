@@ -881,8 +881,8 @@ fn exists_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
 fn term_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     let obj = as_object(body, "term")?;
     let (field_name, spec) = single_key(obj, "term")?;
-    let MappedField { field, ty, .. } = ctx.field(field_name, "term")?;
-
+    // Meme ordre que dans [range] : le refus de [case_insensitive] doit sortir
+    // meme si le champ n'est pas mappe.
     let (value, boost_value) = match spec {
         Value::Object(o) => {
             expect_only(o, &["value", "boost", "case_insensitive"], "term")?;
@@ -898,6 +898,7 @@ fn term_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         }
         v => (v.clone(), None),
     };
+    let MappedField { field, ty, .. } = ctx.field(field_name, "term")?;
 
     if ty.kind() == FieldKind::Date {
         return boost(
@@ -955,13 +956,13 @@ fn terms_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     }
     let (field_name, values) =
         entry.ok_or_else(|| EsError::parsing("[terms] : aucun champ fourni"))?;
-    let MappedField { field, ty, .. } = ctx.field(field_name, "terms")?;
     let list = values.as_array().ok_or_else(|| {
         EsError::illegal_argument(format!(
             "[terms] sur [{field_name}] : une liste de valeurs est attendue (les lookups de \
              termes ne sont pas supportes par ferrite)"
         ))
     })?;
+    let MappedField { field, ty, .. } = ctx.field(field_name, "terms")?;
 
     let clauses: Vec<(Occur, Box<dyn Query>)> = list
         .iter()
@@ -1008,13 +1009,16 @@ fn format_de_requete<'a>(
 fn range_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     let obj = as_object(body, "range")?;
     let (field_name, spec) = single_key(obj, "range")?;
-    let MappedField { field, ty, .. } = ctx.field(field_name, "range")?;
     let spec = as_object(spec, "range")?;
+    // Les parametres se lisent **avant** le champ : sinon un champ non mappe
+    // (tolere par `allow_unmapped_fields`) escamote le refus de [time_zone] ou
+    // [relation], et la clause serait acceptee en silence.
     expect_only(
         spec,
         &["gte", "gt", "lte", "lt", "boost", "format"],
         "range",
     )?;
+    let MappedField { field, ty, .. } = ctx.field(field_name, "range")?;
 
     if ty.kind() == FieldKind::Text {
         return Err(EsError::unsupported(format!(
@@ -1315,8 +1319,11 @@ fn regexp_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         }
     };
 
-    let field = champ_de_motif(ctx, champ, "regexp")?;
+    // Le motif se traduit avant que le champ soit resolu : les operateurs que
+    // ferrite refuse (`~`, `&`, `<n-m>`, `#`) doivent l'etre aussi sur un champ
+    // non mappe, sans quoi la clause passerait en silence.
     let motif = crate::regexp::vers_regex(&valeur, flags, insensible)?;
+    let field = champ_de_motif(ctx, champ, "regexp")?;
     let q = RegexQuery::from_pattern(&motif, field).map_err(|e| {
         EsError::illegal_argument(format!(
             "[regexp] : motif [{valeur}] refuse par l'automate : {e}"

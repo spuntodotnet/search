@@ -2134,6 +2134,39 @@ def champ_non_mappe_ne_correspond_a_rien(es):
 
 
 @scenario
+def refus_de_clause_survit_a_un_champ_non_mappe(es):
+    """Un champ non mappe ne doit pas **avaler** le refus de la clause.
+
+    Le meme piege que la recherche sans index, un cran plus bas : `range`,
+    `term`, `terms` et `regexp` resolvaient leur champ avant de lire leurs
+    parametres, donc un champ jamais mappe (tolere par
+    `allow_unmapped_fields`) court-circuitait la clause **avant** son refus.
+    `time_zone`, `relation`, un *terms lookup*, `case_insensitive` et les
+    operateurs Lucene que ferrite ne construit pas passaient alors en silence
+    — exactement ce que ce projet refuse.
+
+    Trouve par le rejeu du corpus d'usage (`tests/compat/ponderation.py`), qui
+    posait les memes requetes a ferrite et a un ES 8.15."""
+    for clause, contient in (
+            ({"range": {"jamais_mappe": {"gte": "2020-01-01", "time_zone": "+01:00"}}},
+             "time_zone"),
+            ({"range": {"jamais_mappe": {"gte": "2020-01-01", "relation": "within"}}},
+             "relation"),
+            ({"terms": {"jamais_mappe": {"index": "autre", "id": "1", "path": "p"}}},
+             "lookup"),
+            ({"term": {"jamais_mappe": {"value": "x", "case_insensitive": True}}},
+             "case_insensitive"),
+            ({"regexp": {"jamais_mappe": "bel~ami"}}, "~"),
+    ):
+        refused(lambda c=clause: es.search(index=INDEX, query=c), contains=contient)
+    # Et ce qui est supporte continue de ne correspondre a rien, sans erreur.
+    r = es.search(index=INDEX, query={"range": {"jamais_mappe": {"gte": "2020-01-01"}}})
+    assert r["hits"]["total"]["value"] == 0
+    r = es.search(index=INDEX, query={"regexp": {"jamais_mappe": "bel.*"}})
+    assert r["hits"]["total"]["value"] == 0
+
+
+@scenario
 def champ_non_mappe_refuse_en_strict(es):
     """Le mode strict de ferrite reste disponible, sous le nom d'ES.
 
