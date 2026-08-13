@@ -330,6 +330,8 @@ tables:
             - {texte: "`GET /_settings` sans index", note: "le nom est pris pour celui d'un index, d'où un `invalid_index_name_exception` qui trompe"}
             - {texte: "`/{index}/_settings/{nom}`", note: "filtrer par nom de réglage"}
             - {nom: "local"}
+            - {nom: "flat_settings", note: "il aplatit les clés (`index.number_of_shards`) ; longtemps accepté et ignoré, ce qui rendait une réponse que personne n'avait demandée"}
+            - {nom: "include_defaults", note: "il ajoute une section `defaults` avec les dizaines de réglages qu'ES a et que ferrite n'a pas"}
         conformance:
           apis: [indices.get_settings]
           erreurs:
@@ -337,6 +339,7 @@ tables:
             # `/_settings` sans index est pris pour un nom d'index.
             - "no handler found for uri \\[[^]]*/_settings/"
             - "Invalid index name \\[_settings\\]"
+            - "ne supporte pas \\[(flat_settings|include_defaults)\\] sur \\[/\\{index\\}/_settings\\]"
 
       - id: index.settings_ecriture
         nom: "`PUT /{index}/_settings`"
@@ -1057,9 +1060,13 @@ tables:
           supportes: ["action.destructive_requires_name"]
           refuses:
             - {texte: "tout autre réglage", note: "refusé avec le message d'ES (`not recognized`)"}
+            - {nom: "flat_settings", note: "il aplatit les clés de la réponse, ferrite la rendrait imbriquée"}
+            - {nom: "include_defaults", note: "il ajoute la section `defaults` du cluster"}
         conformance:
           apis: [cluster.get_settings, cluster.put_settings]
-          erreurs: ["(transient|persistent) setting \\[.*\\], not recognized"]
+          erreurs:
+            - "(transient|persistent) setting \\[.*\\], not recognized"
+            - "ne supporte pas \\[(flat_settings|include_defaults)\\] sur \\[(GET|PUT) /_cluster/settings\\]"
 
       - id: reglages.destructive_requires_name
         nom: "`action.destructive_requires_name`"
@@ -1370,7 +1377,10 @@ tables:
         detail: >-
           `{index}` est une **expression** au sens d'ES (voir [Expressions
           d'index](#expressions-dindex-listes-motifs-alias)) ; sans index, la
-          recherche porte sur tout, comme `_all`
+          recherche porte sur tout, comme `_all`. Une recherche qui ne vise
+          **aucun** index (cluster vide, motif sans correspondance) valide quand
+          même son corps : requête, agrégations et tri sont lus contre un schéma
+          vide avant qu'on conclue qu'il n'y a rien à chercher
         conformance: {apis: [search]}
 
       - id: recherche.query

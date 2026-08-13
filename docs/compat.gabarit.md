@@ -185,6 +185,16 @@ train de tourner — les rafraîchissements sont sérialisés entre eux.
 d'Elasticsearch — voir [Expressions d'index](#expressions-dindex-listes-motifs-alias)
 juste en dessous. `POST|GET /_search` sans index cherche partout, comme `_all`.
 
+Quand l'expression ne vise **aucun** index — cluster vide, motif sans
+correspondance — le corps est quand même lu : requête, agrégations et tri sont
+traduits contre un schéma vide avant qu'on conclue qu'il n'y a rien à chercher.
+Ça a longtemps été faux, et c'était le seul échec silencieux connu du projet :
+la traduction du Query DSL se faisant index par index, zéro index voulait dire
+zéro validation, et une requête que le premier index venu refuse rendait 200.
+Les seuls verdicts qui restent suspendus sont ceux qu'aucun mapping ne peut
+prononcer (champ non mappé, chemin `nested`, champ `join`) — ES les diffère à
+l'exécution d'un shard, et il n'y a pas de shard.
+
 ### `scroll` — l'export d'un index
 
 C'est ce que `helpers.scan` du client officiel utilise, donc ce dont dépend tout
@@ -611,6 +621,25 @@ pas pour être découverts en production.
     gouverne pas ce cas chez ES non plus. En multi-index, la règle est la même
     que pour les requêtes : si un *autre* index visé mappe le champ, l'index qui
     l'ignore n'agrège simplement pas.
+
+12. **Une recherche qui ne vise aucun index refuse quand même ce que ferrite ne
+    sait pas faire.** Sur un cluster vide (ou un motif qui ne correspond à rien),
+    `{"aggs": {"a": {"significant_terms": …}}}` et `{"query": {"intervals": …}}`
+    rendent **400** ici et **200** chez ES — non parce qu'ES les ignore, mais
+    parce qu'il *sait* les faire : son 200 est une vraie réponse vide, le nôtre
+    serait un silence. La règle qui prime dans ce dépôt tranche : un client qui
+    écrit ça contre un cluster vide doit l'apprendre tout de suite, pas le jour
+    où il aura des données.
+
+    La frontière est mesurée, pas devinée
+    ([`tests/compat/sonde_vide.py`](../tests/compat/sonde_vide.py), 27/27
+    identiques) : sur tout ce qu'ES lui-même refuse sans index — une clause
+    inconnue, un type d'agrégation inconnu, une clé de corps inconnue, un ordre
+    de tri invalide — les deux serveurs rendent le même statut. Et sur ce qu'ES
+    diffère à l'exécution d'un shard — un champ non mappé dans un `term`, un
+    `sort`, une agrégation, un chemin `nested` inexistant — les deux rendent 200
+    et le **même corps**, `max_score: 0.0` et absence de section `aggregations`
+    comprises. Sans shard, il n'y a pas de verdict de mapping à rendre.
 
 ## Limites connues (perf, pas fonctionnalité)
 

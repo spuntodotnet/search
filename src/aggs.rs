@@ -23,7 +23,7 @@ use tantivy::Searcher;
 
 use crate::engine::Generation;
 use crate::error::{EsError, EsResult};
-use crate::mapping::{FieldKind, MappedField};
+use crate::mapping::{FieldKind, Fields, MappedField};
 
 /// Ce qu'il faut savoir d'une agregation pour remettre son resultat au format
 /// d'Elasticsearch.
@@ -128,15 +128,19 @@ const SEP: char = '>';
 
 /// Verifie une demande d'agregations de bout en bout, et construit au passage
 /// les requetes des agregations `filter`.
-pub fn validate(aggs: &Value, gen: &Generation, ctx: &crate::dsl::QueryCtx) -> EsResult<Filtres> {
+pub fn validate(
+    aggs: &Value,
+    champs: Option<&Fields>,
+    ctx: &crate::dsl::QueryCtx,
+) -> EsResult<Filtres> {
     let mut filtres = Filtres::default();
-    validate_niveau(aggs, gen, ctx, "", true, &mut filtres)?;
+    validate_niveau(aggs, champs, ctx, "", true, &mut filtres)?;
     Ok(filtres)
 }
 
 fn validate_niveau(
     aggs: &Value,
-    gen: &Generation,
+    champs: Option<&Fields>,
     ctx: &crate::dsl::QueryCtx,
     chemin: &str,
     filtre_possible: bool,
@@ -154,7 +158,15 @@ fn validate_niveau(
         } else {
             format!("{chemin}{SEP}{nom}")
         };
-        validate_une(nom, &sous_chemin, corps, gen, ctx, filtre_possible, filtres)?;
+        validate_une(
+            nom,
+            &sous_chemin,
+            corps,
+            champs,
+            ctx,
+            filtre_possible,
+            filtres,
+        )?;
     }
     Ok(())
 }
@@ -163,7 +175,7 @@ fn validate_une(
     nom: &str,
     chemin: &str,
     corps: &Value,
-    gen: &Generation,
+    champs: Option<&Fields>,
     ctx: &crate::dsl::QueryCtx,
     filtre_possible: bool,
     filtres: &mut Filtres,
@@ -214,7 +226,7 @@ fn validate_une(
         let filtre = crate::dsl::build_query(corps_agg, ctx)?;
         filtres.insert(chemin.to_string(), filtre);
         if let Some(sous) = sous {
-            validate_niveau(sous, gen, ctx, chemin, true, filtres)?;
+            validate_niveau(sous, champs, ctx, chemin, true, filtres)?;
         }
         return Ok(());
     }
@@ -247,7 +259,7 @@ fn validate_une(
                     "[aggs.{nom}.{type_agg}] : [field] est obligatoire"
                 ))
             })?;
-        verifier_champ(nom, type_agg, champ, gen)?;
+        verifier_champ(nom, type_agg, champ, champs)?;
     }
 
     if type_agg == "terms" {
@@ -263,7 +275,7 @@ fn validate_une(
                  sous-agregations (ce n'est pas une agregation de buckets)"
             )));
         }
-        validate_niveau(sous, gen, ctx, chemin, false, filtres)?;
+        validate_niveau(sous, champs, ctx, chemin, false, filtres)?;
     }
     Ok(())
 }
@@ -310,8 +322,15 @@ fn lire_ordre(order: &Value, nom: &str) -> EsResult<Ordre> {
 /// Une agregation lit un fast field : tous les types en ont un sauf `text`.
 ///
 /// C'est aussi la regle d'ES, qui refuse d'agreger un `text` sans `fielddata`.
-fn verifier_champ(nom: &str, type_agg: &str, champ: &str, gen: &Generation) -> EsResult<()> {
-    let MappedField { ty, .. } = gen.fields.get(champ).ok_or_else(|| {
+///
+/// `champs` vaut `None` quand la recherche ne vise **aucun** index : le type du
+/// champ ne se prononce alors pas (ES non plus, qui rend 200), mais le reste de
+/// l'agregation — et surtout ses sous-agregations — continue d'etre lu.
+fn verifier_champ(nom: &str, type_agg: &str, champ: &str, champs: Option<&Fields>) -> EsResult<()> {
+    let Some(champs) = champs else {
+        return Ok(());
+    };
+    let MappedField { ty, .. } = champs.get(champ).ok_or_else(|| {
         EsError::new(
             axum::http::StatusCode::BAD_REQUEST,
             "illegal_argument_exception",

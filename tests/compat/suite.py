@@ -109,6 +109,75 @@ def header_x_elastic_product(es):
 
 
 # ---------------------------------------------------------------------------
+# Une recherche qui ne vise aucun index
+# ---------------------------------------------------------------------------
+
+@scenario
+def recherche_sans_index_valide_son_corps(es):
+    """Zero index vise ne veut pas dire zero validation.
+
+    Ce scenario est place **avant** tout ce qui cree un index : le cluster est
+    encore vide, et c'est exactement l'etat qui n'etait pas exerce. La
+    traduction du Query DSL se faisant index par index, une recherche sans
+    index ne lisait pas son corps du tout et rendait 200 sur une requete que le
+    premier index venu refuse — le seul echec silencieux connu du projet.
+
+    Deux facons de ne viser aucun index, le meme chemin de code : le cluster
+    vide, et le motif qui ne correspond a rien (des index quotidiens pas encore
+    crees, un premier demarrage). Les deux sont couverts."""
+    # La suite est proprietaire de son serveur (elle le purge deja a la fin) :
+    # on ramene le cluster a l'etat qu'on veut mesurer, index par index, sans
+    # dependre du reglage `action.destructive_requires_name`.
+    for nom in list(es.indices.get(index="*")):
+        es.indices.delete(index=nom)
+    assert es.indices.get(index="*") == {}
+
+    for cible in ({}, {"index": "ferrite-aucun-*"}):
+        # Une requete valide reste une reponse vide, a l'identique d'ES 8.15 :
+        # zero shard, et `max_score` a 0.0 (et non `null`, qu'ES ne rend que
+        # quand un shard a repondu).
+        r = es.search(**cible, query={"match_all": {}})
+        assert r["hits"]["total"]["value"] == 0, r
+        assert r["_shards"]["total"] == 0, r
+        assert r["hits"]["max_score"] == 0.0, r
+        assert "aggregations" not in r, r
+        assert es.count(**cible, query={"match_all": {}})["count"] == 0
+
+        # Un champ que personne ne mappe reste 200 : c'est un verdict de shard,
+        # et il n'y a pas de shard (mesure contre ES 8.15, qui rend 200 aussi).
+        assert es.search(**cible, query={"term": {"absent": "x"}})[
+            "hits"]["total"]["value"] == 0
+        assert es.search(**cible, sort=["absent"])["hits"]["total"]["value"] == 0
+        assert es.search(**cible, aggs={"a": {"terms": {"field": "absent"}}})[
+            "hits"]["total"]["value"] == 0
+
+        # Ce qui ne se lit pas, en revanche, se refuse — ES aussi, sans index.
+        refused(lambda c=cible: es.search(**c, query={"pas_une_query": {"f": "x"}}),
+                contains="pas_une_query")
+        refused(lambda c=cible: es.search(
+            **c, query={"nested": {"path": "p", "query": {"pas_une_query": {}}}}),
+                contains="pas_une_query")
+        refused(lambda c=cible: es.count(**c, query={"pas_une_query": {}}),
+                contains="pas_une_query")
+        refused(lambda c=cible: es.search(
+            **c, aggs={"a": {"terms": {"field": "f"},
+                             "aggs": {"b": {"pas_une_agg": {}}}}}),
+                contains="pas_une_agg")
+        refused(lambda c=cible: es.search(**c, sort=[{"f": {"order": "nawak"}}]),
+                contains="nawak")
+
+        # Et ce que ferrite ne sait pas faire se refuse aussi, meme si ES le
+        # sait : sans ca, un client decouvrirait la limite le jour ou il a des
+        # donnees. C'est la regle qui prime dans ce depot.
+        refused(lambda c=cible: es.search(
+            **c, aggs={"a": {"significant_terms": {"field": "f"}}}),
+                contains="significant_terms")
+        refused(lambda c=cible: es.search(
+            **c, query={"intervals": {"f": {"match": {"query": "x"}}}}),
+                contains="intervals")
+
+
+# ---------------------------------------------------------------------------
 # Index et mapping
 # ---------------------------------------------------------------------------
 
@@ -2087,6 +2156,25 @@ def champ_non_mappe_refuse_en_strict(es):
         index=strict, settings={"index.query.parse.allow_unmapped_fields": True}),
         contains="_settings")
     es.indices.delete(index=strict)
+
+
+@scenario
+def parametres_de_reglages_non_appliques_refuses(es):
+    """`flat_settings` et `include_defaults` changent la **forme** de la
+    reponse chez ES : le premier aplatit les cles
+    (`settings["index.number_of_shards"]`), le second ajoute une section
+    `defaults`. ferrite les acceptait et rendait la reponse inchangee — un
+    client qui lit la cle aplatie n'y trouvait rien, sans la moindre erreur."""
+    for appel in (
+        lambda: es.indices.get_settings(index=INDEX, flat_settings=True),
+        lambda: es.indices.get_settings(index=INDEX, include_defaults=True),
+        lambda: es.cluster.get_settings(flat_settings=True),
+        lambda: es.cluster.get_settings(include_defaults=True),
+    ):
+        refused(appel, contains="forme de la reponse")
+    # Sans eux, la reponse est celle d'avant.
+    assert es.indices.get_settings(index=INDEX)[INDEX]["settings"]["index"][
+        "number_of_shards"] == "1"
 
 
 @scenario

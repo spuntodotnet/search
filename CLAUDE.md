@@ -111,7 +111,7 @@ développement, pas de CI).
 
 | Commande | La question à laquelle elle répond |
 |---|---|
-| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**89/89**, dont l'export par `helpers.scan`, le date math, la recherche libre et l'expression de noms d'alias) |
+| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**91/91**, dont l'export par `helpers.scan`, le date math, la recherche libre, l'expression de noms d'alias et la recherche sans index) |
 | `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (212/213, 0 écart réel) |
 | `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (45/46 ; le seul écart est `_cluster/health`, toujours vert par choix) |
 | `tests/compat/diff_aggs.py` | les mêmes agrégations ? (45/45, `filter` comprise) |
@@ -122,6 +122,7 @@ développement, pas de CI).
 | `tests/compat/sonde_msm.py` | les mêmes documents sur un **`minimum_should_match`** — entier, pourcentage, formes négatives, conditions `3<90%`, et sous un `nested` ? (47/47) |
 | `tests/compat/releve_mots_vides.py` | quelle est **vraiment** la liste de mots vides d'un analyzer d'ES ? |
 | `tests/compat/sonde_alias.py` | les mêmes alias sur une **expression de noms** — liste, joker, exclusion, `_all` — et le même 404 ? (21/21, corps et message compris) |
+| `tests/compat/sonde_vide.py` | sur un serveur **sans aucun index**, la même chose qu'ES — et rien accepté en silence ? (27/27 identiques, 0 refus muet ; les deux serveurs doivent être vides, c'est l'état mesuré) |
 | `tests/compat/genere_compat.py` | le périmètre déclaré et la doc disent-ils la **même chose** ? [`compat.yaml`](compat.yaml) est la source (une entrée par capacité : état, paramètres, motif du refus, poids d'usage) ; [`docs/compat.md`](docs/compat.md) et [`docs/compat.json`](docs/compat.json) en sont **générés**, et la CI échoue s'ils divergent |
 | `tests/compat/perimetre.py` | ce cas qui échoue, il porte sur quoi ? Il rattache un échec de conformance à une capacité déclarée : **régression** si elle est annoncée supportée, **coût de périmètre** si elle est annoncée refusée |
 | `tests/compat/conformance_es.py` | que dit la suite de tests **d'Elastic** ? Ses **107 domaines**, sans liste blanche. Son rapport est un fichier, pas une phrase : [`docs/conformance.json`](docs/conformance.json) (totaux, deux taux, exclusions comptées, détail par cas), régénéré par `--json`, tenu par un cliquet en CI (`--diff`) |
@@ -141,7 +142,7 @@ bouger**, pas après.
   de vérité de trois endroits. La source est maintenant
   [`compat.yaml`](compat.yaml) ; la doc et sa forme machine en sont générées, et
   le rapport de conformance **croise** chaque cas échoué avec elle. C'est ce qui
-  transforme « 400 échecs » en « 41 régressions et 359 coûts de périmètre »
+  transforme « 393 échecs » en « 37 régressions et 356 coûts de périmètre »
   (la mesure du jour, dans [`docs/conformance.json`](docs/conformance.json)) :
   la différence entre un chiffre qu'on subit et un chiffre qu'on pilote. Le
   garde-fou est le troisième verdict : un cas qu'aucune capacité ne réclame
@@ -336,15 +337,14 @@ l'agrégation `filters` (la sœur plurielle de `filter`), `time_zone` sur un
 `range` (refusé explicitement), les alias **filtrés** (`filter`, refusé
 explicitement), et les analyzers des autres langues.
 
-Un défaut connu, trouvé par le croisement du rapport de conformance avec
-`compat.yaml` et **non corrigé** : une recherche qui ne vise **aucun index**
-(cluster vide, ou motif sans correspondance) rend 200 sans valider son corps —
-`{"aggs": {"a": {"significant_terms": …}}}` et `{"query": {"intervals": …}}` y
-passent en silence, là où ils sont refusés dès qu'un index existe, parce que la
-traduction du Query DSL se fait index par index. C'est le seul endroit connu où
-la règle « jamais d'échec silencieux » ne tient pas. Deux petits frères, même
-famille : `include_defaults` et `flat_settings` sont acceptés et ignorés par
-`GET /{index}/_settings`.
+Le seul échec silencieux connu du projet est **corrigé** : une recherche qui ne
+visait **aucun index** (cluster vide, ou motif sans correspondance) rendait 200
+sans valider son corps, parce que la traduction du Query DSL se fait index par
+index. Elle est maintenant exercée contre un **schéma vide**
+(`engine::sans_index`) avant qu'on conclue qu'il n'y a rien à chercher — et avec
+elle les agrégations et le tri. Ses deux petits frères aussi : `include_defaults`
+et `flat_settings` sont refusés au lieu d'être acceptés et ignorés, sur les
+réglages d'index comme sur ceux du cluster.
 
 Les trois derniers manques de cette liste à avoir été **mesurés** plutôt que
 supposés viennent des 85 domaines de conformance qu'on ne lançait pas :

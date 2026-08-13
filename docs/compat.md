@@ -102,7 +102,7 @@ périmètre** (une capacité déclarée refusée).
 | `GET /{index}` | ✅ | `aliases` / `mappings` / `settings`, une entrée par index visé |
 | `GET /{index}/_mapping` | ✅ | |
 | `GET /{index}/_mapping/field/{champs}` | ❌ | **pas encore** — route absente (`no handler found`) : ferrite a pourtant le mapping, c'est un manque et pas une impossibilité — 15 cas de la suite d'Elastic tombent dessus |
-| `GET /{index}/_settings` | 🟡 | les réglages d'ES qu'un index a vraiment (`number_of_shards`, `uuid`, `creation_date`…), et `index.query.parse.allow_unmapped_fields` s'il a été posé. Refusé : `GET /_settings` sans index (le nom est pris pour celui d'un index, d'où un `invalid_index_name_exception` qui trompe), `/{index}/_settings/{nom}` (filtrer par nom de réglage), `local` |
+| `GET /{index}/_settings` | 🟡 | les réglages d'ES qu'un index a vraiment (`number_of_shards`, `uuid`, `creation_date`…), et `index.query.parse.allow_unmapped_fields` s'il a été posé. Refusé : `GET /_settings` sans index (le nom est pris pour celui d'un index, d'où un `invalid_index_name_exception` qui trompe), `/{index}/_settings/{nom}` (filtrer par nom de réglage), `local`, `flat_settings` (il aplatit les clés (`index.number_of_shards`) ; longtemps accepté et ignoré, ce qui rendait une réponse que personne n'avait demandée), `include_defaults` (il ajoute une section `defaults` avec les dizaines de réglages qu'ES a et que ferrite n'a pas) |
 | `PUT /{index}/_settings` | ❌ | **pas encore** — le seul réglage exploité se pose à la création : le changer à chaud demanderait de reconstruire la génération courante, et un client qui le croit changé chercherait longtemps |
 | `PUT /{index}/_mapping` | 🟡 | **ajoute** des champs (une nouvelle génération est construite). Changer le type d'un champ existant reste refusé, comme chez ES. Refusé : `dynamic` (le modifier après coup) |
 | `POST /{index}/_refresh` | ✅ | |
@@ -275,6 +275,16 @@ train de tourner — les rafraîchissements sont sérialisés entre eux.
 d'Elasticsearch — voir [Expressions d'index](#expressions-dindex-listes-motifs-alias)
 juste en dessous. `POST|GET /_search` sans index cherche partout, comme `_all`.
 
+Quand l'expression ne vise **aucun** index — cluster vide, motif sans
+correspondance — le corps est quand même lu : requête, agrégations et tri sont
+traduits contre un schéma vide avant qu'on conclue qu'il n'y a rien à chercher.
+Ça a longtemps été faux, et c'était le seul échec silencieux connu du projet :
+la traduction du Query DSL se faisant index par index, zéro index voulait dire
+zéro validation, et une requête que le premier index venu refuse rendait 200.
+Les seuls verdicts qui restent suspendus sont ceux qu'aucun mapping ne peut
+prononcer (champ non mappé, chemin `nested`, champ `join`) — ES les diffère à
+l'exécution d'un shard, et il n'y a pas de shard.
+
 ### `scroll` — l'export d'un index
 
 C'est ce que `helpers.scan` du client officiel utilise, donc ce dont dépend tout
@@ -439,7 +449,7 @@ Mesuré, pas supposé — voir [`conformance.md`](conformance.md) :
 
 | | État | Détail |
 |---|---|---|
-| `GET\|PUT /_cluster/settings` | 🟡 | `persistent` et `transient` (le second l'emporte), écriture plate ou imbriquée. Supporté : `action.destructive_requires_name`. Refusé : tout autre réglage (refusé avec le message d'ES (`not recognized`)) |
+| `GET\|PUT /_cluster/settings` | 🟡 | `persistent` et `transient` (le second l'emporte), écriture plate ou imbriquée. Supporté : `action.destructive_requires_name`. Refusé : tout autre réglage (refusé avec le message d'ES (`not recognized`)), `flat_settings` (il aplatit les clés de la réponse, ferrite la rendrait imbriquée), `include_defaults` (il ajoute la section `defaults` du cluster) |
 | `action.destructive_requires_name` | ✅ | `true` par défaut, **comme ES depuis la 8.0** |
 
 Conséquence : `DELETE /audits-2026.07.*` et `DELETE /_all` sont **refusés par
@@ -550,7 +560,7 @@ de documents que demandé, sans que rien ne le signale.
 
 | | État | Détail |
 |---|---|---|
-| `POST\|GET /{index}/_search`, `POST\|GET /_search` | ✅ | `{index}` est une **expression** au sens d'ES (voir [Expressions d'index](#expressions-dindex-listes-motifs-alias)) ; sans index, la recherche porte sur tout, comme `_all` |
+| `POST\|GET /{index}/_search`, `POST\|GET /_search` | ✅ | `{index}` est une **expression** au sens d'ES (voir [Expressions d'index](#expressions-dindex-listes-motifs-alias)) ; sans index, la recherche porte sur tout, comme `_all`. Une recherche qui ne vise **aucun** index (cluster vide, motif sans correspondance) valide quand même son corps : requête, agrégations et tri sont lus contre un schéma vide avant qu'on conclue qu'il n'y a rien à chercher |
 | `query` | ✅ | |
 | `from` / `size` | ✅ | corps ou query string. `from + size > 10000` ❌ (`max_result_window`) |
 | `sort` | 🟡 | multi-clés, `asc` / `desc`, sur `keyword` / numérique / `date` / `boolean`, plus `_score` et `_doc`. Valeurs manquantes en dernier (`missing: _last`). Le tableau `sort` est rendu dans chaque hit. En multi-index, un champ non mappé par un des index donne un échec **de ce shard**, comme chez ES. Refusé : `missing`, `mode`, `nested`, `unmapped_type`, le tri par script, le tri sur un champ `text` |
@@ -817,6 +827,25 @@ pas pour être découverts en production.
     gouverne pas ce cas chez ES non plus. En multi-index, la règle est la même
     que pour les requêtes : si un *autre* index visé mappe le champ, l'index qui
     l'ignore n'agrège simplement pas.
+
+12. **Une recherche qui ne vise aucun index refuse quand même ce que ferrite ne
+    sait pas faire.** Sur un cluster vide (ou un motif qui ne correspond à rien),
+    `{"aggs": {"a": {"significant_terms": …}}}` et `{"query": {"intervals": …}}`
+    rendent **400** ici et **200** chez ES — non parce qu'ES les ignore, mais
+    parce qu'il *sait* les faire : son 200 est une vraie réponse vide, le nôtre
+    serait un silence. La règle qui prime dans ce dépôt tranche : un client qui
+    écrit ça contre un cluster vide doit l'apprendre tout de suite, pas le jour
+    où il aura des données.
+
+    La frontière est mesurée, pas devinée
+    ([`tests/compat/sonde_vide.py`](../tests/compat/sonde_vide.py), 27/27
+    identiques) : sur tout ce qu'ES lui-même refuse sans index — une clause
+    inconnue, un type d'agrégation inconnu, une clé de corps inconnue, un ordre
+    de tri invalide — les deux serveurs rendent le même statut. Et sur ce qu'ES
+    diffère à l'exécution d'un shard — un champ non mappé dans un `term`, un
+    `sort`, une agrégation, un chemin `nested` inexistant — les deux rendent 200
+    et le **même corps**, `max_score: 0.0` et absence de section `aggregations`
+    comprises. Sans shard, il n'y a pas de verdict de mapping à rendre.
 
 ## Limites connues (perf, pas fonctionnalité)
 
