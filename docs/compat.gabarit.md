@@ -42,6 +42,20 @@ compter soi-même. C'est la mesure la moins complaisante du projet : les cas
 viennent d'Elastic, pas de nous. La CI en fait un cliquet : le nombre d'échecs
 ne remonte pas.
 
+### Ce que le corpus d'usage réclame le plus
+
+Ce tableau-là ne dit pas ce que ferrite tient, il dit **ce qu'on lui demande**.
+Chaque capacité porte un `poids` : la part des requêtes d'un corpus de vraies
+requêtes — documentation de référence d'ES 8.15, tracks Rally d'Elastic, tests
+et exemples des clients officiels, code open source — qui l'exercent. La
+méthode, les sources et leurs biais sont dans [`usage.md`](usage.md) ; les
+nombres viennent de [`usage.json`](usage.json), et `ponderation.py --verifie`
+échoue si `compat.yaml` s'en écarte. Un poids n'est jamais écrit à la main :
+une capacité qu'aucune requête du corpus ne sait exercer garde `null` plutôt
+qu'un zéro qui aurait l'air d'une mesure.
+
+<!-- table:ponderation -->
+
 ---
 
 ## Poignée de main et cluster

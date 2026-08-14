@@ -178,6 +178,18 @@ est dans [`docs/compat.md`](docs/compat.md). Rien de ce qui n'est pas supporté
 n'échoue en silence : chaque clause, type ou route inconnu produit une erreur
 explicite au format d'Elasticsearch.
 
+**Ce que ça vaut, pondéré par l'usage.** Un pourcentage de cas de test ne dit
+rien de ce qu'une application peut brancher : il met `bool` + `match` au même
+rang qu'un `significant_terms` avec script. Sur un corpus de **5 311 requêtes
+réelles** — la documentation de référence d'ES 8.15, les tracks Rally d'Elastic,
+les tests des clients officiels et le code de 184 dépôts open source — la
+question posée est « celle-ci passerait-elle **entièrement** ? », parce qu'une
+requête supportée à 90 % est une requête qui échoue. Réponse : **89,6 % des
+requêtes trouvées dans du code d'application**, 34,5 % des exemples de la
+documentation, 16,6 % des tracks de benchmark. L'écart entre ces trois nombres
+est le résultat ; la méthode, les sources et les biais sont dans
+[`docs/usage.md`](docs/usage.md), le corpus est publié avec.
+
 Cet inventaire n'est plus écrit à la main : sa source est
 [`compat.yaml`](compat.yaml) à la racine — une entrée par capacité, avec son
 état et, pour un refus, son **motif** (hors périmètre assumé / pas encore /

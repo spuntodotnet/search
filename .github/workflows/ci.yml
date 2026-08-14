@@ -59,6 +59,13 @@ jobs:
       - name: docs/compat.md et docs/compat.json a jour
         run: python3 tests/compat/genere_compat.py --verifie
 
+      # Les `poids` de compat.yaml sont **mesures** sur le corpus d'usage
+      # publie (tests/compat/usage/corpus.jsonl), jamais ecrits a la main : un poids
+      # devine vaudrait moins que pas de poids. Cette etape echoue si les deux
+      # divergent, dans un sens comme dans l'autre.
+      - name: les poids d'usage viennent du corpus
+        run: python3 tests/compat/ponderation.py --verifie
+
   compat:
     name: harnais de compatibilite (client officiel)
     runs-on: ubuntu-latest

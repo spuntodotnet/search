@@ -51,6 +51,41 @@ compter soi-même. C'est la mesure la moins complaisante du projet : les cas
 viennent d'Elastic, pas de nous. La CI en fait un cliquet : le nombre d'échecs
 ne remonte pas.
 
+### Ce que le corpus d'usage réclame le plus
+
+Ce tableau-là ne dit pas ce que ferrite tient, il dit **ce qu'on lui demande**.
+Chaque capacité porte un `poids` : la part des requêtes d'un corpus de vraies
+requêtes — documentation de référence d'ES 8.15, tracks Rally d'Elastic, tests
+et exemples des clients officiels, code open source — qui l'exercent. La
+méthode, les sources et leurs biais sont dans [`usage.md`](usage.md) ; les
+nombres viennent de [`usage.json`](usage.json), et `ponderation.py --verifie`
+échoue si `compat.yaml` s'en écarte. Un poids n'est jamais écrit à la main :
+une capacité qu'aucune requête du corpus ne sait exercer garde `null` plutôt
+qu'un zéro qui aurait l'air d'une mesure.
+
+| Capacité | Part des requêtes du corpus | État |
+|---|---|---|
+| `POST\|GET /{index}/_search`, `POST\|GET /_search` | 33,9 % | ✅ |
+| `query` | 25,3 % | ✅ |
+| Tout ce qu'Elastic ajoute autour du moteur — sécurité et rôles (`_security`), machine learning (`_ml`), cycle de vie (`_ilm`, `_slm`), `_watcher`, `_transform`, `_enrich`, `_eql`, `_sql`, `_esql`, `_inference`, connecteurs, *search applications*, `_rollup`, `_ccr`, `_graph`, licence, `_monitoring` | 18,9 % | ❌ |
+| `from` / `size` | 16,3 % | ✅ |
+| `aggs` / `aggregations` | 14,0 % | 🟡 |
+| `bool` | 12,1 % | 🟡 |
+| `highlight`, `search_after`, `pit`, `collapse`, `knn`, `explain`, `fields`, `docvalue_fields`, `stored_fields`, `seq_no_primary_term`, `post_filter`, `min_score`, `suggest`, `rescore`, `track_scores`, `q`, `runtime_mappings`, `script_fields`, `timeout`, `terminate_after`, `version`, `indices_boost`, `profile`, `slice`, `stats`, `ext`, `retriever` | 12,0 % | ❌ |
+| `range` | 11,4 % | 🟡 |
+| `PUT /{index}` | 10,5 % | 🟡 |
+| Sous-agrégations | 8,8 % | ✅ |
+| `terms` | 7,5 % | 🟡 |
+| `match` | 6,8 % | 🟡 |
+| `PUT\|POST /{index}/_doc/{id}` | 6,8 % | 🟡 |
+| `query_string`, `simple_query_string`, `function_score`, `boosting`, `intervals`, `terms_set`, `script`… | 6,5 % | ❌ |
+| `percentiles`, `extended_stats`, `top_hits`, `composite`, `filters`, `nested`, `significant_terms`, `date_range`, `ip_range`… | 6,1 % | ❌ |
+| `date_histogram` | 5,3 % | 🟡 |
+| `match_phrase` | 4,5 % | 🟡 |
+| `_all`, `*`, URL sans index | 4,1 % | ✅ |
+| Templates, ILM, `_stats`, `_close`, `_open` | 3,9 % | ❌ |
+| `_source` | 3,7 % | ✅ |
+
 ---
 
 ## Poignée de main et cluster
@@ -81,6 +116,7 @@ qui échoue sur `_snapshot` n'est pas le même événement qu'un cas qui échoue
 | Cycle de vie d'un index — `_close`, `_open`, `_stats`, `_forcemerge`, `_shrink`, `_split`, `_clone`, `_rollover`, `_recovery`, `_segments`, `_flush`, `_upgrade`, `_cache/clear`, `_shard_stores`, `_resolve/index` | ❌ | **pas encore** — la moitié de ces routes n'a pas de sens sans shards (`_shrink`, `_split`, `_recovery`, `_shard_stores`) ; l'autre moitié est un manque, `_stats` en tête, que réclament les tableaux de bord |
 | Les autres routes de recherche — `_field_caps`, `_search_shards`, `_termvectors`, `_mtermvectors`, `_suggest`, `_source` | ❌ | **pas encore** — aucune n'est demandée par le code client qu'on cherche à servir ; `_field_caps` est celle qui manquerait le plus, un Kibana s'en sert pour découvrir les champs |
 | L'API typée — un `{type}` dans l'URL, un `_type` dans la réponse, `include_type_name` | ❌ | **comme Elasticsearch** — elle a disparu en 8.x, la version que ferrite annonce : un vrai Elasticsearch 8 échoue au même endroit, et la rendre reviendrait à annoncer une version qu'on ne sert pas |
+| Tout ce qu'Elastic ajoute autour du moteur — sécurité et rôles (`_security`), machine learning (`_ml`), cycle de vie (`_ilm`, `_slm`), `_watcher`, `_transform`, `_enrich`, `_eql`, `_sql`, `_esql`, `_inference`, connecteurs, *search applications*, `_rollup`, `_ccr`, `_graph`, licence, `_monitoring` | ❌ | **hors périmètre assumé** — ce sont des produits posés sur le moteur, pas le moteur : chacun a son propre modèle de données et sa propre API, et aucun n'est ce qu'un client Elasticsearch existant appelle pour chercher des documents. C'est le corpus d'usage qui a montré qu'aucune capacité ne les réclamait — donc que **19 % de ses requêtes** tombaient dans un trou de la déclaration, ni servies ni refusées |
 | Scripting — `_scripts`, `_search/template`, `_render/template`, Painless | ❌ | **hors périmètre assumé** — un moteur de script est un langage à embarquer, à isoler et à maintenir : c'est exactement le genre de poids que ferrite existe pour ne pas porter |
 
 C'est de loin la famille d'écarts la plus fournie de la suite de conformance
@@ -465,9 +501,9 @@ suppression de données.
 |---|---|---|
 | `match_all` | ✅ | `boost` |
 | `match_none` | ✅ | |
-| `match` | 🟡 | sur un champ non analysé, se comporte comme `term`. Voir [la recherche libre](#la-recherche-libre-multi_match) pour `lenient`. Supporté : `query`, `operator` (`or` / `and`), `boost`, `lenient`. Refusé : `fuzziness`, `minimum_should_match`, `analyzer`, `zero_terms_query`, `prefix_length` |
-| `multi_match` | 🟡 | voir [la recherche libre](#la-recherche-libre-multi_match). Supporté : `query`, `fields` (**obligatoire**, avec la pondération `champ^3`), `type` (`best_fields` (défaut), `most_fields`, `phrase`, `phrase_prefix`), `operator`, `tie_breaker`, `lenient`, `max_expansions`, `boost`. Refusé : `type: cross_fields`, `type: bool_prefix`, `slop`, les motifs de champ (`tit*`) |
-| `match_phrase` | 🟡 | les termes dans l'ordre, adjacents. Supporté : `query`, `boost`. Refusé : `slop` (voir les divergences) |
+| `match` | 🟡 | sur un champ non analysé, se comporte comme `term`. Voir [la recherche libre](#la-recherche-libre-multi_match) pour `lenient`. Supporté : `query`, `operator` (`or` / `and`), `boost`, `lenient`. Refusé : `fuzziness`, `minimum_should_match`, `analyzer`, `zero_terms_query`, `prefix_length`, `auto_generate_synonyms_phrase_query`, `fuzzy_transpositions`, `max_expansions` |
+| `multi_match` | 🟡 | voir [la recherche libre](#la-recherche-libre-multi_match). Supporté : `query`, `fields` (**obligatoire**, avec la pondération `champ^3`), `type` (`best_fields` (défaut), `most_fields`, `phrase`, `phrase_prefix`), `operator`, `tie_breaker`, `lenient`, `max_expansions`, `boost`. Refusé : `type: cross_fields`, `type: bool_prefix`, `slop`, les motifs de champ (`tit*`), `minimum_should_match`, `analyzer` |
+| `match_phrase` | 🟡 | les termes dans l'ordre, adjacents. Supporté : `query`, `boost`. Refusé : `slop` (voir les divergences), `analyzer` |
 | `match_phrase_prefix` | 🟡 | les termes dans l'ordre, le dernier n'étant qu'un début de mot. Sur un champ `keyword`, refusée avec le message d'ES (« Can only use phrase prefix queries on text fields »). Supporté : `query`, `max_expansions` (défaut 50, comme ES), `boost`. Refusé : `slop`, `analyzer`, `zero_terms_query` |
 | `exists` | ✅ | sur tous les types, y compris `text`. Un champ absent, `null`, ou un tableau vide compte comme absent, comme chez ES |
 | `term` | ✅ | forme courte et forme `{value, boost}`. Sur un champ `date`, la valeur désigne la **période** qu'elle couvre, pas un instant, et le date math y est accepté (comme chez ES). `case_insensitive` ❌ |
@@ -475,12 +511,13 @@ suppression de données.
 | `prefix` | 🟡 | non analysée comme chez ES. Supporté : `value`, `case_insensitive` (repliement ASCII, comme ES), `boost`. Refusé : `rewrite` |
 | `wildcard` | 🟡 | `*`, `?`, et `\` qui échappe le caractère suivant. Supporté : `value`, `case_insensitive`, `boost`. Refusé : `rewrite` |
 | `regexp` | 🟡 | syntaxe **Lucene**, ancrée des deux côtés (voir les divergences). Supporté : `value`, `flags`, `case_insensitive`, `boost`. Refusé : les opérateurs `~`, `&`, `<n-m>`, `#` (refusés explicitement, jamais pris pour des littéraux), `rewrite`, `max_determinized_states` |
-| `fuzzy` | 🟡 | Supporté : `fuzziness` (`AUTO` ou distance entière), `transpositions`, `boost`. Refusé : `prefix_length`, `max_expansions`, `rewrite` |
+| `fuzzy` | 🟡 | Supporté : `value`, `fuzziness` (`AUTO` ou distance entière), `transpositions`, `boost`. Refusé : `prefix_length`, `max_expansions`, `rewrite` |
 | `constant_score` | ✅ | `filter`, `boost` |
 | `dis_max` | ✅ | `queries`, `tie_breaker`, `boost` — voir [`src/dismax.rs`](../src/dismax.rs) |
 | `terms` | 🟡 | liste de valeurs, score constant comme chez ES. Sur un champ `date`, chaque valeur est une période, comme dans `term`. Refusé : les *terms lookup* (lire la liste des valeurs dans un autre document) |
 | `range` | 🟡 | sur `keyword` / numérique / `date` / `boolean`. Sur un champ `date`, les bornes acceptent le **date math** (`now`, `now-1d/d`, `2026-03-15\|\|+1M`) et sont **arrondies selon leur côté** — voir [la section dédiée](#date-math-et-arrondi-des-bornes). Supporté : `gte`, `gt`, `lte`, `lt`, `boost`, `format` (lecture des bornes). Refusé : `time_zone`, `relation`, un `range` sur un champ `text` |
 | `bool` | 🟡 | `filter` ne contribue pas au score. Un `bool` qui n'a que des `must_not` matche tous les autres documents, comme chez ES. Supporté : `must`, `should`, `filter`, `must_not`, `boost`, `minimum_should_match` (ses **quatre notations**, voir [la section dédiée](#minimum_should_match)). Refusé : `_name`, `adjust_pure_negative` |
+| `_name` (nommer une clause) | ❌ | **pas encore** — nommer une clause n'a d'interet qu'avec `matched_queries` dans la reponse, qui n'est pas rendu : accepter le nom en le perdant serait promettre une information qui ne reviendra pas. Refuse dans toutes les clauses, `bool` compris |
 | `query_string`, `simple_query_string`, `function_score`, `boosting`, `intervals`, `terms_set`, `script`… | ❌ | **pas encore** — `parsing_exception: unknown query [...]`, avec la liste des clauses connues — la plus regrettée est `query_string`, dont la syntaxe est un langage à part entière |
 
 ### La recherche libre (`multi_match`)
@@ -571,7 +608,7 @@ de documents que demandé, sans que rien ne le signale.
 | `preference` | 🟡 | accepté, sans objet : il n'y a qu'un shard |
 | `aggs` / `aggregations` | 🟡 | voir la section dédiée |
 | `scroll` | ✅ | `?scroll=1m` ouvre un contexte figé et rend un `_scroll_id` — voir la section dédiée |
-| `highlight`, `search_after`, PIT, `collapse`, `knn`, `explain`, `fields`, `docvalue_fields`, `stored_fields`, `seq_no_primary_term`, `post_filter`, `min_score`, `suggest`, `rescore`, `track_scores`, `q` | ❌ | **pas encore** — aucun n'est un obstacle de moteur ; `highlight` et `search_after` sont les deux qui manquent le plus, le premier pour une liste de résultats, le second pour paginer au-delà de 10 000 |
+| `highlight`, `search_after`, `pit`, `collapse`, `knn`, `explain`, `fields`, `docvalue_fields`, `stored_fields`, `seq_no_primary_term`, `post_filter`, `min_score`, `suggest`, `rescore`, `track_scores`, `q`, `runtime_mappings`, `script_fields`, `timeout`, `terminate_after`, `version`, `indices_boost`, `profile`, `slice`, `stats`, `ext`, `retriever` | ❌ | **pas encore** — aucun n'est un obstacle de moteur ; `highlight` et `search_after` sont les deux qui manquent le plus, le premier pour une liste de résultats, le second pour paginer au-delà de 10 000 |
 | `ignore_unavailable`, `allow_no_indices`, `expand_wildcards` | ✅ | voir [Expressions d'index](#expressions-dindex-listes-motifs-alias) — `expand_wildcards=none` reste ❌ |
 | `routing`, `filter_path`, `typed_keys` | ❌ | **hors périmètre assumé** — ferrite est mono-shard, `routing` n'a rien à choisir ; les deux autres changent la forme de la réponse, et une forme qui dépend d'un paramètre est une seconde API à mesurer |
 | `search_type`, `max_concurrent_shard_requests`, `pre_filter_shard_size`, `batched_reduce_size` | ❌ | **hors périmètre assumé** — ils reglent la façon dont une recherche se distribue entre shards ; il n'y en a qu'un, donc rien à distribuer et rien à régler |
@@ -623,10 +660,10 @@ Comparées champ par champ à un vrai ES 8.15 sur 45 requêtes
 | Agrégation | État | Détail |
 |---|---|---|
 | `min`, `max`, `sum`, `avg`, `value_count`, `stats` | ✅ | `field`, `missing`. Sur un champ `date`, la valeur est en millisecondes et le `*_as_string` est rendu comme chez ES |
-| `terms` | 🟡 | `doc_count_error_upper_bound` et `sum_other_doc_count` sont renseignés. Supporté : `field`, `size`, `shard_size`, `min_doc_count`, `order` (`_count` / `_key` seulement). Refusé : `include`, `exclude`, l'ordre par sous-agrégation |
+| `terms` | 🟡 | `doc_count_error_upper_bound` et `sum_other_doc_count` sont renseignés. Supporté : `field`, `size`, `shard_size`, `min_doc_count`, `order` (`_count` / `_key` seulement). Refusé : `include`, `exclude`, `missing`, `collect_mode`, `execution_hint`, `script`, `shard_min_doc_count`, `show_term_doc_count_error`, l'ordre par sous-agrégation |
 | `range` | ✅ | `ranges` avec `from` / `to` / `key`, `keyed` |
 | `histogram` | ✅ | `interval`, `offset`, `min_doc_count`, `hard_bounds`, `extended_bounds`, `keyed` |
-| `date_histogram` | 🟡 | Supporté : `fixed_interval`, `offset`, `min_doc_count`, `hard_bounds`, `extended_bounds`, `keyed` (comme `histogram`). Refusé : `calendar_interval` (mois et années civils n'ont pas d'équivalent dans tantivy) |
+| `date_histogram` | 🟡 | Supporté : `field`, `fixed_interval`, `offset`, `min_doc_count`, `hard_bounds`, `extended_bounds`, `keyed` (comme `histogram`). Refusé : `calendar_interval` (mois et années civils n'ont pas d'équivalent dans tantivy), `time_zone`, `format`, `order` |
 | Sous-agrégations | ✅ | sur tous les types de buckets, vérifiées jusqu'à trois niveaux |
 | `cardinality` | ❌ | **divergence de moteur** — l'estimation de tantivy diffère de celle d'ES (mesuré : 582 valeurs distinctes annoncées là où ES en compte 598), y compris sous le seuil où ES est exact — un compte approché sous le nom d'ES serait faux sans le dire |
 | `filter` | 🟡 | n'importe quelle requête du Query DSL, avec ses sous-agrégations. **Exécutée par ferrite**, pas par tantivy : compter les documents qui correspondent à la recherche *et* au filtre, c'est exécuter l'intersection des deux requêtes (voir les divergences). Refusé : sous une agrégation de buckets (il faudrait rejouer sa requête bucket par bucket) |
@@ -699,7 +736,7 @@ distribué ; mono-shard, parent et enfant sont forcément au même endroit.
 |---|---|---|
 | `{"type": "join", "relations": {...}}` | ✅ | un seul champ `join` par index, plusieurs relations et plusieurs enfants par parent |
 | Indexation | ✅ | `"lien": "article"` ou `{"name": "commentaire", "parent": "a1"}`. Un enfant sans `parent`, un parent avec, ou une relation non déclarée : refus explicite |
-| `has_child`, `has_parent` | 🟡 | avec n'importe quelle requête interne. Supporté : `score_mode` (`none` seulement — la jointure rend un score constant). Refusé : `min_children`, `max_children`, `inner_hits`, `ignore_unmapped` |
+| `has_child`, `has_parent` | 🟡 | avec n'importe quelle requête interne. Supporté : `type` (`parent_type` pour `has_parent`), `parent_type`, `query`, `score_mode` (`none` seulement — la jointure rend un score constant). Refusé : `min_children`, `max_children`, `inner_hits`, `ignore_unmapped`, `score` |
 | `parent_id` | ✅ | |
 | `{"term": {"lien": "article"}}` | ✅ | le champ `join` se filtre comme un `keyword`, sous son propre nom, comme chez ES |
 | `routing` | 🟡 | accepté et sans objet : il n'y a qu'un shard, donc rien à co-localiser. C'est **une contrainte d'ES en moins** |
