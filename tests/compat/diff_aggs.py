@@ -48,8 +48,12 @@ def aggregations():
         ("terms sur categorie", {"f": {"terms": {"field": "categorie"}}}),
         ("terms multi-valeur", {"f": {"terms": {"field": "tags"}}}),
         ("terms sur booleen", {"f": {"terms": {"field": "actif"}}}),
-        ("terms min_doc_count", {"f": {"terms": {"field": "marque",
-                                                 "min_doc_count": 50}}}),
+        # `min_doc_count` autre que sa valeur par defaut est **refuse** depuis
+        # que le fuzzing differentiel a montre que `sum_other_doc_count` n'en
+        # suivait pas la regle d'ES (voir docs/fuzz.md). Le cas reste ici sous
+        # sa forme par defaut : c'est celle qui doit coincider.
+        ("terms min_doc_count=1", {"f": {"terms": {"field": "marque",
+                                                   "min_doc_count": 1}}}),
         ("terms order _key asc", {"f": {"terms": {"field": "marque",
                                                   "order": {"_key": "asc"}}}}),
         ("terms order _count asc", {"f": {"terms": {"field": "marque",

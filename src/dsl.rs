@@ -1193,7 +1193,13 @@ fn bool_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     // Un `bool` qui n'a que des `must_not` ne matche rien chez tantivy, alors
     // qu'ES l'interprete comme « tous les documents, sauf ceux-la ». On pose la
     // clause positive implicite.
-    if !has_required && should_count == 0 {
+    //
+    // Elle ne **note** rien : ES donne `0.0` a ces documents, quel que soit le
+    // `boost` du `bool` (mesure). ferrite leur donnait le score de la clause
+    // implicite — `1.5` sous un `boost: 1.5` — et l'ordre changeait des que ce
+    // `bool` etait combine a autre chose, sans que rien ne le signale.
+    let purement_negatif = !has_required && should_count == 0;
+    if purement_negatif {
         clauses.insert(0, (Occur::Must, Box::new(AllQuery)));
         has_required = true;
     }
@@ -1205,13 +1211,16 @@ fn bool_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         return Ok(Box::new(EmptyQuery));
     }
 
-    let inner: Box<dyn Query> = if min_should > 0 {
+    let mut inner: Box<dyn Query> = if min_should > 0 {
         Box::new(BooleanQuery::with_minimum_required_clauses(
             clauses, min_should,
         ))
     } else {
         Box::new(BooleanQuery::new(clauses))
     };
+    if purement_negatif {
+        inner = Box::new(ConstScoreQuery::new(inner, 0.0));
+    }
     boost(inner, obj.get("boost"))
 }
 
@@ -1435,7 +1444,12 @@ fn fuzzy_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         .and_then(Value::as_bool)
         .unwrap_or(true);
 
-    let MappedField { field, .. } = ctx.field(champ, "fuzzy")?;
+    // Une distance d'edition se mesure entre deux chaines. Sur un champ
+    // numerique ou `date`, ES refuse (« Can only use fuzzy queries on keyword
+    // and text fields ») ; ferrite construisait un terme texte sur une colonne
+    // qui n'en contient pas et rendait **zero document en 200** — un resultat
+    // vide qui se fait passer pour une reponse.
+    let field = champ_de_motif(ctx, champ, "fuzzy")?;
     let terme = tantivy::Term::from_field_text(field, &valeur);
     let q = FuzzyTermQuery::new(terme, distance, transpositions);
     boost(
@@ -1790,6 +1804,17 @@ fn clause_nested(v: &Value, ctx: &QueryCtx, racine: &str) -> EsResult<Clause> {
                 .as_str()
                 .ok_or_else(|| EsError::parsing("[prefix] attend une chaine"))?;
             let mf = champ_nested(ctx, champ, racine, "prefix")?;
+            // La meme regle qu'a la racine : un prefixe n'a de sens que sur une
+            // chaine. La verification manquait ici, et un `prefix` sur un champ
+            // `date` sous un `nested` rendait 200 la ou ES refuse — le genre de
+            // 200 qui compte des documents au hasard.
+            if !matches!(mf.ty.kind(), FieldKind::Keyword | FieldKind::Text) {
+                return Err(EsError::illegal_argument(format!(
+                    "[prefix] ne s'applique qu'a un champ [text] ou [keyword] ; [{champ}] est de \
+                     type [{}]",
+                    mf.ty.name()
+                )));
+            }
             Ok(Clause::Champ {
                 chemin: champ.to_string(),
                 champ: mf,

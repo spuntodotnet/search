@@ -90,16 +90,56 @@ avec sa raison, et `--tout` les imprime.
 ## La mesure du jour
 
 ```
-400 cas, 4 942 requêtes générées, 0 divergence réelle
-étalonnage (ES vs ES) : 60 cas, 738 requêtes, 0 divergence
+graines 1–400          400 cas,  5 150 requêtes, 0 divergence réelle
+graines 5000–5299      300 cas,  3 830 requêtes, 0 divergence réelle
+graines 900000+        250 cas,  3 228 requêtes, 0 divergence réelle
+graines 4242000+       250 cas,  3 237 requêtes, 0 divergence réelle
+graines 31337000+      250 cas,  3 226 requêtes, 0 divergence réelle
+                     ------------------------------------------------
+                     1 450 cas, 18 671 requêtes, 0 divergence réelle
+
+étalonnage ES vs ES     60 cas,    735 requêtes, 0 divergence
 ```
+
+Une seule de ces plages (1–400) a servi à corriger. Les quatre autres sont des
+plages **de contrôle** : leur zéro est le seul qui mesure ferrite plutôt que mon
+itération.
 
 Le détail machine est dans [`fuzz.json`](fuzz.json) : les divergences réelles y
 sont écrites entières, les assumées résumées par famille avec trois exemples.
 
+### Pourquoi cinq plages de graines, et pas une
+
+Parce que la première ne prouvait pas ce qu'elle avait l'air de prouver.
+
+Les graines 1–400 sont celles contre lesquelles l'outil a été **réglé** : à
+chaque divergence corrigée, à chaque prédicat écrit, c'est sur elles que je
+relançais. Le zéro qu'elles ont fini par afficher était donc en partie du
+**surajustement** — pas une propriété de ferrite, une propriété de mon
+itération.
+
+La preuve : chaque nouvelle plage jamais regardée en a retrouvé.
+
+| Plage | Ce qu'elle a sorti |
+|---|---|
+| 5000–5299 | **sept** divergences, dont une vraie — `sum_other_doc_count` faux dès que `min_doc_count` dépasse 1 — et deux prédicats trop étroits (ci-dessous) |
+| 900000+ | **deux** défauts réels : `fuzzy` sur un champ `date` ou numérique rendait « zéro document » en 200, et le score d'un `bool` purement négatif valait le `boost` au lieu de `0.0` |
+| 4242000+ | un trou du **rapport**, pas du moteur : un `scroll` refusé ne transportait pas le motif de son refus, donc un refus déclaré s'y lisait comme une divergence réelle |
+| 31337000+ | rien de neuf — la première plage de contrôle qui n'ajoute rien |
+
+Les deux prédicats trop étroits :
+
+| Ce qui manquait | Ce que ça a coûté |
+|---|---|
+| le court-circuit d'ES était reconnu à son **type d'erreur** | trois autres refus légitimes de ferrite comptés comme des divergences. Le prédicat regarde maintenant si la requête est court-circuitable, ce qui est la propriété qui explique l'écart |
+| `exists` sur un `text` était reconnu à un **compte de documents** | sous un `bool { should: [exists], filter: […] }`, le manque ne se voit que dans le **score** : ES donne 1.0, ferrite 0.0, et aucun compte ne bouge. Le fuzzer repose maintenant la clause `exists` seule aux deux serveurs pour trancher — il le **mesure**, il ne le suppose pas |
+
+D'où la règle : **une plage de graines sur laquelle on a itéré ne mesure plus
+rien.** Il en faut une qu'on n'a jamais regardée, et la publier séparément.
+
 ## Ce que le premier passage a trouvé
 
-**Dix-sept défauts**, tous **silencieux** (ferrite répondait 200 avec un
+**Vingt et un défauts**, tous **silencieux** (ferrite répondait 200 avec un
 résultat faux), tous corrigés dans la même PR. Aucun n'avait été signalé par un
 client, aucun n'était couvert par le harnais existant.
 
@@ -124,6 +164,9 @@ client, aucun n'était couvert par le harnais existant.
 | **`range` sur un champ `boolean`** | **500** `internal_server_error` — le `RangeQuery` de tantivy refuse un booléen |
 | **`doc_count_error_upper_bound`** | toujours `0` ; ES rend `-1` quand l'ordre est `_count` croissant et que le nombre de termes distincts atteint `shard_size` |
 | **deux agrégations homonymes à deux niveaux** | les métadonnées de mise en forme étaient rangées **par nom** : un `date_histogram` nommé `x` héritait de la mise en forme du `range` nommé `x` de l'autre branche, et rendait zéro bucket |
+| **`fuzzy` sur un champ `date` ou numérique** | ferrite construisait un terme texte sur une colonne qui n'en contient pas et rendait **zéro document en 200** ; ES refuse. Un résultat vide qui se fait passer pour une réponse |
+| **`prefix` sur un champ non textuel, sous un `nested`** | la vérification du type de champ existait à la racine et manquait dans la branche `nested` |
+| **score d'un `bool` purement négatif** | ES donne `0.0` aux documents qu'un `bool` sans clause positive laisse passer, quel que soit son `boost` ; ferrite leur donnait le score de la clause positive implicite (`1.5` sous un `boost: 1.5`), et l'ordre changeait dès que ce `bool` était combiné à autre chose |
 
 Cinq autres écarts ont été transformés en **refus explicites** plutôt qu'en
 résultats faux, et déclarés dans [`compat.md`](compat.md) :
@@ -135,9 +178,17 @@ résultats faux, et déclarés dans [`compat.md`](compat.md) :
 - une agrégation `range` dont les intervalles se **chevauchent** ;
 - un **trou** entre deux intervalles d'un `range` sur un champ `date` — le
   bucket de remplissage de tantivy y avale l'intervalle demandé ;
-- `min_doc_count: 0` sur un `terms` — tantivy ne l'honore de façon fiable ni sur
-  une colonne numérique, ni quand la requête ne ramène rien, ni dans les buckets
-  vides, qui perdent alors leurs sous-agrégations ;
+- `min_doc_count` autre que sa valeur par défaut sur un `terms` — à `0`, tantivy
+  ne l'honore de façon fiable ni sur une colonne numérique, ni quand la requête
+  ne ramène rien, ni dans les buckets vides, qui perdent alors leurs
+  sous-agrégations. Au-delà de `1`, c'est `sum_other_doc_count` qui ne suit plus,
+  et **c'est le seul endroit où j'ai renoncé après avoir vraiment cherché** :
+  une formule ajustée sur quinze formes d'un corpus les collait toutes, puis
+  s'est effondrée sur d'autres (27 écarts sur 1 450 cas tirés au sort). La règle
+  d'ES dépend de l'ordre demandé, de la troncature et de l'ordre de parcours du
+  dictionnaire de termes — c'est son collecteur qu'il faudrait réécrire, et
+  annoncer un compte faux serait pire. Le cas de `diff_aggs.py` qui l'utilisait
+  a été ramené à la valeur par défaut, dans la même PR ;
 - `tie_breaker` sous un `multi_match` de type `most_fields`, qu'ES accepte sans
   effet.
 

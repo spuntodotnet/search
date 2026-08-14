@@ -104,8 +104,19 @@ DOCS_SCORES = [
     ("trois", {"n": [5, 6, 7], "k": ["a", "b", "c"], "b": [True, False]}),
 ]
 
+NESTE = {"mappings": {"properties": {"b": {"type": "nested", "properties": {
+    "x": {"type": "double"}, "y": {"type": "date"}}}}}}
+DOCS_NESTE = [("n1", {"b": [{"x": 1.0, "y": "2026-01-01"}]})]
+
 TERMES = {"mappings": {"properties": {"k": {"type": "keyword"}}}}
 DOCS_TERMES = [(f"t{i:02d}", {"k": f"v{i:02d}"}) for i in range(20)]
+
+# Le meme champ, mais avec des comptes inegaux : c'est ce qu'il faut pour que
+# `sum_other_doc_count` ait quelque chose a compter.
+INEGAUX = {"mappings": {"properties": {"k": {"type": "keyword"}}}}
+DOCS_INEGAUX = [(f"i{n:02d}", {"k": cle})
+                for n, cle in enumerate(["a"] * 5 + ["b"] * 3 + ["c"] * 2
+                                        + ["d", "e", "f"])]
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +134,10 @@ def agg(nom):
 
 
 def statut(r):
-    """Pour un cas ou seule la frontiere accepte/refuse se compare."""
+    """Pour un cas ou seule la frontiere accepte/refuse se compare.
+
+    Les deux serveurs refusent, mais avec leurs propres mots : c'est le
+    **verdict** qui doit coincider, pas la phrase."""
     return "ok" if "hits" in r or "aggregations" in r else "refus"
 
 
@@ -232,6 +246,9 @@ CAS = [
      lambda r: r.get("aggregations")),
 
     # -- doc_count_error_upper_bound ---------------------------------------
+    (INEGAUX, DOCS_INEGAUX, "sum_other_doc_count sur une troncature",
+     "ce que `size` ecarte compte dans `sum_other_doc_count`, et rien d'autre",
+     {"size": 0, "aggs": {"a": {"terms": {"field": "k", "size": 2}}}}, agg("a")),
     (TERMES, DOCS_TERMES, "doc_count_error_upper_bound en _count croissant",
      "toujours 0 ; ES rend -1 quand l'ordre est `_count` croissant et que le "
      "nombre de termes distincts atteint `shard_size` (size x 1,5 + 10)",
@@ -279,6 +296,35 @@ CAS = [
      {"query": {"term": {"b": True}}, "_source": False},
      lambda r: [(h["_id"], round(h["_score"], 4))
                 for h in r["hits"]["hits"]]),
+    (SCORES, DOCS_SCORES, "score d'un bool purement negatif",
+     "ES donne 0.0 aux documents qu'un `bool` sans clause positive laisse "
+     "passer, quel que soit son `boost` ; ferrite leur donnait le score de la "
+     "clause implicite (1.5 sous un `boost: 1.5`), et l'ordre changeait des que "
+     "ce `bool` etait combine a autre chose",
+     {"query": {"bool": {"must_not": [{"term": {"k": "z"}}], "boost": 1.5}},
+      "_source": False},
+     lambda r: [(h["_id"], round(h["_score"], 4)) for h in r["hits"]["hits"]]),
+    (SCORES, DOCS_SCORES, "score d'un bool negatif avec une clause positive",
+     "des qu'une clause obligatoire est la, le score redevient le sien",
+     {"query": {"bool": {"must": [{"match_all": {}}],
+                         "must_not": [{"term": {"k": "z"}}]}}, "_source": False},
+     lambda r: [(h["_id"], round(h["_score"], 4)) for h in r["hits"]["hits"]]),
+
+    # -- refuses des deux cotes : c'est la frontiere qui se compare ------------
+    (TROUS, DOCS_TROUS, "fuzzy sur une date",
+     "une distance d'edition se mesure entre deux chaines ; ferrite construisait "
+     "un terme texte sur une colonne de dates et rendait **zero document en "
+     "200** — un resultat vide qui se fait passer pour une reponse. ES refuse, "
+     "ferrite refuse maintenant aussi",
+     {"query": {"fuzzy": {"d": "2026-01-01"}}, "_source": False}, statut),
+    (TROUS, DOCS_TROUS, "fuzzy sur un numerique",
+     "meme cause",
+     {"query": {"fuzzy": {"n": "50"}}, "_source": False}, statut),
+    (NESTE, DOCS_NESTE, "prefix sur une date, sous un nested",
+     "la verification du type de champ existait a la racine et manquait dans la "
+     "branche `nested` : un prefixe sur une date y rendait 200",
+     {"query": {"nested": {"path": "b", "query": {"prefix": {"b.y": "20"}}}},
+      "_source": False}, statut),
 ]
 
 # Ce que ferrite refuse **expres** plutot que de rendre un resultat faux. ES sait
@@ -300,6 +346,13 @@ REFUS = [
     (TROUS, DOCS_TROUS, "terms min_doc_count 0",
      "tantivy rendrait zero bucket la ou ES en rend un par valeur de l'index",
      {"size": 0, "aggs": {"a": {"terms": {"field": "n", "min_doc_count": 0}}}}),
+    (INEGAUX, DOCS_INEGAUX, "terms min_doc_count 2",
+     "au-dela de 1, `sum_other_doc_count` ne suit plus la regle d'ES : elle "
+     "depend de l'ordre demande, de la troncature et de l'ordre de parcours du "
+     "dictionnaire de termes (27 ecarts sur 1 450 cas tires au sort avant le "
+     "refus)",
+     {"size": 0, "aggs": {"a": {"terms": {"field": "k", "size": 2,
+                                          "min_doc_count": 2}}}}),
     (TROUS, DOCS_TROUS, "range agg sur une date, avec un trou",
      "le bucket de remplissage de tantivy avale l'intervalle demande quand les "
      "bornes sont des dates : le bucket `2026-02-01-*` disparaissait",

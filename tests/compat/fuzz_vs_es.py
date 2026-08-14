@@ -131,6 +131,9 @@ NEUTRALISATIONS = {
     "mapping (parametres)": "le mapping rendu est compare sur `chemin -> type` : "
                             "c'est le type qui change les resultats, les "
                             "parametres autour sont propres a chaque moteur",
+    "scroll.motif": "le motif d'un scroll refuse, comme tout corps d'erreur : il "
+                    "est joint au rapport pour qu'on voie pourquoi, jamais "
+                    "compare",
 }
 
 
@@ -767,6 +770,13 @@ class Generateur:
     def _q_fuzzy(self, champs, docs, prof):
         if not self.brique("q.fuzzy"):
             return None
+        # Une fois sur dix, sur un champ qui n'est pas une chaine : une distance
+        # d'edition n'y a pas de sens, et les deux serveurs doivent refuser.
+        # C'est par ce trou que ferrite rendait « zero document » en 200.
+        if self.rng.random() < 0.1:
+            c = self._champ_sauf(champs, ("boolean", "date") + tuple(NUMERIQUES))
+            if c is not None:
+                return {"fuzzy": {c.chemin: {"value": "20"}}}
         c = self._champ_sauf(champs, ("keyword", "text", "text_devine"))
         if c is None:
             return None
@@ -939,9 +949,11 @@ class Generateur:
                 return {"exists": {"field": c.chemin}}
             return {"range": {c.chemin: {"gte": a, "lte": b}}}
         if quoi == "prefix":
+            # Y compris sur un sous-champ qui n'est pas une chaine : ES refuse,
+            # et la verification manquait du cote `nested` de ferrite.
             v = self._valeur_pour(c, docs)
             if not isinstance(v, str) or not v:
-                return {"exists": {"field": c.chemin}}
+                return {"prefix": {c.chemin: "20"}}
             return {"prefix": {c.chemin: v[:2]}}
         if quoi == "terms":
             return {"terms": {c.chemin: [self._valeur_pour(c, docs)
@@ -1045,8 +1057,8 @@ class Generateur:
             q = {"field": c.chemin}
             if rng.random() < 0.5:
                 q["size"] = rng.choice([1, 3, 10, 50])
-            if rng.random() < 0.3:
-                q["min_doc_count"] = rng.choice([0, 1, 2])
+            if rng.random() < 0.35:
+                q["min_doc_count"] = rng.choice([0, 1, 2, 3])
             if rng.random() < 0.3:
                 q["order"] = {rng.choice(["_count", "_key"]):
                               rng.choice(["asc", "desc"])}
@@ -1227,7 +1239,7 @@ def _court_circuit(e, requete):
     qu'une valeur y est illisible pour le type du champ. ferrite valide la
     requete entiere avant de l'executer — le contraire ferait dependre la
     validation de l'ordre d'evaluation."""
-    if e.get("chemin") != "statut" or "document_parsing_exception" not in e["texte"]:
+    if e.get("chemin") != "statut" or "droite 200" not in e["texte"]:
         return False
     # Deux facons de vider un `bool` avant d'avoir lu ses autres clauses : une
     # clause obligatoire `match_none`, ou un `must_not` qui prend tout.
@@ -1263,6 +1275,12 @@ def _nested_et_score(e, requete):
     tri = requete.get("sort")
     par_score = tri is None or "_score" in json.dumps(tri)
     return '"nested"' in corps and par_score
+
+
+# Rempli par `Cas.jouer` juste avant de juger une divergence : est-ce que la
+# clause `exists` de cette requete rend vraiment moins de documents chez ferrite ?
+# La question se **mesure**, elle ne se suppose pas.
+_exists_confirme = {"ampute": False}
 
 
 def _corpus_ampute(ecarts):
@@ -1305,6 +1323,14 @@ def _exists_sur_text(e, requete, ecarts):
     if e["chemin"] == "hits.total.value":
         return isinstance(e["a"], int) and isinstance(e["b"], int) and e["a"] < e["b"]
     if e["chemin"].startswith("scroll"):
+        return True
+    # Le manque peut ne se voir **que** dans l'ordre : sous un
+    # `bool { should: [exists], filter: [...] }`, un document dont ES juge le
+    # champ present marque 1.0 et ferrite 0.0, sans qu'aucun compte ne bouge —
+    # le `filter` les garde tous les deux. C'est le meme defaut, vu par le
+    # score. Verifie par le probe de `Cas.jouer`, qui repose la clause `exists`
+    # seule aux deux serveurs avant de conclure.
+    if e["chemin"] == "hits.ordre" and _exists_confirme.get("ampute"):
         return True
     if e["chemin"] == "hits.hits":
         # `<=` et non `<` : des que la requete tronque (`from` / `size`), les
@@ -1373,21 +1399,27 @@ def _ordre_par_pertinence(e, requete):
         return False
 
 
-def _refus_declare(e):
+def _refus_declare(e, _requete=None, ecarts=()):
     """Un refus que `compat.yaml` annonce, prononce la ou ES sait repondre.
 
     Ce n'est pas une divergence a corriger : c'est un cout de perimetre, et
     surtout ce n'est **pas** un silence — le client recoit une erreur au format
     d'ES qui dit pourquoi. La reconnaissance se fait sur la phrase que ferrite
     prononce, pas sur le code d'etat : « 400 » tout court ne prouverait rien."""
-    if e.get("chemin") != "statut":
+    chemin = e.get("chemin", "")
+    if chemin.startswith("scroll") and chemin != "scroll.motif":
+        # Un scroll refuse produit plusieurs ecarts (statut, pages, documents) ;
+        # c'est le **motif** porte par l'un d'eux qui les explique tous.
+        return any(_refus_declare(x) for x in ecarts
+                   if x.get("chemin") == "scroll.motif")
+    if chemin not in ("statut", "scroll.motif"):
         return False
     return any(m in e["texte"] for m in (
         "champ multivalue",           # histogram / range / date_histogram
         "intervalles qui se chevauchent",  # range aux bornes qui se recouvrent
         "[tie_breaker] ne s'applique",     # tie_breaker sous un `most_fields`
-        "[min_doc_count: 0]",              # terms : tantivy n'enumere pas les valeurs absentes
         "un **trou** entre deux intervalles",  # range agg sur une date
+        "[min_doc_count:",                 # terms : seule sa valeur par defaut
     ))
 
 
@@ -1682,6 +1714,7 @@ class Cas:
             verdict, ecarts = compare_recherche(*reps[0], *reps[1],
                                                 positions_du_score(corps))
             if verdict != "ok":
+                _exists_confirme["ampute"] = self.exists_ampute(corps)
                 self.divergence(verdict, "recherche", ecarts, corps)
                 if self.bavard:
                     for nom, (st, r) in zip(self.noms, reps):
@@ -1693,6 +1726,41 @@ class Cas:
         if rng.random() < 0.35:
             self.scroll(champs, docs)
         return self.nettoyer()
+
+    def exists_ampute(self, corps):
+        """Une clause `exists` de cette requete rend-elle moins de documents ?
+
+        La question se **mesure** : chaque `exists` de la requete est reposee
+        seule aux deux serveurs. Si ferrite en rend strictement moins, l'ecart
+        constate en decoule — c'est la divergence declaree sur `exists` d'un
+        `text` sans terme. Sinon, l'ecart est reel et le reste."""
+        champs_exists = []
+
+        def cueille(noeud):
+            if isinstance(noeud, list):
+                for x in noeud:
+                    cueille(x)
+            elif isinstance(noeud, dict):
+                q = noeud.get("exists")
+                if isinstance(q, dict) and isinstance(q.get("field"), str):
+                    champs_exists.append(q["field"])
+                for v in noeud.values():
+                    cueille(v)
+
+        cueille(corps.get("query"))
+        cueille(corps.get("aggs"))
+        for champ in champs_exists:
+            seule = {"query": {"exists": {"field": champ}}, "size": 0,
+                     "track_total_hits": True}
+            comptes = []
+            for base in self.serveurs:
+                st, r = http(base, "POST", f"/{INDEX}/_search", seule)
+                self.requetes += 1
+                comptes.append(r.get("hits", {}).get("total", {}).get("value")
+                               if st == 200 else None)
+            if None not in comptes and comptes[0] < comptes[1]:
+                return True
+        return False
 
     def scroll(self, champs, docs):
         """Le deroule complet d'un scroll, page par page, des deux cotes.
@@ -1706,12 +1774,14 @@ class Cas:
                  "sort": [{TIEBREAK: {"order": "asc"}}],
                  "size": gen.rng.choice([1, 3, 7])}
         self.requetes += 1
-        deroules = []
+        deroules, motifs = [], []
         for base in self.serveurs:
             st, r = http(base, "POST", f"/{INDEX}/_search?scroll=1m", corps)
             if st != 200:
                 deroules.append({"statut": st})
+                motifs.append(motif(r))
                 continue
+            motifs.append("")
             pages, vus = [], []
             while r["hits"]["hits"]:
                 pages.append(len(r["hits"]["hits"]))
@@ -1726,6 +1796,14 @@ class Cas:
         ecarts = []
         arbre_egal(deroules[0], deroules[1], "scroll", ecarts)
         if ecarts:
+            # Le **motif** d'un refus n'est jamais compare — ferrite nomme ses
+            # refus avec ses propres mots, expres. Il est joint a l'ecart pour
+            # que la ligne des refus declares puisse le reconnaitre, et pour
+            # qu'un lecteur voie pourquoi le scroll s'est arrete.
+            if any(motifs):
+                ecart(ecarts, "scroll.motif", motifs[0], motifs[1],
+                      f"scroll.motif (non compare) : {motifs[0][:80]} / "
+                      f"{motifs[1][:80]}")
             self.divergence("ecart", "scroll", ecarts, corps)
 
     def nettoyer(self):

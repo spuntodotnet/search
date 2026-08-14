@@ -300,12 +300,33 @@ fn validate_une(
         // fiable : zero bucket sur une colonne numerique, zero bucket quand la
         // requete ne ramene rien, et des buckets vides prives de leurs
         // sous-agregations. Trois formes du meme resultat faux, sans un mot —
-        // d'ou le refus explicite (mesure : `tests/compat/fuzz_vs_es.py`).
-        if corps_agg.get("min_doc_count").and_then(Value::as_u64) == Some(0) {
+        // d'ou le refus explicite. Au-dela de 1, il est applique par ferrite
+        // lui-meme (voir `mise_en_forme_buckets`).
+        // `min_doc_count` ne se reproduit fidelement dans aucune de ses deux
+        // moities, et les deux echouent en silence.
+        //
+        // `0` demande un bucket pour les valeurs que la recherche n'a **pas**
+        // trouvees : tantivy en rend zero sur une colonne numerique, zero quand
+        // la requete ne ramene rien, et des buckets vides prives de leurs
+        // sous-agregations.
+        //
+        // Au-dela de `1`, c'est `sum_other_doc_count` qui ne suit plus. La regle
+        // d'ES a ete cherchee pour de bon : une formule ajustee sur quinze
+        // formes d'un corpus en collait quinze, puis s'est effondree sur
+        // d'autres corpus (27 ecarts sur 1 450 cas tires au sort). Elle depend
+        // de l'ordre demande, de la troncature, et de l'ordre de parcours du
+        // dictionnaire de termes — c'est le collecteur d'ES qu'il faudrait
+        // reecrire. Annoncer un compte faux serait pire que refuser.
+        if let Some(n) = corps_agg
+            .get("min_doc_count")
+            .and_then(Value::as_u64)
+            .filter(|n| *n != 1)
+        {
             return Err(EsError::unsupported(format!(
-                "ferrite ne supporte pas [min_doc_count: 0] dans [terms] (agregation [{nom}]) : \
-                 l'agregation de tantivy ne sait pas enumerer les valeurs qu'aucun document du \
-                 resultat ne porte, et rendrait moins de buckets qu'Elasticsearch sans le dire \
+                "ferrite ne supporte pas [min_doc_count: {n}] dans [terms] (agregation [{nom}]) ; \
+                 seule sa valeur par defaut [1] est reproduite a l'identique : a [0] \
+                 l'agregation de tantivy rendrait moins de buckets qu'Elasticsearch, et au-dela \
+                 c'est [sum_other_doc_count] qui differerait — dans les deux cas sans le dire \
                  (voir docs/compat.md)"
             )));
         }
@@ -1052,7 +1073,7 @@ fn mise_en_forme_buckets(
                         .iter()
                         .skip(size)
                         .filter_map(|b| b.get("doc_count").and_then(Value::as_u64))
-                        .sum();
+                        .sum::<u64>();
                     liste.truncate(size);
                 }
             }

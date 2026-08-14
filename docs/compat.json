@@ -1867,7 +1867,7 @@
           "order"
         ],
         "refuses": [
-          "min_doc_count: 0",
+          "min_doc_count autre que sa valeur par défaut (1)",
           "include",
           "exclude",
           "missing",

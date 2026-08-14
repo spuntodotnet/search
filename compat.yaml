@@ -1751,17 +1751,23 @@ tables:
             - {nom: "field"}
             - {nom: "size"}
             - {nom: "shard_size"}
-            - {nom: "min_doc_count", note: "sauf la valeur `0`, refusée : voir ci-dessous"}
+            - {nom: "min_doc_count", note: "sa valeur par défaut (`1`) seulement — voir ci-dessous"}
             - {nom: "order", note: "`_count` / `_key` seulement"}
           refuses:
-            - texte: "`min_doc_count: 0`"
+            - texte: "`min_doc_count` autre que sa valeur par défaut (`1`)"
               note: >-
-                il demande un bucket pour les valeurs que la recherche n'a
-                **pas** trouvées. L'agrégation de tantivy ne le rend pas de
+                à `0`, il demande un bucket pour les valeurs que la recherche n'a
+                **pas** trouvées, et l'agrégation de tantivy ne le rend pas de
                 façon fiable : zéro bucket sur une colonne numérique, zéro
                 bucket quand la requête ne ramène rien, et des buckets vides
-                privés de leurs sous-agrégations. Trois formes du même résultat
-                faux, mesurées par
+                privés de leurs sous-agrégations. Au-delà de `1`, c'est
+                `sum_other_doc_count` qui ne suit plus : la règle d'ES a été
+                cherchée pour de bon, une formule ajustée sur quinze formes d'un
+                corpus les collait toutes puis s'est effondrée sur d'autres
+                (27 écarts sur 1 450 cas tirés au sort). Elle dépend de l'ordre
+                demandé, de la troncature et de l'ordre de parcours du
+                dictionnaire de termes — c'est le collecteur d'ES qu'il faudrait
+                réécrire, et annoncer un compte faux serait pire. Mesuré par
                 [`fuzz_vs_es.py`](../tests/compat/fuzz_vs_es.py)
             - {nom: "include"}
             - {nom: "exclude"}

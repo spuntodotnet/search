@@ -102,7 +102,7 @@ branches, il faut un corpus qui les visite.
 Le harnais teste ce à quoi on a pensé, la suite d'Elastic ce à quoi *Elastic* a
 pensé — et elle est figée depuis la 7.10. `tests/compat/fuzz_vs_es.py` tire au
 sort un mapping, des documents et des requêtes **dans le périmètre déclaré**, et
-compare les deux serveurs. Premier passage : **dix-sept défauts**, tous silencieux,
+compare les deux serveurs. Premier passage : **vingt et un défauts**, tous silencieux,
 aucun signalé par un client — le tri d'un champ multivalué (ferrite prenait la
 première valeur, ES prend le minimum ou le maximum), l'agrégation `range` qui
 inventait un bucket de remplissage, le `range` sur un booléen qui rendait un
@@ -112,6 +112,12 @@ valeurs du champ. Voir [`docs/fuzz.md`](docs/fuzz.md).
 Deux règles rendent ce chiffre lisible, et elles sont le vrai contenu de la
 méthode :
 
+- **une plage de graines sur laquelle on a itéré ne mesure plus rien.** Les
+  graines 1–400 sont celles contre lesquelles l'outil a été réglé : leur zéro
+  était en partie du surajustement. Le premier passage sur des graines jamais
+  regardées en a retrouvé sept, dont un vrai défaut. Il faut donc toujours
+  publier une plage **de contrôle**, jamais utilisée pour corriger — et la
+  publier à part ;
 - **le générateur lit `compat.yaml`, il ne le réécrit pas.** Chaque brique cite
   l'identifiant de la capacité qu'elle exerce ; une capacité renommée casse le
   fuzzer bruyamment, une capacité `refuse` n'est pas émise, et `--couverture`
@@ -149,8 +155,8 @@ développement, pas de CI).
 | `tests/compat/releve_mots_vides.py` | quelle est **vraiment** la liste de mots vides d'un analyzer d'ES ? |
 | `tests/compat/sonde_alias.py` | les mêmes alias sur une **expression de noms** — liste, joker, exclusion, `_all` — et le même 404 ? (21/21, corps et message compris) |
 | `tests/compat/sonde_vide.py` | sur un serveur **sans aucun index**, la même chose qu'ES — et rien accepté en silence ? (27/27 identiques, 0 refus muet ; les deux serveurs doivent être vides, c'est l'état mesuré) |
-| `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs (**400 cas, 4 942 requêtes, 0 divergence réelle** ; 17 défauts silencieux trouvés et corrigés au premier passage). S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (60 cas, 738 requêtes, 0) |
-| `tests/compat/sonde_fuzz.py` | les écarts trouvés par le fuzzing, **figés** hors d'une graine (29/29) |
+| `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **1 450 cas, 18 671 requêtes, 0 divergence réelle**, sur cinq plages de graines dont **quatre** n'ont jamais servi à corriger — celle sur laquelle on itère ne mesure plus rien. 21 défauts silencieux trouvés au premier passage. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (60 cas, 739 requêtes, 0) |
+| `tests/compat/sonde_fuzz.py` | les écarts trouvés par le fuzzing, **figés** hors d'une graine (35/35) |
 | `tests/compat/genere_compat.py` | le périmètre déclaré et la doc disent-ils la **même chose** ? [`compat.yaml`](compat.yaml) est la source (une entrée par capacité : état, paramètres, motif du refus, poids d'usage) ; [`docs/compat.md`](docs/compat.md) et [`docs/compat.json`](docs/compat.json) en sont **générés**, et la CI échoue s'ils divergent |
 | `tests/compat/perimetre.py` | ce cas qui échoue, il porte sur quoi ? Il rattache un échec de conformance à une capacité déclarée : **régression** si elle est annoncée supportée, **coût de périmètre** si elle est annoncée refusée |
 | `tests/compat/recolte_usage.py` | à quoi ressemblent les requêtes que les gens envoient **vraiment** ? Constitue le corpus ([`tests/compat/usage/corpus.jsonl`](tests/compat/usage/corpus.jsonl), 5 311 requêtes) depuis quatre sources citables : doc de référence 8.15, tracks Rally, clients officiels, code open source. Chaque requête porte l'URL d'où elle vient |
