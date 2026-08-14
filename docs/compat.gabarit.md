@@ -42,6 +42,14 @@ compter soi-même. C'est la mesure la moins complaisante du projet : les cas
 viennent d'Elastic, pas de nous. La CI en fait un cliquet : le nombre d'échecs
 ne remonte pas.
 
+**Le fuzzing différentiel** ([`fuzz.md`](fuzz.md)) mesure ce qui reste en dehors
+de ces deux inventaires : mapping, documents et requêtes tirés au sort **dans le
+périmètre déclaré par cette page**, posés à ferrite et à un vrai Elasticsearch
+8.15, réponses comparées champ par champ. La mesure du jour est dans
+[`fuzz.json`](fuzz.json). Les divergences qu'il laisse passer sont celles que
+cette page déclare — chacune porte un prédicat écrit dans l'outil, pas un code
+d'état toléré en bloc.
+
 ### Ce que le corpus d'usage réclame le plus
 
 Ce tableau-là ne dit pas ce que ferrite tient, il dit **ce qu'on lui demande**.

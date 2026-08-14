@@ -32,8 +32,19 @@ pub struct SortSpec {
 
 #[derive(Debug, Clone, PartialEq)]
 enum SortValue {
-    Missing,
-    Bool(bool),
+    /// Une valeur absente qui n'a **pas** de valeur de remplacement chez ES :
+    /// le document part en dernier, quel que soit le sens du tri, et son
+    /// tableau `sort` porte `rendu`.
+    ///
+    /// C'est le cas d'un `keyword` (`null`) et d'un flottant (`"Infinity"` /
+    /// `"-Infinity"` — des **chaines**, JSON n'ayant pas l'infini). Un entier,
+    /// un booleen et une date, eux, ne passent pas par la : ES leur substitue
+    /// une vraie valeur (`i64::MAX` en croissant, `i64::MIN` en decroissant),
+    /// donc ferrite en fait un `I64` — et un document qui porte *reellement*
+    /// `9223372036854775807` se retrouve alors ex aequo avec un document qui
+    /// n'a rien, exactement comme chez ES. Mesure par
+    /// `tests/compat/fuzz_vs_es.py`.
+    Missing(Value),
     I64(i64),
     F64(f64),
     Str(String),
@@ -42,7 +53,6 @@ enum SortValue {
 impl SortValue {
     fn cmp_present(&self, other: &Self) -> Ordering {
         match (self, other) {
-            (Self::Bool(a), Self::Bool(b)) => a.cmp(b),
             (Self::I64(a), Self::I64(b)) => a.cmp(b),
             (Self::F64(a), Self::F64(b)) => a.total_cmp(b),
             (Self::Str(a), Self::Str(b)) => a.cmp(b),
@@ -52,13 +62,40 @@ impl SortValue {
 
     fn to_json(&self) -> Value {
         match self {
-            Self::Missing => Value::Null,
-            Self::Bool(b) => json!(b),
+            Self::Missing(rendu) => rendu.clone(),
             Self::I64(n) => json!(n),
             Self::F64(n) => json!(n),
             Self::Str(s) => json!(s),
         }
     }
+}
+
+/// Ce qu'ES met a la place d'une valeur de tri absente, selon le type de la
+/// colonne et le sens du tri.
+///
+/// Sur un entier, un booleen ou une date, c'est une **vraie valeur** : le
+/// document se compare comme s'il la portait. Sur un `keyword` ou un flottant,
+/// c'est un rendu sans valeur : le document part en dernier.
+fn sentinelle(kind: FieldKind, asc: bool) -> SortValue {
+    match kind {
+        FieldKind::Keyword | FieldKind::Text => SortValue::Missing(Value::Null),
+        FieldKind::F64 => SortValue::Missing(json!(if asc { "Infinity" } else { "-Infinity" })),
+        _ => SortValue::I64(if asc { i64::MAX } else { i64::MIN }),
+    }
+}
+
+/// Le minimum (tri croissant) ou le maximum (tri decroissant) des valeurs d'un
+/// champ multivalue.
+///
+/// C'est le `mode` par defaut d'ES, et il n'est pas anodin : prendre la
+/// **premiere** valeur — ce que faisait ferrite — classe `[5, 1, 9]` sur 5 la
+/// ou ES le classe sur 1 en croissant et sur 9 en decroissant. Un ordre faux,
+/// sans le moindre message.
+fn extremum<T: PartialOrd>(valeurs: impl Iterator<Item = T>, asc: bool) -> Option<T> {
+    valeurs.fold(None, |acc, v| match acc {
+        None => Some(v),
+        Some(a) => Some(if (v < a) == asc { v } else { a }),
+    })
 }
 
 /// Un document candidat, avant la fusion entre index.
@@ -99,10 +136,19 @@ enum Accessor {
     Date(Column<tantivy::DateTime>),
 }
 
+/// Un accesseur, plus ce qu'il faut pour lire un champ **multivalue** et pour
+/// rendre une valeur absente comme ES la rend : le sens du tri, et la
+/// sentinelle de son type.
+struct Cle {
+    acc: Accessor,
+    asc: bool,
+    absente: SortValue,
+}
+
 struct SortSegmentCollector {
     seg: SegmentOrdinal,
     cible: usize,
-    accessors: Vec<Accessor>,
+    accessors: Vec<Cle>,
     hits: Vec<Hit>,
     buf: Vec<u8>,
 }
@@ -119,16 +165,24 @@ impl Collector for SortCollector {
         let ff = reader.fast_fields();
         let mut accessors = Vec::with_capacity(self.specs.len());
         for spec in self.specs.iter() {
-            accessors.push(match &spec.key {
-                SortKey::Score => Accessor::Score,
-                SortKey::Doc => Accessor::Doc,
-                SortKey::Field { name, kind } => match kind {
-                    FieldKind::Keyword | FieldKind::Text => Accessor::Str(ff.str(name)?),
-                    FieldKind::I64 => Accessor::I64(ff.i64(name)?),
-                    FieldKind::F64 => Accessor::F64(ff.f64(name)?),
-                    FieldKind::Bool => Accessor::Bool(ff.bool(name)?),
-                    FieldKind::Date => Accessor::Date(ff.date(name)?),
-                },
+            let (acc, absente) = match &spec.key {
+                SortKey::Score => (Accessor::Score, SortValue::Missing(Value::Null)),
+                SortKey::Doc => (Accessor::Doc, SortValue::Missing(Value::Null)),
+                SortKey::Field { name, kind } => (
+                    match kind {
+                        FieldKind::Keyword | FieldKind::Text => Accessor::Str(ff.str(name)?),
+                        FieldKind::I64 => Accessor::I64(ff.i64(name)?),
+                        FieldKind::F64 => Accessor::F64(ff.f64(name)?),
+                        FieldKind::Bool => Accessor::Bool(ff.bool(name)?),
+                        FieldKind::Date => Accessor::Date(ff.date(name)?),
+                    },
+                    sentinelle(*kind, spec.asc),
+                ),
+            };
+            accessors.push(Cle {
+                acc,
+                asc: spec.asc,
+                absente,
             });
         }
         Ok(SortSegmentCollector {
@@ -154,30 +208,47 @@ impl SegmentCollector for SortSegmentCollector {
 
     fn collect(&mut self, doc: DocId, score: Score) {
         let mut keys = Vec::with_capacity(self.accessors.len());
-        for acc in &self.accessors {
-            keys.push(match acc {
+        for cle in &self.accessors {
+            // Un champ multivalue se trie sur son minimum en croissant et sur
+            // son maximum en decroissant : c'est le `mode` par defaut d'ES.
+            let asc = cle.asc;
+            let absente = || cle.absente.clone();
+            keys.push(match &cle.acc {
                 Accessor::Score => SortValue::F64(f64::from(score)),
                 Accessor::Doc => SortValue::I64(i64::from(doc)),
                 Accessor::Str(col) => match col {
-                    Some(c) => match c.term_ords(doc).next() {
+                    // Les ordinaux d'un dictionnaire tantivy suivent l'ordre
+                    // lexicographique : le plus petit ordinal est la plus
+                    // petite chaine.
+                    Some(c) => match extremum(c.term_ords(doc), asc) {
                         Some(ord) => {
                             self.buf.clear();
                             if c.ord_to_bytes(ord, &mut self.buf).unwrap_or(false) {
                                 SortValue::Str(String::from_utf8_lossy(&self.buf).into_owned())
                             } else {
-                                SortValue::Missing
+                                absente()
                             }
                         }
-                        None => SortValue::Missing,
+                        None => absente(),
                     },
-                    None => SortValue::Missing,
+                    None => absente(),
                 },
-                Accessor::I64(c) => c.first(doc).map_or(SortValue::Missing, SortValue::I64),
-                Accessor::F64(c) => c.first(doc).map_or(SortValue::Missing, SortValue::F64),
-                Accessor::Bool(c) => c.first(doc).map_or(SortValue::Missing, SortValue::Bool),
-                Accessor::Date(c) => c.first(doc).map_or(SortValue::Missing, |d| {
-                    SortValue::I64(d.into_timestamp_millis())
-                }),
+                Accessor::I64(c) => {
+                    extremum(c.values_for_doc(doc), asc).map_or_else(absente, SortValue::I64)
+                }
+                Accessor::F64(c) => {
+                    extremum(c.values_for_doc(doc), asc).map_or_else(absente, SortValue::F64)
+                }
+                // ES rend un booleen de tri en entier (`1`, non `true`), et le
+                // compare a la sentinelle des entiers : il est donc un entier
+                // de bout en bout.
+                Accessor::Bool(c) => extremum(c.values_for_doc(doc), asc)
+                    .map_or_else(absente, |b| SortValue::I64(i64::from(b))),
+                Accessor::Date(c) => extremum(
+                    c.values_for_doc(doc).map(|d| d.into_timestamp_millis()),
+                    asc,
+                )
+                .map_or_else(absente, SortValue::I64),
             });
         }
         self.hits.push(Hit {
@@ -628,10 +699,10 @@ fn compare(sort_asc: &[bool], a: &Hit, b: &Hit) -> Ordering {
     for (i, asc) in sort_asc.iter().enumerate() {
         let (av, bv) = (&a.keys[i], &b.keys[i]);
         let ord = match (av, bv) {
-            (SortValue::Missing, SortValue::Missing) => Ordering::Equal,
+            (SortValue::Missing(_), SortValue::Missing(_)) => Ordering::Equal,
             // `missing: _last` — le defaut d'ES, quel que soit le sens du tri.
-            (SortValue::Missing, _) => Ordering::Greater,
-            (_, SortValue::Missing) => Ordering::Less,
+            (SortValue::Missing(_), _) => Ordering::Greater,
+            (_, SortValue::Missing(_)) => Ordering::Less,
             _ => {
                 let c = av.cmp_present(bv);
                 if *asc {
@@ -749,7 +820,7 @@ mod tests {
             doc: 0,
         };
         let missing = Hit {
-            keys: vec![SortValue::Missing],
+            keys: vec![SortValue::Missing(json!(i64::MIN))],
             score: 1.0,
             cible: 0,
             seg: 0,
@@ -757,6 +828,51 @@ mod tests {
         };
         assert_eq!(compare(&[false], &present, &missing), Ordering::Less);
         assert_eq!(compare(&[false], &missing, &present), Ordering::Greater);
+    }
+
+    /// Ce qu'ES rend a la place d'une valeur de tri absente : pas `null`, sauf
+    /// sur un `keyword`. Mesure contre un ES 8.15 (`fuzz_vs_es.py`).
+    #[test]
+    fn sentinelles_des_valeurs_absentes() {
+        assert_eq!(sentinelle(FieldKind::I64, true).to_json(), json!(i64::MAX));
+        assert_eq!(sentinelle(FieldKind::I64, false).to_json(), json!(i64::MIN));
+        assert_eq!(sentinelle(FieldKind::Bool, true).to_json(), json!(i64::MAX));
+        assert_eq!(
+            sentinelle(FieldKind::Date, false).to_json(),
+            json!(i64::MIN)
+        );
+        assert_eq!(
+            sentinelle(FieldKind::F64, true).to_json(),
+            json!("Infinity")
+        );
+        assert_eq!(
+            sentinelle(FieldKind::F64, false).to_json(),
+            json!("-Infinity")
+        );
+        assert_eq!(sentinelle(FieldKind::Keyword, true).to_json(), Value::Null);
+
+        // Sur un entier, la sentinelle est une **vraie valeur** : un document
+        // qui porte i64::MAX est ex aequo avec un document qui n'a rien, et
+        // c'est la cle suivante qui les departage — comme chez ES.
+        let cle_suivante = |v: SortValue, id: u32| Hit {
+            keys: vec![v, SortValue::Str(format!("d{id}"))],
+            score: 1.0,
+            cible: 0,
+            seg: 0,
+            doc: id,
+        };
+        let vide = cle_suivante(sentinelle(FieldKind::I64, true), 4);
+        let plein = cle_suivante(SortValue::I64(i64::MAX), 8);
+        assert_eq!(compare(&[true, true], &vide, &plein), Ordering::Less);
+    }
+
+    /// Le `mode` par defaut d'ES sur un champ multivalue : minimum en
+    /// croissant, maximum en decroissant.
+    #[test]
+    fn extremum_selon_le_sens_du_tri() {
+        assert_eq!(extremum([5i64, 1, 9].into_iter(), true), Some(1));
+        assert_eq!(extremum([5i64, 1, 9].into_iter(), false), Some(9));
+        assert_eq!(extremum(std::iter::empty::<i64>(), true), None);
     }
 
     /// Sans cle de tri, deux documents de meme score sont departages par

@@ -1131,18 +1131,33 @@ fn add_field(b: &mut SchemaBuilder, name: &str, ty: FieldType, analyzer: Analyze
         FieldKind::Keyword => {
             // `fast` pour pouvoir trier dessus ; `raw` pour que le terme soit
             // la valeur entiere, comme un keyword ES.
+            //
+            // `set_fieldnorms(false)` parce qu'un `keyword` d'ES est declare
+            // `norms: false` : son score ne depend pas du nombre de valeurs du
+            // champ. Avec les fieldnorms, un `term` sur un champ a trois
+            // valeurs marquait moins qu'un champ a une seule — ES donne le meme
+            // score aux deux, et le classement en dependait. Mesure par
+            // `tests/compat/fuzz_vs_es.py`.
             let opts = TextOptions::default()
                 .set_indexing_options(
                     TextFieldIndexing::default()
                         .set_tokenizer(RAW_TOKENIZER)
-                        .set_index_option(IndexRecordOption::Basic),
+                        .set_index_option(IndexRecordOption::Basic)
+                        .set_fieldnorms(false),
                 )
                 .set_fast(Some(RAW_TOKENIZER));
             b.add_text_field(name, opts)
         }
         FieldKind::I64 => b.add_i64_field(name, NumericOptions::from(INDEXED | FAST)),
         FieldKind::F64 => b.add_f64_field(name, NumericOptions::from(INDEXED | FAST)),
-        FieldKind::Bool => b.add_bool_field(name, NumericOptions::from(INDEXED | FAST)),
+        // Sans fieldnorm : chez Lucene un `boolean` est indexe `omitNorms`, donc
+        // deux documents qui portent `true` marquent pareil, que le champ ait
+        // une valeur ou trois. Avec les fieldnorms, ferrite les departageait —
+        // et le classement changeait. Mesure par `tests/compat/fuzz_vs_es.py`.
+        // `FAST` puis `set_indexed()` plutot que `INDEXED | FAST` : c'est le
+        // seul chemin qui laisse les fieldnorms a `false` (le drapeau `INDEXED`
+        // les allume).
+        FieldKind::Bool => b.add_bool_field(name, NumericOptions::from(FAST).set_indexed()),
         FieldKind::Date => b.add_date_field(
             name,
             DateOptions::from(INDEXED | FAST).set_precision(DateTimePrecision::Milliseconds),

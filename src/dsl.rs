@@ -362,7 +362,17 @@ fn field_match(
         _ => {
             let tv = mapping::coerce_avec(field_name, ty, value, ctx.fields.format_de(field_name))
                 .map_err(EsError::sur_valeur_illisible)?;
-            Box::new(TermQuery::new(tv.to_term(field), IndexRecordOption::Basic))
+            let terme: Box<dyn Query> =
+                Box::new(TermQuery::new(tv.to_term(field), IndexRecordOption::Basic));
+            // Comme dans `term` : sur un numerique, ES interroge un arbre de
+            // points et donne le meme score a tout le monde. Sans ce
+            // ConstScoreQuery, un `match` sur un champ numerique classait les
+            // documents par BM25 — et l'ordre changeait sans rien dire.
+            if matches!(ty.kind(), FieldKind::I64 | FieldKind::F64) {
+                Box::new(ConstScoreQuery::new(terme, 1.0))
+            } else {
+                terme
+            }
         }
     })
 }
@@ -912,10 +922,19 @@ fn term_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     } else {
         IndexRecordOption::Basic
     };
-    boost(
-        Box::new(TermQuery::new(tv.to_term(field), record)),
-        boost_value.as_ref(),
-    )
+    let terme: Box<dyn Query> = Box::new(TermQuery::new(tv.to_term(field), record));
+    // Sur un champ numerique, ES n'interroge pas l'index inverse mais un arbre
+    // de points, et donne a tout le monde le **meme** score (1.0 × boost).
+    // tantivy, lui, notait par BM25 : un document dont le champ portait
+    // plusieurs valeurs marquait moins qu'un autre, et le classement changeait
+    // sans que rien ne le signale. Mesure : `{"term": {"n": 5}}` rendait
+    // 0.562 / 0.354 la ou ES rend 1.0 / 1.0.
+    let interne: Box<dyn Query> = if matches!(ty.kind(), FieldKind::I64 | FieldKind::F64) {
+        Box::new(ConstScoreQuery::new(terme, 1.0))
+    } else {
+        terme
+    };
+    boost(interne, boost_value.as_ref())
 }
 
 /// Ce qu'une valeur de date designe hors d'un `range` (`term`, `terms`,
@@ -1075,6 +1094,43 @@ fn range_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         return Err(EsError::illegal_argument(format!(
             "[range] sur [{field_name}] : au moins une borne (gte/gt/lte/lt) est requise"
         )));
+    }
+
+    // Un booleen n'a que deux valeurs : le `RangeQuery` de tantivy refuse d'en
+    // faire un intervalle (« Expected term with u64, i64, f64 or date ») et
+    // rendait un 500. On enumere donc les valeurs que les bornes laissent
+    // passer, ce qui est exactement le sens du `range` d'ES sur un `boolean` —
+    // et les deux valeurs a la fois veut dire « le champ a une valeur ».
+    if ty.kind() == FieldKind::Bool {
+        let retenues: Vec<bool> = [false, true]
+            .into_iter()
+            .filter(|v| {
+                let t = TypedValue::Bool(*v).to_term(field);
+                let apres_bas = match &lower {
+                    Bound::Unbounded => true,
+                    Bound::Included(b) => t.value().as_bool() >= b.value().as_bool(),
+                    Bound::Excluded(b) => t.value().as_bool() > b.value().as_bool(),
+                };
+                let avant_haut = match &upper {
+                    Bound::Unbounded => true,
+                    Bound::Included(b) => t.value().as_bool() <= b.value().as_bool(),
+                    Bound::Excluded(b) => t.value().as_bool() < b.value().as_bool(),
+                };
+                apres_bas && avant_haut
+            })
+            .collect();
+        let interne: Box<dyn Query> = match retenues.as_slice() {
+            [] => Box::new(tantivy::query::EmptyQuery),
+            [v] => Box::new(TermQuery::new(
+                TypedValue::Bool(*v).to_term(field),
+                IndexRecordOption::Basic,
+            )),
+            _ => Box::new(ExistsQuery::new(field_name.to_string(), false)),
+        };
+        return boost(
+            Box::new(ConstScoreQuery::new(interne, 1.0)),
+            spec.get("boost"),
+        );
     }
 
     let inner: Box<dyn Query> = Box::new(ConstScoreQuery::new(

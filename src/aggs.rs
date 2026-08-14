@@ -40,6 +40,35 @@ struct Info {
     size: Option<usize>,
     /// L'ordre demande sur un `terms`.
     ordre: Ordre,
+    /// Le `shard_size` demande sur un `terms` : au-dela, ES annonce ne pas
+    /// savoir borner l'erreur de comptage.
+    shard_size: Option<usize>,
+    /// Le champ agrege, quand il y en a un.
+    champ: Option<String>,
+    /// Les intervalles demandes sur un `range`.
+    ///
+    /// tantivy **comble les trous** : il rend un bucket pour chaque intervalle
+    /// entre deux bornes demandees, plus un a chaque extremite. ES ne rend que
+    /// ce qu'on lui a demande. On garde donc la demande pour ecarter les
+    /// buckets que personne n'a reclames.
+    ranges: Vec<Borne>,
+}
+
+impl Info {
+    /// Une agregation dont on ne sait rien : ce que rend une sous-cle qu'on ne
+    /// reconnait pas.
+    fn vide() -> Self {
+        Self {
+            type_agg: String::new(),
+            date: false,
+            format: None,
+            size: None,
+            ordre: Ordre::CountDesc,
+            shard_size: None,
+            champ: None,
+            ranges: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -266,6 +295,29 @@ fn validate_une(
         if let Some(order) = corps_agg.get("order") {
             lire_ordre(order, nom)?;
         }
+        // `min_doc_count: 0` demande un bucket pour les valeurs que la
+        // recherche n'a **pas** trouvees. tantivy ne le rend pas de facon
+        // fiable : zero bucket sur une colonne numerique, zero bucket quand la
+        // requete ne ramene rien, et des buckets vides prives de leurs
+        // sous-agregations. Trois formes du meme resultat faux, sans un mot —
+        // d'ou le refus explicite (mesure : `tests/compat/fuzz_vs_es.py`).
+        if corps_agg.get("min_doc_count").and_then(Value::as_u64) == Some(0) {
+            return Err(EsError::unsupported(format!(
+                "ferrite ne supporte pas [min_doc_count: 0] dans [terms] (agregation [{nom}]) : \
+                 l'agregation de tantivy ne sait pas enumerer les valeurs qu'aucun document du \
+                 resultat ne porte, et rendrait moins de buckets qu'Elasticsearch sans le dire \
+                 (voir docs/compat.md)"
+            )));
+        }
+    }
+
+    if type_agg == "range" {
+        let champ = corps_agg.get("field").and_then(Value::as_str).unwrap_or("");
+        let format = champs.and_then(|c| {
+            (c.get(champ).map(|m| m.ty.kind()) == Some(FieldKind::Date))
+                .then(|| c.format_ou_defaut(champ))
+        });
+        verifier_ranges(nom, corps_agg, format)?;
     }
 
     if let Some(sous) = sous {
@@ -276,6 +328,130 @@ fn validate_une(
             )));
         }
         validate_niveau(sous, champs, ctx, chemin, false, filtres)?;
+    }
+    Ok(())
+}
+
+/// Un intervalle demande dans un `range` : ses deux bornes, plus le nom que le
+/// client lui a donne.
+///
+/// `to` est **exclu** et `from` **inclus**, des deux cotes. Garder le nom
+/// demande evite d'avoir a deviner, dans le resultat, si la cle rendue par
+/// tantivy est celle du client ou une cle generee — et les deux ne se
+/// distinguent pas de facon fiable sur un champ date.
+#[derive(Debug, Clone, PartialEq)]
+struct Borne {
+    from: Option<f64>,
+    to: Option<f64>,
+    nom: Option<String>,
+}
+
+/// Les bornes demandees, dans l'ordre du client.
+///
+/// Sur un champ `date`, une borne n'est pas un nombre : c'est une date, ecrite
+/// au format du champ (`"2026-01-03"`) ou en millisecondes. tantivy, lui,
+/// compte les dates en **nanosecondes** et n'accepte qu'un flottant : lui
+/// passer la borne telle quelle lisait `1767398400000` comme 29 minutes apres
+/// l'epoque et rendait des buckets vides **sans rien dire**. Les bornes d'un
+/// champ date sont donc lues ici, puis rendues en nanosecondes.
+fn lire_ranges(
+    corps_agg: &Value,
+    format: Option<&crate::dateformat::DateFormat>,
+) -> EsResult<Vec<Borne>> {
+    let Some(a) = corps_agg.get("ranges").and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::with_capacity(a.len());
+    for r in a {
+        let lire = |nom: &str| -> EsResult<Option<f64>> {
+            let Some(v) = r.get(nom) else {
+                return Ok(None);
+            };
+            if v.is_null() {
+                return Ok(None);
+            }
+            match format {
+                // Une borne de date se resout comme celle d'un `range` du Query
+                // DSL, arrondie **vers le bas** : `to: "2026-01-03"` est le
+                // debut de la journee chez ES, pas sa fin.
+                Some(f) => {
+                    let ms = crate::datemath::borne(
+                        v,
+                        f,
+                        crate::datemath::maintenant(),
+                        crate::datemath::Arrondi::Bas,
+                    )?;
+                    Ok(Some(ms as f64))
+                }
+                None => v.as_f64().map(Some).ok_or_else(|| {
+                    EsError::illegal_argument(format!(
+                        "[range.ranges] : borne [{nom}] illisible ({v})"
+                    ))
+                }),
+            }
+        };
+        out.push(Borne {
+            from: lire("from")?,
+            to: lire("to")?,
+            nom: r.get("key").and_then(Value::as_str).map(str::to_string),
+        });
+    }
+    Ok(out)
+}
+
+/// Une borne de date, en nanosecondes : l'unite dans laquelle tantivy compte.
+const NANOS: f64 = 1_000_000.0;
+
+/// Les intervalles d'un `range` se **chevauchent**-ils ?
+///
+/// Elasticsearch les accepte et compte alors un document dans chaque bucket qui
+/// le contient. L'agregation de tantivy, elle, partitionne : elle exige des
+/// intervalles disjoints et refuse le reste avec un message qui parle de ses
+/// propres structures. Le refus est donc prononce ici, explicitement, plutot
+/// que de laisser fuir une erreur interne — et il est declare dans
+/// `docs/compat.md`.
+fn verifier_ranges(
+    nom: &str,
+    corps_agg: &Value,
+    format: Option<&crate::dateformat::DateFormat>,
+) -> EsResult<()> {
+    let date = format.is_some();
+    let mut bornes = lire_ranges(corps_agg, format)?;
+    if bornes.is_empty() {
+        return Err(EsError::illegal_argument(format!(
+            "[aggs.{nom}.range] : [ranges] est obligatoire et ne peut pas etre vide"
+        )));
+    }
+    bornes.sort_by(|a, b| {
+        a.from
+            .unwrap_or(f64::NEG_INFINITY)
+            .total_cmp(&b.from.unwrap_or(f64::NEG_INFINITY))
+    });
+    for paire in bornes.windows(2) {
+        let (fin, debut) = (paire[0].to, paire[1].from);
+        let fin = fin.unwrap_or(f64::INFINITY);
+        let debut = debut.unwrap_or(f64::NEG_INFINITY);
+        if debut < fin {
+            return Err(EsError::unsupported(format!(
+                "ferrite ne supporte pas des intervalles qui se chevauchent dans \
+                 [aggs.{nom}.range] : l'agregation de tantivy partitionne les valeurs, elle ne \
+                 peut pas compter un document dans deux buckets (voir docs/compat.md)"
+            )));
+        }
+        // Un **trou** entre deux intervalles se comble chez tantivy, et ferrite
+        // ecarte ensuite le bucket de remplissage. Sur un champ date, ou les
+        // bornes passent en nanosecondes, ce remplissage avale l'intervalle
+        // suivant : le bucket demande n'existe plus, et il manquerait en
+        // silence. Sur un numerique, les deux buckets sortent bien, et le
+        // filtrage suffit.
+        if date && debut > fin {
+            return Err(EsError::unsupported(format!(
+                "ferrite ne supporte pas un **trou** entre deux intervalles d'un \
+                 [aggs.{nom}.range] sur un champ date : l'agregation de tantivy comble les \
+                 trous, et sur une date le bucket de remplissage avale l'intervalle demande \
+                 (voir docs/compat.md)"
+            )));
+        }
     }
     Ok(())
 }
@@ -487,6 +663,58 @@ fn executer_filtre(parts: &[Part<'_>], corps: &Value, chemin: &str) -> EsResult<
     Ok(Value::Object(out))
 }
 
+/// Un `histogram`, un `date_histogram` ou un `range` sur un champ **multivalue**
+/// compte les valeurs, la ou ES compte les documents.
+///
+/// Un document dont le champ vaut `[1, 2, 3]` tombe trois fois dans le bucket
+/// qui les contient toutes chez tantivy, une seule fois chez ES. Mesure :
+/// `doc_count` de 4 la ou ES en compte 2. C'est un resultat faux, et rien ne le
+/// signale — d'ou ce refus explicite, prononce **seulement** quand la colonne
+/// est reellement multivaluee. Le cas courant (une valeur par document) reste
+/// exact et reste servi.
+///
+/// `terms`, `value_count` et `stats` ne sont pas concernes : leurs comptes
+/// coincident avec ceux d'ES, mesure a l'appui.
+fn verifier_cardinalite(parts: &[Part<'_>], infos: &HashMap<String, Info>) -> EsResult<()> {
+    use tantivy::columnar::Cardinality;
+
+    for (chemin, info) in infos {
+        if !matches!(
+            info.type_agg.as_str(),
+            "histogram" | "date_histogram" | "range"
+        ) {
+            continue;
+        }
+        let Some(champ) = info.champ.as_deref() else {
+            continue;
+        };
+        for part in parts {
+            let Some(mf) = part.gen.fields.get(champ) else {
+                continue;
+            };
+            for lecteur in part.searcher.segment_readers() {
+                let ff = lecteur.fast_fields();
+                let multi = match mf.ty.kind() {
+                    FieldKind::I64 => ff.i64(champ).map(|c| c.get_cardinality()),
+                    FieldKind::F64 => ff.f64(champ).map(|c| c.get_cardinality()),
+                    FieldKind::Date => ff.date(champ).map(|c| c.get_cardinality()),
+                    _ => continue,
+                };
+                if matches!(multi, Ok(Cardinality::Multivalued)) {
+                    return Err(EsError::unsupported(format!(
+                        "ferrite ne supporte pas [{}] (agregation [{chemin}]) sur le champ \
+                         multivalue [{champ}] : l'agregation de tantivy compte les **valeurs**, \
+                         Elasticsearch compte les **documents** — un document dont le champ vaut \
+                         [1, 2, 3] tomberait trois fois dans le meme bucket (voir docs/compat.md)",
+                        info.type_agg
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Les agregations que tantivy execute lui-meme, en un seul passage.
 fn run_natif(parts: &[Part<'_>], aggs: &Value) -> EsResult<Value> {
     let Some(premiere) = parts.first() else {
@@ -497,7 +725,9 @@ fn run_natif(parts: &[Part<'_>], aggs: &Value) -> EsResult<Value> {
     // lisent dans un mapping. Elles sont prises sur le premier index vise : ce
     // sont des proprietes de la **demande**, pas des documents.
     let mut infos = HashMap::new();
-    let demande = preparer(aggs, premiere.gen, &mut infos);
+    let demande = preparer(aggs, premiere.gen, "", &mut infos);
+
+    verifier_cardinalite(parts, &infos)?;
 
     let requete: Aggregations = serde_json::from_value(demande)
         .map_err(|e| EsError::parsing(format!("[aggs] illisible : {e}")))?;
@@ -526,17 +756,30 @@ fn run_natif(parts: &[Part<'_>], aggs: &Value) -> EsResult<Value> {
 
     let brut = serde_json::to_value(resultat)
         .map_err(|e| EsError::internal(format!("resultat d'agregation illisible : {e}")))?;
-    Ok(mise_en_forme(&brut, &infos))
+    Ok(mise_en_forme(&brut, "", &infos))
 }
 
 /// Recense ce qu'il faut savoir de chaque agregation, et prepare la demande
 /// envoyee a tantivy (voir [`MARGE_TERMS`]).
-fn preparer(aggs: &Value, gen: &Generation, infos: &mut HashMap<String, Info>) -> Value {
+fn preparer(
+    aggs: &Value,
+    gen: &Generation,
+    chemin: &str,
+    infos: &mut HashMap<String, Info>,
+) -> Value {
     let Some(obj) = aggs.as_object() else {
         return aggs.clone();
     };
     let mut out = Map::new();
     for (nom, corps) in obj {
+        // Les infos sont rangees par **chemin**, comme les filtres : deux
+        // agregations peuvent porter le meme nom a deux niveaux differents, et
+        // une table a plat leur ferait echanger leur mise en forme.
+        let sous_chemin = if chemin.is_empty() {
+            nom.clone()
+        } else {
+            format!("{chemin}{SEP}{nom}")
+        };
         let Some(corps_obj) = corps.as_object() else {
             out.insert(nom.clone(), corps.clone());
             continue;
@@ -544,7 +787,7 @@ fn preparer(aggs: &Value, gen: &Generation, infos: &mut HashMap<String, Info>) -
         let mut nouveau = Map::new();
         for (cle, valeur) in corps_obj {
             if cle == "aggs" || cle == "aggregations" {
-                nouveau.insert(cle.clone(), preparer(valeur, gen, infos));
+                nouveau.insert(cle.clone(), preparer(valeur, gen, &sous_chemin, infos));
                 continue;
             }
             let champ = valeur.get("field").and_then(Value::as_str);
@@ -570,14 +813,54 @@ fn preparer(aggs: &Value, gen: &Generation, infos: &mut HashMap<String, Info>) -
                     o.insert("size".into(), json!(voulu + MARGE_TERMS));
                 }
             }
+            // Les bornes d'un `range` : lues en millisecondes (elles ont deja
+            // ete validees), puis rendues a tantivy en nanosecondes s'il s'agit
+            // d'un champ date. C'est aussi cette liste qui sert a ecarter les
+            // buckets que tantivy ajoute pour combler les trous.
+            let mut ranges = Vec::new();
+            if cle == "range" {
+                let fmt = date.then(|| gen.fields.format_ou_defaut(champ.unwrap_or("")));
+                // `ranges` reste dans l'unite **rendue** (millisecondes sur une
+                // date) : c'est elle qui sert a reconnaitre un bucket une fois
+                // mis en forme. Seule la demande envoyee a tantivy passe en
+                // nanosecondes.
+                ranges = lire_ranges(valeur, fmt).unwrap_or_default();
+                let echelle = if date { NANOS } else { 1.0 };
+                if let Some(o) = corps_agg.as_object_mut() {
+                    o.insert(
+                        "ranges".into(),
+                        Value::Array(
+                            ranges
+                                .iter()
+                                .map(|b| {
+                                    let mut m = Map::new();
+                                    if let Some(x) = b.from {
+                                        m.insert("from".into(), json!(x * echelle));
+                                    }
+                                    if let Some(x) = b.to {
+                                        m.insert("to".into(), json!(x * echelle));
+                                    }
+                                    Value::Object(m)
+                                })
+                                .collect(),
+                        ),
+                    );
+                }
+            }
             infos.insert(
-                nom.clone(),
+                sous_chemin.clone(),
                 Info {
                     type_agg: cle.clone(),
                     date,
                     format,
                     size,
                     ordre,
+                    shard_size: valeur
+                        .get("shard_size")
+                        .and_then(Value::as_u64)
+                        .map(|n| n as usize),
+                    champ: champ.map(str::to_string),
+                    ranges,
                 },
             );
             nouveau.insert(cle.clone(), corps_agg);
@@ -589,10 +872,14 @@ fn preparer(aggs: &Value, gen: &Generation, infos: &mut HashMap<String, Info>) -
 
 /// La forme lisible d'une date : celle du `format` declare du champ, sinon
 /// l'ISO d'Elasticsearch.
+///
+/// La moyenne de deux dates tombe entre deux millisecondes. ES **tronque**
+/// alors vers zero pour l'afficher — mesure : une moyenne de `0.5` s'affiche
+/// `"0"`, une moyenne de `1.5` s'affiche `"1"`.
 fn rend_date(millis: f64, info: &Info) -> Option<String> {
     match &info.format {
         Some(f) => f.rend(millis as i64),
-        None => format_date(millis),
+        None => format_date(millis.trunc()),
     }
 }
 
@@ -625,21 +912,23 @@ fn format_date(millis: f64) -> Option<String> {
 /// 3. ES departage les buckets `terms` ex aequo par **cle croissante** ;
 /// 4. ES formate les bornes d'un `range` en flottants (`100.0`), meme sur un
 ///    champ entier, et rend la cle d'un `date_histogram` en entier.
-fn mise_en_forme(brut: &Value, infos: &HashMap<String, Info>) -> Value {
+fn mise_en_forme(brut: &Value, chemin: &str, infos: &HashMap<String, Info>) -> Value {
     let Some(obj) = brut.as_object() else {
         return brut.clone();
     };
     let mut out = Map::new();
     for (nom, valeur) in obj {
-        let vide = Info {
-            type_agg: String::new(),
-            date: false,
-            format: None,
-            size: None,
-            ordre: Ordre::CountDesc,
+        let sous_chemin = if chemin.is_empty() {
+            nom.clone()
+        } else {
+            format!("{chemin}{SEP}{nom}")
         };
-        let info = infos.get(nom).unwrap_or(&vide);
-        out.insert(nom.clone(), mise_en_forme_une(valeur, info, infos));
+        let vide = Info::vide();
+        let info = infos.get(&sous_chemin).unwrap_or(&vide);
+        out.insert(
+            nom.clone(),
+            mise_en_forme_une(valeur, &sous_chemin, info, infos),
+        );
     }
     Value::Object(out)
 }
@@ -647,18 +936,30 @@ fn mise_en_forme(brut: &Value, infos: &HashMap<String, Info>) -> Value {
 /// Les metriques dont la valeur est une date a convertir.
 const METRIQUES_DATE: &[&str] = &["value", "min", "max", "avg", "sum"];
 
-fn mise_en_forme_une(valeur: &Value, info: &Info, infos: &HashMap<String, Info>) -> Value {
+fn mise_en_forme_une(
+    valeur: &Value,
+    chemin: &str,
+    info: &Info,
+    infos: &HashMap<String, Info>,
+) -> Value {
     let Some(obj) = valeur.as_object() else {
         return valeur.clone();
     };
     let mut out = Map::new();
 
+    // Un `stats` sur un bucket vide : ES rend `sum: 0.0` mais **pas** de
+    // `sum_as_string`. Une somme de zero date n'est pas l'epoque Unix, c'est
+    // rien du tout — et ferrite l'annoncait comme « 1970-01-01 ».
+    let vide = obj.get("count").and_then(Value::as_u64) == Some(0);
+
     // Les buckets d'abord : la troncature d'un `terms` dit combien de documents
     // partent avec les buckets ecartes, et ce compte doit rejoindre
     // `sum_other_doc_count`.
     let mut ecartes = 0u64;
+    let mut distincts = 0usize;
     if let Some(buckets) = obj.get("buckets") {
-        let (rendus, perdus) = mise_en_forme_buckets(buckets, info, infos);
+        distincts = buckets.as_array().map_or(0, Vec::len);
+        let (rendus, perdus) = mise_en_forme_buckets(buckets, chemin, info, infos);
         ecartes = perdus;
         out.insert("buckets".into(), rendus);
     }
@@ -673,12 +974,24 @@ fn mise_en_forme_une(valeur: &Value, info: &Info, infos: &HashMap<String, Info>)
         }
         // Metrique sur un champ date : tantivy rend des nanosecondes, ES des
         // millisecondes, et y ajoute la forme lisible.
-        if info.date && METRIQUES_DATE.contains(&cle.as_str()) {
+        // `value_count` porte lui aussi sa reponse sous `value`, mais c'est un
+        // **compte**, pas une date : le convertir rendait « 3 documents » en
+        // `3e-06`, avec un `value_as_string` a l'epoque Unix.
+        // `value_count` compte : ES le rend en **entier**, tantivy en flottant.
+        if info.type_agg == "value_count" && cle == "value" {
+            if let Some(n) = v.as_f64() {
+                out.insert(cle.clone(), json!(n as u64));
+                continue;
+            }
+        }
+        if info.date && info.type_agg != "value_count" && METRIQUES_DATE.contains(&cle.as_str()) {
             if let Some(nanos) = v.as_f64() {
                 let millis = nanos / 1_000_000.0;
                 out.insert(cle.clone(), json!(millis));
-                if let Some(texte) = rend_date(millis, info) {
-                    out.insert(format!("{cle}_as_string"), json!(texte));
+                if !vide {
+                    if let Some(texte) = rend_date(millis, info) {
+                        out.insert(format!("{cle}_as_string"), json!(texte));
+                    }
                 }
                 continue;
             }
@@ -687,18 +1000,41 @@ fn mise_en_forme_une(valeur: &Value, info: &Info, infos: &HashMap<String, Info>)
     }
 
     if info.type_agg == "terms" {
-        out.entry("doc_count_error_upper_bound".to_string())
-            .or_insert_with(|| json!(0));
+        out.insert(
+            "doc_count_error_upper_bound".to_string(),
+            json!(erreur_de_comptage(info, distincts)),
+        );
         out.entry("sum_other_doc_count".to_string())
             .or_insert_with(|| json!(ecartes));
     }
     Value::Object(out)
 }
 
+/// `doc_count_error_upper_bound` : la borne d'erreur qu'ES annonce sur un
+/// `terms`.
+///
+/// Elle vaut `-1` — « je ne sais pas la borner » — quand deux conditions sont
+/// reunies : l'ordre demande est `_count` **croissant**, et le nombre de termes
+/// distincts **atteint** ce que le shard collecte (`shard_size`, par defaut
+/// `size * 1.5 + 10`). Elle vaut `0` partout ailleurs. Mesure contre un ES 8.15,
+/// `size: 3` donc `shard_size` de 14 : `0` a 13 termes distincts, `-1` a 14 ;
+/// et `0` en `_count desc` comme en `_key`, quel qu'en soit le nombre.
+fn erreur_de_comptage(info: &Info, distincts: usize) -> i64 {
+    let size = info.size.unwrap_or(10);
+    let defaut = (size as f64 * 1.5 + 10.0) as usize;
+    let shard_size = info.shard_size.unwrap_or(defaut);
+    if info.ordre == Ordre::CountAsc && distincts >= shard_size {
+        -1
+    } else {
+        0
+    }
+}
+
 /// Rend les buckets mis en forme, et le nombre de documents portes par ceux que
 /// la troncature a ecartes.
 fn mise_en_forme_buckets(
     buckets: &Value,
+    chemin: &str,
     info: &Info,
     infos: &HashMap<String, Info>,
 ) -> (Value, u64) {
@@ -706,7 +1042,7 @@ fn mise_en_forme_buckets(
         Value::Array(a) => {
             let mut liste: Vec<Value> = a
                 .iter()
-                .map(|b| mise_en_forme_bucket(b, info, infos))
+                .map(|b| mise_en_forme_bucket(b, chemin, info, infos))
                 .collect();
             let mut ecartes = 0u64;
             if info.type_agg == "terms" {
@@ -720,18 +1056,86 @@ fn mise_en_forme_buckets(
                     liste.truncate(size);
                 }
             }
+            if info.type_agg == "range" {
+                liste.retain(|b| demande(b, &info.ranges, 1.0).is_some());
+            }
             (Value::Array(liste), ecartes)
         }
-        // Forme `keyed` : un objet de buckets, dont l'ordre n'a pas de sens.
-        Value::Object(o) => (
-            Value::Object(
-                o.iter()
-                    .map(|(k, b)| (k.clone(), mise_en_forme_bucket(b, info, infos)))
-                    .collect(),
-            ),
-            0,
-        ),
+        // Forme `keyed` : un objet de buckets, dont l'ordre n'a pas de sens —
+        // mais dont la **cle** n'est pas la meme chez tantivy et chez ES.
+        Value::Object(o) => {
+            let mut map = Map::new();
+            for (_, b) in o {
+                let bucket = mise_en_forme_bucket(b, chemin, info, infos);
+                if info.type_agg == "range" && demande(&bucket, &info.ranges, 1.0).is_none() {
+                    continue;
+                }
+                let (cle, bucket) = cle_keyed(bucket, info);
+                map.insert(cle, bucket);
+            }
+            (Value::Object(map), 0)
+        }
         autre => (autre.clone(), 0),
+    }
+}
+
+/// Ce bucket de `range` a-t-il ete demande ?
+///
+/// tantivy comble les trous entre deux intervalles demandes : il rend un bucket
+/// `10.0-1000.0` que personne n'a reclame quand le client a demande
+/// `*--100`, `-100-10` et `1000-*`. ES ne rend que ce qu'on lui demande — et un
+/// bucket de plus n'est pas anodin : un client qui lit ses buckets par indice
+/// lit alors le mauvais.
+fn demande<'a>(bucket: &Value, ranges: &'a [Borne], echelle: f64) -> Option<&'a Borne> {
+    let borne = |nom: &str| bucket.get(nom).and_then(Value::as_f64).map(|x| x / echelle);
+    let (from, to) = (borne("from"), borne("to"));
+    let egal = |a: Option<f64>, b: Option<f64>| match (a, b) {
+        (None, None) => true,
+        (Some(x), Some(y)) => x == y,
+        _ => false,
+    };
+    ranges.iter().find(|b| egal(from, b.from) && egal(to, b.to))
+}
+
+/// La cle d'un bucket dans la forme `keyed`, telle qu'ES la nomme.
+///
+/// Elle n'est **pas** celle de tantivy, et pas la meme selon l'agregation :
+/// un `range` est nomme par sa cle de bucket (et perd alors son champ `key`,
+/// qu'ES ne repete pas), un `date_histogram` par sa date lisible, un
+/// `histogram` par sa borne rendue en flottant (`-1000.0`, non `-1000`).
+fn cle_keyed(bucket: Value, info: &Info) -> (String, Value) {
+    let cle = bucket.get("key").cloned();
+    match info.type_agg.as_str() {
+        "range" => {
+            let nom = cle
+                .as_ref()
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let mut b = bucket;
+            if let Some(o) = b.as_object_mut() {
+                o.remove("key");
+            }
+            (nom, b)
+        }
+        "date_histogram" => (
+            bucket
+                .get("key_as_string")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            bucket,
+        ),
+        _ => {
+            let nom = match cle {
+                Some(Value::Number(n)) => n
+                    .as_f64()
+                    .map_or_else(|| n.to_string(), |f| format!("{f:?}")),
+                Some(Value::String(s)) => s,
+                autre => autre.map(|v| v.to_string()).unwrap_or_default(),
+            };
+            (nom, bucket)
+        }
     }
 }
 
@@ -763,7 +1167,12 @@ fn trier_terms(buckets: &mut [Value], ordre: Ordre) {
     });
 }
 
-fn mise_en_forme_bucket(bucket: &Value, info: &Info, infos: &HashMap<String, Info>) -> Value {
+fn mise_en_forme_bucket(
+    bucket: &Value,
+    chemin: &str,
+    info: &Info,
+    infos: &HashMap<String, Info>,
+) -> Value {
     let Some(obj) = bucket.as_object() else {
         return bucket.clone();
     };
@@ -780,61 +1189,83 @@ fn mise_en_forme_bucket(bucket: &Value, info: &Info, infos: &HashMap<String, Inf
             }
             // Deja pose juste au-dessus, au bon format.
             "key_as_string" if info.type_agg == "date_histogram" => {}
-            "key" if info.type_agg == "range" => {
-                out.insert("key".into(), json!(cle_de_range(bucket, v)));
+            // Un `terms` sur un champ date : ES rend la cle en millisecondes et
+            // ajoute sa forme lisible ; tantivy rend une chaine ISO.
+            "key" if info.type_agg == "terms" && info.date => {
+                let millis = millis_de_cle(v);
+                out.insert("key".into(), json!(millis as i64));
+                if let Some(texte) = rend_date(millis, info) {
+                    out.insert("key_as_string".into(), json!(texte));
+                }
             }
+            "key" if info.type_agg == "range" => {
+                out.insert("key".into(), json!(cle_de_range(bucket, info)));
+            }
+            // Les bornes d'un `range` sur un champ date : tantivy les rend en
+            // nanosecondes, ES en millisecondes, et il ajoute leur forme
+            // lisible a cote.
+            "from" | "to" if info.type_agg == "range" && info.date => {
+                let millis = v.as_f64().unwrap_or(0.0) / NANOS;
+                out.insert(cle.clone(), json!(millis));
+                if let Some(texte) = rend_date(millis, info) {
+                    out.insert(format!("{cle}_as_string"), json!(texte));
+                }
+            }
+            // tantivy pose lui aussi un `*_as_string`, en RFC 3339 sans les
+            // millisecondes et sans egard pour le `format` du champ : celui
+            // qu'on vient d'ecrire est le bon, on ne le laisse pas ecraser.
+            "from_as_string" | "to_as_string" if info.type_agg == "range" && info.date => {}
             "doc_count" | "key" | "key_as_string" | "from" | "to" | "from_as_string"
             | "to_as_string" => {
                 out.insert(cle.clone(), v.clone());
             }
             // Tout le reste est une sous-agregation.
             autre => {
-                let vide = Info {
-                    type_agg: String::new(),
-                    date: false,
-                    format: None,
-                    size: None,
-                    ordre: Ordre::CountDesc,
-                };
-                let sous = infos.get(autre).unwrap_or(&vide);
-                out.insert(cle.clone(), mise_en_forme_une(v, sous, infos));
+                let sous_chemin = format!("{chemin}{SEP}{autre}");
+                let vide = Info::vide();
+                let sous = infos.get(&sous_chemin).unwrap_or(&vide);
+                out.insert(cle.clone(), mise_en_forme_une(v, &sous_chemin, sous, infos));
             }
         }
     }
     Value::Object(out)
 }
 
-/// ES nomme les buckets d'un `range` avec des bornes flottantes : `*-100.0`,
-/// `100.0-500.0`, `500.0-*`. tantivy rend `*-100`. Une cle explicite fournie
-/// par le client est laissee telle quelle.
-fn cle_de_range(bucket: &Value, cle_tantivy: &Value) -> String {
-    let borne = |nom: &str| -> Option<f64> { bucket.get(nom).and_then(Value::as_f64) };
-    let (from, to) = (borne("from"), borne("to"));
-    if from.is_none() && to.is_none() {
-        return cle_tantivy.as_str().unwrap_or_default().to_string();
+/// La cle d'un terme de `terms` sur un champ date, en millisecondes.
+///
+/// tantivy la rend en chaine ISO (`2026-01-05T00:00:00Z`) ; ES en
+/// millisecondes. La chaine est relue plutot que devinee.
+fn millis_de_cle(v: &Value) -> f64 {
+    match v {
+        Value::Number(n) => n.as_f64().unwrap_or(0.0) / NANOS,
+        Value::String(s) => {
+            time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
+                .map(|d| (d.unix_timestamp_nanos() / 1_000_000) as f64)
+                .unwrap_or(0.0)
+        }
+        _ => 0.0,
     }
-    // Une cle nommee ne contient ni `-` genere ni `*` : on la reconnait au fait
-    // qu'elle ne correspond pas a la forme generee par tantivy.
-    let generee = format!(
-        "{}-{}",
-        from.map(trim_zero).unwrap_or_else(|| "*".into()),
-        to.map(trim_zero).unwrap_or_else(|| "*".into())
-    );
-    if cle_tantivy.as_str() != Some(generee.as_str()) {
-        return cle_tantivy.as_str().unwrap_or_default().to_string();
-    }
-    format!(
-        "{}-{}",
-        from.map(|f| format!("{f:?}")).unwrap_or_else(|| "*".into()),
-        to.map(|f| format!("{f:?}")).unwrap_or_else(|| "*".into())
-    )
 }
 
-/// La forme que tantivy donne a une borne : entiere quand elle est ronde.
-fn trim_zero(f: f64) -> String {
-    if f.fract() == 0.0 && f.abs() < 1e15 {
-        format!("{}", f as i64)
-    } else {
-        format!("{f}")
+/// ES nomme les buckets d'un `range` : `*-100.0`, `100.0-500.0`, `500.0-*` sur
+/// un champ numerique, et la **date lisible** sur un champ date
+/// (`*-2026-01-03T00:00:00.000Z`, ou au `format` du champ).
+///
+/// Le nom demande par le client l'emporte, et il est repris de la **demande**,
+/// pas devine dans la reponse : sur un champ date, la cle generee par tantivy
+/// est elle-meme une date, donc rien ne la distingue d'un nom choisi.
+fn cle_de_range(bucket: &Value, info: &Info) -> String {
+    let echelle = if info.date { NANOS } else { 1.0 };
+    if let Some(nom) = demande(bucket, &info.ranges, echelle).and_then(|b| b.nom.clone()) {
+        return nom;
     }
+    let brut = |nom: &str| bucket.get(nom).and_then(Value::as_f64);
+    let rendu = |b: Option<f64>| match b {
+        None => "*".to_string(),
+        Some(f) if info.date => {
+            rend_date(f / NANOS, info).unwrap_or_else(|| format!("{:?}", f / NANOS))
+        }
+        Some(f) => format!("{f:?}"),
+    };
+    format!("{}-{}", rendu(brut("from")), rendu(brut("to")))
 }
