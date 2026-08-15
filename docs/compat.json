@@ -176,7 +176,7 @@
       "nom": "Cycle de vie d'un index — `_close`, `_open`, `_forcemerge`, `_shrink`, `_split`, `_clone`, `_rollover`, `_recovery`, `_segments`, `_flush`, `_upgrade`, `_cache/clear`, `_shard_stores`, `_resolve/index`",
       "nom_texte": "Cycle de vie d'un index — _close, _open, _forcemerge, _shrink, _split, _clone, _rollover, _recovery, _segments, _flush, _upgrade, _cache/clear, _shard_stores, _resolve/index",
       "etat": "refuse",
-      "poids": 3.1,
+      "poids": 3.4,
       "motif": "pas_encore",
       "raison": "la moitié de ces routes n'a pas de sens sans shards (`_shrink`, `_split`, `_recovery`, `_shard_stores`) ; l'autre moitié suppose un index qu'on peut arrêter de servir sans le supprimer (`_close` / `_open`), état que ferrite n'a pas."
     },
@@ -186,7 +186,7 @@
       "nom": "Les autres routes de recherche — `_search_shards`, `_termvectors`, `_mtermvectors`, `_suggest`, `_source`",
       "nom_texte": "Les autres routes de recherche — _search_shards, _termvectors, _mtermvectors, _suggest, _source",
       "etat": "refuse",
-      "poids": 0.8,
+      "poids": 0.6,
       "motif": "pas_encore",
       "raison": "aucune n'est demandée par le code client qu'on cherche à servir."
     },
@@ -414,7 +414,7 @@
       "nom": "Templates d'index — `_index_template` et `_template`",
       "nom_texte": "Templates d'index — _index_template et _template",
       "etat": "partiel",
-      "poids": 3.9,
+      "poids": 2.4,
       "detail": "`PUT` / `GET` / `HEAD` / `DELETE` sur les deux familles, et l'application du template à la création de l'index — **implicite** (une écriture dans un index absent) comme **explicite** (`PUT /{index}`, où le corps l'emporte). Un composable qui correspond éclipse les anciens ; sinon tous les anciens qui correspondent sont fusionnés par `order` croissant, comme chez ES. Le contenu est validé **à la pose** : un réglage refusé, un type de champ inconnu ou un alias filtré font échouer le `PUT`, là où le client regarde",
       "parametres": {
         "supportes": [
@@ -440,7 +440,7 @@
       "nom": "`_component_template`, `_simulate_index_template`, `_simulate`",
       "nom_texte": "_component_template, _simulate_index_template, _simulate",
       "etat": "refuse",
-      "poids": 0.0,
+      "poids": 0.9,
       "motif": "pas_encore",
       "raison": "un template de composants est un template qu'on cite depuis un autre : tant qu'il n'est pas lu, `composed_of` est refusé à la pose plutôt qu'appliqué à moitié. La simulation, elle, rend l'index qu'on obtiendrait — utile, et sans client qui la demande."
     },
@@ -450,7 +450,7 @@
       "nom": "`GET /{index}/_stats`",
       "nom_texte": "GET /{index}/_stats",
       "etat": "partiel",
-      "poids": 0.0,
+      "poids": 0.2,
       "detail": "la forme d'ES — `_shards`, `_all` (`primaries` / `total`), `indices` — et les quatre groupes que ferrite **mesure**. Sur un moteur mono-shard sans réplique, `primaries` et `total` portent les mêmes nombres : c'est vrai, pas une simplification",
       "parametres": {
         "supportes": [
@@ -1822,7 +1822,7 @@
       "nom": "`_msearch`, `_search/template`, `_explain`",
       "nom_texte": "_msearch, _search/template, _explain",
       "etat": "refuse",
-      "poids": 0.2,
+      "poids": 0.1,
       "motif": "pas_encore",
       "raison": "`_msearch` est le plus regretté : un tableau de bord qui pose six facettes fait six appels au lieu d'un. Les deux autres sont des outils de mise au point."
     },
@@ -1832,7 +1832,7 @@
       "nom": "`GET|POST /{index}/_field_caps`",
       "nom_texte": "GET|POST /{index}/_field_caps",
       "etat": "partiel",
-      "poids": 0.0,
+      "poids": 0.2,
       "detail": "par champ, son type, `searchable` et `aggregatable`, et l'agrégation **par index** quand plusieurs sont visés — c'est la question que pose un outil de découverte avant de proposer un filtre qui échouerait sur la moitié des index. Toute l'information est déjà dans le mapping : ferrite n'a ni `index: false` ni `doc_values: false`, donc les deux drapeaux se déduisent du type",
       "parametres": {
         "supportes": [
@@ -1852,7 +1852,7 @@
       "nom": "`GET|POST /{index}/_validate/query`",
       "nom_texte": "GET|POST /{index}/_validate/query",
       "etat": "partiel",
-      "poids": 0.0,
+      "poids": 0.1,
       "detail": "le traducteur du Query DSL rendu observable, sans exécuter. Les deux formes de réponse d'ES sont reproduites, et la distinction compte : une requête mal formée (clause inconnue) rend `valid: false` **sans** `_shards`, une requête que ce mapping-là ne sait pas construire rend `_shards` et une explication par index",
       "parametres": {
         "supportes": [

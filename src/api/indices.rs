@@ -271,7 +271,13 @@ fn get_settings_impl(
         n.split(',')
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .map(|s| if s == "_all" { "*".to_string() } else { s.to_string() })
+            .map(|s| {
+                if s == "_all" {
+                    "*".to_string()
+                } else {
+                    s.to_string()
+                }
+            })
             .collect()
     });
 

@@ -91,9 +91,9 @@ mappings, tout ce qui n'est pas un corps de `_search`.
 |---|---|---|
 | **`github` — du code d'application open source** | 338 | **89,6 %** |
 | `clients` — tests et exemples des clients officiels | 143 | 79,7 % |
-| `doc` — la documentation de référence | 3 969 | 34,5 % |
-| `rally` — les tracks de benchmark d'Elastic | 861 | 16,6 % |
-| **tout le corpus** | 5 311 | 36,3 % |
+| `doc` — la documentation de référence | 3 969 | 38,8 % |
+| `rally` — les tracks de benchmark d'Elastic | 861 | 17,4 % |
+| **tout le corpus** | 5 311 | 39,7 % |
 
 Ces quatre nombres ne se contredisent pas, ils mesurent quatre choses
 différentes, et l'écart entre eux **est** le résultat :
@@ -103,12 +103,12 @@ différentes, et l'écart entre eux **est** le résultat :
   requêtes sur dix passent telles quelles** ;
 - la documentation de référence consacre **une page par fonctionnalité**, avec au
   moins un exemple chacune : elle sur-représente exactement ce qui est rare. Un
-  taux de 34,5 % s'y lit « ferrite couvre un tiers de la surface d'API », ce qui
-  est vrai et sans rapport avec la question précédente ;
+  taux de 38,8 % s'y lit « ferrite couvre un peu plus d'un tiers de la surface
+  d'API », ce qui est vrai et sans rapport avec la question précédente ;
 - les tracks Rally sont des **bancs d'essai analytiques** : `date_histogram`
   avec `calendar_interval`, `runtime_mappings`, `fields`, `percentiles`. Et le
   track `elastic/logs` rejoue les requêtes de **Kibana**, qui pose
-  systématiquement des `runtime_mappings` et des `fields`. 16,6 %, c'est le prix
+  systématiquement des `runtime_mappings` et des `fields`. 17,4 %, c'est le prix
   d'entrée pour servir un Kibana, pas celui d'une application.
 
 Le corpus n'est pas homogène et il ne prétend pas l'être : la documentation en
@@ -125,16 +125,21 @@ source » compte autant que le total :
 
 | Capacité refusée | Tout le corpus | doc | rally | applications |
 |---|---|---|---|---|
-| `hors.xpack` — sécurité, ML, ILM, watcher, transform, EQL/SQL… | 18,9 % | 25,2 % | 0,2 % | 0 % |
-| `recherche.non_supportes` — `highlight`, `fields`, `runtime_mappings`… | 12,0 % | 3,8 % | 52,1 % | 7,3 % |
-| `dsl.non_supportees` — `query_string`, `function_score`… | 6,5 % | 4,4 % | 18,9 % | 1,9 % |
-| `agg.non_supportees` — `percentiles`, `top_hits`, `filters`… | 6,1 % | 3,0 % | 23,2 % | 0,4 % |
-| `agg.date_histogram` — `calendar_interval`, `time_zone`, `format` | 4,9 % | 0,9 % | 25,8 % | 0,4 % |
-| `index.templates` — templates, ILM, `_stats`, `_close` | 3,9 % | 5,1 % | 0,3 % | 0 % |
-| `ingestion.reecriture_en_masse` — `_update_by_query`… | 3,6 % | 4,4 % | 0,8 % | 2,3 % |
-| `hors.cycle_de_vie` — `_close`, `_open`, `_forcemerge`… | 3,1 % | 4,1 % | — | 0 % |
-| `type.autres_parametres` — `index`, `null_value`, `doc_values`… | 3,0 % | 3,2 % | 3,8 % | 0 % |
-| `type.autres` — `geo_point`, `ip`, `binary`… | 3,0 % | 3,2 % | 3,6 % | 0 % |
+| `hors.xpack` — sécurité, ML, ILM, watcher, transform, EQL/SQL… | 18,9 % | 25,2 % | 0,2 % | — |
+| `recherche.non_supportes` — `highlight`, `fields`, `runtime_mappings`… | 12,0 % | 3,8 % | 52,1 % | 5,0 % |
+| `dsl.non_supportees` — `query_string`, `function_score`… | 6,5 % | 4,4 % | 18,9 % | 0,6 % |
+| `agg.non_supportees` — `percentiles`, `top_hits`, `filters`… | 6,1 % | 3,0 % | 23,2 % | 0,6 % |
+| `agg.date_histogram` — `calendar_interval`, `time_zone`, `format` | 4,9 % | 0,9 % | 25,8 % | 0,6 % |
+| `ingestion.reecriture_en_masse` — `_update_by_query`… | 3,6 % | 4,4 % | 0,8 % | 2,4 % |
+| `hors.cycle_de_vie` — `_close`, `_open`, `_forcemerge`… | 3,4 % | 4,6 % | — | — |
+| `type.autres_parametres` — `index`, `null_value`, `doc_values`… | 3,0 % | 3,2 % | 3,8 % | — |
+| `type.autres` — `geo_point`, `ip`, `binary`… | 3,0 % | 3,2 % | 3,6 % | — |
+| `agg.terms` — `include`, `exclude`, ordre par sous-agrégation… | 2,0 % | 0,1 % | 11,7 % | 0,3 % |
+
+La ligne `index.templates` (3,9 % du corpus, 5,1 % de la documentation) **a
+disparu de ce tableau** : c'est la carte 20, faite. Ce qui reste de sa famille
+est `index.templates_composants` (0,9 %) — les templates de composants et la
+simulation, refusés à la pose plutôt qu'appliqués à moitié.
 
 `hors.xpack` en tête est un artefact de la documentation, pas un manque
 ressenti : `docs/reference/` documente tout ce qu'Elastic vend, et aucune des
@@ -152,9 +157,17 @@ débloque. Deux colonnes, parce qu'elles ne disent pas la même chose :
   requête. C'est la colonne qui décide, parce qu'un chantier qui ne débloque
   rien tout seul ne change rien pour personne.
 
+> **Ce classement est celui du jour où il a été mesuré.** La carte 20 a été
+> faite depuis : elle a fait passer le corpus de **36,3 % à 39,7 %** servi
+> entièrement (1 929 → 2 106 requêtes), et la documentation de 34,5 % à 38,8 %.
+> Sur le sous-corpus des applications réelles, elle en débloque **zéro** — la
+> mesure l'annonçait, et elle avait raison : cette carte vaut pour la surface
+> d'API, pas pour débloquer un utilisateur précis. Les autres lignes n'ont pas
+> été recalculées ; elles se refont avec la recette qui suit.
+
 | Rang mesuré | Carte | bloque | débloque | débloque (applications) |
 |---|---|---|---|---|
-| 1 | **20** — `_validate`, `field_caps`, `_stats`, templates, `PUT _settings` | 262 | **239** | 0 |
+| 1 | **20** — `_validate`, `field_caps`, `_stats`, templates, `PUT _settings` — **faite** | 262 | **239** | 0 |
 | 2 | **18** — `fields`, `docvalue_fields`, `stored_fields` (+ `runtime_mappings`, `script_fields`) | 504 | **125** | 4 |
 | 3 | **19** — `_delete_by_query`, `_update_by_query` | 77 | **75** | **10** |
 | 4 | **05** — `highlight` | 102 | 18 | 1 |
@@ -202,6 +215,13 @@ comptés sur `tests/compat/usage/verdicts.jsonl` (`manques[].trait`).
   fourre-tout ; c'est le chantier qui débloque le plus de requêtes du corpus,
   parce que **les templates** sont partout dans la documentation et dans tout
   script d'initialisation d'index. Le mot « petites » était le mauvais mot.
+
+  Vérification après coup, qui est le seul vrai test d'une prédiction : la carte
+  faite, le corpus passe de 36,3 % à **39,7 %**, soit **177 requêtes** de plus
+  servies entièrement. La prédiction disait 239 ; l'écart est ce qui reste
+  refusé *à côté* dans les mêmes requêtes — les templates de composants
+  (`composed_of`, `_component_template`, 0,9 % à eux seuls) et la simulation,
+  qui n'étaient pas séparés de la carte au moment du classement.
 - **La carte 19 (`_delete_by_query`) est le premier blocage des applications
   réelles** — 10 des 481 requêtes d'application et de client, plus que tout le
   reste. Elle était 15e sur 17. Un code qui gère des données fait des
@@ -277,7 +297,7 @@ premier lecteur attentif.
 
 - **La documentation sur-représente le rare.** Une page par fonctionnalité, au
   moins un exemple par page : dans ce sous-corpus, `significant_terms` pèse
-  autant que `match`. C'est pour ça que le taux global (36,3 %) est un chiffre
+  autant que `match`. C'est pour ça que le taux global (39,7 %) est un chiffre
   de couverture d'API, pas un chiffre d'usage — et c'est pour ça que les
   colonnes par source sont partout dans cette page.
 - **Les tracks Rally sur-représentent le log, la géo et l'analytique**, et

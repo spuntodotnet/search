@@ -1238,7 +1238,7 @@ def _somme_de_dates(e):
     return abs(a - b) <= max(1.0, abs(float(b))) * 1e-9
 
 
-def _court_circuit(e, requete):
+def _court_circuit(e, requete, ecarts=()):
     """ES n'a pas construit la clause fautive, ferrite l'a lue.
 
     Un `bool` qui ne peut rien rendre — une clause obligatoire `match_none`, ou
@@ -1246,8 +1246,22 @@ def _court_circuit(e, requete):
     s'arrete la et ne construit jamais les autres clauses, donc il ne voit pas
     qu'une valeur y est illisible pour le type du champ. ferrite valide la
     requete entiere avant de l'executer — le contraire ferait dependre la
-    validation de l'ordre d'evaluation."""
-    if e.get("chemin") != "statut" or "droite 200" not in e["texte"]:
+    validation de l'ordre d'evaluation.
+
+    Le meme court-circuit se produit a l'ouverture d'un `scroll`, et le
+    predicat le manquait : il ne regardait que le chemin `statut` d'une
+    recherche. Un troisieme predicat trop etroit, trouve comme les deux
+    premiers — par une plage de graines qu'on n'avait jamais regardee."""
+    chemin = e.get("chemin", "")
+    if chemin.startswith("scroll") and chemin != "scroll.statut":
+        # Un scroll refuse produit plusieurs ecarts (pages, documents, motif) ;
+        # c'est le statut porte par l'un d'eux qui les explique tous.
+        return any(_court_circuit(x, requete) for x in ecarts
+                   if x.get("chemin") == "scroll.statut")
+    if chemin == "scroll.statut":
+        if not (e.get("b") == 200 and e.get("a") != 200):
+            return False
+    elif chemin != "statut" or "droite 200" not in e["texte"]:
         return False
     # Deux facons de vider un `bool` avant d'avoir lu ses autres clauses : une
     # clause obligatoire `match_none`, ou un `must_not` qui prend tout.

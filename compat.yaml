@@ -197,7 +197,7 @@ tables:
           `_flush`, `_upgrade`, `_cache/clear`, `_shard_stores`, `_resolve/index`
         etat: refuse
         motif: pas_encore
-        poids: 3.1
+        poids: 3.4
         raison: >-
           la moitié de ces routes n'a pas de sens sans shards (`_shrink`,
           `_split`, `_recovery`, `_shard_stores`) ; l'autre moitié suppose un
@@ -211,7 +211,7 @@ tables:
           `_termvectors`, `_mtermvectors`, `_suggest`, `_source`
         etat: refuse
         motif: pas_encore
-        poids: 0.8
+        poids: 0.6
         raison: >-
           aucune n'est demandée par le code client qu'on cherche à servir.
         conformance:
@@ -450,7 +450,7 @@ tables:
       - id: index.templates
         nom: "Templates d'index — `_index_template` et `_template`"
         etat: partiel
-        poids: 3.9
+        poids: 2.4
         detail: >-
           `PUT` / `GET` / `HEAD` / `DELETE` sur les deux familles, et
           l'application du template à la création de l'index — **implicite**
@@ -484,7 +484,7 @@ tables:
         nom: "`_component_template`, `_simulate_index_template`, `_simulate`"
         etat: refuse
         motif: pas_encore
-        poids: 0.0
+        poids: 0.9
         raison: >-
           un template de composants est un template qu'on cite depuis un autre :
           tant qu'il n'est pas lu, `composed_of` est refusé à la pose plutôt
@@ -498,7 +498,7 @@ tables:
       - id: index.stats
         nom: "`GET /{index}/_stats`"
         etat: partiel
-        poids: 0.0
+        poids: 0.2
         detail: >-
           la forme d'ES — `_shards`, `_all` (`primaries` / `total`), `indices` —
           et les quatre groupes que ferrite **mesure**. Sur un moteur mono-shard
@@ -1715,7 +1715,7 @@ tables:
         nom: "`_msearch`, `_search/template`, `_explain`"
         etat: refuse
         motif: pas_encore
-        poids: 0.2
+        poids: 0.1
         raison: >-
           `_msearch` est le plus regretté : un tableau de bord qui pose six
           facettes fait six appels au lieu d'un. Les deux autres sont des
@@ -1725,7 +1725,7 @@ tables:
       - id: recherche.field_caps
         nom: "`GET|POST /{index}/_field_caps`"
         etat: partiel
-        poids: 0.0
+        poids: 0.2
         detail: >-
           par champ, son type, `searchable` et `aggregatable`, et l'agrégation
           **par index** quand plusieurs sont visés — c'est la question que pose
@@ -1746,7 +1746,7 @@ tables:
       - id: recherche.validate_query
         nom: "`GET|POST /{index}/_validate/query`"
         etat: partiel
-        poids: 0.0
+        poids: 0.1
         detail: >-
           le traducteur du Query DSL rendu observable, sans exécuter. Les deux
           formes de réponse d'ES sont reproduites, et la distinction compte :

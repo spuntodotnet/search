@@ -38,6 +38,22 @@ capacité qu'elle exerce, et au démarrage le fuzzer
 - **imprime ce qu'il ne couvre pas** (`--couverture`). Un fuzzer qui ne dit pas
   où il ne va pas se lit comme s'il allait partout.
 
+Une capacité déclarée tenue mais qu'aucune brique n'exerce sort **déclarée sans
+être mesurée** : c'est pour ça que la liste des briques grandit avec le
+périmètre. Trois routes de description y sont entrées avec les leurs, et chacune
+porte un prédicat écrit sur ce qui n'est **pas** comparé :
+
+| Brique | Ce qui est comparé | Ce qui ne l'est pas, et pourquoi |
+|---|---|---|
+| `_field_caps` sur le mapping tiré au sort | le type, `searchable`, `aggregatable`, la liste `indices`, champ par champ | les champs de **métadonnées** (`_id`, `_index`, `_seq_no`…) : ferrite ne les expose pas, et c'est déclaré — il ne sait pas les interroger |
+| `_validate/query` sur chaque requête générée | le verdict `valid` | l'`explanation` : celle d'ES est la chaîne Lucene, celle de ferrite le rendu de sa requête tantivy. Et un `valid: false` là où ES dit `true` n'est un écart **de cette route** que si ferrite accepte pourtant la requête en recherche — sinon c'est le refus que la comparaison de recherche vient de mesurer, vu d'ailleurs |
+| `_stats` | `docs.count` | `store.size_in_bytes` : deux moteurs de stockage. Et `docs.count` lui-même diverge dès qu'il y a du `nested` — Lucene compte ses sous-documents, ferrite n'en a pas. Le prédicat le **mesure** : il exige que le compte de ferrite égale ce que la recherche rend des deux côtés, et que celui d'ES lui soit strictement supérieur |
+
+Une brique de plus ne pose pas de requête : une fois sur quatre, le mapping
+n'est pas posé sur l'index mais dans un **template**, et l'index naît de
+l'écriture. La comparaison de mapping qui suit mesure alors ce qu'un template
+applique vraiment, sur un mapping que personne n'a choisi.
+
 ## L'étalonnage vient avant la mesure
 
 `--calibrer` fait tourner exactement la même batterie contre **deux**
@@ -90,20 +106,43 @@ avec sa raison, et `--tout` les imprime.
 ## La mesure du jour
 
 ```
-graines 1–400          400 cas,  5 150 requêtes, 0 divergence réelle
-graines 5000–5299      300 cas,  3 830 requêtes, 0 divergence réelle
-graines 900000+        250 cas,  3 228 requêtes, 0 divergence réelle
-graines 4242000+       250 cas,  3 237 requêtes, 0 divergence réelle
-graines 31337000+      250 cas,  3 226 requêtes, 0 divergence réelle
+graines 1–400          400 cas, 16 718 requêtes, 0 divergence réelle
+graines 5000–5299      300 cas, 12 473 requêtes, 1 divergence réelle
+graines 900000+        250 cas, 10 418 requêtes, 1 divergence réelle
+graines 4242000+       250 cas, 10 405 requêtes, 0 divergence réelle
+graines 31337000+      250 cas, 10 410 requêtes, 0 divergence réelle
                      ------------------------------------------------
-                     1 450 cas, 18 671 requêtes, 0 divergence réelle
+                     1 450 cas, 60 424 requêtes, 2 divergences réelles
 
-étalonnage ES vs ES     60 cas,    735 requêtes, 0 divergence
+étalonnage ES vs ES     60 cas,  2 416 requêtes, 0 divergence
 ```
 
 Une seule de ces plages (1–400) a servi à corriger. Les quatre autres sont des
 plages **de contrôle** : leur zéro est le seul qui mesure ferrite plutôt que mon
 itération.
+
+Le nombre de requêtes a triplé sans que le nombre de cas bouge : trois briques
+de plus posent maintenant `_field_caps` et `_stats` sur chaque mapping tiré au
+sort, et `_validate/query` sur chaque requête générée.
+
+### Les deux divergences réelles du jour
+
+Elles sont **ouvertes**, pas corrigées, et elles ne portent ni l'une ni l'autre
+sur les routes que la même PR a ajoutées. Elles sont apparues parce que les
+briques nouvelles ont décalé les graines : chaque cas de chaque plage est un
+tirage différent de celui d'hier, et c'est exactement l'effet que ce fichier
+décrit plus bas (« une plage de graines sur laquelle on a itéré ne mesure plus
+rien »). Les publier plutôt que de les taire est le seul usage honnête de cet
+outil.
+
+| Ce qui diffère | Ce qu'il faudrait |
+|---|---|
+| **Un bucket vide de `histogram` n'a pas ses sous-agrégations.** tantivy comble les trous entre deux extrêmes, mais ses buckets de remplissage n'exécutent aucune sous-agrégation : un `range` sous un `histogram` y rend `buckets: []` là où ES rend ses trois intervalles à `doc_count: 0` | rendre, dans un bucket vide, la forme « zéro document » de chaque sous-agrégation déclarée. C'est déjà la famille nommée dans `src/aggs.rs` à propos de `min_doc_count: 0` — « des buckets vides privés de leurs sous-agrégations » |
+| **Une agrégation sur un sous-champ de `nested` depuis la racine.** ES ne voit aucun document au niveau racine et rend `0.0` ; ferrite agrège les valeurs à plat et rend un autre nombre | la refuser, comme la **requête** équivalente l'est déjà (divergence assumée n° 10 de `compat.md`) : un refus se voit, un nombre faux non |
+
+Aucune n'est un échec bruyant : les deux rendent 200 avec un résultat faux, ce
+qui est précisément la famille que ce projet cherche à ne pas laisser passer.
+Elles font l'objet de la carte suivante.
 
 Le détail machine est dans [`fuzz.json`](fuzz.json) : les divergences réelles y
 sont écrites entières, les assumées résumées par famille avec trois exemples.
@@ -127,12 +166,18 @@ La preuve : chaque nouvelle plage jamais regardée en a retrouvé.
 | 4242000+ | un trou du **rapport**, pas du moteur : un `scroll` refusé ne transportait pas le motif de son refus, donc un refus déclaré s'y lisait comme une divergence réelle |
 | 31337000+ | rien de neuf — la première plage de contrôle qui n'ajoute rien |
 
-Les deux prédicats trop étroits :
+Et au passage suivant, générateur changé, la règle a rejoué exactement pareil :
+la plage 1–400 — celle sur laquelle on avait itéré — a sorti le **troisième**
+prédicat trop étroit du tableau ci-dessous, et deux plages de contrôle ont sorti
+les deux divergences réelles décrites plus haut.
+
+Les trois prédicats trop étroits :
 
 | Ce qui manquait | Ce que ça a coûté |
 |---|---|
 | le court-circuit d'ES était reconnu à son **type d'erreur** | trois autres refus légitimes de ferrite comptés comme des divergences. Le prédicat regarde maintenant si la requête est court-circuitable, ce qui est la propriété qui explique l'écart |
 | `exists` sur un `text` était reconnu à un **compte de documents** | sous un `bool { should: [exists], filter: […] }`, le manque ne se voit que dans le **score** : ES donne 1.0, ferrite 0.0, et aucun compte ne bouge. Le fuzzer repose maintenant la clause `exists` seule aux deux serveurs pour trancher — il le **mesure**, il ne le suppose pas |
+| le court-circuit d'ES n'était reconnu que sur le chemin `statut` d'une **recherche** | le même court-circuit se produit à l'ouverture d'un `scroll`, et l'écart s'y lisait comme réel. Un prédicat qui nomme un chemin plutôt qu'une propriété finit toujours par manquer une route |
 
 D'où la règle : **une plage de graines sur laquelle on a itéré ne mesure plus
 rien.** Il en faut une qu'on n'a jamais regardée, et la publier séparément.
