@@ -362,7 +362,17 @@ fn field_match(
         _ => {
             let tv = mapping::coerce_avec(field_name, ty, value, ctx.fields.format_de(field_name))
                 .map_err(EsError::sur_valeur_illisible)?;
-            Box::new(TermQuery::new(tv.to_term(field), IndexRecordOption::Basic))
+            let terme: Box<dyn Query> =
+                Box::new(TermQuery::new(tv.to_term(field), IndexRecordOption::Basic));
+            // Comme dans `term` : sur un numerique, ES interroge un arbre de
+            // points et donne le meme score a tout le monde. Sans ce
+            // ConstScoreQuery, un `match` sur un champ numerique classait les
+            // documents par BM25 — et l'ordre changeait sans rien dire.
+            if matches!(ty.kind(), FieldKind::I64 | FieldKind::F64) {
+                Box::new(ConstScoreQuery::new(terme, 1.0))
+            } else {
+                terme
+            }
         }
     })
 }
@@ -912,10 +922,19 @@ fn term_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     } else {
         IndexRecordOption::Basic
     };
-    boost(
-        Box::new(TermQuery::new(tv.to_term(field), record)),
-        boost_value.as_ref(),
-    )
+    let terme: Box<dyn Query> = Box::new(TermQuery::new(tv.to_term(field), record));
+    // Sur un champ numerique, ES n'interroge pas l'index inverse mais un arbre
+    // de points, et donne a tout le monde le **meme** score (1.0 × boost).
+    // tantivy, lui, notait par BM25 : un document dont le champ portait
+    // plusieurs valeurs marquait moins qu'un autre, et le classement changeait
+    // sans que rien ne le signale. Mesure : `{"term": {"n": 5}}` rendait
+    // 0.562 / 0.354 la ou ES rend 1.0 / 1.0.
+    let interne: Box<dyn Query> = if matches!(ty.kind(), FieldKind::I64 | FieldKind::F64) {
+        Box::new(ConstScoreQuery::new(terme, 1.0))
+    } else {
+        terme
+    };
+    boost(interne, boost_value.as_ref())
 }
 
 /// Ce qu'une valeur de date designe hors d'un `range` (`term`, `terms`,
@@ -1077,6 +1096,43 @@ fn range_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         )));
     }
 
+    // Un booleen n'a que deux valeurs : le `RangeQuery` de tantivy refuse d'en
+    // faire un intervalle (« Expected term with u64, i64, f64 or date ») et
+    // rendait un 500. On enumere donc les valeurs que les bornes laissent
+    // passer, ce qui est exactement le sens du `range` d'ES sur un `boolean` —
+    // et les deux valeurs a la fois veut dire « le champ a une valeur ».
+    if ty.kind() == FieldKind::Bool {
+        let retenues: Vec<bool> = [false, true]
+            .into_iter()
+            .filter(|v| {
+                let t = TypedValue::Bool(*v).to_term(field);
+                let apres_bas = match &lower {
+                    Bound::Unbounded => true,
+                    Bound::Included(b) => t.value().as_bool() >= b.value().as_bool(),
+                    Bound::Excluded(b) => t.value().as_bool() > b.value().as_bool(),
+                };
+                let avant_haut = match &upper {
+                    Bound::Unbounded => true,
+                    Bound::Included(b) => t.value().as_bool() <= b.value().as_bool(),
+                    Bound::Excluded(b) => t.value().as_bool() < b.value().as_bool(),
+                };
+                apres_bas && avant_haut
+            })
+            .collect();
+        let interne: Box<dyn Query> = match retenues.as_slice() {
+            [] => Box::new(tantivy::query::EmptyQuery),
+            [v] => Box::new(TermQuery::new(
+                TypedValue::Bool(*v).to_term(field),
+                IndexRecordOption::Basic,
+            )),
+            _ => Box::new(ExistsQuery::new(field_name.to_string(), false)),
+        };
+        return boost(
+            Box::new(ConstScoreQuery::new(interne, 1.0)),
+            spec.get("boost"),
+        );
+    }
+
     let inner: Box<dyn Query> = Box::new(ConstScoreQuery::new(
         Box::new(RangeQuery::new(lower, upper)),
         1.0,
@@ -1137,7 +1193,13 @@ fn bool_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     // Un `bool` qui n'a que des `must_not` ne matche rien chez tantivy, alors
     // qu'ES l'interprete comme « tous les documents, sauf ceux-la ». On pose la
     // clause positive implicite.
-    if !has_required && should_count == 0 {
+    //
+    // Elle ne **note** rien : ES donne `0.0` a ces documents, quel que soit le
+    // `boost` du `bool` (mesure). ferrite leur donnait le score de la clause
+    // implicite — `1.5` sous un `boost: 1.5` — et l'ordre changeait des que ce
+    // `bool` etait combine a autre chose, sans que rien ne le signale.
+    let purement_negatif = !has_required && should_count == 0;
+    if purement_negatif {
         clauses.insert(0, (Occur::Must, Box::new(AllQuery)));
         has_required = true;
     }
@@ -1149,13 +1211,16 @@ fn bool_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         return Ok(Box::new(EmptyQuery));
     }
 
-    let inner: Box<dyn Query> = if min_should > 0 {
+    let mut inner: Box<dyn Query> = if min_should > 0 {
         Box::new(BooleanQuery::with_minimum_required_clauses(
             clauses, min_should,
         ))
     } else {
         Box::new(BooleanQuery::new(clauses))
     };
+    if purement_negatif {
+        inner = Box::new(ConstScoreQuery::new(inner, 0.0));
+    }
     boost(inner, obj.get("boost"))
 }
 
@@ -1379,7 +1444,12 @@ fn fuzzy_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         .and_then(Value::as_bool)
         .unwrap_or(true);
 
-    let MappedField { field, .. } = ctx.field(champ, "fuzzy")?;
+    // Une distance d'edition se mesure entre deux chaines. Sur un champ
+    // numerique ou `date`, ES refuse (« Can only use fuzzy queries on keyword
+    // and text fields ») ; ferrite construisait un terme texte sur une colonne
+    // qui n'en contient pas et rendait **zero document en 200** — un resultat
+    // vide qui se fait passer pour une reponse.
+    let field = champ_de_motif(ctx, champ, "fuzzy")?;
     let terme = tantivy::Term::from_field_text(field, &valeur);
     let q = FuzzyTermQuery::new(terme, distance, transpositions);
     boost(
@@ -1734,6 +1804,17 @@ fn clause_nested(v: &Value, ctx: &QueryCtx, racine: &str) -> EsResult<Clause> {
                 .as_str()
                 .ok_or_else(|| EsError::parsing("[prefix] attend une chaine"))?;
             let mf = champ_nested(ctx, champ, racine, "prefix")?;
+            // La meme regle qu'a la racine : un prefixe n'a de sens que sur une
+            // chaine. La verification manquait ici, et un `prefix` sur un champ
+            // `date` sous un `nested` rendait 200 la ou ES refuse — le genre de
+            // 200 qui compte des documents au hasard.
+            if !matches!(mf.ty.kind(), FieldKind::Keyword | FieldKind::Text) {
+                return Err(EsError::illegal_argument(format!(
+                    "[prefix] ne s'applique qu'a un champ [text] ou [keyword] ; [{champ}] est de \
+                     type [{}]",
+                    mf.ty.name()
+                )));
+            }
             Ok(Clause::Champ {
                 chemin: champ.to_string(),
                 champ: mf,

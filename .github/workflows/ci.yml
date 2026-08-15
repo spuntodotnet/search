@@ -66,6 +66,14 @@ jobs:
       - name: les poids d'usage viennent du corpus
         run: python3 tests/compat/ponderation.py --verifie
 
+      # Le generateur du fuzzer ne redit pas la liste des capacites : chaque
+      # brique cite l'identifiant de celle qu'elle exerce. Renommer une capacite
+      # doit casser bruyamment plutot que de laisser le fuzzer fuzzer a cote.
+      # `--couverture` ne parle a aucun serveur : il verifie les identifiants, et
+      # imprime les capacites declarees tenues que le fuzzer n'exerce pas.
+      - name: les briques du fuzzer citent des capacites qui existent
+        run: python3 tests/compat/fuzz_vs_es.py --couverture
+
   compat:
     name: harnais de compatibilite (client officiel)
     runs-on: ubuntu-latest

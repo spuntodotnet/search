@@ -36,10 +36,10 @@
     }
   },
   "totaux": {
-    "capacites": 180,
-    "supporte": 94,
-    "partiel": 43,
-    "refuse": 43,
+    "capacites": 181,
+    "supporte": 89,
+    "partiel": 48,
+    "refuse": 44,
     "poids_renseignes": 125
   },
   "capacites": [
@@ -583,9 +583,14 @@
       "table": "types_champ",
       "nom": "`float`, `double`",
       "nom_texte": "float, double",
-      "etat": "supporte",
+      "etat": "partiel",
       "poids": 0.4,
-      "detail": "`f64` indexé + fast"
+      "detail": "`f64` indexé + fast",
+      "parametres": {
+        "refuses": [
+          "la précision d'un float à l'affichage"
+        ]
+      }
     },
     {
       "id": "type.boolean",
@@ -1290,9 +1295,14 @@
       "table": "dsl",
       "nom": "`exists`",
       "nom_texte": "exists",
-      "etat": "supporte",
+      "etat": "partiel",
       "poids": 2.6,
-      "detail": "sur tous les types, y compris `text`. Un champ absent, `null`, ou un tableau vide compte comme absent, comme chez ES"
+      "detail": "sur tous les types, y compris `text`. Un champ absent, `null`, ou un tableau vide compte comme absent, comme chez ES",
+      "parametres": {
+        "refuses": [
+          "sur un text dont la valeur ne produit aucun terme"
+        ]
+      }
     },
     {
       "id": "dsl.term",
@@ -1643,9 +1653,15 @@
       "table": "corps_search",
       "nom": "Scoring",
       "nom_texte": "Scoring",
-      "etat": "supporte",
+      "etat": "partiel",
       "poids": null,
-      "detail": "BM25 (tantivy), `_score` et `max_score` renseignés ; `null` quand un tri est demandé, comme chez ES"
+      "detail": "BM25 (tantivy), `_score` et `max_score` renseignés ; `null` quand un tri est demandé, comme chez ES. Les **valeurs** ne sont pas comparées à celles d'ES (les constantes diffèrent) ; c'est l'**ordre** qui l'est, par [`diff_relevance.py`](../tests/compat/diff_relevance.py). Un `term` sur un champ numérique vaut `1.0` comme chez ES (requête de points), un `keyword` et un `boolean` sont indexés sans *fieldnorm* comme chez Lucene — donc deux documents qui portent la même valeur marquent pareil, quel que soit le nombre de valeurs du champ",
+      "parametres": {
+        "refuses": [
+          "l'avgdl de BM25 sur un champ text facultatif",
+          "le score d'un fuzzy"
+        ]
+      }
     },
     {
       "id": "recherche.format_reponse",
@@ -1841,7 +1857,7 @@
       "nom_texte": "terms",
       "etat": "partiel",
       "poids": 7.5,
-      "detail": "`doc_count_error_upper_bound` et `sum_other_doc_count` sont renseignés",
+      "detail": "`sum_other_doc_count` est renseigné, et `doc_count_error_upper_bound` suit la règle d'ES : `-1` quand l'ordre est `_count` **croissant** et que le nombre de termes distincts atteint `shard_size` (`size × 1,5 + 10` par défaut), `0` partout ailleurs. Sur un champ `date`, la clé du bucket est rendue en millisecondes avec son `key_as_string`, comme chez ES",
       "parametres": {
         "supportes": [
           "field",
@@ -1851,6 +1867,7 @@
           "order"
         ],
         "refuses": [
+          "min_doc_count autre que sa valeur par défaut (1)",
           "include",
           "exclude",
           "missing",
@@ -1868,18 +1885,30 @@
       "table": "aggs",
       "nom": "`range`",
       "nom_texte": "range",
-      "etat": "supporte",
+      "etat": "partiel",
       "poids": 0.2,
-      "detail": "`ranges` avec `from` / `to` / `key`, `keyed`"
+      "detail": "`ranges` avec `from` / `to` / `key`, `keyed`. Sur un champ `date`, les bornes s'écrivent **en dates** (au `format` du champ) et les buckets rendent `from_as_string` / `to_as_string`. Les intervalles que le client n'a pas demandés sont écartés : tantivy comble les trous entre deux bornes, Elasticsearch non",
+      "parametres": {
+        "refuses": [
+          "un trou entre deux intervalles, sur un champ date",
+          "des intervalles qui se chevauchent",
+          "un champ multivalué"
+        ]
+      }
     },
     {
       "id": "agg.histogram",
       "table": "aggs",
       "nom": "`histogram`",
       "nom_texte": "histogram",
-      "etat": "supporte",
+      "etat": "partiel",
       "poids": 0.2,
-      "detail": "`interval`, `offset`, `min_doc_count`, `hard_bounds`, `extended_bounds`, `keyed`"
+      "detail": "`interval`, `offset`, `min_doc_count`, `hard_bounds`, `extended_bounds`, `keyed`",
+      "parametres": {
+        "refuses": [
+          "un champ multivalué"
+        ]
+      }
     },
     {
       "id": "agg.date_histogram",
@@ -1910,6 +1939,16 @@
       "etat": "supporte",
       "poids": 8.8,
       "detail": "sur tous les types de buckets, vérifiées jusqu'à trois niveaux"
+    },
+    {
+      "id": "agg.multivalue",
+      "table": "aggs",
+      "nom": "`histogram`, `date_histogram`, `range` sur un champ **multivalué**",
+      "nom_texte": "histogram, date_histogram, range sur un champ multivalué",
+      "etat": "refuse",
+      "poids": null,
+      "motif": "divergence_moteur",
+      "raison": "l'agrégation de tantivy compte les **valeurs**, Elasticsearch compte les **documents** : un document dont le champ vaut `[1, 2, 3]` tombe trois fois dans le bucket qui les contient (mesuré : `doc_count` de 4 là où ES en compte 2). Le refus n'est prononcé que si la colonne est réellement multivaluée — un champ à une valeur par document, le cas courant, reste servi et exact. `terms`, `value_count` et `stats` ne sont pas concernés : leurs comptes coïncident avec ceux d'ES."
     },
     {
       "id": "agg.cardinality",

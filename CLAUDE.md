@@ -31,9 +31,9 @@ d'Elasticsearch. Rendre des résultats faux parce qu'on a ignoré un
 `minimum_should_match` est le pire résultat possible de ce projet — pire que de
 ne pas supporter la clause du tout.
 
-## La méthode, en six gestes
+## La méthode, en sept gestes
 
-Ces six gestes ont chacun trouvé quelque chose qu'un raisonnement n'aurait pas
+Ces sept gestes ont chacun trouvé quelque chose qu'un raisonnement n'aurait pas
 trouvé. Ils ne sont pas décoratifs.
 
 ### 1. Mesurer contre un vrai Elasticsearch, jamais contre son idée d'Elasticsearch
@@ -97,7 +97,39 @@ français, dont deux règles que j'avais écrites de travers. « Identique sur c
 qu'on a testé » n'est pas « identique » : quand un algorithme a des dizaines de
 branches, il faut un corpus qui les visite.
 
-### 6. Vérifier une hypothèse sur une dépendance par un spike, pas par une lecture
+### 6. Tirer au sort ce à quoi on n'a pas pensé — après avoir étalonné le tirage
+
+Le harnais teste ce à quoi on a pensé, la suite d'Elastic ce à quoi *Elastic* a
+pensé — et elle est figée depuis la 7.10. `tests/compat/fuzz_vs_es.py` tire au
+sort un mapping, des documents et des requêtes **dans le périmètre déclaré**, et
+compare les deux serveurs. Premier passage : **vingt et un défauts**, tous silencieux,
+aucun signalé par un client — le tri d'un champ multivalué (ferrite prenait la
+première valeur, ES prend le minimum ou le maximum), l'agrégation `range` qui
+inventait un bucket de remplissage, le `range` sur un booléen qui rendait un
+**500**, le score d'un `term` sur un numérique qui variait avec le nombre de
+valeurs du champ. Voir [`docs/fuzz.md`](docs/fuzz.md).
+
+Deux règles rendent ce chiffre lisible, et elles sont le vrai contenu de la
+méthode :
+
+- **une plage de graines sur laquelle on a itéré ne mesure plus rien.** Les
+  graines 1–400 sont celles contre lesquelles l'outil a été réglé : leur zéro
+  était en partie du surajustement. Le premier passage sur des graines jamais
+  regardées en a retrouvé sept, dont un vrai défaut. Il faut donc toujours
+  publier une plage **de contrôle**, jamais utilisée pour corriger — et la
+  publier à part ;
+- **le générateur lit `compat.yaml`, il ne le réécrit pas.** Chaque brique cite
+  l'identifiant de la capacité qu'elle exerce ; une capacité renommée casse le
+  fuzzer bruyamment, une capacité `refuse` n'est pas émise, et `--couverture`
+  imprime les capacités déclarées tenues que le fuzzer **n'exerce pas** ;
+- **chaque divergence laissée passer porte un prédicat écrit.** Pas un code
+  d'état toléré en bloc : une fonction, avec sa mesure et sa raison. La ligne
+  sur l'ordre de pertinence, par exemple, n'accepte une inversion que si ES
+  lui-même donne deux scores **différents** aux documents échangés — et c'est
+  précisément par les cas où ES les classe ex æquo que le `term` sur un
+  numérique est sorti.
+
+### 7. Vérifier une hypothèse sur une dépendance par un spike, pas par une lecture
 
 `tests/spike_nested.rs` mesure deux propriétés de tantivy dont dépend tout le
 support de `nested`. Elles ne sont pas documentées comme des garanties : le
@@ -123,6 +155,8 @@ développement, pas de CI).
 | `tests/compat/releve_mots_vides.py` | quelle est **vraiment** la liste de mots vides d'un analyzer d'ES ? |
 | `tests/compat/sonde_alias.py` | les mêmes alias sur une **expression de noms** — liste, joker, exclusion, `_all` — et le même 404 ? (21/21, corps et message compris) |
 | `tests/compat/sonde_vide.py` | sur un serveur **sans aucun index**, la même chose qu'ES — et rien accepté en silence ? (27/27 identiques, 0 refus muet ; les deux serveurs doivent être vides, c'est l'état mesuré) |
+| `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **1 450 cas, 18 671 requêtes, 0 divergence réelle**, sur cinq plages de graines dont **quatre** n'ont jamais servi à corriger — celle sur laquelle on itère ne mesure plus rien. 21 défauts silencieux trouvés au premier passage. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (60 cas, 739 requêtes, 0) |
+| `tests/compat/sonde_fuzz.py` | les écarts trouvés par le fuzzing, **figés** hors d'une graine (35/35) |
 | `tests/compat/genere_compat.py` | le périmètre déclaré et la doc disent-ils la **même chose** ? [`compat.yaml`](compat.yaml) est la source (une entrée par capacité : état, paramètres, motif du refus, poids d'usage) ; [`docs/compat.md`](docs/compat.md) et [`docs/compat.json`](docs/compat.json) en sont **générés**, et la CI échoue s'ils divergent |
 | `tests/compat/perimetre.py` | ce cas qui échoue, il porte sur quoi ? Il rattache un échec de conformance à une capacité déclarée : **régression** si elle est annoncée supportée, **coût de périmètre** si elle est annoncée refusée |
 | `tests/compat/recolte_usage.py` | à quoi ressemblent les requêtes que les gens envoient **vraiment** ? Constitue le corpus ([`tests/compat/usage/corpus.jsonl`](tests/compat/usage/corpus.jsonl), 5 311 requêtes) depuis quatre sources citables : doc de référence 8.15, tracks Rally, clients officiels, code open source. Chaque requête porte l'URL d'où elle vient |
@@ -299,6 +333,20 @@ bouger**, pas après.
   rendait **moins de documents qu'ES** sans rien dire : ferrite lisait la date
   comme minuit là où ES couvre la journée. Le 400 se voit, l'autre non. Quand un
   client signale un trou, mesurer **tout le voisinage** de ce trou.
+- **Un moteur qui rend « la valeur » d'un champ multivalué en choisit une, et
+  personne ne dit laquelle.** ferrite triait sur la **première**, ES trie sur le
+  minimum en croissant et sur le maximum en décroissant. Même famille : ES ne
+  rend pas `null` pour une valeur de tri absente, il rend une **sentinelle**
+  (`9223372036854775807`, `"Infinity"`) — et cette sentinelle est une vraie
+  valeur, donc un document qui porte `i64::MAX` est ex æquo avec un document
+  vide. Aucune de ces règles n'est écrite nulle part ; toutes viennent d'une
+  mesure.
+- **Une agrégation déléguée n'a pas les mêmes bords que son homonyme.** Celle de
+  tantivy **comble les trous** entre deux intervalles d'un `range`, compte les
+  **valeurs** là où ES compte les **documents** sur un champ multivalué, et
+  nomme ses buckets `keyed` autrement. Trois résultats faux rendus 200. Déléguer
+  une fonctionnalité ne dispense pas de mesurer ses bords : c'est même là qu'ils
+  diffèrent.
 - **Un `curl` de vérification qui n'utilise pas le même texte que le test ne
   vérifie rien.** Une chasse au bug d'analyzer s'est terminée sur un faux
   positif : `match edition` ne trouvait pas `l'édition` — ce que fait aussi ES,
