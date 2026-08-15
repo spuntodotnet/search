@@ -13,21 +13,6 @@ use crate::error::{EsError, EsResult};
 use crate::mapping::Mapping;
 use crate::selection::{index_unique, resoudre, Options};
 
-/// Reglages d'index acceptes et sans effet : ferrite est mono-shard,
-/// zero-replique par construction, donc ces valeurs sont deja ce qu'elles
-/// decrivent. Tout autre reglage est refuse.
-const NOOP_SETTINGS: &[&str] = &[
-    "number_of_shards",
-    "number_of_replicas",
-    "index.number_of_shards",
-    "index.number_of_replicas",
-];
-
-/// `index.query.parse.allow_unmapped_fields` : le seul reglage d'index que
-/// ferrite exploite vraiment (voir
-/// [`crate::mapping::Mapping::allow_unmapped_fields`]).
-const ALLOW_UNMAPPED: &str = "index.query.parse.allow_unmapped_fields";
-
 /// `PUT /{index}` — creation avec mapping explicite obligatoire.
 pub async fn create(
     State(st): State<SharedState>,
@@ -53,10 +38,28 @@ pub async fn create(
     };
     expect_only(&obj, &["mappings", "settings", "aliases"], "PUT /{index}")?;
 
+    // Un template qui correspond s'applique aussi a une creation **explicite**,
+    // et ce que le corps de la requete dit l'emporte. C'est ce que fait ES, et
+    // c'est ce qui rend un `PUT /{index}` d'un script d'init compatible avec un
+    // template pose juste avant.
+    let tpl = st.catalog.templates().pour(&index);
+    let settings = crate::templates::fusionner(
+        tpl.as_ref().and_then(|t| t.settings.clone()),
+        obj.get("settings").cloned(),
+    );
+    let mappings = crate::templates::fusionner(
+        tpl.as_ref().and_then(|t| t.mappings.clone()),
+        obj.get("mappings").cloned(),
+    );
+    let aliases = crate::templates::fusionner(
+        tpl.as_ref().and_then(|t| t.aliases.clone()),
+        obj.get("aliases").cloned(),
+    );
+
     // Les alias sont poses **apres** la creation : un alias ne peut pas
     // designer un index qui n'existe pas encore.
     let mut alias_a_poser = Vec::new();
-    if let Some(aliases) = obj.get("aliases") {
+    if let Some(aliases) = &aliases {
         let decl = aliases
             .as_object()
             .ok_or_else(|| EsError::parsing("[PUT /{index}] : [aliases] doit etre un objet"))?;
@@ -69,29 +72,13 @@ pub async fn create(
             });
         }
     }
-    let mut declares = crate::analysis::Analysis::default();
-    let mut allow_unmapped = None;
-    if let Some(settings) = obj.get("settings") {
-        // `analysis` est extrait avant la verification : c'est la seule section
-        // de `settings` qui declare quelque chose plutot que de regler.
-        if let Some(a) = section_analysis(settings) {
-            declares = crate::analysis::Analysis::parse(a)?;
-        }
-        allow_unmapped = check_settings(settings)?;
-    }
 
     // Sans `mappings`, l'index part vide et se remplit par mapping dynamique,
     // comme chez ES.
-    let mut mapping = match obj.get("mappings") {
-        Some(m) => Mapping::parse_avec(m, &declares)?,
-        None => Mapping::default(),
-    };
-    mapping.analysis = declares;
-    if let Some(v) = allow_unmapped {
-        mapping.allow_unmapped_fields = v;
-    }
+    let (mapping, inertes) =
+        crate::reglages::mapping_et_inertes(settings.as_ref(), mappings.as_ref())?;
 
-    st.catalog.create(&index, mapping)?;
+    st.catalog.create(&index, mapping, inertes)?;
     if !alias_a_poser.is_empty() {
         // Un alias refuse laisse un index sans alias : on defait la creation
         // plutot que de rendre `acknowledged` sur une moitie de demande.
@@ -105,85 +92,6 @@ pub async fn create(
         "shards_acknowledged": true,
         "index": index,
     })))
-}
-
-/// `settings.analysis`, sous ses deux ecritures (`{"analysis": …}` ou
-/// `{"index": {"analysis": …}}`).
-fn section_analysis(settings: &Value) -> Option<&Value> {
-    let o = settings.as_object()?;
-    o.get("analysis")
-        .or_else(|| o.get("index")?.as_object()?.get("analysis"))
-}
-
-/// Verifie les `settings` d'un index, et rend la valeur de celui que ferrite
-/// exploite (`allow_unmapped_fields`), s'il est fourni.
-///
-/// Un reglage d'ES s'ecrit aussi bien a plat (`"index.number_of_shards": 1`)
-/// qu'imbrique (`{"index": {"number_of_shards": 1}}`), et les clients melangent
-/// les deux : on aplatit tout avant de comparer, sinon la meme demande serait
-/// acceptee sous une forme et refusee sous l'autre.
-fn check_settings(settings: &Value) -> EsResult<Option<bool>> {
-    let obj = settings
-        .as_object()
-        .ok_or_else(|| EsError::parsing("[settings] doit etre un objet"))?;
-    let mut plats: Vec<(String, &Value)> = Vec::new();
-    aplatir("", obj, &mut plats);
-
-    let mut allow_unmapped = None;
-    for (cle, valeur) in plats {
-        let complete = if cle.starts_with("index.") {
-            cle.clone()
-        } else {
-            format!("index.{cle}")
-        };
-        if complete == ALLOW_UNMAPPED {
-            allow_unmapped = Some(lire_booleen(valeur, &cle)?);
-            continue;
-        }
-        if !NOOP_SETTINGS.contains(&cle.as_str()) {
-            return Err(EsError::unsupported(format!(
-                "ferrite ne supporte pas le reglage d'index [{cle}] ; reglages acceptes : \
-                 {NOOP_SETTINGS:?} (sans effet, ferrite etant mono-shard) et [{ALLOW_UNMAPPED}]"
-            )));
-        }
-    }
-    Ok(allow_unmapped)
-}
-
-/// Aplatit les `settings` en chemins pointes. `analysis` est laisse de cote :
-/// il est traite ailleurs (il est exploite, lui).
-fn aplatir<'a>(
-    prefixe: &str,
-    obj: &'a serde_json::Map<String, Value>,
-    out: &mut Vec<(String, &'a Value)>,
-) {
-    for (cle, valeur) in obj {
-        let chemin = if prefixe.is_empty() {
-            cle.clone()
-        } else {
-            format!("{prefixe}.{cle}")
-        };
-        if chemin == "analysis" || chemin == "index.analysis" {
-            continue;
-        }
-        match valeur {
-            Value::Object(o) => aplatir(&chemin, o, out),
-            _ => out.push((chemin, valeur)),
-        }
-    }
-}
-
-/// ES accepte un booleen comme sa forme chaine (`"false"`) dans les settings.
-fn lire_booleen(v: &Value, cle: &str) -> EsResult<bool> {
-    match v {
-        Value::Bool(b) => Ok(*b),
-        Value::String(s) if s == "true" => Ok(true),
-        Value::String(s) if s == "false" => Ok(false),
-        autre => Err(EsError::illegal_argument(format!(
-            "Failed to parse value [{autre}] as only [true] or [false] are allowed for setting \
-             [{cle}]"
-        ))),
-    }
 }
 
 /// `DELETE /{index}` — un nom, une liste, un motif.
@@ -295,19 +203,13 @@ pub async fn get_index(
 /// Les `settings` d'un index, au format d'ES (`{"index": {...}}`, valeurs en
 /// chaines).
 fn reglages_de(idx: &crate::engine::FerriteIndex) -> Value {
-    let mut index = json!({
-        "number_of_shards": "1",
-        "number_of_replicas": "0",
-        "uuid": idx.uuid,
-        "provided_name": idx.name,
-        "creation_date": idx.created_at.to_string(),
-        "version": {"created": crate::ES_VERSION},
-    });
-    // Comme chez ES, le reglage n'apparait que s'il a ete pose.
-    if !idx.mapping().allow_unmapped_fields {
-        index["query"] = json!({"parse": {"allow_unmapped_fields": "false"}});
-    }
-    json!({ "index": index })
+    crate::reglages::rendre(
+        &idx.inertes(),
+        &idx.uuid,
+        &idx.name,
+        idx.created_at,
+        idx.mapping().allow_unmapped_fields,
+    )
 }
 
 /// `GET /{index}/_settings`
@@ -319,14 +221,78 @@ pub async fn get_settings(
     let mut p = Params::parse(&uri);
     let opts = selection_options(&mut p)?;
     p.opt("master_timeout");
-    super::refuser_reglages_non_supportes(&mut p, "/{index}/_settings")?;
+    p.opt("local");
+    let plat = p.flag("flat_settings", false)?;
+    super::refuser_include_defaults(&mut p, "/{index}/_settings")?;
     p.done()?;
 
     let mut out = serde_json::Map::new();
     for idx in resoudre(&st.catalog, &index, &opts)? {
-        out.insert(idx.name.clone(), json!({"settings": reglages_de(&idx)}));
+        let reglages = reglages_de(&idx);
+        let reglages = if plat {
+            crate::reglages::aplatir_reponse(&reglages)
+        } else {
+            reglages
+        };
+        out.insert(idx.name.clone(), json!({"settings": reglages}));
     }
     Ok(Json::ok(Value::Object(out)))
+}
+
+/// `PUT /{index}/_settings` — poser les reglages modifiables.
+///
+/// Ferrite n'a qu'un reglage qui change ses reponses, et il est fige a la
+/// creation. Refuser la route entiere pour autant faisait echouer un script
+/// d'init complet sur une ligne (`number_of_replicas: 1`) qui ne changerait
+/// rien ici : les reglages **inertes** sont donc acceptes, gardes et rendus,
+/// et tout le reste est refuse explicitement (voir [`crate::reglages`]).
+pub async fn put_settings(
+    State(st): State<SharedState>,
+    Path(index): Path<String>,
+    uri: Uri,
+    body: Bytes,
+) -> EsResult<Json> {
+    let mut p = Params::parse(&uri);
+    let opts = selection_options(&mut p)?;
+    p.opt("master_timeout");
+    p.opt("timeout");
+    let preserve_existing = p.flag("preserve_existing", false)?;
+    if p.opt("reopen").is_some() {
+        return Err(EsError::unsupported(
+            "ferrite ne supporte pas [reopen] sur [PUT /{index}/_settings] : il rouvre l'index \
+             pour poser un reglage fige, et ferrite n'a pas d'index ferme",
+        ));
+    }
+    p.done()?;
+
+    let body = parse_body(&body)?;
+    let obj = body.as_object().ok_or_else(|| {
+        EsError::parsing("le corps de [PUT /{index}/_settings] doit etre un objet")
+    })?;
+    // Les deux ecritures d'ES : les reglages a la racine, ou sous `settings`.
+    let bloc = match obj.get("settings") {
+        Some(v) if obj.len() == 1 => v.clone(),
+        _ => body.clone(),
+    };
+
+    let vises = match resoudre(&st.catalog, &index, &opts) {
+        Ok(v) => v,
+        Err(e) if opts.ignore_unavailable && e.ty == "index_not_found_exception" => Vec::new(),
+        Err(e) => return Err(e),
+    };
+    let cibles = vises
+        .iter()
+        .map(|i| format!("{}/{}", i.name, i.uuid))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let lus = crate::reglages::lire_pour_modification(&bloc, &cibles)?;
+    // Ce que le corps met a `null` est efface, comme chez ES.
+    let effaces = crate::reglages::cles_effacees(&bloc);
+
+    for idx in &vises {
+        idx.poser_inertes(&lus.inertes, &effaces, preserve_existing)?;
+    }
+    Ok(Json::ok(json!({"acknowledged": true})))
 }
 
 /// `GET /{index}/_mapping`

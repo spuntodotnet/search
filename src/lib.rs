@@ -17,6 +17,11 @@
 //!   index — alias, listes, motifs — et leur resolution en index concrets.
 //! - [`search`] : l'execution d'une recherche et la mise en forme du resultat au
 //!   format ES.
+//! - [`reglages`] : les reglages d'index — ce qui est exploite, ce qui est
+//!   accepte sans effet, ce qui est refuse. Lu depuis trois routes, donc ecrit
+//!   une seule fois.
+//! - [`templates`] : les templates d'index, appliques a un index **qui n'existe
+//!   pas encore**.
 //! - [`api`] : la couche HTTP — routage, parametres, format de reponse et
 //!   d'erreur. Ne contient aucune logique de moteur.
 
@@ -34,10 +39,12 @@ pub mod mapping;
 pub mod msm;
 pub mod nested;
 pub mod regexp;
+pub mod reglages;
 pub mod scroll;
 pub mod search;
 pub mod selection;
 pub mod stemmer;
+pub mod templates;
 pub mod util;
 
 /// Version d'Elasticsearch annoncee par ferrite.

@@ -124,6 +124,13 @@ pub struct FerriteIndex {
     /// par tantivy ni par les autres systemes — on ne s'y appuie donc pas.
     retirees: Mutex<Vec<Arc<Generation>>>,
     docs: RwLock<HashMap<String, DocMeta>>,
+    /// Les reglages acceptes et sans effet (voir [`crate::reglages::INERTES`]).
+    ///
+    /// Ils ne changent rien a ce que l'index repond — c'est leur definition —
+    /// mais ils sont **rendus** par `GET /{index}/_settings`, donc ils vivent
+    /// avec l'index et survivent au redemarrage : un script d'init qui relit ce
+    /// qu'il a pose doit le retrouver.
+    inertes: RwLock<BTreeMap<String, String>>,
     seq_counter: AtomicU64,
     dirty: AtomicBool,
     /// Serialise les rafraichissements entre eux.
@@ -162,6 +169,43 @@ impl FerriteIndex {
 
     pub fn is_dirty(&self) -> bool {
         self.dirty.load(Ordering::Acquire)
+    }
+
+    /// Les reglages acceptes et sans effet poses sur cet index.
+    pub fn inertes(&self) -> BTreeMap<String, String> {
+        self.inertes.read().expect("reglages lock").clone()
+    }
+
+    /// Pose (ou remplace) des reglages inertes et les persiste.
+    ///
+    /// `preserve_existing` est le parametre d'ES : ne poser que ce qui n'est
+    /// pas deja la.
+    pub fn poser_inertes(
+        &self,
+        demandes: &BTreeMap<String, String>,
+        efface: &[String],
+        preserve_existing: bool,
+    ) -> EsResult<()> {
+        {
+            let mut courants = self.inertes.write().expect("reglages lock");
+            for cle in efface {
+                courants.remove(cle);
+            }
+            for (cle, valeur) in demandes {
+                if preserve_existing && courants.contains_key(cle) {
+                    continue;
+                }
+                courants.insert(cle.clone(), valeur.clone());
+            }
+        }
+        let gen = self.current();
+        ecrire_meta(
+            &self.dir,
+            &self.uuid,
+            self.created_at,
+            &gen,
+            &self.inertes(),
+        )
     }
 
     /// Taille sur disque, pour `_cat/indices`.
@@ -503,7 +547,13 @@ impl FerriteIndex {
             mapping,
             Some(&courante),
         )?);
-        ecrire_meta(&self.dir, &self.uuid, self.created_at, &suivante)?;
+        ecrire_meta(
+            &self.dir,
+            &self.uuid,
+            self.created_at,
+            &suivante,
+            &self.inertes.read().expect("reglages lock").clone(),
+        )?;
 
         let ancienne = std::mem::replace(&mut *courante, suivante);
         drop(courante);
@@ -780,6 +830,8 @@ pub struct Catalog {
     /// se retrouver actif au redemarrage suivant.
     persistants: RwLock<BTreeMap<String, Value>>,
     transitoires: RwLock<BTreeMap<String, Value>>,
+    /// Les templates d'index, persistes dans `_templates.json`.
+    templates: RwLock<crate::templates::Registre>,
 }
 
 /// Le fichier des reglages persistants, a la racine des donnees.
@@ -806,6 +858,7 @@ impl Catalog {
             aliases: RwLock::new(crate::alias::Registre::new()),
             persistants: RwLock::new(lire_reglages(&root)),
             transitoires: RwLock::new(BTreeMap::new()),
+            templates: RwLock::new(crate::templates::charger(&root)),
         });
 
         let entries = fs::read_dir(&root)
@@ -897,6 +950,69 @@ impl Catalog {
         let mut t = self.transitoires.write().expect("reglages lock");
         appliquer(&mut t, transitoires);
         Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Templates
+    // -----------------------------------------------------------------------
+
+    pub fn templates(&self) -> crate::templates::Registre {
+        self.templates.read().expect("templates lock").clone()
+    }
+
+    /// Pose un template. `create` refuse d'ecraser, comme le parametre d'ES.
+    pub fn poser_template(
+        &self,
+        nom: &str,
+        tpl: crate::templates::Template,
+        composable: bool,
+        create: bool,
+    ) -> EsResult<()> {
+        let mut registre = self.templates.write().expect("templates lock");
+        let table = if composable {
+            &registre.composables
+        } else {
+            &registre.anciens
+        };
+        if create && table.contains_key(nom) {
+            return Err(EsError::illegal_argument(format!(
+                "index_template [{nom}] already exists"
+            )));
+        }
+        if composable {
+            crate::templates::verifier_priorite(&registre, nom, &tpl)?;
+            registre.composables.insert(nom.to_string(), tpl);
+        } else {
+            registre.anciens.insert(nom.to_string(), tpl);
+        }
+        crate::templates::enregistrer(&self.root, &registre)
+    }
+
+    /// Supprime un template. Rend le 404 d'ES si le nom (ou le motif) ne
+    /// designe rien.
+    pub fn supprimer_template(&self, nom: &str, composable: bool) -> EsResult<()> {
+        let mut registre = self.templates.write().expect("templates lock");
+        let table = if composable {
+            &mut registre.composables
+        } else {
+            &mut registre.anciens
+        };
+        let vises: Vec<String> = table
+            .keys()
+            .filter(|n| crate::search::glob_match(nom, n))
+            .cloned()
+            .collect();
+        if vises.is_empty() {
+            return Err(EsError::new(
+                axum::http::StatusCode::NOT_FOUND,
+                "index_template_missing_exception",
+                format!("index_template [{nom}] missing"),
+            ));
+        }
+        for n in vises {
+            table.remove(&n);
+        }
+        crate::templates::enregistrer(&self.root, &registre)
     }
 
     // -----------------------------------------------------------------------
@@ -1069,8 +1185,29 @@ impl Catalog {
         match self.get(name) {
             Ok(idx) => Ok(idx),
             Err(e) if e.ty == "index_not_found_exception" => {
-                match self.create(name, Mapping::default()) {
-                    Ok(idx) => Ok(idx),
+                // Un template qui correspond decide du mapping, des reglages et
+                // des alias de l'index qui nait : c'est tout l'objet d'un
+                // template, et c'est ici que la creation est **implicite**.
+                let tpl = self.templates().pour(name);
+                let (mapping, inertes) = match &tpl {
+                    Some(t) => crate::reglages::mapping_et_inertes(
+                        t.settings.as_ref(),
+                        t.mappings.as_ref(),
+                    )?,
+                    None => (Mapping::default(), BTreeMap::new()),
+                };
+                match self.create(name, mapping, inertes) {
+                    Ok(idx) => {
+                        if let Some(actions) = alias_du_template(name, tpl.as_ref())? {
+                            // Un alias refuse laisserait un index sans son
+                            // alias : on defait plutot que de servir a moitie.
+                            if let Err(e) = self.modifier_alias(&actions) {
+                                let _ = self.delete(name);
+                                return Err(e);
+                            }
+                        }
+                        Ok(idx)
+                    }
                     // Un autre appel a gagne la course : son index fait l'affaire.
                     Err(_) => self.get(name),
                 }
@@ -1105,7 +1242,12 @@ impl Catalog {
         self.indices.read().expect("catalog lock").get(nom).cloned()
     }
 
-    pub fn create(&self, name: &str, mapping: Mapping) -> EsResult<Arc<FerriteIndex>> {
+    pub fn create(
+        &self,
+        name: &str,
+        mapping: Mapping,
+        inertes: BTreeMap<String, String>,
+    ) -> EsResult<Arc<FerriteIndex>> {
         validate_index_name(name)?;
         if self.est_alias(name) {
             return Err(EsError::new(
@@ -1131,7 +1273,7 @@ impl Catalog {
         let uuid = util::random_uuid();
         let created_at = util::now_millis();
         let gen = Arc::new(construire_generation(&dir, 0, mapping, None)?);
-        ecrire_meta(&dir, &uuid, created_at, &gen)?;
+        ecrire_meta(&dir, &uuid, created_at, &gen, &inertes)?;
 
         let idx = Arc::new(FerriteIndex {
             name: name.to_string(),
@@ -1141,6 +1283,7 @@ impl Catalog {
             current: RwLock::new(gen),
             retirees: Mutex::new(Vec::new()),
             docs: RwLock::new(HashMap::new()),
+            inertes: RwLock::new(inertes),
             seq_counter: AtomicU64::new(0),
             dirty: AtomicBool::new(false),
             refresh_lock: Mutex::new(()),
@@ -1169,6 +1312,14 @@ impl Catalog {
     /// boucle de fond (`index.refresh_interval` d'ES, en plus simple).
     pub fn refresh_dirty(&self) {
         for idx in self.list() {
+            // `index.refresh_interval: -1` demande a ne **pas** rafraichir tout
+            // seul : c'est la seule valeur de ce reglage qui change quelque
+            // chose ici, et elle est appliquee plutot qu'acceptee et ignoree.
+            // Un `POST /{index}/_refresh` explicite passe toujours.
+            if crate::reglages::rafraichissement_desactive(&idx.inertes()) {
+                idx.balayer_generations_retirees();
+                continue;
+            }
             if idx.is_dirty() {
                 let _ = idx.refresh();
             }
@@ -1249,7 +1400,13 @@ fn rejouer(depuis: &Generation, vers: &Generation) -> EsResult<()> {
 /// Ecrit `ferrite.json` de facon atomique (fichier temporaire puis renommage) :
 /// il designe la generation courante, donc il ne doit jamais etre a moitie
 /// ecrit.
-fn ecrire_meta(dir: &Path, uuid: &str, created_at: i64, gen: &Generation) -> EsResult<()> {
+fn ecrire_meta(
+    dir: &Path,
+    uuid: &str,
+    created_at: i64,
+    gen: &Generation,
+    inertes: &BTreeMap<String, String>,
+) -> EsResult<()> {
     let meta = json!({
         "uuid": uuid,
         "created_at": created_at,
@@ -1266,6 +1423,10 @@ fn ecrire_meta(dir: &Path, uuid: &str, created_at: i64, gen: &Generation) -> EsR
         "settings": {"index": {"query": {"parse": {
             "allow_unmapped_fields": gen.mapping.allow_unmapped_fields,
         }}}},
+        // Les reglages acceptes sans effet : ils ne changent rien a ce que
+        // l'index repond, mais `GET /{index}/_settings` les rend, donc les
+        // perdre au redemarrage ferait mentir cette route.
+        "reglages_inertes": inertes,
     });
     let tmp = dir.join(format!("{META_FILE}.tmp"));
     fs::write(&tmp, serde_json::to_vec_pretty(&meta).unwrap())
@@ -1273,6 +1434,29 @@ fn ecrire_meta(dir: &Path, uuid: &str, created_at: i64, gen: &Generation) -> EsR
     fs::rename(&tmp, dir.join(META_FILE))
         .map_err(|e| EsError::internal(format!("bascule du mapping: {e}")))?;
     Ok(())
+}
+
+/// Les alias qu'un template pose sur l'index qu'il vient de faire naitre.
+fn alias_du_template(
+    index: &str,
+    tpl: Option<&crate::templates::Template>,
+) -> EsResult<Option<Vec<ActionAlias>>> {
+    let Some(aliases) = tpl.and_then(|t| t.aliases.as_ref()) else {
+        return Ok(None);
+    };
+    let Some(o) = aliases.as_object() else {
+        return Ok(None);
+    };
+    let mut actions = Vec::new();
+    for (nom, corps) in o {
+        crate::alias::valider_nom(nom)?;
+        actions.push(ActionAlias::Ajouter {
+            index: index.to_string(),
+            alias: nom.clone(),
+            attache: crate::alias::lire_attache(corps, "template.aliases")?,
+        });
+    }
+    Ok((!actions.is_empty()).then_some(actions))
 }
 
 /// `null` efface un reglage, comme chez ES ; toute autre valeur le pose.
@@ -1325,6 +1509,16 @@ fn open_index(dir: &Path, name: &str) -> EsResult<FerriteIndex> {
         mapping.allow_unmapped_fields = v;
     }
 
+    let inertes: BTreeMap<String, String> = meta
+        .get("reglages_inertes")
+        .and_then(Value::as_object)
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+
     let gen_dir = dir.join(format!("{INDEX_DIR_PREFIX}{seq}"));
     let (schema, fields) = mapping::build_schema(&mapping);
     let index = Index::open_in_dir(&gen_dir)?;
@@ -1363,6 +1557,7 @@ fn open_index(dir: &Path, name: &str) -> EsResult<FerriteIndex> {
         current: RwLock::new(Arc::new(gen)),
         retirees: Mutex::new(Vec::new()),
         docs: RwLock::new(docs),
+        inertes: RwLock::new(inertes),
         seq_counter: AtomicU64::new(next_seq),
         dirty: AtomicBool::new(false),
         refresh_lock: Mutex::new(()),
