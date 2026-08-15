@@ -140,9 +140,12 @@ REFUSES_PAR_FERRITE_SEUL = [
 # Les deux petits freres de la meme famille, trouves en meme temps : ils
 # changent la **forme** de la reponse chez ES, et ferrite la rendait inchangee
 # sans rien dire. Ils ont besoin d'un index, donc ils passent apres.
+#
+# `flat_settings` sur les reglages d'un **index** en est sorti depuis : ce
+# n'etait qu'une reecriture de cles, elle est ecrite, et il est donc servi. Il
+# est verifie plus bas sur la propriete qui compte — que les cles soient
+# vraiment aplaties — plutot que compte comme un refus manquant.
 REGLAGES = [
-    ("_settings flat_settings", "GET",
-     f"/{INDEX_REGLAGES}/_settings?flat_settings=true", None),
     ("_settings include_defaults", "GET",
      f"/{INDEX_REGLAGES}/_settings?include_defaults=true", None),
     ("_cluster/settings flat_settings", "GET",
@@ -239,6 +242,25 @@ def main():
             muet = st_ferrite == 200
             silences += muet
             ligne("!" if muet else " ", libelle, reps)
+
+        # `flat_settings`, lui, est servi : les deux serveurs doivent rendre
+        # 200, et **toutes** les cles de ferrite doivent porter un point. Les
+        # valeurs, elles, ne peuvent pas coincider (uuid, date de creation) et
+        # ne sont pas comparees.
+        total += 1
+        aplaties = []
+        for nom, base in dispo:
+            st, corps = http(base, "GET",
+                             f"/{INDEX_REGLAGES}/_settings?flat_settings=true")
+            cles = list(((corps.get(INDEX_REGLAGES) or {}).get("settings") or {}))
+            aplaties.append(st == 200 and bool(cles)
+                            and all("." in c for c in cles))
+        ok = all(aplaties)
+        if not ok:
+            ecarts += 1
+        ligne(" " if ok else "*", "_settings flat_settings (servi)",
+              [(nom, "", "cles aplaties" if a else "cles NON aplaties")
+               for (nom, _), a in zip(dispo, aplaties)])
     finally:
         for nom, base in dispo:
             http(base, "DELETE", f"/{INDEX_REGLAGES}")

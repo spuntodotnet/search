@@ -996,7 +996,7 @@ pas pour être découverts en production.
     où il aura des données.
 
     La frontière est mesurée, pas devinée
-    ([`tests/compat/sonde_vide.py`](../tests/compat/sonde_vide.py), 27/27
+    ([`tests/compat/sonde_vide.py`](../tests/compat/sonde_vide.py), 28/28
     identiques) : sur tout ce qu'ES lui-même refuse sans index — une clause
     inconnue, un type d'agrégation inconnu, une clé de corps inconnue, un ordre
     de tri invalide — les deux serveurs rendent le même statut. Et sur ce qu'ES
