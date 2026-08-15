@@ -162,6 +162,19 @@ pub fn router(state: SharedState) -> Router {
                 .post(indices::put_settings)
                 .get(indices::get_settings),
         )
+        // `/_settings` sans index vaut `_all`, et `{nom}` filtre par nom de
+        // reglage : deux formes qu'un `no handler found` rendait indechiffrables.
+        .route(
+            "/_settings",
+            get(|s, u| indices::get_settings_all(s, None, u))
+                .put(indices::put_settings_all)
+                .post(indices::put_settings_all),
+        )
+        .route(
+            "/_settings/{nom}",
+            get(|s, n, u| indices::get_settings_all(s, Some(n), u)),
+        )
+        .route("/{index}/_settings/{nom}", get(indices::get_settings_nomme))
         // `_field_caps`, `_validate/query` et `_stats` : trois routes sans
         // difficulte de moteur, dont l'absence bloquait des outils entiers.
         .route(

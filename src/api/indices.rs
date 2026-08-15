@@ -212,28 +212,83 @@ fn reglages_de(idx: &crate::engine::FerriteIndex) -> Value {
     )
 }
 
+/// `GET /_settings` — tous les index, comme `_all`.
+pub async fn get_settings_all(
+    State(st): State<SharedState>,
+    nom: Option<Path<String>>,
+    uri: Uri,
+) -> EsResult<Json> {
+    get_settings_impl(st, "_all".to_string(), nom.map(|Path(n)| n), uri)
+}
+
+/// `PUT /_settings` — tous les index, comme `_all`.
+pub async fn put_settings_all(
+    State(st): State<SharedState>,
+    uri: Uri,
+    body: Bytes,
+) -> EsResult<Json> {
+    put_settings(State(st), Path("_all".to_string()), uri, body).await
+}
+
 /// `GET /{index}/_settings`
 pub async fn get_settings(
     State(st): State<SharedState>,
     Path(index): Path<String>,
     uri: Uri,
 ) -> EsResult<Json> {
+    get_settings_impl(st, index, None, uri)
+}
+
+/// `GET /{index}/_settings/{nom}` — filtrer par nom de reglage.
+pub async fn get_settings_nomme(
+    State(st): State<SharedState>,
+    Path((index, nom)): Path<(String, String)>,
+    uri: Uri,
+) -> EsResult<Json> {
+    get_settings_impl(st, index, Some(nom), uri)
+}
+
+fn get_settings_impl(
+    st: SharedState,
+    index: String,
+    noms: Option<String>,
+    uri: Uri,
+) -> EsResult<Json> {
     let mut p = Params::parse(&uri);
     let opts = selection_options(&mut p)?;
     p.opt("master_timeout");
+    // Un seul noeud : « demande au noeud local » designe le meme etat.
     p.opt("local");
     let plat = p.flag("flat_settings", false)?;
     super::refuser_include_defaults(&mut p, "/{index}/_settings")?;
     p.done()?;
 
+    // `{nom}` est une expression : une liste, des jokers, `_all`. Elle porte sur
+    // les cles **aplaties** (`index.number_of_shards`), qu'on filtre avant de
+    // rendre l'arborescence — sinon le meme nom filtrerait autrement selon
+    // `flat_settings`.
+    let motifs: Option<Vec<String>> = noms.map(|n| {
+        n.split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| if s == "_all" { "*".to_string() } else { s.to_string() })
+            .collect()
+    });
+
     let mut out = serde_json::Map::new();
     for idx in resoudre(&st.catalog, &index, &opts)? {
-        let reglages = reglages_de(&idx);
-        let reglages = if plat {
-            crate::reglages::aplatir_reponse(&reglages)
-        } else {
-            reglages
-        };
+        let mut reglages = crate::reglages::aplatir_reponse(&reglages_de(&idx));
+        if let (Some(motifs), Value::Object(o)) = (&motifs, &mut reglages) {
+            o.retain(|cle, _| motifs.iter().any(|m| crate::search::glob_match(m, cle)));
+            // Aucun reglage retenu : ES laisse tomber l'index, il ne rend pas
+            // une entree vide.
+            if o.is_empty() {
+                continue;
+            }
+        }
+        if !plat {
+            reglages = crate::reglages::nicher_reponse(&reglages);
+        }
         out.insert(idx.name.clone(), json!({"settings": reglages}));
     }
     Ok(Json::ok(Value::Object(out)))

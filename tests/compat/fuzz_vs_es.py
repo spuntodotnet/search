@@ -113,6 +113,7 @@ import genere_compat  # noqa: E402
 
 RACINE = genere_compat.RACINE
 INDEX = "fuzz_vs_es"
+TEMPLATE = "fuzz_vs_es_tpl"
 
 # Ce qui est retire des reponses avant comparaison. Chaque entree porte sa
 # raison : une neutralisation tacite est une divergence qu'on ne verra jamais.
@@ -265,6 +266,13 @@ BRIQUES = {
     "route.mapping": "index.mapping",
     "route.supprimer": "index.suppression",
     "route.refresh": "ingestion.refresh",
+    # Les routes de description, posees sur le mapping tire au sort : c'est la
+    # que `_field_caps` a le plus a dire, un mapping aleatoire melangeant
+    # objets, `nested`, multi-fields et champs devines.
+    "route.field_caps": "recherche.field_caps",
+    "route.validate": "recherche.validate_query",
+    "route.stats": "index.stats",
+    "route.template": "index.templates",
 }
 
 # Les analyzers integres, cites par leur propre capacite : un `analyzer` tire au
@@ -1632,15 +1640,31 @@ class Cas:
 
         # 1. creation de l'index — un mapping refuse d'un cote seulement est
         #    deja une divergence, et rend la suite du cas inutilisable.
-        gen.brique("route.creer")
+        #
+        #    Une fois sur quatre, le mapping n'est pas pose sur l'index mais
+        #    dans un **template**, et l'index nait de l'ecriture de l'etape
+        #    suivante. Le mapping compare a l'etape 3 mesure alors ce qu'un
+        #    template applique vraiment, sur un mapping que personne n'a choisi.
         corps_index = {"mappings": {"properties": props},
                        "settings": {"number_of_shards": 1, "number_of_replicas": 0}}
+        par_template = (gen.p.jouable("index.templates")
+                        and rng.random() < 0.25)
         reps = []
-        for base in self.serveurs:
-            http(base, "DELETE", f"/{INDEX}")
-            reps.append(http(base, "PUT", f"/{INDEX}", corps_index))
+        if par_template:
+            gen.brique("route.template")
+            corps_tpl = {"index_patterns": [INDEX], "priority": 500,
+                         "template": corps_index}
+            for base in self.serveurs:
+                http(base, "DELETE", f"/{INDEX}")
+                reps.append(http(base, "PUT", f"/_index_template/{TEMPLATE}",
+                                 corps_tpl))
+        else:
+            gen.brique("route.creer")
+            for base in self.serveurs:
+                http(base, "DELETE", f"/{INDEX}")
+                reps.append(http(base, "PUT", f"/{INDEX}", corps_index))
         if reps[0][0] != reps[1][0]:
-            self.divergence("ecart", "creation",
+            self.divergence("ecart", "template" if par_template else "creation",
                             [f"{self.noms[0]} {reps[0][0]} / {self.noms[1]} "
                              f"{reps[1][0]} — {json.dumps(reps[0][1])[:200]} | "
                              f"{json.dumps(reps[1][1])[:200]}"],
@@ -1691,6 +1715,12 @@ class Cas:
                             {"mappings": {"properties": props},
                              "documents": [d for _, d in docs[:3]]})
 
+        # 3 bis. la **description** du meme mapping. `_field_caps` n'invente
+        #    rien : tout est deja dans le mapping. C'est justement pour ca
+        #    qu'un mapping tire au sort la met a l'epreuve — objets imbriques,
+        #    `nested`, multi-fields, champs devines par l'indexation.
+        self.decrire(props)
+
         # 4. le compte, avant toute requete : si les corpus different, tout le
         #    reste ment.
         gen.brique("route.count")
@@ -1711,6 +1741,7 @@ class Cas:
             reps = [http(b, "POST", f"/{INDEX}/_search", corps)
                     for b in self.serveurs]
             self._dit("requete", corps)
+            self.valider(corps, reps[0][0])
             verdict, ecarts = compare_recherche(*reps[0], *reps[1],
                                                 positions_du_score(corps))
             if verdict != "ok":
@@ -1726,6 +1757,110 @@ class Cas:
         if rng.random() < 0.35:
             self.scroll(champs, docs)
         return self.nettoyer()
+
+    def decrire(self, props):
+        """`_field_caps` et `_stats` sur l'index qu'on vient de remplir.
+
+        Deux predicats ecrits, et ils sont le contenu de cette comparaison :
+
+        * les champs de **metadonnees** (`_id`, `_index`, `_seq_no`…) sortent
+          de la comparaison. ES les rend sur `fields=*`, ferrite non, et c'est
+          declare : il ne sait pas les interroger, les annoncer `searchable`
+          serait un resultat faux. Tout le reste — le type, `searchable`,
+          `aggregatable`, la liste `indices` — se compare a l'octet pres ;
+        * de `_stats`, seul `docs.count` se compare. `store.size_in_bytes`
+          mesure deux moteurs de stockage differents : le comparer ne dirait
+          rien de la compatibilite."""
+        gen = self.gen
+        if gen.p.jouable("recherche.field_caps"):
+            gen.brique("route.field_caps")
+            vus = []
+            for base in self.serveurs:
+                _, r = http(base, "GET", f"/{INDEX}/_field_caps?fields=*")
+                self.requetes += 1
+                champs = r.get("fields") or {}
+                vus.append({nom: cap for nom, cap in champs.items()
+                            if not nom.startswith("_")})
+            ecarts = []
+            arbre_egal(vus[0], vus[1], "field_caps", ecarts)
+            if ecarts:
+                self.divergence("ecart", "field_caps", ecarts,
+                                {"mappings": {"properties": props}})
+        if gen.p.jouable("index.stats"):
+            gen.brique("route.stats")
+            comptes = []
+            for base in self.serveurs:
+                _, r = http(base, "GET", f"/{INDEX}/_stats/docs")
+                self.requetes += 1
+                comptes.append(
+                    (((r.get("_all") or {}).get("primaries") or {})
+                     .get("docs") or {}).get("count"))
+            if comptes[0] != comptes[1] and not self.nested_gonfle(props, comptes):
+                self.divergence("ecart", "stats",
+                                [f"_all.primaries.docs.count : "
+                                 f"{self.noms[0]}={comptes[0]} / "
+                                 f"{self.noms[1]}={comptes[1]}"])
+
+    def nested_gonfle(self, props, comptes):
+        """L'ecart de `docs.count` s'explique-t-il par les sous-documents
+        `nested` d'ES ?
+
+        Lucene indexe **chaque element** d'un tableau `nested` comme un document
+        a part : `docs.count` d'ES les compte, et depasse donc le nombre de
+        documents qu'on a envoyes. ferrite n'a pas de jointure de bloc (voir
+        docs/nested-join.md) : il n'a pas ces sous-documents, et compte ce qu'il
+        a. Aucun des deux ne ment.
+
+        Le predicat n'est pas « il y a du nested, on tolere ». Il se **mesure** :
+        le compte de ferrite doit egaler ce que la recherche rend des deux
+        cotes, et celui d'ES doit lui etre strictement superieur. Un ecart d'une
+        autre nature ressort donc quand meme."""
+        if not any(t == "nested" for t in types_du_mapping(props).values()):
+            return False
+        cherches = []
+        for base in self.serveurs:
+            _, r = http(base, "GET", f"/{INDEX}/_count")
+            self.requetes += 1
+            cherches.append(r.get("count"))
+        return (cherches[0] == cherches[1] == comptes[0]
+                and comptes[1] > comptes[0])
+
+    def valider(self, corps, statut_recherche):
+        """La meme requete, posee a `_validate/query` — sans l'executer.
+
+        Deux predicats ecrits :
+
+        * seul `valid` se compare. L'`explanation` d'ES est la chaine Lucene de
+          la requete reecrite, celle de ferrite le rendu de la requete tantivy :
+          les deux moteurs ne construisent pas les memes objets, ce qui doit
+          coincider est le **verdict** ;
+        * un `valid: false` la ou ES dit `true` n'est un ecart **de cette
+          route** que si ferrite accepte pourtant la meme requete en recherche.
+          Sinon, c'est un refus que la comparaison de recherche vient deja de
+          mesurer, vu depuis une autre route — le compter deux fois gonflerait
+          le nombre de divergences sans rien apprendre. Ce que ce predicat
+          verifie vraiment, c'est que `_validate/query` dit la **meme chose** que
+          `_search` : une route qui declarerait valide ce que la recherche
+          refuse serait le vrai defaut."""
+        if "query" not in corps or not self.gen.p.jouable("recherche.validate_query"):
+            return
+        self.gen.brique("route.validate")
+        verdicts = []
+        for base in self.serveurs:
+            st, r = http(base, "POST", f"/{INDEX}/_validate/query",
+                         {"query": corps["query"]})
+            self.requetes += 1
+            verdicts.append(r.get("valid") if st == 200 else f"HTTP {st}")
+        if verdicts[0] == verdicts[1]:
+            return
+        # `_validate` et `_search` s'accordent : l'ecart est celui, deja
+        # mesure, de la recherche elle-meme.
+        if verdicts[0] is False and statut_recherche != 200:
+            return
+        self.divergence("ecart", "validate_query",
+                        [f"valid : {self.noms[0]}={verdicts[0]} / "
+                         f"{self.noms[1]}={verdicts[1]}"],
+                        {"query": corps["query"]})
 
     def exists_ampute(self, corps):
         """Une clause `exists` de cette requete rend-elle moins de documents ?
@@ -1810,6 +1945,10 @@ class Cas:
         self.gen.brique("route.supprimer")
         for base in self.serveurs:
             http(base, "DELETE", f"/{INDEX}")
+            # Un template survit a la suppression des index : le laisser
+            # derriere soi s'appliquerait aux cas suivants. C'est exactement la
+            # fuite d'etat qui a deja coute cher a ce depot (voir CLAUDE.md).
+            http(base, "DELETE", f"/_index_template/{TEMPLATE}")
         return self.divergences
 
 

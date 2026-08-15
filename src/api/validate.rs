@@ -93,12 +93,18 @@ pub async fn validate(
     // Meme geste que la recherche sans index : la requete est construite contre
     // un schema vide, ou seule sa **forme** peut echouer. Une clause inconnue
     // sort ici, et c'est exactement ce qu'ES range en erreur de coordinateur.
+    //
+    // Seules les erreurs de **forme** comptent : contre un schema vide, un
+    // `nested` sur un chemin qui n'y existe pas echoue aussi, et le prendre
+    // pour une requete invalide rendait `valid: false` sur une requete qu'ES
+    // declare valide. C'est le fuzzer differentiel qui l'a trouve, sur un
+    // `nested` tire au sort.
     if let Some(q) = &requete {
         let vide = crate::engine::sans_index();
         let searcher = vide.searcher();
         let ctx = QueryCtx::new(&vide.fields, &vide.index, &searcher).avec_maintenant(maintenant);
         if let Err(e) = build_query(q, &ctx) {
-            if e.champ_inconnu.is_none() {
+            if erreur_de_forme(&e) {
                 return Ok(invalide(explain, &e));
             }
         }
@@ -196,6 +202,23 @@ fn nommer_les_champs(brut: &str, schema: &tantivy::schema::Schema) -> String {
     }
     out.push_str(reste);
     out
+}
+
+/// Cette erreur porte-t-elle sur la **forme** de la requete, ou sur le mapping
+/// contre lequel on la construit ?
+///
+/// C'est la frontiere qu'ES trace entre son noeud coordinateur et ses shards, et
+/// elle decide de la forme de la reponse. Une clause inconnue ou un parametre
+/// refuse ne dependent d'aucun mapping (`parsing_exception`,
+/// `not_implemented_in_ferrite_exception`) ; tout le reste — un chemin `nested`
+/// absent, une valeur qui n'a pas le type du champ — n'a de sens que sur un
+/// index donne, et se juge index par index.
+fn erreur_de_forme(e: &EsError) -> bool {
+    e.champ_inconnu.is_none()
+        && matches!(
+            e.ty.as_str(),
+            "parsing_exception" | crate::error::UNSUPPORTED
+        )
 }
 
 /// Le corps de `_validate/query` : `{"query": …}` et rien d'autre.

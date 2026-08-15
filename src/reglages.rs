@@ -201,6 +201,18 @@ fn aplatir_json(
     }
 }
 
+/// L'inverse d'[`aplatir_reponse`] : `{"index.a.b": 1}` redevient
+/// `{"index": {"a": {"b": 1}}}`.
+pub fn nicher_reponse(v: &Value) -> Value {
+    let mut out = json!({});
+    if let Value::Object(o) = v {
+        for (cle, valeur) in o {
+            nicher(&mut out, cle, valeur.clone());
+        }
+    }
+    out
+}
+
 fn nicher(cible: &mut Value, chemin: &str, valeur: Value) {
     let mut courant = cible;
     let parts: Vec<&str> = chemin.split('.').collect();
