@@ -142,6 +142,27 @@ def cas_nested():
             "must": [{"term": {"lignes.a": "oui"}}],
             "should": [{"term": {"lignes.c": "oui"}}],
             "must_not": [{"term": {"lignes.b": "oui"}}]}}}}))
+    # Le voisinage du meme piege, un cran plus loin : ce n'est pas seulement la
+    # **valeur par defaut** de `minimum_should_match` qu'un `must_not` ne rend
+    # pas facultative. Un minimum **explicite** qui retombe a zero — `"50%"`
+    # d'une seule clause, la troncature vers zero d'ES le rend nul — ne la rend
+    # pas facultative non plus : Lucene exige au moins une clause positive
+    # quand aucune clause obligatoire n'est la. ferrite jetait alors le
+    # `should` entier et rendait `ny`, qu'ES ne rend pas.
+    for spec in ["50%", 0, "-100%", "-1"]:
+        out.append((f"nested, should + must_not, msm={spec!r} (retombe a 0)",
+                    {"nested": {"path": "lignes", "query": {"bool": {
+                        "should": [{"term": {"lignes.a": "oui"}}],
+                        "must_not": [{"term": {"lignes.b": "oui"}}],
+                        "minimum_should_match": spec}}}}))
+    # Avec une clause obligatoire, en revanche, zero veut bien dire zero.
+    for spec in ["50%", 0]:
+        out.append((f"nested, must + should + must_not, msm={spec!r}",
+                    {"nested": {"path": "lignes", "query": {"bool": {
+                        "must": [{"term": {"lignes.a": "oui"}}],
+                        "should": [{"term": {"lignes.c": "oui"}}],
+                        "must_not": [{"term": {"lignes.b": "oui"}}],
+                        "minimum_should_match": spec}}}}))
     return out
 
 

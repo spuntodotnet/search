@@ -407,8 +407,16 @@ Absent, le paramètre vaut 1 quand le `bool` n'a que des `should`, et 0 dès
 qu'il a une clause obligatoire (`must` ou `filter`) — un `must_not` **ne rend
 pas** le `should` facultatif.
 
+Et ce n'est pas seulement sa valeur par défaut : un minimum **explicite** qui
+retombe à zéro (`"50%"` d'une seule clause, `0`, `-100%`) ne le rend pas
+facultatif non plus. Lucene exige au moins une clause positive quand il n'y a
+aucune clause obligatoire, quel que soit le minimum demandé. Sous un `nested`,
+ferrite jetait alors le `should` entier et rendait un document dont un élément
+satisfaisait seulement le `must_not` — trouvé par une plage de contrôle du
+fuzzer, mesuré dans `sonde_msm.py`.
+
 Les bords, tous mesurés contre un vrai ES 8.15
-([`tests/compat/sonde_msm.py`](../tests/compat/sonde_msm.py), **47/47
+([`tests/compat/sonde_msm.py`](../tests/compat/sonde_msm.py), **53/53
 identiques**), parce que ce sont exactement ceux que la documentation ne dit
 pas :
 
@@ -459,7 +467,7 @@ empilement.
 
 ## Agrégations
 
-Comparées champ par champ à un vrai ES 8.15 sur 45 requêtes
+Comparées champ par champ à un vrai ES 8.15 sur 53 requêtes
 (`tests/compat/diff_aggs.py`), clés de réponse comprises.
 
 <!-- table:aggs -->
@@ -742,6 +750,20 @@ pas pour être découverts en production.
    en silence — un piège classique. ferrite les indexe sur le document parent, il
    pourrait donc y répondre, et rendrait alors des documents là où ES n'en rend
    aucun. Il refuse explicitement, en nommant la clause `nested` attendue.
+
+    La règle vaut aussi pour ce qui **lit** ces valeurs sans les filtrer, et
+    c'est là qu'elle manquait. Une **agrégation** sur `lignes.prix` posée depuis
+    la racine ne voit chez ES aucun document : il rend `null`, `0.0` ou
+    `buckets: []` selon l'agrégation. ferrite, lui, agrégeait à plat — mesuré :
+    une moyenne de `7.0` là où ES rend `null`, une somme de `21.0` là où ES rend
+    `0.0`. Un **tri** sur le même chemin est carrément refusé par ES
+    (`it is mandatory to set the [nested] context on the nested sort field`) là
+    où ferrite rendait un ordre en 200. Les deux sont maintenant refusés, pour
+    la raison qui vaut dans tout ce dépôt : un chiffre plausible et faux est
+    pire qu'une erreur. Rendre le résultat vide d'ES serait une autre option,
+    mais elle demanderait de savoir agréger *dans* le contexte `nested` pour ne
+    pas se contenter d'annoncer zéro — l'agrégation `nested` n'est pas encore
+    supportée, et ce zéro-là est justement le piège qu'ES tend à ses clients.
 
 11. **Un champ inconnu dans une agrégation reste une erreur.** ES rend un
     résultat vide (`buckets: []`, `value: null`, `sum: 0.0` selon l'agrégation) ;

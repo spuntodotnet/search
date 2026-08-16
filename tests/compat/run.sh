@@ -40,6 +40,20 @@ echo "== client : $($PYTHON -c 'import elasticsearch; print("elasticsearch-py", 
 
 # --- serveur ----------------------------------------------------------------
 if [ -z "$URL" ]; then
+  # Un serveur qui repond deja sur ce port n'est pas le notre : le `bind`
+  # echouerait sans bruit et le harnais exercerait **cet** autre serveur, en
+  # y creant index, templates et reglages de cluster. Ca a deja coute une
+  # campagne de fuzzing entiere, dont les 400 premiers cas sont partis en
+  # divergences de mapping qui n'existaient pas. Un port occupe est donc une
+  # erreur, pas un raccourci — `FERRITE_URL` reste la facon de viser un serveur
+  # deja lance, et elle, elle est explicite.
+  if curl -sf "http://127.0.0.1:$PORT/" >/dev/null 2>&1; then
+    echo "!! un serveur repond deja sur :$PORT — le harnais l'exercerait sans"
+    echo "!! l'avoir lance, et y laisserait ses index. Relance avec"
+    echo "!!   FERRITE_PORT=<autre port> $0"
+    echo "!! ou, si c'est voulu, FERRITE_URL=http://127.0.0.1:$PORT $0"
+    exit 2
+  fi
   echo "== compilation (release)"
   cargo build --release
   DATA="$(mktemp -d)"

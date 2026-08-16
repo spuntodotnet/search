@@ -86,6 +86,61 @@ def aggregations():
                                  "aggs": {"b": {"terms": {"field": "marque", "size": 2},
                                                 "aggs": {"c": {"avg": {
                                                     "field": "prix"}}}}}}}),
+        # --- ce qu'un bucket **vide** doit porter
+        #
+        # Un `histogram` comble ses trous des deux cotes, mais tantivy ne fait
+        # pas tourner les sous-agregations dans les buckets qu'il fabrique : un
+        # `range` y rendait `buckets: []` la ou ES rend ses intervalles a
+        # `doc_count: 0`. Trouve par le fuzzer, corrige dans `src/aggs.rs`,
+        # verrouille ici — c'est un resultat faux rendu en 200, et un graphe qui
+        # empile deux niveaux y perdait ses categories sur les periodes creuses.
+        #
+        # La requete restreint le corpus a une categorie : c'est ce qui creuse
+        # les trous, donc ce qui fait exister les buckets vides.
+        ("histogram + range, buckets vides", {"h": {
+            "histogram": {"field": "prix", "interval": 20},
+            "aggs": {"r": {"range": {"field": "prix", "ranges": [
+                {"to": 100}, {"from": 100, "to": 500}, {"from": 500}]}}}}},
+         {"term": {"categorie": "audio"}}),
+        ("histogram + range keyed, buckets vides", {"h": {
+            "histogram": {"field": "prix", "interval": 20},
+            "aggs": {"r": {"range": {"field": "prix", "keyed": True, "ranges": [
+                {"key": "petit", "to": 100}, {"key": "grand", "from": 100}]}}}}},
+         {"term": {"categorie": "audio"}}),
+        ("histogram keyed + range, buckets vides", {"h": {
+            "histogram": {"field": "prix", "interval": 20, "keyed": True},
+            "aggs": {"r": {"range": {"field": "prix", "ranges": [
+                {"to": 100}, {"from": 100}]}}}}},
+         {"term": {"categorie": "audio"}}),
+        ("histogram + range + terms, buckets vides", {"h": {
+            "histogram": {"field": "prix", "interval": 10},
+            "aggs": {"r": {"range": {"field": "prix", "ranges": [
+                {"to": 100}, {"from": 100}]},
+                "aggs": {"g": {"terms": {"field": "marque", "size": 3}},
+                         "s": {"stats": {"field": "stock"}}}}}}},
+         {"term": {"categorie": "audio"}}),
+        ("histogram extended_bounds + range", {"h": {
+            "histogram": {"field": "prix", "interval": 200,
+                          "extended_bounds": {"min": -400, "max": 1800}},
+            "aggs": {"r": {"range": {"field": "prix", "ranges": [
+                {"to": 100}, {"from": 100}]}}}}}),
+        ("date_histogram + range, buckets vides", {"d": {
+            "date_histogram": {"field": "cree_le", "fixed_interval": "5d"},
+            "aggs": {"r": {"range": {"field": "prix", "ranges": [
+                {"to": 100}, {"from": 100}]}}}}},
+         {"term": {"categorie": "audio"}}),
+        ("histogram + range sur une date, buckets vides", {"h": {
+            "histogram": {"field": "prix", "interval": 20},
+            "aggs": {"r": {"range": {"field": "cree_le", "ranges": [
+                {"to": "2026-01-01"}, {"from": "2026-01-01"}]}}}}},
+         {"term": {"categorie": "audio"}}),
+        ("recherche sans resultat, histogram + range", {"h": {
+            "histogram": {"field": "prix", "interval": 200,
+                          "extended_bounds": {"min": 0, "max": 600}},
+            "aggs": {"r": {"range": {"field": "prix", "ranges": [
+                {"to": 100}, {"from": 100}]},
+                "aggs": {"g": {"terms": {"field": "marque"}}}}}}},
+         {"term": {"categorie": "categorie_inexistante"}}),
         # --- filter : celle que ferrite execute lui-meme, en croisant la
         # requete de la recherche avec celle du filtre
         ("filter simple", {"f": {"filter": {"term": {"categorie": "audio"}}}}),

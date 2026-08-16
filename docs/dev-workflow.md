@@ -62,6 +62,13 @@ Le harnais de compat installe le client officiel dans un venv (`.venv-compat/`)
 s'il n'est pas déjà disponible. Il accepte `FERRITE_PORT` (port d'écoute) et
 `FERRITE_URL` (viser un serveur déjà lancé, sans rien compiler).
 
+Il **refuse** de démarrer si un serveur répond déjà sur son port : son `bind`
+échouerait sans bruit et il exercerait cet autre serveur, en y laissant index,
+templates et réglages de cluster. C'est ce qui a fait dérailler une campagne de
+fuzzing entière (400 cas partis en divergences de mapping qui n'existaient pas)
+avant que le garde-fou n'existe. Viser un serveur déjà lancé se demande
+explicitement, avec `FERRITE_URL`.
+
 Ce fichier doit toujours décrire les commandes réelles du repo : une PR qui
 change ces commandes met ce tableau à jour dans la même PR.
 
@@ -87,11 +94,11 @@ Deux comparateurs, qui ne cherchent pas la même chose :
 |---|---|
 | `tests/compat/diff_against_es.py` | la **forme** des réponses — champ par champ, sur 46 appels, après neutralisation des valeurs qui ne peuvent pas coïncider (durées, uuid, scores, `_scroll_id`). Le `scroll` y est comparé sur son **déroulé complet** : mêmes pages, mêmes documents, même fin |
 | `tests/compat/diff_relevance.py` | la **pertinence** — même corpus de 600 documents des deux côtés, ~205 requêtes générées, et pour chacune : même total, mêmes documents, **même ordre** |
-| `tests/compat/diff_aggs.py` | les **agrégations** — 45 requêtes, comparaison du JSON champ par champ, clés comprises (dont 11 sur l'agrégation `filter`, que ferrite exécute lui-même) |
+| `tests/compat/diff_aggs.py` | les **agrégations** — 53 requêtes, comparaison du JSON champ par champ, clés comprises (dont 11 sur l'agrégation `filter`, que ferrite exécute lui-même, et 8 sur ce qu'un bucket **vide** doit porter) |
 | `tests/compat/diff_analyzers.py` | les **analyzers** — chaque analyzer intégré confronté à son homonyme d'ES sur 28 textes, token par token |
 | `tests/compat/diff_datemath.py` | les **bornes de date** — 276 bornes posées aux deux serveurs sur un corpus d'instants placés sur les bords (minuit, dernière milliseconde d'un jour, d'un mois, d'une année) : une milliseconde d'arrondi de travers change la réponse. Le même fichier lancé contre le ferrite d'avant rend 45/276 — c'est ce qui prouve qu'il mesure quelque chose |
 | `tests/compat/diff_motifs.py` | les **motifs** — 101 motifs posés aux deux serveurs sur un corpus construit pour eux : la syntaxe de `regexp` est celle de Lucene, pas celle du moteur qui l'exécute, et les deux divergent là où personne ne regarde (`\d`, `^`, `@`, `case_insensitive`) |
-| `tests/compat/sonde_msm.py` | les notations de **`minimum_should_match`** — 47 requêtes dont le compte de résultats dit quel minimum a été appliqué, sur un `bool` et sous un `nested`. C'est elle qui a montré que l'arrondi d'ES est une troncature vers zéro, qu'un minimum supérieur au nombre de clauses n'est pas plafonné, et que le séparateur de `2<-25% 9<-3` est l'espace |
+| `tests/compat/sonde_msm.py` | les notations de **`minimum_should_match`** — 53 requêtes dont le compte de résultats dit quel minimum a été appliqué, sur un `bool` et sous un `nested`. C'est elle qui a montré que l'arrondi d'ES est une troncature vers zéro, qu'un minimum supérieur au nombre de clauses n'est pas plafonné, et que le séparateur de `2<-25% 9<-3` est l'espace |
 | `tests/compat/diff_multi_index.py` | les **expressions d'index** et le multi-index — `es.search(index=["a","b"])`, `logs-*`, `_all`, exclusions, alias, `is_write_index`, purge en `DELETE /logs-2026.07.*` : total, ordre des `(_index, _id)`, `_shards`, agrégations fusionnées, statut et type d'erreur |
 | `tests/compat/probe_es7.py` | ce qu'un **client 7.x** obtient — le même fichier se lance contre ferrite, contre un `elasticsearch:7.10.2` et contre un `elasticsearch:8.15.0`, ce qui sépare « ferrite est incomplet » de « la 8 a supprimé ça » |
 | `tests/compat/bench_vs_es.py` | le **prix** de ces résultats — indexation, latence médiane et p95, débit à 8 requêtes en vol, mesurés sur les deux serveurs avec la même batterie |

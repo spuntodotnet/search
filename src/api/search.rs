@@ -916,6 +916,21 @@ fn sort_spec(
         "_score" => SortKey::Score,
         "_doc" => SortKey::Doc,
         name => {
+            // Un sous-champ de `nested` trie a plat trierait sur autre chose
+            // que ce qu'une clause `nested` filtre : ES refuse, et ferrite
+            // rendait un ordre en 200. La phrase est **celle d'ES**, relevee
+            // mot pour mot contre un 8.15 : un client qui la journalise doit
+            // lire la meme des deux cotes.
+            if champs.racine_nested(name).is_some() {
+                return Err(EsError::new(
+                    axum::http::StatusCode::BAD_REQUEST,
+                    "query_shard_exception",
+                    format!(
+                        "it is mandatory to set the [nested] context on the nested sort field: \
+                         [{name}]."
+                    ),
+                ));
+            }
             let mapped = champs.get(name).ok_or_else(|| {
                 // Le type d'ES, et le marqueur qui permet a une recherche
                 // multi-index de n'echouer que sur **cet** index.

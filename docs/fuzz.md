@@ -106,43 +106,78 @@ avec sa raison, et `--tout` les imprime.
 ## La mesure du jour
 
 ```
-graines 1–400          400 cas, 16 718 requêtes, 0 divergence réelle
-graines 5000–5299      300 cas, 12 473 requêtes, 1 divergence réelle
-graines 900000+        250 cas, 10 418 requêtes, 1 divergence réelle
-graines 4242000+       250 cas, 10 405 requêtes, 0 divergence réelle
-graines 31337000+      250 cas, 10 410 requêtes, 0 divergence réelle
+graines 1–400          400 cas, 16 714 requêtes, 0 divergence réelle
+graines 5000–5299      300 cas, 12 475 requêtes, 0 divergence réelle
+graines 900000+        250 cas, 10 441 requêtes, 1 divergence réelle  (ouverte, décrite plus bas)
+graines 4242000+       250 cas, 10 417 requêtes, 0 divergence réelle
+graines 31337000+      250 cas, 10 395 requêtes, 0 divergence réelle
+graines 7770000+       250 cas, 10 413 requêtes, 0 divergence réelle
+graines 6060000+       250 cas, 10 400 requêtes, 0 divergence réelle
                      ------------------------------------------------
-                     1 450 cas, 60 424 requêtes, 2 divergences réelles
+                     1 950 cas, 81 255 requêtes, 1 divergence réelle
 
-étalonnage ES vs ES     60 cas,  2 416 requêtes, 0 divergence
+étalonnage ES vs ES     60 cas,  2 418 requêtes, 0 divergence
 ```
 
-Une seule de ces plages (1–400) a servi à corriger. Les quatre autres sont des
-plages **de contrôle** : leur zéro est le seul qui mesure ferrite plutôt que mon
-itération.
+Deux de ces plages ont servi à corriger : 1–400, contre laquelle l'outil a été
+réglé, et 4242000+, qui a sorti le `minimum_should_match` décrit plus bas. Les
+cinq autres sont des plages **de contrôle**, et **6060000+ n'a jamais été
+regardée avant ce passage** : c'est son zéro qui mesure ferrite plutôt que mon
+itération. Le rapport machine ([`fuzz.json`](fuzz.json)) est le sien.
 
-Le nombre de requêtes a triplé sans que le nombre de cas bouge : trois briques
-de plus posent maintenant `_field_caps` et `_stats` sur chaque mapping tiré au
-sort, et `_validate/query` sur chaque requête générée.
+Les graines ont toutes changé de sens depuis la mesure précédente : le
+générateur pose maintenant, en plus, un tri et une agrégation sur un sous-champ
+de `nested`. Chaque cas de chaque plage est donc un tirage différent — c'est
+exactement pour ça que ce qui compte devient un cas écrit dans
+[`sonde_fuzz.py`](../tests/compat/sonde_fuzz.py) et pas une graine.
 
-### Les deux divergences réelles du jour
+### Les deux divergences du passage précédent : corrigées
 
-Elles sont **ouvertes**, pas corrigées, et elles ne portent ni l'une ni l'autre
-sur les routes que la même PR a ajoutées. Elles sont apparues parce que les
-briques nouvelles ont décalé les graines : chaque cas de chaque plage est un
-tirage différent de celui d'hier, et c'est exactement l'effet que ce fichier
-décrit plus bas (« une plage de graines sur laquelle on a itéré ne mesure plus
-rien »). Les publier plutôt que de les taire est le seul usage honnête de cet
-outil.
+Elles avaient été publiées ouvertes plutôt que tues. Les voici, avec ce qu'elles
+sont devenues.
 
-| Ce qui diffère | Ce qu'il faudrait |
+| Ce qui différait | Ce que c'est devenu |
 |---|---|
-| **Un bucket vide de `histogram` n'a pas ses sous-agrégations.** tantivy comble les trous entre deux extrêmes, mais ses buckets de remplissage n'exécutent aucune sous-agrégation : un `range` sous un `histogram` y rend `buckets: []` là où ES rend ses trois intervalles à `doc_count: 0` | rendre, dans un bucket vide, la forme « zéro document » de chaque sous-agrégation déclarée. C'est déjà la famille nommée dans `src/aggs.rs` à propos de `min_doc_count: 0` — « des buckets vides privés de leurs sous-agrégations » |
-| **Une agrégation sur un sous-champ de `nested` depuis la racine.** ES ne voit aucun document au niveau racine et rend `0.0` ; ferrite agrège les valeurs à plat et rend un autre nombre | la refuser, comme la **requête** équivalente l'est déjà (divergence assumée n° 10 de `compat.md`) : un refus se voit, un nombre faux non |
+| **Un bucket vide de `histogram` n'avait pas ses sous-agrégations.** tantivy comble les trous entre deux extrêmes, mais ses buckets de remplissage n'exécutent aucune sous-agrégation : un `range` sous un `histogram` y rendait `buckets: []` là où ES rend ses trois intervalles à `doc_count: 0` | **corrigé** dans `src/aggs.rs`. Un bucket à `doc_count: 0` ne contient rien : ses sous-agrégations sont donc, mot pour mot, celles d'une recherche qui ne ramène rien. Cette forme-là n'est pas écrite à la main, elle est **mesurée** — les sous-agrégations de chaque `histogram` sont rejouées sur une requête vide, et le bucket prend cette réponse. `diff_aggs.py` passe de 45 à 53 cas, les huit nouveaux étant précisément ceux-là |
+| **Une agrégation sur un sous-champ de `nested` depuis la racine.** ES n'y voit aucun document et rend son résultat vide (`null`, `0.0`, `buckets: []`) ; ferrite agrégeait les valeurs à plat et rendait un autre nombre — mesuré : `avg` de `7.0` là où ES rend `null` | **refusée**, comme la requête équivalente l'était déjà (divergence assumée n° 10 de `compat.md`) : un refus se voit, un nombre faux non. En mesurant le voisinage, le **tri** sur le même chemin s'est révélé porter le même défaut — et là c'est ES qui refuse (`it is mandatory to set the [nested] context on the nested sort field`) pendant que ferrite rendait un ordre en 200 |
 
-Aucune n'est un échec bruyant : les deux rendent 200 avec un résultat faux, ce
-qui est précisément la famille que ce projet cherche à ne pas laisser passer.
-Elles font l'objet de la carte suivante.
+Les deux rendaient 200 avec un résultat faux, ce qui est précisément la famille
+que ce projet cherche à ne pas laisser passer. Elles sont figées dans
+[`sonde_fuzz.py`](../tests/compat/sonde_fuzz.py), qui passe de 35 à 42 cas et de
+6 à 10 refus, et le générateur pose maintenant les deux formes exprès : quand le mapping
+tiré au sort contient un `nested`, une agrégation sur un de ses sous-champs sort
+une fois sur douze et un tri sur un de ses sous-champs une fois sur douze aussi
+(mesuré sur 400 mappings : 66 agrégations et 45 tris). Une correction que plus
+personne n'exerce se défait en silence.
+
+Une note de méthode, parce qu'elle a coûté une demi-heure : la deuxième
+divergence était attribuée ici à une graine (900119) qui, rejouée, montre tout
+autre chose — un `sum` sur un champ **objet**, pas `nested`. Le défaut `nested`
+était bien réel (il se mesure en trois lignes contre ES), mais la ligne qui le
+rattachait à cette graine était fausse. Une divergence ne se range pas sous une
+graine : elle se réduit à un cas écrit. C'est exactement ce que dit la dernière
+section de ce fichier, et c'est la deuxième fois que le dépôt le paie.
+
+### Ce que la campagne de ce passage a trouvé en plus
+
+Une plage de contrôle a sorti un **troisième** résultat faux rendu en 200, sans
+rapport avec les deux précédents — c'est exactement ce à quoi sert une plage
+qu'on n'a jamais regardée.
+
+| Ce qui différait | Ce que c'est devenu |
+|---|---|
+| **Sous un `nested`, un `minimum_should_match` explicite qui retombe à zéro jetait le `should` entier.** `"50%"` d'une seule clause vaut `0` (la troncature vers zéro d'ES), et ferrite en concluait « pas de minimum, donc pas de clause ». Un document dont un élément satisfaisait seulement le `must_not` remontait, là où ES n'en rend aucun | **corrigé**. Lucene exige au moins une clause positive quand aucune clause obligatoire n'est là, quel que soit le minimum demandé : la règle s'applique **après** la résolution du paramètre, pas à sa place. La correction précédente ne portait que sur la valeur **par défaut** du paramètre — corriger le défaut d'un paramètre ne corrige pas le paramètre. Figé dans `sonde_msm.py`, qui passe de 47 à 53 cas |
+
+### Ce que la graine 900119 montrait vraiment, et qui reste ouvert
+
+| Ce qui diffère | Ce que c'est |
+|---|---|
+| **`sum` d'entiers hors du domaine exact d'un `double`.** Sur un corpus qui contient `-9223372036854775808`, `9223372036854775807`, `-1` et `1`, ES rend `0.0` et ferrite `-1.0` | ES accumule sa somme en **double** — `-2^63 + 2^63` y vaut exactement `0`, puis `-1`, puis `0` ; tantivy accumule en `i64`, donc exactement : `-1`, `-2`, `-1`. Les deux sont défendables, et celle de ferrite est arithmétiquement juste ; mais ce n'est pas celle d'ES. L'écart n'existe qu'au-delà de 2^53, là où un `double` ne représente plus tous les entiers |
+
+Elle est **ouverte** : elle ne se corrige pas dans la couche de mise en forme
+(la somme est faite par le collecteur de tantivy), et elle n'est pas de la
+famille traitée par cette carte. Elle est publiée ici pour la même raison que
+les deux précédentes — c'est le seul usage honnête de cet outil.
 
 Le détail machine est dans [`fuzz.json`](fuzz.json) : les divergences réelles y
 sont écrites entières, les assumées résumées par famille avec trois exemples.
