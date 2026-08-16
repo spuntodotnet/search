@@ -169,9 +169,17 @@ L'**export d'un index** marche avec le code que tout le monde écrit :
 contexte fige l'index : ce qui est écrit pendant l'export ne s'y invite pas, et
 chaque document sort une fois et une seule.
 
+Les **petites routes** qui bloquent un outil entier passent aussi :
+`_field_caps` (ce que chaque champ sait faire, et son type index par index —
+c'est ce qu'appelle un outil de découverte de champs), `_validate/query`,
+`_stats`, `PUT /{index}/_settings` et les **templates d'index**, dans leurs deux
+familles (`_index_template` et le `_template` déprécié qu'on trouve dans les
+scripts d'init venus de la 7.x). Un template s'applique à la création implicite
+de l'index comme à sa création explicite.
+
 **Ce qui n'y est pas encore** : `highlight`, `search_after`, `_msearch`,
-`_stats`, les templates, `PUT /{index}/_settings`, `_update_by_query` /
-`_reindex`, `query_string`, et les analyzers des autres langues.
+`_update_by_query` / `_reindex`, `query_string`, les templates de composants
+(`_component_template`), et les analyzers des autres langues.
 
 L'inventaire complet — supporté, partiel, refusé, et les divergences assumées —
 est dans [`docs/compat.md`](docs/compat.md). Rien de ce qui n'est pas supporté
@@ -185,8 +193,8 @@ réelles** — la documentation de référence d'ES 8.15, les tracks Rally d'Ela
 les tests des clients officiels et le code de 184 dépôts open source — la
 question posée est « celle-ci passerait-elle **entièrement** ? », parce qu'une
 requête supportée à 90 % est une requête qui échoue. Réponse : **89,6 % des
-requêtes trouvées dans du code d'application**, 34,5 % des exemples de la
-documentation, 16,6 % des tracks de benchmark. L'écart entre ces trois nombres
+requêtes trouvées dans du code d'application**, 38,8 % des exemples de la
+documentation, 17,4 % des tracks de benchmark. L'écart entre ces trois nombres
 est le résultat ; la méthode, les sources et les biais sont dans
 [`docs/usage.md`](docs/usage.md), le corpus est publié avec.
 
@@ -203,7 +211,8 @@ Cet inventaire est aussi ce qui **borne un tirage au sort**. Un fuzzer
 différentiel ([`tests/compat/fuzz_vs_es.py`](tests/compat/fuzz_vs_es.py)) génère
 des mappings, des documents et des requêtes dans le périmètre que `compat.yaml`
 déclare, les pose à ferrite **et** à un vrai Elasticsearch 8.15, et compare les
-réponses champ par champ : **1 450 cas, 18 671 requêtes, 0 divergence réelle** sur cinq plages de graines, dont quatre jamais utilisées pour corriger. Il
+réponses champ par champ : **1 450 cas, 60 424 requêtes, 2 divergences réelles** sur cinq plages de graines, dont quatre jamais utilisées pour corriger — les deux
+sont dans les agrégations, ouvertes, et décrites plutôt que tues. Il
 s'étalonne d'abord contre deux Elasticsearch — tant qu'il n'y est pas à zéro, ce
 qu'il dit de ferrite ne vaut rien. Son premier passage a trouvé vingt et un défauts
 que personne n'avait signalés, tous silencieux ; ils sont racontés dans

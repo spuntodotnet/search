@@ -2187,7 +2187,7 @@ def champ_non_mappe_refuse_en_strict(es):
     # laisser croire que la demande a ete prise en compte.
     refused(lambda: es.indices.put_settings(
         index=strict, settings={"index.query.parse.allow_unmapped_fields": True}),
-        contains="_settings")
+        contains="apres la creation de l'index")
     es.indices.delete(index=strict)
 
 
@@ -2197,15 +2197,21 @@ def parametres_de_reglages_non_appliques_refuses(es):
     reponse chez ES : le premier aplatit les cles
     (`settings["index.number_of_shards"]`), le second ajoute une section
     `defaults`. ferrite les acceptait et rendait la reponse inchangee — un
-    client qui lit la cle aplatie n'y trouvait rien, sans la moindre erreur."""
+    client qui lit la cle aplatie n'y trouvait rien, sans la moindre erreur.
+
+    Depuis, `flat_settings` est **applique** la ou ferrite rend des reglages
+    d'index : ce n'est qu'une reecriture des cles, et il n'y avait aucune raison
+    de le refuser une fois ecrit. `include_defaults`, lui, reste refuse — ferrite
+    n'a pas les dizaines de reglages qu'il ajouterait."""
+    plat = es.indices.get_settings(index=INDEX, flat_settings=True)[INDEX]["settings"]
+    assert plat["index.number_of_shards"] == "1", plat
     for appel in (
-        lambda: es.indices.get_settings(index=INDEX, flat_settings=True),
         lambda: es.indices.get_settings(index=INDEX, include_defaults=True),
         lambda: es.cluster.get_settings(flat_settings=True),
         lambda: es.cluster.get_settings(include_defaults=True),
     ):
-        refused(appel, contains="forme de la reponse")
-    # Sans eux, la reponse est celle d'avant.
+        refused(appel)
+    # Sans lui, la reponse est celle d'avant.
     assert es.indices.get_settings(index=INDEX)[INDEX]["settings"]["index"][
         "number_of_shards"] == "1"
 
@@ -2524,6 +2530,317 @@ def purge_totale_du_script_d_init(es):
             contains="not recognized")
     refused(lambda: es.indices.delete(index="*"),
             contains="Wildcard expressions or all indices are not allowed")
+
+
+# ---------------------------------------------------------------------------
+# Les petites routes qui bloquent un outil entier
+# ---------------------------------------------------------------------------
+
+FC = "compat_fc"
+FC2 = "compat_fc2"
+JOURNAUX = ["compat_log-2026.01.01", "compat_log-2026.01.02"]
+
+
+@scenario
+def field_caps(es):
+    """`_field_caps` : le type de chaque champ, et son type **par index**."""
+    for nom in (FC, FC2):
+        es.options(ignore_status=404).indices.delete(index=nom)
+    es.indices.create(index=FC, mappings={"properties": {
+        "titre": {"type": "text"},
+        "tag": {"type": "keyword"},
+        "prix": {"type": "long"},
+        "client": {"type": "object", "properties": {"ville": {"type": "keyword"}}},
+        "lignes": {"type": "nested", "properties": {"ref": {"type": "keyword"}}},
+    }})
+    es.indices.create(index=FC2, mappings={"properties": {
+        "tag": {"type": "text"},
+        "prix": {"type": "long"},
+    }})
+
+    caps = es.field_caps(index=FC, fields="*")
+    assert caps["indices"] == [FC], caps["indices"]
+    f = caps["fields"]
+    assert f["titre"]["text"]["searchable"] is True
+    # Un `text` est analyse : ES ne l'agrege pas sans `fielddata`.
+    assert f["titre"]["text"]["aggregatable"] is False
+    assert f["tag"]["keyword"]["aggregatable"] is True
+    # Les conteneurs sont rendus, et ne sont ni cherchables ni agregeables.
+    assert f["client"]["object"]["searchable"] is False
+    assert f["lignes"]["nested"]["searchable"] is False
+    assert f["client.ville"]["keyword"]["aggregatable"] is True
+    assert f["lignes.ref"]["keyword"]["aggregatable"] is True
+
+    # Deux index, deux types pour le meme nom : c'est **la** question que pose
+    # un outil de decouverte avant de proposer un filtre.
+    caps = es.field_caps(index=[FC, FC2], fields=["tag", "prix"])
+    tag = caps["fields"]["tag"]
+    assert set(tag) == {"keyword", "text"}, tag
+    assert tag["keyword"]["indices"] == [FC]
+    assert tag["text"]["indices"] == [FC2]
+    # Un seul type : pas de `indices`, meme quand plusieurs index sont vises.
+    assert "indices" not in caps["fields"]["prix"]["long"]
+
+    # `include_unmapped` fait apparaitre les index qui ne connaissent pas le
+    # champ — et fait donc apparaitre `indices` sur l'entree qui le connait.
+    caps = es.field_caps(index=[FC, FC2], fields="titre", include_unmapped=True)
+    titre = caps["fields"]["titre"]
+    assert titre["text"]["indices"] == [FC]
+    assert titre["unmapped"]["indices"] == [FC2]
+
+    # `index_filter` : ne decrire que les index qui ont quelque chose a dire.
+    es.index(index=FC, id="1", document={"prix": 10}, refresh=True)
+    caps = es.field_caps(index=[FC, FC2], fields="prix",
+                         index_filter={"range": {"prix": {"gte": 5}}})
+    assert caps["indices"] == [FC], caps["indices"]
+
+    # Sans `fields`, il n'y a rien a decrire : ES refuse, ferrite aussi.
+    refused(lambda: es.field_caps(index=FC),
+            contains="no fields specified")
+    es.indices.delete(index=[FC, FC2])
+
+
+@scenario
+def validate_query(es):
+    """`_validate/query` : le parseur du DSL expose, sans executer."""
+    INDEX = "compat_validate"
+    es.options(ignore_status=404).indices.delete(index=INDEX)
+    es.indices.create(index=INDEX, mappings={"properties": {
+        "titre": {"type": "text"}, "annee": {"type": "integer"}}})
+
+    r = es.indices.validate_query(index=INDEX, query={"match": {"titre": "horla"}})
+    assert r["valid"] is True, r
+
+    r = es.indices.validate_query(index=INDEX, explain=True,
+                                  query={"match": {"titre": "horla"}})
+    assert r["_shards"]["failed"] == 0
+    assert r["explanations"][0]["index"] == INDEX
+    assert r["explanations"][0]["valid"] is True
+    assert r["explanations"][0]["explanation"], "une explication est attendue"
+
+    # Sans corps : la requete est `*:*`, et elle est valide.
+    r = es.indices.validate_query(index=INDEX, explain=True)
+    assert r["valid"] is True
+    assert r["explanations"][0]["explanation"] == "*:*"
+
+    # Une clause inconnue est une erreur **de forme** : ES ne rend alors ni
+    # `_shards` ni `explanations`, seulement `valid` (et `error` avec explain).
+    r = es.indices.validate_query(index=INDEX, query={"match_zzz": {"titre": "x"}})
+    assert r["valid"] is False, r
+    assert "error" not in r, r
+    r = es.indices.validate_query(index=INDEX, explain=True,
+                                  query={"match_zzz": {"titre": "x"}})
+    assert r["valid"] is False
+    assert "match_zzz" in r["error"], r["error"]
+
+    # Une valeur qui n'a pas le type du champ, elle, ne se voit qu'avec le
+    # mapping : la reponse porte alors `_shards` et une explication par index.
+    r = es.indices.validate_query(index=INDEX, explain=True,
+                                  query={"range": {"annee": {"gte": "pas un nombre"}}})
+    assert r["valid"] is False, r
+    assert r["explanations"][0]["valid"] is False
+    assert "annee" in r["explanations"][0]["error"], r["explanations"][0]
+
+    # `q` (query_string) n'est pas implemente : refus explicite, pas un silence.
+    refused(lambda: es.indices.validate_query(index=INDEX, q="titre:horla"),
+            contains="query_string")
+    es.indices.delete(index=INDEX)
+
+
+@scenario
+def stats(es):
+    """`_stats` : les compteurs que ferrite mesure, et le refus des autres."""
+    INDEX = "compat_stats"
+    es.options(ignore_status=404).indices.delete(index=INDEX)
+    es.indices.create(index=INDEX, mappings={"properties": {"a": {"type": "keyword"}}})
+    for i in range(3):
+        es.index(index=INDEX, id=str(i), document={"a": "x"}, refresh=True)
+
+    st = es.indices.stats(index=INDEX)
+    assert st["_shards"]["failed"] == 0
+    assert st["_all"]["primaries"]["docs"]["count"] == 3
+    assert st["_all"]["total"]["docs"]["count"] == 3
+    idx = st["indices"][INDEX]
+    assert idx["uuid"], "l'uuid de l'index est attendu"
+    assert idx["status"] == "open"
+    assert idx["primaries"]["store"]["size_in_bytes"] > 0
+    assert idx["primaries"]["docs"]["count"] == 3
+
+    # Un sous-ensemble de metriques.
+    st = es.indices.stats(index=INDEX, metric="docs")
+    assert set(st["_all"]["primaries"]) == {"docs"}, st["_all"]["primaries"]
+
+    # Un motif sans correspondance : zero shard, pas d'erreur.
+    st = es.indices.stats(index="pas_un_index-*")
+    assert st["_shards"]["total"] == 0
+    assert st["indices"] == {}
+
+    # ES nomme la metrique la plus proche ; ferrite reprend son message.
+    err = refused(lambda: es.indices.stats(metric="fieldata"))
+    assert "did you mean [fielddata]?" in err["reason"], err["reason"]
+
+    # Un compteur que ferrite ne tient pas est **refuse**, pas rendu a zero :
+    # un `index_total: 0` sur un index qu'on vient de remplir ferait passer
+    # « non mesure » pour « aucune activite ».
+    refused(lambda: es.indices.stats(index=INDEX, metric="indexing"),
+            contains="il ne tient pas ce compteur")
+    es.indices.delete(index=INDEX)
+
+
+@scenario
+def put_settings(es):
+    """`PUT /{index}/_settings` : les reglages inertes acceptes, les autres non."""
+    nom = "compat_settings"
+    es.options(ignore_status=404).indices.delete(index=nom)
+    es.indices.create(index=nom)
+
+    # Le geste d'un script d'init : poser un nombre de repliques. Sans effet
+    # ici, mais faire echouer le script entier pour autant serait pire.
+    assert es.indices.put_settings(index=nom, settings={"number_of_replicas": 1})["acknowledged"]
+    lu = es.indices.get_settings(index=nom)[nom]["settings"]["index"]
+    assert lu["number_of_replicas"] == "1", lu
+
+    # `flat_settings` aplatit les cles, comme chez ES.
+    plat = es.indices.get_settings(index=nom, flat_settings=True)[nom]["settings"]
+    assert plat["index.number_of_replicas"] == "1", plat
+
+    # `preserve_existing` ne pose que ce qui manque.
+    es.indices.put_settings(index=nom, preserve_existing=True,
+                            settings={"number_of_replicas": 3})
+    lu = es.indices.get_settings(index=nom)[nom]["settings"]["index"]
+    assert lu["number_of_replicas"] == "1", lu
+
+    # `null` efface, comme chez ES.
+    es.indices.put_settings(index=nom, settings={"index.refresh_interval": "30s"})
+    es.indices.put_settings(index=nom, settings={"index.refresh_interval": None})
+    lu = es.indices.get_settings(index=nom)[nom]["settings"]["index"]
+    assert "refresh_interval" not in lu, lu
+
+    # Un reglage fige a la creation ne se modifie pas, et ES le dit ainsi.
+    refused(lambda: es.indices.put_settings(index=nom, settings={"index.number_of_shards": 2}),
+            contains="Can't update non dynamic settings")
+    # Un reglage que ferrite n'applique pas est refuse, jamais avale.
+    refused(lambda: es.indices.put_settings(index=nom, settings={"index.blocks.read_only": True}),
+            contains="ne supporte pas le reglage d'index")
+    es.indices.delete(index=nom)
+
+
+@scenario
+def index_template(es):
+    """`_index_template` : un mapping applique a un index qui n'existe pas."""
+    es.options(ignore_status=404).indices.delete_index_template(name="compat_tpl")
+    # Jamais de motif ici : `action.destructive_requires_name` le refuse, comme
+    # sur un vrai ES 8.
+    for nom in JOURNAUX:
+        es.options(ignore_status=404).indices.delete(index=nom)
+
+    assert es.indices.put_index_template(
+        name="compat_tpl",
+        index_patterns=["compat_log-*"],
+        priority=100,
+        version=3,
+        template={
+            "settings": {"number_of_replicas": 0},
+            "mappings": {"properties": {"ts": {"type": "date"},
+                                        "niveau": {"type": "keyword"}}},
+            "aliases": {"compat_log": {}},
+        },
+    )["acknowledged"]
+
+    lu = es.indices.get_index_template(name="compat_tpl")["index_templates"][0]
+    assert lu["name"] == "compat_tpl"
+    assert lu["index_template"]["index_patterns"] == ["compat_log-*"]
+    assert lu["index_template"]["priority"] == 100
+    assert lu["index_template"]["version"] == 3
+    assert es.indices.exists_index_template(name="compat_tpl")
+    assert not es.indices.exists_index_template(name="compat_tpl_absent")
+
+    # L'ecriture cree l'index — et le template lui donne son mapping, ses
+    # reglages et son alias. C'est tout l'objet d'un template.
+    es.index(index="compat_log-2026.01.01", document={"ts": "2026-01-01", "niveau": "warn"},
+             refresh=True)
+    vu = es.indices.get(index="compat_log-2026.01.01")["compat_log-2026.01.01"]
+    assert vu["mappings"]["properties"]["ts"] == {"type": "date"}
+    assert vu["mappings"]["properties"]["niveau"] == {"type": "keyword"}
+    assert "compat_log" in vu["aliases"], vu["aliases"]
+    # Et l'alias sert : c'est par lui qu'une application lit ses index du jour.
+    assert es.search(index="compat_log")["hits"]["total"]["value"] == 1
+
+    # Une creation **explicite** applique aussi le template ; ce que le corps
+    # dit l'emporte.
+    es.indices.create(index="compat_log-2026.01.02",
+                      mappings={"properties": {"extra": {"type": "keyword"}}})
+    vu = es.indices.get(index="compat_log-2026.01.02")["compat_log-2026.01.02"]
+    assert vu["mappings"]["properties"]["ts"] == {"type": "date"}
+    assert vu["mappings"]["properties"]["extra"] == {"type": "keyword"}
+
+    # Deux templates de meme priorite dont les motifs se recouvrent rendraient
+    # la creation ambigue : ES refuse, ferrite aussi.
+    refused(lambda: es.indices.put_index_template(
+        name="compat_tpl_bis", index_patterns=["compat_log-*-*"], priority=100),
+        contains="same priority")
+
+    # Un template dont le contenu ne s'appliquerait pas est refuse **a la
+    # pose**, la ou le client regarde.
+    refused(lambda: es.indices.put_index_template(
+        name="compat_tpl_ko", index_patterns=["compat_ko-*"],
+        template={"settings": {"index.blocks.read_only": True}}),
+        contains="ne supporte pas le reglage d'index")
+    refused(lambda: es.indices.put_index_template(
+        name="compat_tpl_ko", index_patterns=["compat_ko-*"],
+        template={"aliases": {"a": {"filter": {"term": {"x": "y"}}}}}),
+        contains="[filter] sur un alias")
+
+    # Un nom litteral absent est un 404 qui le nomme.
+    refused(lambda: es.indices.get_index_template(name="compat_tpl_absent"),
+            status=404, contains="not found")
+
+    assert es.indices.delete_index_template(name="compat_tpl")["acknowledged"]
+    refused(lambda: es.indices.delete_index_template(name="compat_tpl"),
+            status=404, contains="missing")
+    es.indices.delete(index=JOURNAUX)
+
+
+@scenario
+def template_ancien(es):
+    """`_template` : la forme depreciee, celle des scripts d'init venus de 7.x."""
+    es.options(ignore_status=404).indices.delete_template(name="compat_leg")
+    es.options(ignore_status=404).indices.delete(index="compat_leg-1")
+
+    assert es.indices.put_template(
+        name="compat_leg",
+        index_patterns=["compat_leg-*"],
+        order=5,
+        version=7,
+        settings={"number_of_replicas": 0},
+        mappings={"properties": {"a": {"type": "keyword"}}},
+        aliases={"compat_leg_alias": {}},
+    )["acknowledged"]
+
+    lu = es.indices.get_template(name="compat_leg")["compat_leg"]
+    assert lu["order"] == 5
+    assert lu["version"] == 7
+    assert lu["index_patterns"] == ["compat_leg-*"]
+    assert lu["settings"] == {"index": {"number_of_replicas": "0"}}, lu["settings"]
+    plat = es.indices.get_template(name="compat_leg", flat_settings=True)["compat_leg"]
+    assert plat["settings"] == {"index.number_of_replicas": "0"}, plat["settings"]
+    assert es.indices.exists_template(name="compat_leg")
+    assert not es.indices.exists_template(name="compat_leg_absent")
+
+    es.index(index="compat_leg-1", document={"a": "x"}, refresh=True)
+    vu = es.indices.get(index="compat_leg-1")["compat_leg-1"]
+    assert vu["mappings"]["properties"]["a"] == {"type": "keyword"}
+    assert "compat_leg_alias" in vu["aliases"]
+
+    # `create=true` refuse d'ecraser.
+    refused(lambda: es.indices.put_template(name="compat_leg", create=True,
+                                            index_patterns=["compat_leg-*"]),
+            contains="already exists")
+
+    assert es.indices.delete_template(name="compat_leg")["acknowledged"]
+    refused(lambda: es.indices.delete_template(name="compat_leg"),
+            status=404, contains="missing")
+    es.indices.delete(index="compat_leg-1")
 
 
 # ---------------------------------------------------------------------------

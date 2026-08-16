@@ -6,8 +6,12 @@
 pub mod aliases;
 pub mod cluster;
 pub mod docs;
+pub mod fieldcaps;
 pub mod indices;
 pub mod search;
+pub mod stats;
+pub mod templates;
+pub mod validate;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -152,14 +156,76 @@ pub fn router(state: SharedState) -> Router {
             post(unsupported_route).get(unsupported_route),
         )
         .route("/_reindex", post(unsupported_route))
-        // Le seul reglage d'index que ferrite exploite se pose a la creation :
-        // le dire vaut mieux qu'un « no handler » qui laisserait croire a une
-        // faute d'URL.
         .route(
             "/{index}/_settings",
-            put(reglages_non_modifiables)
-                .post(reglages_non_modifiables)
+            put(indices::put_settings)
+                .post(indices::put_settings)
                 .get(indices::get_settings),
+        )
+        // `/_settings` sans index vaut `_all`, et `{nom}` filtre par nom de
+        // reglage : deux formes qu'un `no handler found` rendait indechiffrables.
+        .route(
+            "/_settings",
+            get(|s, u| indices::get_settings_all(s, None, u))
+                .put(indices::put_settings_all)
+                .post(indices::put_settings_all),
+        )
+        .route(
+            "/_settings/{nom}",
+            get(|s, n, u| indices::get_settings_all(s, Some(n), u)),
+        )
+        .route("/{index}/_settings/{nom}", get(indices::get_settings_nomme))
+        // `_field_caps`, `_validate/query` et `_stats` : trois routes sans
+        // difficulte de moteur, dont l'absence bloquait des outils entiers.
+        .route(
+            "/_field_caps",
+            get(fieldcaps::field_caps_all).post(fieldcaps::field_caps_all),
+        )
+        .route(
+            "/{index}/_field_caps",
+            get(fieldcaps::field_caps).post(fieldcaps::field_caps),
+        )
+        .route(
+            "/_validate/query",
+            get(validate::validate_all).post(validate::validate_all),
+        )
+        .route(
+            "/{index}/_validate/query",
+            get(validate::validate).post(validate::validate),
+        )
+        .route("/_stats", get(|s, u| stats::stats_all(s, None, u)))
+        .route(
+            "/_stats/{metric}",
+            get(|s, m, u| stats::stats_all(s, Some(m), u)),
+        )
+        .route("/{index}/_stats", get(stats::stats_index))
+        .route("/{index}/_stats/{metric}", get(stats::stats_index_metric))
+        // Les templates : un mapping applique a un index qui n'existe pas
+        // encore. Les deux familles, parce qu'un script d'init venu de la 7.x
+        // pose un `_template` et que ce code-la ne doit pas changer.
+        .route(
+            "/_index_template",
+            get(|s, u| templates::lire_composables(s, None, u)),
+        )
+        .route(
+            "/_index_template/{nom}",
+            put(templates::poser_composable)
+                .post(templates::poser_composable)
+                .get(|s, n, u| templates::lire_composables(s, Some(n), u))
+                .head(templates::existe_composable)
+                .delete(templates::supprimer_composable),
+        )
+        .route(
+            "/_template",
+            get(|s, u| templates::lire_anciens(s, None, u)),
+        )
+        .route(
+            "/_template/{nom}",
+            put(templates::poser_ancien)
+                .post(templates::poser_ancien)
+                .get(|s, n, u| templates::lire_anciens(s, Some(n), u))
+                .head(templates::existe_ancien)
+                .delete(templates::supprimer_ancien),
         )
         .route(
             "/{index}/_msearch",
@@ -200,20 +266,6 @@ async fn unsupported_route(uri: Uri) -> EsError {
         "ferrite n'implemente pas la route [{}] dans cette version (voir docs/compat.md)",
         uri.path()
     ))
-}
-
-/// `PUT /{index}/_settings` : ferrite n'a pas de reglage modifiable a chaud.
-///
-/// Le seul reglage qu'il exploite — `index.query.parse.allow_unmapped_fields` —
-/// se pose a la creation de l'index. Le changer ensuite demanderait de
-/// reconstruire la generation courante, et un client qui croit l'avoir change
-/// alors qu'il n'en est rien chercherait longtemps.
-async fn reglages_non_modifiables() -> EsError {
-    EsError::unsupported(
-        "ferrite ne supporte pas [PUT /{index}/_settings] : le seul reglage qu'il exploite, \
-         [index.query.parse.allow_unmapped_fields], se pose dans [settings] a la creation de \
-         l'index (voir docs/compat.md)",
-    )
 }
 
 /// Le 400 d'ES pour une route inconnue, au format exact (une chaine, pas un
@@ -445,14 +497,15 @@ pub fn expect_only(
     Ok(())
 }
 
-/// Refuse `flat_settings` et `include_defaults`, que ferrite n'applique pas.
+/// Refuse les parametres qui changent la **forme** d'une reponse de reglages
+/// et que ferrite n'applique pas.
 ///
-/// Les deux changent la **forme** de la reponse chez ES : `flat_settings`
-/// aplatit les cles (`index.number_of_shards` au lieu de l'arborescence),
 /// `include_defaults` ajoute une section `defaults` de plusieurs dizaines de
-/// reglages. Les accepter puis les ignorer rend une reponse que personne n'a
-/// demandee, sans le dire — c'est exactement l'echec silencieux que ce projet
-/// refuse.
+/// reglages qu'ES a et que ferrite n'a pas : l'accepter puis l'ignorer rend une
+/// reponse que personne n'a demandee, sans le dire — c'est exactement l'echec
+/// silencieux que ce projet refuse. `flat_settings`, lui, n'est qu'une
+/// reecriture des cles : il est **applique** la ou ferrite rend des reglages
+/// (voir [`crate::reglages::aplatir_reponse`]), et refuse ailleurs.
 pub fn refuser_reglages_non_supportes(p: &mut Params, route: &str) -> EsResult<()> {
     for param in ["flat_settings", "include_defaults"] {
         if p.opt(param).is_some() {
@@ -461,6 +514,18 @@ pub fn refuser_reglages_non_supportes(p: &mut Params, route: &str) -> EsResult<(
                  reponse, et ferrite la rendrait inchangee (voir docs/compat.md)"
             )));
         }
+    }
+    Ok(())
+}
+
+/// Le seul des deux qui reste refuse la ou `flat_settings` est applique.
+pub fn refuser_include_defaults(p: &mut Params, route: &str) -> EsResult<()> {
+    if p.opt("include_defaults").is_some() {
+        return Err(EsError::unsupported(format!(
+            "ferrite ne supporte pas [include_defaults] sur [{route}] : il ajoute une section \
+             [defaults] avec les dizaines de reglages qu'ES a et que ferrite n'a pas (voir \
+             docs/compat.md)"
+        )));
     }
     Ok(())
 }

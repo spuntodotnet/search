@@ -43,6 +43,7 @@ fn aucune_perte_pendant_les_evolutions_concurrentes() {
         .create(
             "livres",
             Mapping::parse(&json!({"properties": {"titre": {"type": "text"}}})).unwrap(),
+            Default::default(),
         )
         .unwrap();
 
@@ -167,6 +168,7 @@ fn ecritures_et_suppressions_concurrentes() {
         .create(
             "livres",
             Mapping::parse(&json!({"properties": {"n": {"type": "long"}}})).unwrap(),
+            Default::default(),
         )
         .unwrap();
 
@@ -222,6 +224,7 @@ fn refresh_garantit_la_visibilite_malgre_le_rafraichissement_de_fond() {
         .create(
             "livres",
             Mapping::parse(&json!({"properties": {"titre": {"type": "text"}}})).unwrap(),
+            Default::default(),
         )
         .unwrap();
 

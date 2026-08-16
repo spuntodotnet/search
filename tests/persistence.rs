@@ -43,7 +43,7 @@ fn un_index_survit_au_redemarrage() {
 
     {
         let cat = catalog(&dir);
-        let idx = cat.create("livres", mapping()).unwrap();
+        let idx = cat.create("livres", mapping(), Default::default()).unwrap();
         idx.index_doc(
             "1",
             &json!({"titre": "Le Horla", "auteur": "Maupassant", "annee": 1887}),
@@ -94,7 +94,7 @@ fn un_index_supprime_ne_revient_pas() {
     let dir = tmp_dir("delete");
     {
         let cat = catalog(&dir);
-        cat.create("livres", mapping()).unwrap();
+        cat.create("livres", mapping(), Default::default()).unwrap();
         cat.delete("livres").unwrap();
     }
     let cat = catalog(&dir);
@@ -106,7 +106,7 @@ fn un_index_supprime_ne_revient_pas() {
 fn un_champ_absent_du_mapping_est_refuse_en_strict() {
     let dir = tmp_dir("strict");
     let cat = catalog(&dir);
-    let idx = cat.create("livres", mapping()).unwrap();
+    let idx = cat.create("livres", mapping(), Default::default()).unwrap();
     let err = idx
         .index_doc(
             "1",
@@ -126,7 +126,9 @@ fn un_champ_decouvert_fait_changer_de_generation() {
     let dir = tmp_dir("dyn");
     {
         let cat = catalog(&dir);
-        let idx = cat.create("livres", mapping_dynamique()).unwrap();
+        let idx = cat
+            .create("livres", mapping_dynamique(), Default::default())
+            .unwrap();
         idx.index_doc("1", &json!({"titre": "Bel-Ami"}), WriteOptions::default())
             .unwrap();
         idx.refresh().unwrap();
@@ -185,7 +187,7 @@ fn dynamic_false_conserve_sans_indexer() {
         "properties": {"titre": {"type": "text"}}
     }))
     .unwrap();
-    let idx = cat.create("livres", mapping).unwrap();
+    let idx = cat.create("livres", mapping, Default::default()).unwrap();
     idx.index_doc(
         "1",
         &json!({"titre": "Bel-Ami", "note": 5}),

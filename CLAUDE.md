@@ -73,6 +73,14 @@ contre trois serveurs (ferrite, ES 7.10.2, ES 8.15.0) exprès pour trancher ça.
 Sur 11 échecs d'un client 7.x, 6 casseraient à l'identique contre un ES 8 : ce
 sont des coûts de migration 7→8, pas des manques de ferrite.
 
+Le geste vaut aussi pour la suite de conformance, et il coûte trois minutes :
+`conformance_es.py --suites <domaines>` lancé contre le **conteneur de
+référence**. Le seul cas de `field_caps` qui échoue encore
+(`index_filter` avec une borne `gte: 2019` sur un champ `date`) échoue
+**à l'identique** contre un vrai ES 8.15 — la suite est figée à la 7.10, où un
+nombre nu se lisait comme une année ; en 8.x c'est un `epoch_millis`, et ferrite
+rend la même chose qu'ES. Sans cette mesure, la ligne se lisait « régression ».
+
 ### 4. Prendre les tests des autres — et ne pas choisir lesquels
 
 Le harnais maison teste ce à quoi on a pensé. La suite REST d'Elasticsearch
@@ -143,7 +151,7 @@ développement, pas de CI).
 
 | Commande | La question à laquelle elle répond |
 |---|---|
-| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**92/92**, dont l'export par `helpers.scan`, le date math, la recherche libre, l'expression de noms d'alias et la recherche sans index) |
+| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**98/98**, dont l'export par `helpers.scan`, le date math, la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats` et les templates) |
 | `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (212/213, 0 écart réel) |
 | `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (45/46 ; le seul écart est `_cluster/health`, toujours vert par choix) |
 | `tests/compat/diff_aggs.py` | les mêmes agrégations ? (45/45, `filter` comprise) |
@@ -154,13 +162,13 @@ développement, pas de CI).
 | `tests/compat/sonde_msm.py` | les mêmes documents sur un **`minimum_should_match`** — entier, pourcentage, formes négatives, conditions `3<90%`, et sous un `nested` ? (47/47) |
 | `tests/compat/releve_mots_vides.py` | quelle est **vraiment** la liste de mots vides d'un analyzer d'ES ? |
 | `tests/compat/sonde_alias.py` | les mêmes alias sur une **expression de noms** — liste, joker, exclusion, `_all` — et le même 404 ? (21/21, corps et message compris) |
-| `tests/compat/sonde_vide.py` | sur un serveur **sans aucun index**, la même chose qu'ES — et rien accepté en silence ? (27/27 identiques, 0 refus muet ; les deux serveurs doivent être vides, c'est l'état mesuré) |
-| `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **1 450 cas, 18 671 requêtes, 0 divergence réelle**, sur cinq plages de graines dont **quatre** n'ont jamais servi à corriger — celle sur laquelle on itère ne mesure plus rien. 21 défauts silencieux trouvés au premier passage. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (60 cas, 739 requêtes, 0) |
+| `tests/compat/sonde_vide.py` | sur un serveur **sans aucun index**, la même chose qu'ES — et rien accepté en silence ? (28/28 identiques, 0 refus muet ; les deux serveurs doivent être vides, c'est l'état mesuré) |
+| `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **1 450 cas, 60 424 requêtes, 2 divergences réelles** (toutes deux dans les agrégations, ouvertes et décrites dans [`docs/fuzz.md`](docs/fuzz.md)), sur cinq plages de graines dont **quatre** n'ont jamais servi à corriger — celle sur laquelle on itère ne mesure plus rien. 21 défauts silencieux trouvés au premier passage. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (60 cas, 2 416 requêtes, 0) |
 | `tests/compat/sonde_fuzz.py` | les écarts trouvés par le fuzzing, **figés** hors d'une graine (35/35) |
 | `tests/compat/genere_compat.py` | le périmètre déclaré et la doc disent-ils la **même chose** ? [`compat.yaml`](compat.yaml) est la source (une entrée par capacité : état, paramètres, motif du refus, poids d'usage) ; [`docs/compat.md`](docs/compat.md) et [`docs/compat.json`](docs/compat.json) en sont **générés**, et la CI échoue s'ils divergent |
 | `tests/compat/perimetre.py` | ce cas qui échoue, il porte sur quoi ? Il rattache un échec de conformance à une capacité déclarée : **régression** si elle est annoncée supportée, **coût de périmètre** si elle est annoncée refusée |
 | `tests/compat/recolte_usage.py` | à quoi ressemblent les requêtes que les gens envoient **vraiment** ? Constitue le corpus ([`tests/compat/usage/corpus.jsonl`](tests/compat/usage/corpus.jsonl), 5 311 requêtes) depuis quatre sources citables : doc de référence 8.15, tracks Rally, clients officiels, code open source. Chaque requête porte l'URL d'où elle vient |
-| `tests/compat/ponderation.py` | **quelle part de ces requêtes passe entièrement ?** (36,3 % du corpus, mais **89,6 % du code d'application** et 16,6 % des tracks Rally — l'écart *est* le résultat). Écrit les `poids` de `compat.yaml`, publie [`docs/usage.json`](docs/usage.json) et la table « ce qui manque, par fréquence d'usage ». `--rejoue` pose la même requête à ferrite et à un vrai ES 8.15 : les deux mesures s'accordent sur 99,3 % des cas |
+| `tests/compat/ponderation.py` | **quelle part de ces requêtes passe entièrement ?** (39,7 % du corpus, mais **89,6 % du code d'application** et 17,4 % des tracks Rally — l'écart *est* le résultat). Écrit les `poids` de `compat.yaml`, publie [`docs/usage.json`](docs/usage.json) et la table « ce qui manque, par fréquence d'usage ». `--rejoue` pose la même requête à ferrite et à un vrai ES 8.15 : les deux mesures s'accordent sur 99,3 % des cas |
 | `tests/compat/conformance_es.py` | que dit la suite de tests **d'Elastic** ? Ses **107 domaines**, sans liste blanche. Son rapport est un fichier, pas une phrase : [`docs/conformance.json`](docs/conformance.json) (totaux, deux taux, exclusions comptées, détail par cas), régénéré par `--json`, tenu par un cliquet en CI (`--diff`) |
 | `tests/compat/bench_vs_es.py` | mêmes résultats, **et à quel prix** ? (×3,6 en latence, ×6 en indexation) |
 | `tests/compat/probe_es7.py` | un **client** 7.x peut-il se brancher ? |
@@ -347,6 +355,23 @@ bouger**, pas après.
   nomme ses buckets `keyed` autrement. Trois résultats faux rendus 200. Déléguer
   une fonctionnalité ne dispense pas de mesurer ses bords : c'est même là qu'ils
   diffèrent.
+- **Un schéma vide n'échoue pas que sur la forme.** `_validate/query` doit
+  séparer « la requête est mal formée » (ES rend `valid: false` sans `_shards`)
+  de « elle est impossible sur ce mapping » (ES rend `_shards` et une
+  explication par index). Le premier se trouve en construisant la requête contre
+  le schéma vide d'`engine::sans_index`, où aucune erreur ne peut venir d'un
+  mapping — sauf qu'un `nested` sur un chemin absent y échoue aussi, et sortait
+  `valid: false` là où ES dit `true`. Seules les erreurs de **forme**
+  (`parsing_exception`, refus explicite) valent verdict de coordinateur. Trouvé
+  par le fuzzer le jour où on lui a donné une brique pour cette route — pas par
+  le raisonnement qui avait écrit le code.
+- **Rendre un compteur à zéro n'est pas neutre.** `_stats` d'ES a une vingtaine
+  de groupes ; ferrite en mesure quatre. Les autres à zéro auraient donné un
+  `indexing.index_total: 0` sur un index qu'on vient de remplir — « non mesuré »
+  rendu comme « aucune activité », et un tableau de bord qui affiche
+  tranquillement une courbe plate. Ils sont donc **refusés**, pas rendus. Une
+  valeur par défaut plausible est le déguisement le plus efficace d'un échec
+  silencieux.
 - **Un `curl` de vérification qui n'utilise pas le même texte que le test ne
   vérifie rien.** Une chasse au bug d'analyzer s'est terminée sur un faux
   positif : `match edition` ne trouvait pas `l'édition` — ce que fait aussi ES,
@@ -380,12 +405,22 @@ son début, et un champ pas encore mappé n'annule plus la clause. Le
 critères », écrit `"75%"` — est calculé comme chez ES, dans ses quatre
 notations, sur un `bool` comme sous un `nested`.
 
+Un outil de découverte de champs, un script d'init qui pose un template et un
+tableau de bord qui lit `_stats` se branchent aussi : `_field_caps`,
+`_validate/query`, `_stats`, `PUT /{index}/_settings` et les templates d'index
+(les deux familles, `_index_template` et le `_template` des scripts venus de la
+7.x) sont servis. `_stats` ne rend que les quatre groupes que ferrite **mesure**
+et refuse les autres : un `index_total: 0` sur un index qu'on vient de remplir
+ferait passer « non mesuré » pour « aucune activité ».
+
 Ce qui reste, par ordre de gêne pour un projet réel : `rest_total_hits_as_int`,
-`_msearch`, `_stats`, les templates, `PUT /{index}/_settings`, `GET /_cat/aliases`
-et les colonnes `h` / `s` des `_cat`, `GET /{index}/_mapping/field/{champs}`,
-l'agrégation `filters` (la sœur plurielle de `filter`), `time_zone` sur un
-`range` (refusé explicitement), les alias **filtrés** (`filter`, refusé
-explicitement), et les analyzers des autres langues.
+`_msearch`, les templates de **composants** (`_component_template`, et le
+`composed_of` qui les cite — refusé à la pose plutôt qu'appliqué à moitié),
+`GET /_cat/aliases` et les colonnes `h` / `s` des `_cat`,
+`GET /{index}/_mapping/field/{champs}`, l'agrégation `filters` (la sœur
+plurielle de `filter`), `time_zone` sur un `range` (refusé explicitement), les
+alias **filtrés** (`filter`, refusé explicitement), et les analyzers des autres
+langues.
 
 Le seul échec silencieux connu du projet est **corrigé** : une recherche qui ne
 visait **aucun index** (cluster vide, ou motif sans correspondance) rendait 200

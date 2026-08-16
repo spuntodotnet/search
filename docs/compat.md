@@ -91,8 +91,8 @@ qu'un zéro qui aurait l'air d'une mesure.
 | `date_histogram` | 5,3 % | 🟡 |
 | `match_phrase` | 4,5 % | 🟡 |
 | `_all`, `*`, URL sans index | 4,1 % | ✅ |
-| Templates, ILM, `_stats`, `_close`, `_open` | 3,9 % | ❌ |
 | `_source` | 3,7 % | ✅ |
+| `min`, `max`, `sum`, `avg`, `value_count`, `stats` | 3,6 % | ✅ |
 
 ---
 
@@ -121,8 +121,8 @@ qui échoue sur `_snapshot` n'est pas le même événement qu'un cas qui échoue
 | Cluster distribué — `_cluster/state`, `_cluster/stats`, `_cluster/reroute`, `_cluster/allocation/explain`, `_cluster/pending_tasks`, `_remote/info`, `_nodes/stats`, `_tasks` | ❌ | **hors périmètre assumé** — ferrite est mono-nœud et mono-shard : il n'y a ni allocation, ni réallocation, ni tâche distribuée à rapporter, et une réponse plausible inventée pour ces routes serait un mensonge sur la nature du serveur |
 | Les `_cat/*` autres que `_cat/indices` et `_cat/health` | ❌ | **pas encore** — ce sont des vues de texte sur un état que ferrite a pour la plupart ; elles ne sont pas écrites, et leurs tests exigent en plus les colonnes `h`, `s` et `help` que les deux `_cat` existants n'ont pas non plus |
 | Snapshots, dépôts, restauration — `_snapshot/*` | ❌ | **hors périmètre assumé** — la sauvegarde d'un ferrite est la copie de son répertoire de données, ou l'export par `scroll` ; un dépôt de snapshots répliqué est de la mécanique de cluster |
-| Cycle de vie d'un index — `_close`, `_open`, `_stats`, `_forcemerge`, `_shrink`, `_split`, `_clone`, `_rollover`, `_recovery`, `_segments`, `_flush`, `_upgrade`, `_cache/clear`, `_shard_stores`, `_resolve/index` | ❌ | **pas encore** — la moitié de ces routes n'a pas de sens sans shards (`_shrink`, `_split`, `_recovery`, `_shard_stores`) ; l'autre moitié est un manque, `_stats` en tête, que réclament les tableaux de bord |
-| Les autres routes de recherche — `_field_caps`, `_search_shards`, `_termvectors`, `_mtermvectors`, `_suggest`, `_source` | ❌ | **pas encore** — aucune n'est demandée par le code client qu'on cherche à servir ; `_field_caps` est celle qui manquerait le plus, un Kibana s'en sert pour découvrir les champs |
+| Cycle de vie d'un index — `_close`, `_open`, `_forcemerge`, `_shrink`, `_split`, `_clone`, `_rollover`, `_recovery`, `_segments`, `_flush`, `_upgrade`, `_cache/clear`, `_shard_stores`, `_resolve/index` | ❌ | **pas encore** — la moitié de ces routes n'a pas de sens sans shards (`_shrink`, `_split`, `_recovery`, `_shard_stores`) ; l'autre moitié suppose un index qu'on peut arrêter de servir sans le supprimer (`_close` / `_open`), état que ferrite n'a pas |
+| Les autres routes de recherche — `_search_shards`, `_termvectors`, `_mtermvectors`, `_suggest`, `_source` | ❌ | **pas encore** — aucune n'est demandée par le code client qu'on cherche à servir |
 | L'API typée — un `{type}` dans l'URL, un `_type` dans la réponse, `include_type_name` | ❌ | **comme Elasticsearch** — elle a disparu en 8.x, la version que ferrite annonce : un vrai Elasticsearch 8 échoue au même endroit, et la rendre reviendrait à annoncer une version qu'on ne sert pas |
 | Tout ce qu'Elastic ajoute autour du moteur — sécurité et rôles (`_security`), machine learning (`_ml`), cycle de vie (`_ilm`, `_slm`), `_watcher`, `_transform`, `_enrich`, `_eql`, `_sql`, `_esql`, `_inference`, connecteurs, *search applications*, `_rollup`, `_ccr`, `_graph`, licence, `_monitoring` | ❌ | **hors périmètre assumé** — ce sont des produits posés sur le moteur, pas le moteur : chacun a son propre modèle de données et sa propre API, et aucun n'est ce qu'un client Elasticsearch existant appelle pour chercher des documents. C'est le corpus d'usage qui a montré qu'aucune capacité ne les réclamait — donc que **19 % de ses requêtes** tombaient dans un trou de la déclaration, ni servies ni refusées |
 | Scripting — `_scripts`, `_search/template`, `_render/template`, Painless | ❌ | **hors périmètre assumé** — un moteur de script est un langage à embarquer, à isoler et à maintenir : c'est exactement le genre de poids que ferrite existe pour ne pas porter |
@@ -146,14 +146,16 @@ périmètre** (une capacité déclarée refusée).
 | `GET /{index}` | ✅ | `aliases` / `mappings` / `settings`, une entrée par index visé |
 | `GET /{index}/_mapping` | ✅ | |
 | `GET /{index}/_mapping/field/{champs}` | ❌ | **pas encore** — route absente (`no handler found`) : ferrite a pourtant le mapping, c'est un manque et pas une impossibilité — 15 cas de la suite d'Elastic tombent dessus |
-| `GET /{index}/_settings` | 🟡 | les réglages d'ES qu'un index a vraiment (`number_of_shards`, `uuid`, `creation_date`…), et `index.query.parse.allow_unmapped_fields` s'il a été posé. Refusé : `GET /_settings` sans index (le nom est pris pour celui d'un index, d'où un `invalid_index_name_exception` qui trompe), `/{index}/_settings/{nom}` (filtrer par nom de réglage), `local`, `flat_settings` (il aplatit les clés (`index.number_of_shards`) ; longtemps accepté et ignoré, ce qui rendait une réponse que personne n'avait demandée), `include_defaults` (il ajoute une section `defaults` avec les dizaines de réglages qu'ES a et que ferrite n'a pas) |
-| `PUT /{index}/_settings` | ❌ | **pas encore** — le seul réglage exploité se pose à la création : le changer à chaud demanderait de reconstruire la génération courante, et un client qui le croit changé chercherait longtemps |
+| `GET /{index}/_settings` | 🟡 | les réglages d'ES qu'un index a vraiment (`number_of_shards`, `uuid`, `creation_date`…), et `index.query.parse.allow_unmapped_fields` s'il a été posé. Supporté : `GET /_settings` sans index (vaut `_all`), `/{index}/_settings/{nom}` (filtrer par nom de réglage — liste, jokers, `_all`. Le filtre porte sur les clés **aplaties**, sans quoi le même nom filtrerait autrement selon `flat_settings`), `flat_settings` (il aplatit les clés (`index.number_of_shards`) ; longtemps refusé, parce qu'accepté et ignoré il rendait une réponse que personne n'avait demandée — c'est une réécriture de clés, elle est maintenant faite), `local` (un seul nœud : la question ne se pose pas). Refusé : `include_defaults` (il ajoute une section `defaults` avec les dizaines de réglages qu'ES a et que ferrite n'a pas) |
+| `PUT /{index}/_settings` | 🟡 | les réglages **inertes** sont acceptés, gardés et rendus par `GET /{index}/_settings` : ils décrivent déjà ce que ferrite est (mono-shard, sans réplique). Faire échouer un script d'init entier sur un `number_of_replicas: 1` qui ne changerait rien serait pire que de l'accepter. `index.refresh_interval` n'est pas accepté-et-ignoré : `-1` sort vraiment l'index de la boucle de rafraîchissement de fond. Supporté : `number_of_replicas` (sans effet — ferrite n'a pas de réplique), `auto_expand_replicas` (sans effet, même raison), `refresh_interval` (`-1` désactive vraiment le rafraîchissement de fond ; une valeur positive est honorée, ferrite rafraîchissant toutes les secondes), `preserve_existing`, une valeur `null` (efface le réglage, comme chez ES). Refusé : `number_of_shards` (figé à la création, comme chez ES (`Can't update non dynamic settings`)), `index.query.parse.allow_unmapped_fields` (figé dans la génération courante du schéma ; un client qui le croirait changé chercherait longtemps), `reopen`, tout autre réglage d'ES (`index.blocks.*`, `index.max_result_window`… : les accepter puis les ignorer changerait le comportement en silence) |
 | `PUT /{index}/_mapping` | 🟡 | **ajoute** des champs (une nouvelle génération est construite). Changer le type d'un champ existant reste refusé, comme chez ES. Refusé : `dynamic` (le modifier après coup) |
 | `POST /{index}/_refresh` | ✅ | |
 | `POST\|GET /_analyze`, `/{index}/_analyze` | 🟡 | Supporté : `text` (chaîne ou liste), `analyzer`, `field`. Refusé : `tokenizer`, `filter`, `char_filter` |
 | Mapping dynamique | ✅ | `dynamic` : `true` (défaut), `false`, `strict`. `runtime` ❌. Voir plus bas |
 | Alias | ✅ | voir la section dédiée |
-| Templates, ILM, `_stats`, `_close`, `_open` | ❌ | **pas encore** — un template applique un mapping à un index qui n'existe pas encore ; rien ne s'y oppose ici, ce n'est pas écrit — et `_close` / `_open` supposent un index qu'on peut arrêter de servir sans le supprimer, état que ferrite n'a pas |
+| Templates d'index — `_index_template` et `_template` | 🟡 | `PUT` / `GET` / `HEAD` / `DELETE` sur les deux familles, et l'application du template à la création de l'index — **implicite** (une écriture dans un index absent) comme **explicite** (`PUT /{index}`, où le corps l'emporte). Un composable qui correspond éclipse les anciens ; sinon tous les anciens qui correspondent sont fusionnés par `order` croissant, comme chez ES. Le contenu est validé **à la pose** : un réglage refusé, un type de champ inconnu ou un alias filtré font échouer le `PUT`, là où le client regarde. Supporté : `index_patterns`, `template` (`settings`, `mappings`, `aliases`), `priority` (composables — le plus fort gagne, et deux motifs qui se recouvrent à priorité égale sont refusés comme chez ES), `order` (anciens — fusion par ordre croissant), `version`, `_meta`, `create`, `flat_settings` (sur `GET /_template`). Refusé : `composed_of` (les templates de composants (`_component_template`) ne sont pas implémentés ; appliquer un template qui en cite un sans le lire donnerait un index sans le mapping demandé), `data_stream`, `include_defaults` |
+| `_component_template`, `_simulate_index_template`, `_simulate` | ❌ | **pas encore** — un template de composants est un template qu'on cite depuis un autre : tant qu'il n'est pas lu, `composed_of` est refusé à la pose plutôt qu'appliqué à moitié. La simulation, elle, rend l'index qu'on obtiendrait — utile, et sans client qui la demande |
+| `GET /{index}/_stats` | 🟡 | la forme d'ES — `_shards`, `_all` (`primaries` / `total`), `indices` — et les quatre groupes que ferrite **mesure**. Sur un moteur mono-shard sans réplique, `primaries` et `total` portent les mêmes nombres : c'est vrai, pas une simplification. Supporté : `docs` (`count`, `deleted`), `store` (`size_in_bytes`, `total_data_set_size_in_bytes`), `segments` (`count`), `shard_stats` (`total_count`), `level` (`cluster`, `indices`, `shards`). Refusé : les autres groupes de compteurs (`indexing`, `search`, `get`, `merge`, `translog`, les caches… : ferrite ne les tient pas, et un `index_total: 0` sur un index qu'on vient de remplir ferait passer « non mesuré » pour « aucune activité »), `fields`, `groups`, `completion_fields`, `fielddata_fields`, `_shards.total` (un shard par index, toujours : un cas de la suite d'Elastic qui crée un index à 5 shards et en attend 10 au total ne peut pas passer ici — et ne devrait pas) |
 
 ### Mapping dynamique
 
@@ -621,7 +623,9 @@ de documents que demandé, sans que rien ne le signale.
 | `routing`, `filter_path`, `typed_keys` | ❌ | **hors périmètre assumé** — ferrite est mono-shard, `routing` n'a rien à choisir ; les deux autres changent la forme de la réponse, et une forme qui dépend d'un paramètre est une seconde API à mesurer |
 | `search_type`, `max_concurrent_shard_requests`, `pre_filter_shard_size`, `batched_reduce_size` | ❌ | **hors périmètre assumé** — ils reglent la façon dont une recherche se distribue entre shards ; il n'y en a qu'un, donc rien à distribuer et rien à régler |
 | `rest_total_hits_as_int` | ❌ | **pas encore** — il change la forme de `hits.total` (nombre au lieu d'objet) ; ES 8 l'accepte encore et du code venu de la 6.x/7.x s'en sert, voir [`compat-es7.md`](compat-es7.md) |
-| `_msearch`, `_search/template`, `_explain`, `_validate` | ❌ | **pas encore** — `_msearch` est le plus regretté : un tableau de bord qui pose six facettes fait six appels au lieu d'un. Les trois autres sont des outils de mise au point |
+| `_msearch`, `_search/template`, `_explain` | ❌ | **pas encore** — `_msearch` est le plus regretté : un tableau de bord qui pose six facettes fait six appels au lieu d'un. Les deux autres sont des outils de mise au point |
+| `GET\|POST /{index}/_field_caps` | 🟡 | par champ, son type, `searchable` et `aggregatable`, et l'agrégation **par index** quand plusieurs sont visés — c'est la question que pose un outil de découverte avant de proposer un filtre qui échouerait sur la moitié des index. Toute l'information est déjà dans le mapping : ferrite n'a ni `index: false` ni `doc_values: false`, donc les deux drapeaux se déduisent du type. Supporté : `fields` (dans l'URL ou dans le corps, jokers compris), `include_unmapped`, `index_filter` (n'décrire que les index qui ont au moins un document correspondant). Refusé : les champs de métadonnées (`_id`, `_index`, `_seq_no`…) (ES les rend sur `fields=*` ; ferrite ne sait pas les interroger, et les annoncer `searchable` serait un résultat faux), `runtime_mappings` |
+| `GET\|POST /{index}/_validate/query` | 🟡 | le traducteur du Query DSL rendu observable, sans exécuter. Les deux formes de réponse d'ES sont reproduites, et la distinction compte : une requête mal formée (clause inconnue) rend `valid: false` **sans** `_shards`, une requête que ce mapping-là ne sait pas construire rend `_shards` et une explication par index. Supporté : `explain`, `all_shards` (un shard par index : sans objet ici), `ignore_unavailable`, `allow_no_indices`, `expand_wildcards`. Refusé : `rewrite` (il demande la forme **réécrite** de la requête Lucene, que ferrite n'a pas), `q` (la recherche par chaîne (`query_string`) n'est pas implémentée ; `df`, `default_operator`, `analyzer`, `analyze_wildcard` et `lenient` la suivent) |
 
 Les paramètres purement cosmétiques `pretty`, `human` et `error_trace` sont
 acceptés partout ; `pretty` est implémenté (indentation de la réponse).
@@ -749,6 +753,114 @@ distribué ; mono-shard, parent et enfant sont forcément au même endroit.
 | `parent_id` | ✅ | |
 | `{"term": {"lien": "article"}}` | ✅ | le champ `join` se filtre comme un `keyword`, sous son propre nom, comme chez ES |
 | `routing` | 🟡 | accepté et sans objet : il n'y a qu'un shard, donc rien à co-localiser. C'est **une contrainte d'ES en moins** |
+
+## Les petites routes qui débloquent un outil
+
+Cinq routes sans difficulté de moteur, dont l'absence faisait échouer des outils
+entiers : un outil de découverte de champs, un script d'init qui pose un
+template, un tableau de bord qui lit `_stats`.
+
+### `_field_caps` — ce que chaque champ sait faire
+
+`GET|POST /{index}/_field_caps?fields=*` rend, par champ, son type, `searchable`
+et `aggregatable`, et l'**agrégation par index** quand plusieurs sont visés :
+c'est la question que pose un outil de découverte avant de proposer un filtre
+qui échouerait sur la moitié des index. Toute l'information est déjà dans le
+mapping — ferrite n'a ni `index: false` ni `doc_values: false`, donc les deux
+drapeaux se déduisent du type (un `text` n'est pas agrégeable, un `object` et un
+`nested` ne sont ni l'un ni l'autre, tout le reste est les deux ; mesuré contre
+ES 8.15).
+
+Une règle de la réponse d'ES n'était pas devinable et vient d'une mesure : la
+liste `indices` n'apparaît sur une entrée de type que si le champ a **plusieurs**
+entrées. Un champ présent dans un seul des deux index visés n'a donc pas de
+`indices` tant qu'il n'a qu'un type — c'est `include_unmapped=true` qui, en
+ajoutant l'entrée `unmapped`, le fait apparaître.
+
+`index_filter` est supporté : il ne décrit que les index qui ont au moins un
+document correspondant, ce qui évite de décrire mille index quotidiens quand un
+seul porte la période demandée.
+
+### `_validate/query` — la requête est-elle valide, et sinon pourquoi
+
+C'est le traducteur du Query DSL rendu observable, sans exécuter la recherche.
+Ce qu'il fallait reproduire, ce sont les **deux formes de réponse** d'ES, et la
+distinction compte :
+
+| Ce qui est invalide | Ce qu'ES rend |
+|---|---|
+| la requête elle-même (clause inconnue, paramètre refusé) | `{"valid": false}`, **sans** `_shards` — et `error` avec `explain=true` |
+| la requête sur *ce mapping-là* (une valeur qui n'a pas le type du champ) | `_shards`, et une explication par index |
+
+ferrite trouve la première au même endroit qu'ES : en construisant la requête
+contre un **schéma vide** ([`engine::sans_index`](../src/engine.rs)), où aucune
+erreur ne peut venir d'un mapping. Seules les erreurs de *forme* y comptent —
+c'est le fuzzer différentiel qui l'a montré, en trouvant qu'un `nested` sur un
+chemin absent échoue aussi contre un schéma vide et sortait `valid: false` là où
+ES dit `true`.
+
+### `_stats` — les compteurs que ferrite mesure
+
+`GET /{index}/_stats` rend la forme d'ES — `_shards`, `_all`
+(`primaries` / `total`), `indices` — et **quatre** groupes : `docs`, `store`,
+`segments`, `shard_stats`. Sur un moteur mono-shard sans réplique, `primaries`
+et `total` portent les mêmes nombres : c'est vrai, pas une simplification.
+
+Les autres groupes (`indexing`, `search`, `get`, `merge`, `translog`, les
+caches…) ne sont **pas** rendus à zéro. Un `index_total: 0` sur un index où l'on
+vient d'écrire mille documents ferait passer « non mesuré » pour « aucune
+activité » : c'est l'échec silencieux que ce projet interdit, et il est pire
+qu'un refus. Un client qui en nomme un (`GET /_stats/indexing`) reçoit donc une
+erreur explicite.
+
+### `PUT /{index}/_settings` — les réglages inertes, plutôt qu'un script cassé
+
+ferrite n'a qu'un réglage qui change ses réponses
+(`index.query.parse.allow_unmapped_fields`), et il est figé à la création :
+la route était refusée en bloc pour autant. Le prix était disproportionné —
+un script d'init entier échouait sur un `number_of_replicas: 1` qui ne
+changerait rien ici.
+
+Les réglages **inertes** sont donc acceptés, gardés et rendus par
+`GET /{index}/_settings` : ils décrivent déjà ce que ferrite est. Tout le reste
+est refusé explicitement, `index.blocks.*` et `index.max_result_window` compris —
+ceux-là changeraient le comportement, et les avaler serait le même échec
+silencieux.
+
+Un cas mérite d'être dit, parce qu'il n'est pas inerte : `index.refresh_interval`
+n'est pas accepté-et-ignoré. La valeur `-1` sort **vraiment** l'index de la
+boucle de rafraîchissement de fond (`POST /{index}/_refresh` continue de
+marcher) ; une valeur positive est honorée au sens où ES la définit — « visible
+au plus tard après ce délai » — puisque ferrite rafraîchit toutes les secondes.
+
+`flat_settings` est appliqué là où ferrite rend des réglages d'index, et
+`GET /_settings` sans index vaut `_all` ; `/{index}/_settings/{nom}` filtre par
+nom de réglage (liste, jokers, `_all`), sur les clés **aplaties** — sans quoi le
+même nom filtrerait autrement selon `flat_settings`.
+
+### Templates d'index — les deux familles
+
+`_index_template` (la forme actuelle) et `_template` (l'ancienne, dépréciée mais
+toujours servie par ES 8) : `PUT`, `GET`, `HEAD`, `DELETE`, et l'application du
+template à la création de l'index. Les deux, parce que c'est `_template` qu'on
+trouve dans le script d'init d'un projet resté en 7.x — et le produit, c'est que
+ce code-là ne change pas.
+
+Le template s'applique à la création **implicite** (écrire dans un index absent)
+comme **explicite** (`PUT /{index}`, où le corps de la requête l'emporte) — c'est
+ce que fait ES, mesuré. Un composable qui correspond éclipse les anciens ; sinon
+tous les anciens qui correspondent sont fusionnés par `order` croissant.
+
+Le contenu est validé **à la pose**, pas à la création de l'index : un réglage
+refusé, un type de champ inconnu ou un alias filtré font échouer le `PUT`, là où
+le client regarde. Les découvrir six mois plus tard, au premier document écrit
+dans `logs-2027.01.01`, serait la même information rendue inutilisable.
+
+Deux composables de même priorité dont les motifs se recouvrent rendraient la
+création ambiguë : ES refuse, ferrite aussi. Le recouvrement est une
+approximation assumée — on ne calcule pas l'intersection de deux jokers, on
+regarde si l'un décrit l'autre pris pour un nom — et elle ne peut que
+**sur**-détecter, jamais laisser passer deux motifs identiques.
 
 ## Erreurs
 
@@ -884,7 +996,7 @@ pas pour être découverts en production.
     où il aura des données.
 
     La frontière est mesurée, pas devinée
-    ([`tests/compat/sonde_vide.py`](../tests/compat/sonde_vide.py), 27/27
+    ([`tests/compat/sonde_vide.py`](../tests/compat/sonde_vide.py), 28/28
     identiques) : sur tout ce qu'ES lui-même refuse sans index — une clause
     inconnue, un type d'agrégation inconnu, une clé de corps inconnue, un ordre
     de tri invalide — les deux serveurs rendent le même statut. Et sur ce qu'ES
@@ -892,6 +1004,33 @@ pas pour être découverts en production.
     `sort`, une agrégation, un chemin `nested` inexistant — les deux rendent 200
     et le **même corps**, `max_score: 0.0` et absence de section `aggregations`
     comprises. Sans shard, il n'y a pas de verdict de mapping à rendre.
+
+13. **`_field_caps` n'expose pas les champs de métadonnées.** Sur `fields=*`, ES
+    décrit aussi `_id`, `_index`, `_seq_no`, `_source`, `_routing`, `_tier` et
+    une dizaine d'autres. ferrite ne les rend pas : il ne sait pas les
+    interroger, et les annoncer `searchable: true` serait un résultat faux — un
+    outil qui construirait un filtre dessus n'obtiendrait rien, en silence. Les
+    champs du mapping, eux, sont mesurés identiques à ES par le fuzzer
+    différentiel, sur des mappings tirés au sort.
+
+14. **L'`explanation` de `_validate/query` est celle de ferrite.** Celle d'ES est
+    la chaîne Lucene de la requête réécrite ; ferrite rend le rendu de la requête
+    tantivy qu'il a construite (avec les noms de champ remis à la place des
+    numéros internes). Les deux moteurs ne construisent pas les mêmes objets, et
+    inventer une chaîne Lucene qu'on n'a pas serait pire que d'en rendre une qui
+    dit honnêtement ce que ferrite a compris. Ce qui doit coïncider — et qui est
+    comparé par le fuzzer sur chaque requête tirée au sort — c'est le **verdict**
+    `valid`. `rewrite=true`, qui demande explicitement la forme réécrite, est
+    refusé.
+
+15. **`_stats` ne rend que les groupes que ferrite mesure**, et
+    `docs.count` n'y compte pas la même chose qu'ES dès qu'il y a du `nested` :
+    Lucene indexe chaque élément d'un tableau `nested` comme un document à part
+    et les compte, ferrite n'a pas ces sous-documents (voir
+    [`nested-join.md`](nested-join.md)) et compte ce qu'il a. Aucun des deux ne
+    ment. Le fuzzer ne le tolère pas en bloc : il exige que le compte de ferrite
+    égale ce que la recherche rend des deux côtés, et que celui d'ES lui soit
+    strictement supérieur.
 
 ## Limites connues (perf, pas fonctionnalité)
 

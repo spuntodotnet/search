@@ -252,7 +252,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let cat = Catalog::open(dir.clone(), "test".into(), "n1".into()).unwrap();
         for nom in noms {
-            cat.create(nom, Mapping::default()).unwrap();
+            cat.create(nom, Mapping::default(), Default::default())
+                .unwrap();
         }
         (Jetable(dir), cat)
     }

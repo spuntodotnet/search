@@ -192,31 +192,30 @@ tables:
 
       - id: hors.cycle_de_vie
         nom: >-
-          Cycle de vie d'un index — `_close`, `_open`, `_stats`, `_forcemerge`,
+          Cycle de vie d'un index — `_close`, `_open`, `_forcemerge`,
           `_shrink`, `_split`, `_clone`, `_rollover`, `_recovery`, `_segments`,
           `_flush`, `_upgrade`, `_cache/clear`, `_shard_stores`, `_resolve/index`
         etat: refuse
         motif: pas_encore
-        poids: 3.1
+        poids: 3.4
         raison: >-
           la moitié de ces routes n'a pas de sens sans shards (`_shrink`,
-          `_split`, `_recovery`, `_shard_stores`) ; l'autre moitié est un manque,
-          `_stats` en tête, que réclament les tableaux de bord.
+          `_split`, `_recovery`, `_shard_stores`) ; l'autre moitié suppose un
+          index qu'on peut arrêter de servir sans le supprimer (`_close` /
+          `_open`), état que ferrite n'a pas.
         conformance: {apis: ["indices.*"]}
 
       - id: hors.autres_recherches
         nom: >-
-          Les autres routes de recherche — `_field_caps`, `_search_shards`,
+          Les autres routes de recherche — `_search_shards`,
           `_termvectors`, `_mtermvectors`, `_suggest`, `_source`
         etat: refuse
         motif: pas_encore
-        poids: 0.8
+        poids: 0.6
         raison: >-
-          aucune n'est demandée par le code client qu'on cherche à servir ;
-          `_field_caps` est celle qui manquerait le plus, un Kibana s'en sert
-          pour découvrir les champs.
+          aucune n'est demandée par le code client qu'on cherche à servir.
         conformance:
-          apis: [field_caps, search_shards, termvectors, mtermvectors, suggest,
+          apis: [search_shards, termvectors, mtermvectors, suggest,
                  get_source, exists_source, mlt, rank_eval, knn_search,
                  terms_enum, search_mvt, open_point_in_time, close_point_in_time]
 
@@ -365,30 +364,46 @@ tables:
           été posé
         parametres:
           refuses:
-            - {texte: "`GET /_settings` sans index", note: "le nom est pris pour celui d'un index, d'où un `invalid_index_name_exception` qui trompe"}
-            - {texte: "`/{index}/_settings/{nom}`", note: "filtrer par nom de réglage"}
-            - {nom: "local"}
-            - {nom: "flat_settings", note: "il aplatit les clés (`index.number_of_shards`) ; longtemps accepté et ignoré, ce qui rendait une réponse que personne n'avait demandée"}
             - {nom: "include_defaults", note: "il ajoute une section `defaults` avec les dizaines de réglages qu'ES a et que ferrite n'a pas"}
+          supportes:
+            - {texte: "`GET /_settings` sans index", note: "vaut `_all`"}
+            - {texte: "`/{index}/_settings/{nom}`", note: "filtrer par nom de réglage — liste, jokers, `_all`. Le filtre porte sur les clés **aplaties**, sans quoi le même nom filtrerait autrement selon `flat_settings`"}
+            - {nom: "flat_settings", note: "il aplatit les clés (`index.number_of_shards`) ; longtemps refusé, parce qu'accepté et ignoré il rendait une réponse que personne n'avait demandée — c'est une réécriture de clés, elle est maintenant faite"}
+            - {nom: "local", note: "un seul nœud : la question ne se pose pas"}
         conformance:
           apis: [indices.get_settings]
           erreurs:
-            # La sous-route « filtrer par nom de reglage » n'existe pas, et
-            # `/_settings` sans index est pris pour un nom d'index.
-            - "no handler found for uri \\[[^]]*/_settings/"
-            - "Invalid index name \\[_settings\\]"
-            - "ne supporte pas \\[(flat_settings|include_defaults)\\] sur \\[/\\{index\\}/_settings\\]"
+            - "ne supporte pas \\[include_defaults\\] sur \\[/\\{index\\}/_settings\\]"
 
       - id: index.settings_ecriture
         nom: "`PUT /{index}/_settings`"
-        etat: refuse
-        motif: pas_encore
+        etat: partiel
         poids: 0.7
-        raison: >-
-          le seul réglage exploité se pose à la création : le changer à chaud
-          demanderait de reconstruire la génération courante, et un client qui le
-          croit changé chercherait longtemps.
-        conformance: {apis: [indices.put_settings]}
+        detail: >-
+          les réglages **inertes** sont acceptés, gardés et rendus par
+          `GET /{index}/_settings` : ils décrivent déjà ce que ferrite est
+          (mono-shard, sans réplique). Faire échouer un script d'init entier sur
+          un `number_of_replicas: 1` qui ne changerait rien serait pire que de
+          l'accepter. `index.refresh_interval` n'est pas accepté-et-ignoré :
+          `-1` sort vraiment l'index de la boucle de rafraîchissement de fond
+        parametres:
+          supportes:
+            - {nom: "number_of_replicas", note: "sans effet — ferrite n'a pas de réplique"}
+            - {nom: "auto_expand_replicas", note: "sans effet, même raison"}
+            - {nom: "refresh_interval", note: "`-1` désactive vraiment le rafraîchissement de fond ; une valeur positive est honorée, ferrite rafraîchissant toutes les secondes"}
+            - {nom: "preserve_existing"}
+            - {texte: "une valeur `null`", note: "efface le réglage, comme chez ES"}
+          refuses:
+            - {nom: "number_of_shards", note: "figé à la création, comme chez ES (`Can't update non dynamic settings`)"}
+            - {texte: "`index.query.parse.allow_unmapped_fields`", note: "figé dans la génération courante du schéma ; un client qui le croirait changé chercherait longtemps"}
+            - {nom: "reopen"}
+            - {texte: "tout autre réglage d'ES", note: "`index.blocks.*`, `index.max_result_window`… : les accepter puis les ignorer changerait le comportement en silence"}
+        conformance:
+          apis: [indices.put_settings]
+          erreurs:
+            - "ne supporte pas le reglage d'index"
+            - "ne supporte pas de changer \\[index.query.parse.allow_unmapped_fields\\]"
+            - "ne supporte pas \\[reopen\\]"
 
       - id: index.mapping_ecriture
         nom: "`PUT /{index}/_mapping`"
@@ -433,24 +448,90 @@ tables:
         detail: "voir la section dédiée"
 
       - id: index.templates
-        nom: "Templates, ILM, `_stats`, `_close`, `_open`"
-        etat: refuse
-        motif: pas_encore
-        poids: 3.9
-        raison: >-
-          un template applique un mapping à un index qui n'existe pas encore ;
-          rien ne s'y oppose ici, ce n'est pas écrit — et `_close` / `_open`
-          supposent un index qu'on peut arrêter de servir sans le supprimer,
-          état que ferrite n'a pas.
+        nom: "Templates d'index — `_index_template` et `_template`"
+        etat: partiel
+        poids: 2.4
+        detail: >-
+          `PUT` / `GET` / `HEAD` / `DELETE` sur les deux familles, et
+          l'application du template à la création de l'index — **implicite**
+          (une écriture dans un index absent) comme **explicite**
+          (`PUT /{index}`, où le corps l'emporte). Un composable qui correspond
+          éclipse les anciens ; sinon tous les anciens qui correspondent sont
+          fusionnés par `order` croissant, comme chez ES. Le contenu est validé
+          **à la pose** : un réglage refusé, un type de champ inconnu ou un
+          alias filtré font échouer le `PUT`, là où le client regarde
+        parametres:
+          supportes:
+            - {nom: "index_patterns"}
+            - {nom: "template", note: "`settings`, `mappings`, `aliases`"}
+            - {nom: "priority", note: "composables — le plus fort gagne, et deux motifs qui se recouvrent à priorité égale sont refusés comme chez ES"}
+            - {nom: "order", note: "anciens — fusion par ordre croissant"}
+            - {nom: "version"}
+            - {nom: "_meta"}
+            - {nom: "create"}
+            - {nom: "flat_settings", note: "sur `GET /_template`"}
+          refuses:
+            - {nom: "composed_of", note: "les templates de composants (`_component_template`) ne sont pas implémentés ; appliquer un template qui en cite un sans le lire donnerait un index sans le mapping demandé"}
+            - {nom: "data_stream"}
+            - {nom: "include_defaults"}
         conformance:
           apis: [indices.put_template, indices.get_template, indices.delete_template,
                  indices.exists_template, indices.put_index_template,
                  indices.get_index_template, indices.delete_index_template,
-                 indices.exists_index_template, indices.simulate_index_template,
-                 indices.simulate_template, cluster.put_component_template,
-                 cluster.get_component_template, cluster.delete_component_template,
-                 cluster.exists_component_template, indices.stats, indices.close,
-                 indices.open]
+                 indices.exists_index_template]
+
+      - id: index.templates_composants
+        nom: "`_component_template`, `_simulate_index_template`, `_simulate`"
+        etat: refuse
+        motif: pas_encore
+        poids: 0.9
+        raison: >-
+          un template de composants est un template qu'on cite depuis un autre :
+          tant qu'il n'est pas lu, `composed_of` est refusé à la pose plutôt
+          qu'appliqué à moitié. La simulation, elle, rend l'index qu'on
+          obtiendrait — utile, et sans client qui la demande.
+        conformance:
+          apis: [indices.simulate_index_template, indices.simulate_template,
+                 cluster.put_component_template, cluster.get_component_template,
+                 cluster.delete_component_template, cluster.exists_component_template]
+
+      - id: index.stats
+        nom: "`GET /{index}/_stats`"
+        etat: partiel
+        poids: 0.2
+        detail: >-
+          la forme d'ES — `_shards`, `_all` (`primaries` / `total`), `indices` —
+          et les quatre groupes que ferrite **mesure**. Sur un moteur mono-shard
+          sans réplique, `primaries` et `total` portent les mêmes nombres : c'est
+          vrai, pas une simplification
+        parametres:
+          supportes:
+            - {nom: "docs", note: "`count`, `deleted`"}
+            - {nom: "store", note: "`size_in_bytes`, `total_data_set_size_in_bytes`"}
+            - {nom: "segments", note: "`count`"}
+            - {nom: "shard_stats", note: "`total_count`"}
+            - {nom: "level", note: "`cluster`, `indices`, `shards`"}
+          refuses:
+            - {texte: "les autres groupes de compteurs", note: "`indexing`, `search`, `get`, `merge`, `translog`, les caches… : ferrite ne les tient pas, et un `index_total: 0` sur un index qu'on vient de remplir ferait passer « non mesuré » pour « aucune activité »"}
+            - {nom: "fields"}
+            - {nom: "groups"}
+            - {nom: "completion_fields"}
+            - {nom: "fielddata_fields"}
+            - {nom: "_shards.total", note: "un shard par index, toujours : un cas de la suite d'Elastic qui crée un index à 5 shards et en attend 10 au total ne peut pas passer ici — et ne devrait pas"}
+        conformance:
+          apis: [indices.stats]
+          erreurs:
+            - "ne supporte pas la metrique \\[[a-z_]+\\] de \\[_stats\\]"
+            - "ne supporte pas \\[(fields|groups|completion_fields|fielddata_fields)\\] sur \\[_stats\\]"
+            # Les groupes de compteurs que ferrite ne tient pas : un cas qui les
+            # lit ne mesure pas un ecart, il mesure ce refus. Les motifs citent
+            # les noms de groupe d'ES, ils ne peuvent donc pas attraper autre
+            # chose que `_stats`.
+            - "\\[_all\\.(total|primaries)\\.(indexing|search|get|merges|merge|refresh|flush|warmer|query_cache|fielddata|completion|translog|request_cache|recovery|bulk|segments\\.file_sizes)\\]"
+            # `level=shards` : ferrite rend son shard unique et ses compteurs,
+            # pas l'etat interne d'un shard Lucene (commit, seq_no, baux de
+            # retention).
+            - "\\[indices\\.[^]]*\\.shards\\.0\\.0\\."
 
   # ---------------------------------------------------------------------------
   - id: analyzers
@@ -1631,15 +1712,59 @@ tables:
           [`compat-es7.md`](compat-es7.md).
 
       - id: recherche.msearch
-        nom: "`_msearch`, `_search/template`, `_explain`, `_validate`"
+        nom: "`_msearch`, `_search/template`, `_explain`"
         etat: refuse
         motif: pas_encore
-        poids: 0.2
+        poids: 0.1
         raison: >-
           `_msearch` est le plus regretté : un tableau de bord qui pose six
-          facettes fait six appels au lieu d'un. Les trois autres sont des
+          facettes fait six appels au lieu d'un. Les deux autres sont des
           outils de mise au point.
-        conformance: {apis: [msearch, explain, indices.validate_query]}
+        conformance: {apis: [msearch, explain]}
+
+      - id: recherche.field_caps
+        nom: "`GET|POST /{index}/_field_caps`"
+        etat: partiel
+        poids: 0.2
+        detail: >-
+          par champ, son type, `searchable` et `aggregatable`, et l'agrégation
+          **par index** quand plusieurs sont visés — c'est la question que pose
+          un outil de découverte avant de proposer un filtre qui échouerait sur
+          la moitié des index. Toute l'information est déjà dans le mapping :
+          ferrite n'a ni `index: false` ni `doc_values: false`, donc les deux
+          drapeaux se déduisent du type
+        parametres:
+          supportes:
+            - {nom: "fields", note: "dans l'URL ou dans le corps, jokers compris"}
+            - {nom: "include_unmapped"}
+            - {nom: "index_filter", note: "n'décrire que les index qui ont au moins un document correspondant"}
+          refuses:
+            - {texte: "les champs de métadonnées (`_id`, `_index`, `_seq_no`…)", note: "ES les rend sur `fields=*` ; ferrite ne sait pas les interroger, et les annoncer `searchable` serait un résultat faux"}
+            - {nom: "runtime_mappings"}
+        conformance: {apis: [field_caps]}
+
+      - id: recherche.validate_query
+        nom: "`GET|POST /{index}/_validate/query`"
+        etat: partiel
+        poids: 0.1
+        detail: >-
+          le traducteur du Query DSL rendu observable, sans exécuter. Les deux
+          formes de réponse d'ES sont reproduites, et la distinction compte :
+          une requête mal formée (clause inconnue) rend `valid: false` **sans**
+          `_shards`, une requête que ce mapping-là ne sait pas construire rend
+          `_shards` et une explication par index
+        parametres:
+          supportes:
+            - {nom: "explain"}
+            - {nom: "all_shards", note: "un shard par index : sans objet ici"}
+            - {texte: "`ignore_unavailable`, `allow_no_indices`, `expand_wildcards`"}
+          refuses:
+            - {nom: "rewrite", note: "il demande la forme **réécrite** de la requête Lucene, que ferrite n'a pas"}
+            - {nom: "q", note: "la recherche par chaîne (`query_string`) n'est pas implémentée ; `df`, `default_operator`, `analyzer`, `analyze_wildcard` et `lenient` la suivent"}
+        conformance:
+          apis: [indices.validate_query]
+          erreurs:
+            - "ne supporte pas \\[(rewrite|q|df|default_operator|analyzer|analyze_wildcard|lenient)\\] sur \\[_validate/query\\]"
 
   # ---------------------------------------------------------------------------
   - id: datemath

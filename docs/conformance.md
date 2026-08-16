@@ -156,7 +156,7 @@ tous invisibles tant que les 400 échecs étaient anonymes :
 
 | Ce que la doc disait | Ce que la mesure dit |
 |---|---|
-| `GET /{index}/_settings` ✅ | 15 cas y échouent : `GET /_settings` sans index rend `invalid_index_name_exception`, `/{index}/_settings/{nom}` n'existe pas, `local` est refusé. La capacité est **partielle**, elle est déclarée telle |
+| `GET /{index}/_settings` ✅ | 15 cas y échouent : `GET /_settings` sans index rend `invalid_index_name_exception`, `/{index}/_settings/{nom}` n'existe pas, `local` est refusé. La capacité est **partielle**, elle est déclarée telle — les trois manques ont été écrits depuis, et ces cas passent |
 | `_cluster/health` 🟡, seul `level` refusé | tous les `wait_for_*` d'attente de shards sont refusés eux aussi (9 cas), ce qui est juste sur un mono-nœud — mais n'était écrit nulle part |
 | `_cat/indices` / `_cat/health` 🟡 | `help` et `ts` sont refusés en plus de `h` et `s` |
 
@@ -184,6 +184,29 @@ le correctif : quatre cas quittent cette colonne et sept passent d'« échec » 
 pas ici). La frontière avec ES sur un serveur vide est désormais tenue par
 [`tests/compat/sonde_vide.py`](../tests/compat/sonde_vide.py), qui refuse de
 tourner si l'un des deux serveurs n'est pas vide.
+
+### Le même geste, contre le conteneur de référence, pour trois minutes
+
+Un cas qui échoue contre ferrite n'échoue pas forcément **parce que** c'est
+ferrite. La suite est figée à la 7.10.2 ; ce qu'elle décrit est parfois ce
+qu'ES faisait alors et ne fait plus. Le runner accepte une liste de domaines,
+donc la question se tranche en une commande :
+
+```bash
+python3 tests/compat/conformance_es.py http://localhost:9201 \
+  --suites field_caps,indices.validate_query,indices.stats,indices.put_settings
+```
+
+Sur les domaines des cinq routes ajoutées par la carte 20, un vrai
+**Elasticsearch 8.15** rend 106/118 : les douze échecs qui restent chez lui sont
+l'API typée (9 cas, un `{type}` dans l'URL), et — celui qui comptait —
+`field_caps/30_filter.yml::Field caps with index filter`. Il pose une borne
+`gte: 2019` sur un champ `date` : la 7.10 lisait ce nombre nu comme une année,
+la 8.x comme un `epoch_millis`. **ferrite rend la même chose qu'ES 8.15**, donc
+ce cas ne mesure pas un manque de ferrite — il mesure un coût de migration
+7→8, comme le probe 7.x en mesure d'autres. Le rapport le compte pourtant en
+régression : le runner n'a pas de troisième catégorie pour ça, et inventer une
+exception au cas par cas serait le début d'un dénominateur choisi.
 
 ## D'où viennent ces tests, et pourquoi on a le droit
 
