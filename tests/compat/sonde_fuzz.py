@@ -104,9 +104,15 @@ DOCS_SCORES = [
     ("trois", {"n": [5, 6, 7], "k": ["a", "b", "c"], "b": [True, False]}),
 ]
 
-NESTE = {"mappings": {"properties": {"b": {"type": "nested", "properties": {
-    "x": {"type": "double"}, "y": {"type": "date"}}}}}}
-DOCS_NESTE = [("n1", {"b": [{"x": 1.0, "y": "2026-01-01"}]})]
+NESTE = {"mappings": {"properties": {
+    "b": {"type": "nested", "properties": {"x": {"type": "double"},
+                                           "y": {"type": "date"}}},
+    # Un champ de la racine : il sert d'agregation porteuse, pour verifier que
+    # le refus d'un sous-champ de `nested` vaut aussi en sous-agregation.
+    "k": {"type": "keyword"}}}}
+DOCS_NESTE = [("n1", {"k": "a", "b": [{"x": 1.0, "y": "2026-01-01"},
+                                      {"x": 3.0, "y": "2026-02-01"}]}),
+              ("n2", {"k": "b", "b": [{"x": 8.0, "y": "2026-03-01"}]})]
 
 TERMES = {"mappings": {"properties": {"k": {"type": "keyword"}}}}
 DOCS_TERMES = [(f"t{i:02d}", {"k": f"v{i:02d}"}) for i in range(20)]
@@ -213,6 +219,62 @@ CAS = [
      "la cle de la map etait l'epoch, ES y met la date lisible",
      {"size": 0, "aggs": {"a": {"date_histogram": {
          "field": "d", "fixed_interval": "30d", "keyed": True}}}}, agg("a")),
+
+    # -- sous-agregations d'un bucket vide ---------------------------------
+    #
+    # `histogram` et `date_histogram` comblent leurs trous des deux cotes. Mais
+    # tantivy ne fait pas tourner ce qu'il y a **dessous** dans les buckets
+    # qu'il fabrique : une sous-agregation `range` y rendait `buckets: []`. Un
+    # graphe qui empile deux niveaux perdait donc ses categories sur les
+    # periodes creuses, en 200 et sans un mot.
+    (TROUS, DOCS_TROUS, "range sous un bucket vide de histogram",
+     "tantivy comble les trous sans executer ce qu'il y a dessous : le `range` "
+     "rendait `buckets: []` dans les buckets 1000 a 4000, la ou ES rend ses "
+     "trois intervalles a `doc_count: 0`",
+     {"size": 0, "aggs": {"a": {"histogram": {"field": "n", "interval": 1000},
+                                "aggs": {"r": {"range": {"field": "n", "ranges": [
+                                    {"to": 0}, {"from": 0, "to": 100},
+                                    {"from": 100}]}}}}}}, agg("a")),
+    (TROUS, DOCS_TROUS, "range keyed sous un bucket vide de histogram",
+     "meme chose sous la forme `keyed`, ou la map sortait vide",
+     {"size": 0, "aggs": {"a": {"histogram": {"field": "n", "interval": 1000},
+                                "aggs": {"r": {"range": {
+                                    "field": "n", "keyed": True, "ranges": [
+                                        {"to": 0, "key": "bas"},
+                                        {"from": 0, "key": "haut"}]}}}}}},
+     agg("a")),
+    (TROUS, DOCS_TROUS, "range sous un bucket vide de date_histogram",
+     "le remplissage d'un `date_histogram` a le meme trou",
+     {"size": 0, "aggs": {"a": {"date_histogram": {"field": "d",
+                                                   "fixed_interval": "5d"},
+                                "aggs": {"r": {"range": {"field": "n", "ranges": [
+                                    {"to": 0}, {"from": 0}]}}}}}}, agg("a")),
+    (TROUS, DOCS_TROUS, "deux niveaux sous un bucket vide de histogram",
+     "ce qui est sous le `range` disparaissait avec lui : le `terms` et le "
+     "`stats` de chaque intervalle n'existaient meme pas",
+     {"size": 0, "aggs": {"a": {"histogram": {"field": "n", "interval": 1000},
+                                "aggs": {"r": {
+                                    "range": {"field": "n", "ranges": [
+                                        {"to": 0}, {"from": 0}]},
+                                    "aggs": {"t": {"terms": {"field": "n"}},
+                                             "s": {"stats": {"field": "n"}}}}}}}},
+     agg("a")),
+    (TROUS, DOCS_TROUS, "range sous un bucket d'extended_bounds",
+     "un bucket demande par `extended_bounds` est vide pour la meme raison, et "
+     "perdait ses sous-agregations de la meme facon",
+     {"size": 0, "aggs": {"a": {
+         "histogram": {"field": "n", "interval": 1000,
+                       "extended_bounds": {"min": -3000, "max": 8000}},
+         "aggs": {"r": {"range": {"field": "n", "ranges": [
+             {"to": 0}, {"from": 0}]}}}}}}, agg("a")),
+    (TROUS, DOCS_TROUS, "recherche sans resultat, histogram + range",
+     "quand rien ne correspond, **tous** les buckets sont fabriques : c'est le "
+     "cas ou la perte est totale",
+     {"size": 0, "query": {"match_none": {}}, "aggs": {"a": {
+         "histogram": {"field": "n", "interval": 1000,
+                       "extended_bounds": {"min": 0, "max": 2000}},
+         "aggs": {"r": {"range": {"field": "n", "ranges": [
+             {"to": 0}, {"from": 0}]}}}}}}, agg("a")),
 
     # -- agregations sur une date ------------------------------------------
     (TROUS, DOCS_TROUS, "terms sur un champ date",
@@ -325,6 +387,11 @@ CAS = [
      "branche `nested` : un prefixe sur une date y rendait 200",
      {"query": {"nested": {"path": "b", "query": {"prefix": {"b.y": "20"}}}},
       "_source": False}, statut),
+    (NESTE, DOCS_NESTE, "tri sur un sous-champ de nested depuis la racine",
+     "ferrite triait sur les valeurs a plat et rendait un ordre en 200 ; ES "
+     "refuse (« it is mandatory to set the [nested] context on the nested sort "
+     "field »). Les deux refusent maintenant",
+     {"sort": [{"b.x": "asc"}], "_source": False}, statut),
 ]
 
 # Ce que ferrite refuse **expres** plutot que de rendre un resultat faux. ES sait
@@ -358,6 +425,28 @@ REFUS = [
      "bornes sont des dates : le bucket `2026-02-01-*` disparaissait",
      {"size": 0, "aggs": {"a": {"range": {"field": "dm", "ranges": [
          {"to": "2026-01-03"}, {"from": "2026-02-01"}]}}}}),
+    # Un sous-champ de `nested` agrege depuis la racine : ES n'y voit aucun
+    # document (ses valeurs vivent dans des documents caches) et rend le
+    # resultat vide de l'agregation. ferrite les porte sur le document parent :
+    # il rendait un autre nombre, en 200. Mesure : `avg` de 1.0 la ou ES rend
+    # `null`, `sum` de 1.0 la ou ES rend 0.0.
+    (NESTE, DOCS_NESTE, "avg sur un sous-champ de nested depuis la racine",
+     "ferrite agregeait a plat et rendait un nombre plausible et faux ; ES rend "
+     "`null`, parce qu'il ne voit aucun document au niveau racine",
+     {"size": 0, "aggs": {"a": {"avg": {"field": "b.x"}}}}),
+    (NESTE, DOCS_NESTE, "sum sur un sous-champ de nested depuis la racine",
+     "meme cause, et c'est la que le zero d'ES se lit le plus mal : `0.0` la ou "
+     "ferrite rendait la somme des sous-documents",
+     {"size": 0, "aggs": {"a": {"sum": {"field": "b.x"}}}}),
+    (NESTE, DOCS_NESTE, "terms sur un sous-champ de nested depuis la racine",
+     "ES rend `buckets: []` ; ferrite listait les valeurs des sous-documents",
+     {"size": 0, "aggs": {"a": {"terms": {"field": "b.y"}}}}),
+    (NESTE, DOCS_NESTE, "avg sur un sous-champ de nested, sous un terms",
+     "le refus vaut a tous les niveaux : une sous-agregation n'y echappe pas, "
+     "et c'est la que le nombre faux se voyait le moins (ES rend `null` dans "
+     "chaque bucket)",
+     {"size": 0, "aggs": {"t": {"terms": {"field": "k"},
+                                "aggs": {"a": {"avg": {"field": "b.x"}}}}}}),
 ]
 
 # Les cas ou c'est **ES** qui casse. Ils sont ici pour ne pas etre repris pour

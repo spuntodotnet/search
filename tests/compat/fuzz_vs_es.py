@@ -332,6 +332,16 @@ def descendre(noeud, parts):
     return [noeud]
 
 
+def feuilles_de_nested(champs):
+    """Les sous-champs d'un `nested`, tels qu'on les ecrirait depuis la racine.
+
+    Ils ne sont pas dans la liste des champs interrogeables : une clause posee
+    dessus depuis la racine est refusee (divergence assumee n° 10), et les y
+    mettre remplirait le tirage de refus. Ils servent aux deux endroits ou le
+    refus doit rester **exerce** : le tri et les agregations."""
+    return [s for c in champs if c.ty == "nested" for s in c.sous]
+
+
 class Champ:
     def __init__(self, nom, ty, mapping, chemin=None, sous=None):
         self.nom = nom          # nom court
@@ -987,6 +997,16 @@ class Generateur:
             n = min(len(triables), rng.randint(1, 2))
             tri = [{c.chemin: {"order": rng.choice(["asc", "desc"])}}
                    for c in rng.sample(triables, n)]
+            # Une fois sur douze, la cle de tri est un sous-champ de `nested`
+            # pris depuis la racine. ES refuse (« it is mandatory to set the
+            # [nested] context ») ; ferrite triait sur les valeurs a plat et
+            # rendait un ordre en 200. Le refus est declare
+            # (`nested.tri_et_aggs`), et il faut qu'il reste exerce : une
+            # correction que plus personne ne pose se defait en silence.
+            feuilles = feuilles_de_nested(champs)
+            if feuilles and rng.random() < 1 / 12:
+                c = rng.choice(feuilles)
+                tri.insert(0, {c.chemin: {"order": rng.choice(["asc", "desc"])}})
             if rng.random() < 0.3:
                 tri.insert(0, "_score")
             # La cle unique en dernier : le tri devient **total**, donc une
@@ -1031,6 +1051,29 @@ class Generateur:
 
     def _agg(self, champs, docs, prof):
         rng = self.rng
+
+        # Une agregation posee sur un sous-champ de `nested` **depuis la
+        # racine**. Chez ES ces valeurs vivent dans des documents caches : il
+        # n'en voit aucune et rend le resultat vide de l'agregation (`null`,
+        # `0.0`, `buckets: []`). ferrite les porte sur le document parent — il
+        # agregeait donc a plat et rendait un autre nombre, en 200. Il refuse
+        # maintenant, et le refus est declare (`nested.tri_et_aggs`).
+        #
+        # La brique citee est celle de l'agregation elle-meme, pas une
+        # nouvelle : ce qui est exerce ici est bien une metrique ou un `terms`,
+        # sur un champ qui se trouve etre sous un `nested`.
+        feuilles = feuilles_de_nested(champs)
+        if feuilles and rng.random() < 0.08:
+            c = rng.choice(feuilles)
+            if (c.ty in NUMERIQUES or c.ty == "date") and self.brique("agg.metriques"):
+                nom = rng.choice(["min", "max", "value_count", "stats"]
+                                 if c.ty == "date"
+                                 else ["min", "max", "sum", "avg", "value_count",
+                                       "stats"])
+                return {nom: {"field": c.chemin}}
+            if self.brique("agg.terms"):
+                return {"terms": {"field": c.chemin}}
+
         numeriques = [c for c in champs if c.ty in NUMERIQUES]
         dates = [c for c in champs if c.ty == "date"]
         cles = [c for c in champs
@@ -1442,6 +1485,10 @@ def _refus_declare(e, _requete=None, ecarts=()):
         "[tie_breaker] ne s'applique",     # tie_breaker sous un `most_fields`
         "un **trou** entre deux intervalles",  # range agg sur une date
         "[min_doc_count:",                 # terms : seule sa valeur par defaut
+        # Un sous-champ de `nested` pris depuis la racine — clause, tri ou
+        # agregation. ES rend 0 hit / un resultat vide, ferrite le dit.
+        "est sous le champ [nested]",
+        "on the nested sort field",
     ))
 
 

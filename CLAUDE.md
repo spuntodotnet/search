@@ -154,17 +154,17 @@ développement, pas de CI).
 | `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**98/98**, dont l'export par `helpers.scan`, le date math, la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats` et les templates) |
 | `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (212/213, 0 écart réel) |
 | `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (45/46 ; le seul écart est `_cluster/health`, toujours vert par choix) |
-| `tests/compat/diff_aggs.py` | les mêmes agrégations ? (45/45, `filter` comprise) |
+| `tests/compat/diff_aggs.py` | les mêmes agrégations ? (53/53, `filter` comprise, et ce qu'un bucket **vide** doit porter) |
 | `tests/compat/diff_analyzers.py` | les mêmes tokens ? (7 analyzers, 210 textes, tous identiques) |
 | `tests/compat/diff_datemath.py` | les mêmes documents sur une **borne de date** — `now`, `now-1d/d`, `2026-03-15\|\|+1M`, et l'arrondi selon le côté de la borne ? (276/276, messages d'erreur compris ; 45/276 avant le chantier) |
 | `tests/compat/diff_motifs.py` | les mêmes documents sur un **motif** — `regexp`, `wildcard`, `prefix`, `match_phrase_prefix` ? (101/101) |
 | `tests/compat/diff_multi_index.py` | `index=["a","b"]`, `logs-*`, les alias : **les mêmes index visés, fusionnés pareil** ? (87/87, 0 écart, plus aucune divergence assumée ; `--calibrer` : 87/87 contre deux ES) |
-| `tests/compat/sonde_msm.py` | les mêmes documents sur un **`minimum_should_match`** — entier, pourcentage, formes négatives, conditions `3<90%`, et sous un `nested` ? (47/47) |
+| `tests/compat/sonde_msm.py` | les mêmes documents sur un **`minimum_should_match`** — entier, pourcentage, formes négatives, conditions `3<90%`, et sous un `nested` ? (53/53) |
 | `tests/compat/releve_mots_vides.py` | quelle est **vraiment** la liste de mots vides d'un analyzer d'ES ? |
 | `tests/compat/sonde_alias.py` | les mêmes alias sur une **expression de noms** — liste, joker, exclusion, `_all` — et le même 404 ? (21/21, corps et message compris) |
 | `tests/compat/sonde_vide.py` | sur un serveur **sans aucun index**, la même chose qu'ES — et rien accepté en silence ? (28/28 identiques, 0 refus muet ; les deux serveurs doivent être vides, c'est l'état mesuré) |
-| `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **1 450 cas, 60 424 requêtes, 2 divergences réelles** (toutes deux dans les agrégations, ouvertes et décrites dans [`docs/fuzz.md`](docs/fuzz.md)), sur cinq plages de graines dont **quatre** n'ont jamais servi à corriger — celle sur laquelle on itère ne mesure plus rien. 21 défauts silencieux trouvés au premier passage. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (60 cas, 2 416 requêtes, 0) |
-| `tests/compat/sonde_fuzz.py` | les écarts trouvés par le fuzzing, **figés** hors d'une graine (35/35) |
+| `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **1 950 cas, 81 255 requêtes, 1 divergence réelle** (une somme d'entiers au-delà de 2^53, ouverte et décrite dans [`docs/fuzz.md`](docs/fuzz.md)), sur sept plages de graines dont **cinq** n'ont jamais servi à corriger — celle sur laquelle on itère ne mesure plus rien. 21 défauts silencieux trouvés au premier passage, 3 de plus depuis. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (60 cas, 2 418 requêtes, 0) |
+| `tests/compat/sonde_fuzz.py` | les écarts trouvés par le fuzzing, **figés** hors d'une graine (42/42, plus 10 refus assumés) |
 | `tests/compat/genere_compat.py` | le périmètre déclaré et la doc disent-ils la **même chose** ? [`compat.yaml`](compat.yaml) est la source (une entrée par capacité : état, paramètres, motif du refus, poids d'usage) ; [`docs/compat.md`](docs/compat.md) et [`docs/compat.json`](docs/compat.json) en sont **générés**, et la CI échoue s'ils divergent |
 | `tests/compat/perimetre.py` | ce cas qui échoue, il porte sur quoi ? Il rattache un échec de conformance à une capacité déclarée : **régression** si elle est annoncée supportée, **coût de périmètre** si elle est annoncée refusée |
 | `tests/compat/recolte_usage.py` | à quoi ressemblent les requêtes que les gens envoient **vraiment** ? Constitue le corpus ([`tests/compat/usage/corpus.jsonl`](tests/compat/usage/corpus.jsonl), 5 311 requêtes) depuis quatre sources citables : doc de référence 8.15, tracks Rally, clients officiels, code open source. Chaque requête porte l'URL d'où elle vient |
@@ -302,6 +302,17 @@ bouger**, pas après.
   d'au moins un `should`. Personne ne l'avait signalé — c'est d'avoir mesuré le
   **voisinage** du `minimum_should_match` demandé, jusqu'à sa valeur par défaut,
   qui l'a sorti.
+
+  Et le même piège est revenu un cran plus loin, parce que la correction ne
+  portait que sur la valeur **par défaut** : un minimum **explicite** qui
+  retombe à zéro — `"50%"` d'une seule clause, la troncature vers zéro d'ES le
+  rend nul — ne rend pas non plus le `should` facultatif. ferrite le jetait
+  alors entier, et rendait le même document qu'ES ne rend pas. Corriger la
+  valeur par défaut d'un paramètre ne corrige pas le paramètre : la règle
+  (« au moins une clause positive quand rien n'est obligatoire ») doit être
+  appliquée **après** la résolution, pas à sa place. Trouvé par une plage de
+  contrôle du fuzzer (graine 4242047), pas par le raisonnement qui avait écrit
+  la première correction.
 - **Écarter un index n'est pas neutre.** Sur un mapping hétérogène, la première
   version écartait l'index qui ignorait un champ de la requête. Vrai sur un
   `term` seul, faux dans un `bool` : `should: [term sur champ absent, match]`
@@ -351,10 +362,26 @@ bouger**, pas après.
   mesure.
 - **Une agrégation déléguée n'a pas les mêmes bords que son homonyme.** Celle de
   tantivy **comble les trous** entre deux intervalles d'un `range`, compte les
-  **valeurs** là où ES compte les **documents** sur un champ multivalué, et
-  nomme ses buckets `keyed` autrement. Trois résultats faux rendus 200. Déléguer
-  une fonctionnalité ne dispense pas de mesurer ses bords : c'est même là qu'ils
-  diffèrent.
+  **valeurs** là où ES compte les **documents** sur un champ multivalué, nomme
+  ses buckets `keyed` autrement, et **fabrique** les buckets vides d'un
+  `histogram` sans exécuter ce qu'il y a dessous (une sous-agrégation `range` y
+  rendait `buckets: []` là où ES rend ses intervalles à zéro). Quatre résultats
+  faux rendus 200. Déléguer une fonctionnalité ne dispense pas de mesurer ses
+  bords : c'est même là qu'ils diffèrent.
+- **La forme « zéro document » se mesure, elle ne s'écrit pas.** Corriger le
+  bucket vide demandait de savoir ce que rend chaque agrégation sur zéro
+  document — et l'écrire à la main aurait remis dans le code l'idée qu'on s'en
+  fait, une par type d'agrégation, avec ses `extended_bounds` et ses `keyed`. La
+  réponse était déjà là : ferrite est **déjà mesuré identique à ES** sur une
+  recherche qui ne ramène rien. Les sous-agrégations d'un `histogram` sont donc
+  rejouées sur une requête vide, et un bucket à `doc_count: 0` prend cette
+  réponse-là — puisque c'est exactement ce qu'il contient.
+- **Ce qui lit un champ compte autant que ce qui le filtre.** Un sous-champ de
+  `nested` interrogé depuis la racine était refusé dans une **clause** depuis
+  longtemps ; la même règle manquait sur l'**agrégation** et sur le **tri**, qui
+  lisent les mêmes valeurs à plat. `docs/compat.md` déclarait pourtant les trois
+  refusés depuis des mois : une capacité déclarée n'est vraie que si quelque
+  chose l'exerce. Le fuzzer pose maintenant les deux formes exprès.
 - **Un schéma vide n'échoue pas que sur la forme.** `_validate/query` doit
   séparer « la requête est mal formée » (ES rend `valid: false` sans `_shards`)
   de « elle est impossible sur ce mapping » (ES rend `_shards` et une
@@ -372,6 +399,15 @@ bouger**, pas après.
   tranquillement une courbe plate. Ils sont donc **refusés**, pas rendus. Une
   valeur par défaut plausible est le déguisement le plus efficace d'un échec
   silencieux.
+- **Deux outils qui visent le même port se marchent dessus, en silence.**
+  `run.sh` écoute par défaut sur 9200 ; lancé pendant qu'un ferrite y tournait
+  déjà, son `bind` a échoué sans bruit et il a exercé **ce** serveur-là — index,
+  templates et réglages de cluster compris. La campagne de fuzzing qui tournait
+  en parallèle est partie en 400 cas de divergences de mapping qui n'existaient
+  pas. Le réflexe de la section 2 s'applique aux outils entre eux : un résultat
+  massivement rouge est presque toujours un défaut d'outillage. `run.sh` refuse
+  maintenant un port occupé, et rien d'autre ne doit toucher les serveurs
+  pendant une campagne.
 - **Un `curl` de vérification qui n'utilise pas le même texte que le test ne
   vérifie rien.** Une chasse au bug d'analyzer s'est terminée sur un faux
   positif : `match edition` ne trouvait pas `l'édition` — ce que fait aussi ES,

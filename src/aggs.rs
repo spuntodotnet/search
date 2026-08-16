@@ -527,6 +527,31 @@ fn verifier_champ(nom: &str, type_agg: &str, champ: &str, champs: Option<&Fields
     let Some(champs) = champs else {
         return Ok(());
     };
+
+    // Un sous-champ de `nested` agrege depuis la racine.
+    //
+    // Chez ES, ces valeurs vivent dans des documents caches : au niveau racine
+    // il n'en voit aucune et rend le resultat vide de l'agregation (`null` pour
+    // un `avg`, `0.0` pour un `sum`, `buckets: []` pour un `terms` — mesure
+    // contre ES 8.15). ferrite les indexe sur le document parent : il agregeait
+    // donc a plat et rendait un **autre nombre**, en 200 (mesure : `avg` de
+    // `7.0` la ou ES rend `null`, `sum` de `21.0` la ou ES rend `0.0`).
+    //
+    // Un chiffre plausible et faux est le pire des resultats. Et rendre celui
+    // d'ES demanderait de savoir agreger *dans* le contexte `nested` pour ne
+    // pas se contenter d'un zero — l'agregation `nested` n'est pas supportee.
+    // Le refus est donc explicite, comme il l'est deja pour la **requete**
+    // equivalente (divergence assumee n° 10 de docs/compat.md).
+    if let Some(racine) = champs.racine_nested(champ) {
+        return Err(EsError::unsupported(format!(
+            "[{champ}] est sous le champ [nested] [{racine}] : ferrite ne l'agrege pas depuis la \
+             racine (agregation [{nom}.{type_agg}]). Elasticsearch n'y voit aucun document et \
+             rend un resultat vide ; ferrite porte ces valeurs sur le document parent et \
+             rendrait un autre nombre, sans le dire. L'agregation [nested] n'est pas encore \
+             supportee (voir docs/compat.md)"
+        )));
+    }
+
     let MappedField { ty, .. } = champs.get(champ).ok_or_else(|| {
         EsError::new(
             axum::http::StatusCode::BAD_REQUEST,
@@ -750,17 +775,50 @@ fn run_natif(parts: &[Part<'_>], aggs: &Value) -> EsResult<Value> {
 
     verifier_cardinalite(parts, &infos)?;
 
+    let brut = collecter(parts, demande.clone(), Cible::Recherche)?;
+    let vides = formes_vides(parts, &demande, &infos)?;
+    Ok(mise_en_forme(
+        &brut,
+        "",
+        &Forme {
+            infos: &infos,
+            vides: &vides,
+        },
+    ))
+}
+
+/// Sur quoi une passe d'agregation est collectee.
+#[derive(Clone, Copy)]
+enum Cible {
+    /// La requete de la recherche, index par index.
+    Recherche,
+    /// Aucun document — la forme « zero document » de la demande.
+    Rien,
+}
+
+/// Collecte une demande d'agregations sur tous les index vises et rend le JSON
+/// **brut** de tantivy.
+///
+/// Chaque index est un index tantivy distinct : il faut donc l'agreger a part,
+/// puis fusionner les resultats **intermediaires** avant de finaliser une seule
+/// fois (voir [`run`]).
+fn collecter(parts: &[Part<'_>], demande: Value, cible: Cible) -> EsResult<Value> {
     let requete: Aggregations = serde_json::from_value(demande)
         .map_err(|e| EsError::parsing(format!("[aggs] illisible : {e}")))?;
     let limites = AggregationLimitsGuard::new(Some(MEMORY_LIMIT), Some(MAX_BUCKETS));
+    let rien = tantivy::query::EmptyQuery;
 
     let mut cumul: Option<IntermediateAggregationResults> = None;
     for part in parts {
         let contexte = AggContextParams::new(limites.clone(), part.gen.index.tokenizers().clone());
         let collecteur = DistributedAggregationCollector::from_aggs(requete.clone(), contexte);
+        let query: &dyn Query = match cible {
+            Cible::Recherche => part.query,
+            Cible::Rien => &rien,
+        };
         let partiel = part
             .searcher
-            .search(part.query, &collecteur)
+            .search(query, &collecteur)
             .map_err(|e| EsError::illegal_argument(format!("agregation : {e}")))?;
         match &mut cumul {
             None => cumul = Some(partiel),
@@ -775,9 +833,127 @@ fn run_natif(parts: &[Part<'_>], aggs: &Value) -> EsResult<Value> {
         .into_final_result(requete, limites)
         .map_err(|e| EsError::illegal_argument(format!("agregation : {e}")))?;
 
-    let brut = serde_json::to_value(resultat)
-        .map_err(|e| EsError::internal(format!("resultat d'agregation illisible : {e}")))?;
-    Ok(mise_en_forme(&brut, "", &infos))
+    serde_json::to_value(resultat)
+        .map_err(|e| EsError::internal(format!("resultat d'agregation illisible : {e}")))
+}
+
+/// La forme « zero document » des sous-agregations d'un `histogram`, **mesuree**
+/// plutot qu'ecrite.
+///
+/// tantivy comble les trous entre deux buckets d'un `histogram` ou d'un
+/// `date_histogram` — c'est ce que fait ES aussi — mais il n'execute pas ce
+/// qu'il y a **dessous** : dans un de ces buckets de remplissage, une
+/// sous-agregation `range` rend `buckets: []` la ou ES rend ses intervalles a
+/// `doc_count: 0`. Mesure contre ES 8.15 : sur un `histogram` d'intervalle 10
+/// dont les prix sautent de 5 a 30, les buckets `10.0` et `20.0` rendent zero
+/// intervalle ici, trois chez ES. Un graphe qui empile deux niveaux perd donc
+/// ses categories sur les periodes creuses, en 200 et sans un mot.
+///
+/// Ecrire a la main ce que chaque agregation rend sur zero document remettrait
+/// dans le code l'idee qu'on s'en fait. On le **mesure** : les sous-agregations
+/// de chaque `histogram` sont rejouees telles quelles sur une requete qui ne
+/// ramene aucun document, et un bucket a `doc_count: 0` prend cette
+/// reponse-la — puisque c'est exactement ce qu'il contient. Le meme jeu de
+/// requetes pose sur une recherche sans resultat est deja mesure identique a ES
+/// (`diff_aggs.py`), y compris sur deux niveaux de `range` : la forme rendue
+/// n'est donc pas une supposition de plus.
+///
+/// Le tirage est restreint aux `histogram` et `date_histogram` : ce sont les
+/// seules agregations dont tantivy **fabrique** des buckets sans les executer.
+/// Un bucket vide de `range` ou de `terms`, lui, est bien passe par le
+/// collecteur, et porte deja les bonnes sous-agregations (mesure).
+fn formes_vides(
+    parts: &[Part<'_>],
+    demande: &Value,
+    infos: &HashMap<String, Info>,
+) -> EsResult<HashMap<String, Value>> {
+    // Chaque sous-agregation concernee est posee **au premier niveau**, sous le
+    // nom de son chemin : c'est ce qui la rend mesurable. Laissee sous son
+    // `histogram`, elle ne serait jamais atteinte — sur zero document, le
+    // parent ne rend aucun bucket.
+    let mut plates = Map::new();
+    let mut enfants: Vec<(String, String)> = Vec::new();
+    recenser_sous_aggs(demande, "", infos, &mut plates, &mut enfants);
+    if plates.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let brut = collecter(parts, Value::Object(plates), Cible::Rien)?;
+    let obj = match brut.as_object() {
+        Some(o) => o,
+        None => return Ok(HashMap::new()),
+    };
+    let sans = HashMap::new();
+    let forme = Forme {
+        infos,
+        vides: &sans,
+    };
+    let mut out: HashMap<String, Value> = HashMap::new();
+    for (parent, nom) in enfants {
+        let chemin = format!("{parent}{SEP}{nom}");
+        let Some(valeur) = obj.get(&chemin) else {
+            continue;
+        };
+        let vide = Info::vide();
+        let info = infos.get(&chemin).unwrap_or(&vide);
+        let rendu = mise_en_forme_une(valeur, &chemin, info, &forme);
+        match out
+            .entry(parent)
+            .or_insert_with(|| Value::Object(Map::new()))
+        {
+            Value::Object(o) => {
+                o.insert(nom, rendu);
+            }
+            _ => unreachable!(),
+        }
+    }
+    Ok(out)
+}
+
+/// Met a plat les sous-agregations de chaque `histogram` ou `date_histogram` de
+/// la demande deja preparee : `plates` en est la demande (une entree par
+/// sous-agregation, nommee par son chemin), `enfants` le lien (parent, nom) qui
+/// permettra de les remettre en place.
+fn recenser_sous_aggs(
+    aggs: &Value,
+    chemin: &str,
+    infos: &HashMap<String, Info>,
+    plates: &mut Map<String, Value>,
+    enfants: &mut Vec<(String, String)>,
+) {
+    let Some(obj) = aggs.as_object() else {
+        return;
+    };
+    for (nom, corps) in obj {
+        let sous_chemin = if chemin.is_empty() {
+            nom.clone()
+        } else {
+            format!("{chemin}{SEP}{nom}")
+        };
+        let Some(sous) = corps
+            .get("aggs")
+            .or_else(|| corps.get("aggregations"))
+            .and_then(Value::as_object)
+            .filter(|o| !o.is_empty())
+        else {
+            continue;
+        };
+        let fabrique_des_buckets = infos
+            .get(&sous_chemin)
+            .is_some_and(|i| matches!(i.type_agg.as_str(), "histogram" | "date_histogram"));
+        if fabrique_des_buckets {
+            for (fils, corps_fils) in sous {
+                plates.insert(format!("{sous_chemin}{SEP}{fils}"), corps_fils.clone());
+                enfants.push((sous_chemin.clone(), fils.clone()));
+            }
+        }
+        recenser_sous_aggs(
+            &Value::Object(sous.clone()),
+            &sous_chemin,
+            infos,
+            plates,
+            enfants,
+        );
+    }
 }
 
 /// Recense ce qu'il faut savoir de chaque agregation, et prepare la demande
@@ -923,17 +1099,28 @@ fn format_date(millis: f64) -> Option<String> {
     })
 }
 
+/// Ce dont la mise en forme a besoin : les metadonnees de chaque agregation,
+/// et la forme « zero document » des sous-agregations d'un `histogram` (voir
+/// [`formes_vides`]), rangee par chemin de l'agregation qui les porte.
+struct Forme<'a> {
+    infos: &'a HashMap<String, Info>,
+    vides: &'a HashMap<String, Value>,
+}
+
 /// Remet le resultat de tantivy au format exact d'ES.
 ///
-/// Quatre ecarts constates par `tests/compat/diff_aggs.py` sont corriges ici,
-/// et tous sont documentes dans `docs/compat.md` :
+/// Cinq ecarts constates par `tests/compat/diff_aggs.py` et par le fuzzer
+/// differentiel sont corriges ici, et tous sont documentes dans
+/// `docs/compat.md` :
 ///
 /// 1. tantivy compte les dates en **nanosecondes**, ES en millisecondes ;
 /// 2. ES ajoute un `*_as_string` a cote de chaque metrique de date ;
 /// 3. ES departage les buckets `terms` ex aequo par **cle croissante** ;
 /// 4. ES formate les bornes d'un `range` en flottants (`100.0`), meme sur un
-///    champ entier, et rend la cle d'un `date_histogram` en entier.
-fn mise_en_forme(brut: &Value, chemin: &str, infos: &HashMap<String, Info>) -> Value {
+///    champ entier, et rend la cle d'un `date_histogram` en entier ;
+/// 5. un bucket vide de `histogram` garde ses sous-agregations chez ES ;
+///    tantivy comble le trou sans les executer (voir [`formes_vides`]).
+fn mise_en_forme(brut: &Value, chemin: &str, forme: &Forme<'_>) -> Value {
     let Some(obj) = brut.as_object() else {
         return brut.clone();
     };
@@ -945,10 +1132,10 @@ fn mise_en_forme(brut: &Value, chemin: &str, infos: &HashMap<String, Info>) -> V
             format!("{chemin}{SEP}{nom}")
         };
         let vide = Info::vide();
-        let info = infos.get(&sous_chemin).unwrap_or(&vide);
+        let info = forme.infos.get(&sous_chemin).unwrap_or(&vide);
         out.insert(
             nom.clone(),
-            mise_en_forme_une(valeur, &sous_chemin, info, infos),
+            mise_en_forme_une(valeur, &sous_chemin, info, forme),
         );
     }
     Value::Object(out)
@@ -957,12 +1144,7 @@ fn mise_en_forme(brut: &Value, chemin: &str, infos: &HashMap<String, Info>) -> V
 /// Les metriques dont la valeur est une date a convertir.
 const METRIQUES_DATE: &[&str] = &["value", "min", "max", "avg", "sum"];
 
-fn mise_en_forme_une(
-    valeur: &Value,
-    chemin: &str,
-    info: &Info,
-    infos: &HashMap<String, Info>,
-) -> Value {
+fn mise_en_forme_une(valeur: &Value, chemin: &str, info: &Info, forme: &Forme<'_>) -> Value {
     let Some(obj) = valeur.as_object() else {
         return valeur.clone();
     };
@@ -980,7 +1162,7 @@ fn mise_en_forme_une(
     let mut distincts = 0usize;
     if let Some(buckets) = obj.get("buckets") {
         distincts = buckets.as_array().map_or(0, Vec::len);
-        let (rendus, perdus) = mise_en_forme_buckets(buckets, chemin, info, infos);
+        let (rendus, perdus) = mise_en_forme_buckets(buckets, chemin, info, forme);
         ecartes = perdus;
         out.insert("buckets".into(), rendus);
     }
@@ -1057,13 +1239,13 @@ fn mise_en_forme_buckets(
     buckets: &Value,
     chemin: &str,
     info: &Info,
-    infos: &HashMap<String, Info>,
+    forme: &Forme<'_>,
 ) -> (Value, u64) {
     match buckets {
         Value::Array(a) => {
             let mut liste: Vec<Value> = a
                 .iter()
-                .map(|b| mise_en_forme_bucket(b, chemin, info, infos))
+                .map(|b| mise_en_forme_bucket(b, chemin, info, forme))
                 .collect();
             let mut ecartes = 0u64;
             if info.type_agg == "terms" {
@@ -1087,7 +1269,7 @@ fn mise_en_forme_buckets(
         Value::Object(o) => {
             let mut map = Map::new();
             for (_, b) in o {
-                let bucket = mise_en_forme_bucket(b, chemin, info, infos);
+                let bucket = mise_en_forme_bucket(b, chemin, info, forme);
                 if info.type_agg == "range" && demande(&bucket, &info.ranges, 1.0).is_none() {
                     continue;
                 }
@@ -1188,16 +1370,23 @@ fn trier_terms(buckets: &mut [Value], ordre: Ordre) {
     });
 }
 
-fn mise_en_forme_bucket(
-    bucket: &Value,
-    chemin: &str,
-    info: &Info,
-    infos: &HashMap<String, Info>,
-) -> Value {
+fn mise_en_forme_bucket(bucket: &Value, chemin: &str, info: &Info, forme: &Forme<'_>) -> Value {
     let Some(obj) = bucket.as_object() else {
         return bucket.clone();
     };
     let mut out = Map::new();
+
+    // Un bucket a `doc_count: 0` ne contient aucun document : ses
+    // sous-agregations sont donc, mot pour mot, celles d'une recherche qui ne
+    // ramene rien. C'est ce que [`formes_vides`] a mesure, et c'est ce qui
+    // remplace ici ce que tantivy a rendu — lui ne les execute pas dans les
+    // buckets qu'il fabrique pour combler un trou.
+    let zero = obj.get("doc_count").and_then(Value::as_u64) == Some(0);
+    let remplacement = if zero {
+        forme.vides.get(chemin).and_then(Value::as_object)
+    } else {
+        None
+    };
     for (cle, v) in obj {
         match cle.as_str() {
             "key" if info.type_agg == "date_histogram" => {
@@ -1244,10 +1433,15 @@ fn mise_en_forme_bucket(
             autre => {
                 let sous_chemin = format!("{chemin}{SEP}{autre}");
                 let vide = Info::vide();
-                let sous = infos.get(&sous_chemin).unwrap_or(&vide);
-                out.insert(cle.clone(), mise_en_forme_une(v, &sous_chemin, sous, infos));
+                let sous = forme.infos.get(&sous_chemin).unwrap_or(&vide);
+                out.insert(cle.clone(), mise_en_forme_une(v, &sous_chemin, sous, forme));
             }
         }
+    }
+    // La forme « zero document » l'emporte, et elle ajoute au besoin les
+    // sous-agregations que tantivy n'a pas rendues du tout.
+    for (cle, v) in remplacement.into_iter().flatten() {
+        out.insert(cle.clone(), v.clone());
     }
     Value::Object(out)
 }

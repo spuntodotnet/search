@@ -584,8 +584,16 @@ Absent, le paramètre vaut 1 quand le `bool` n'a que des `should`, et 0 dès
 qu'il a une clause obligatoire (`must` ou `filter`) — un `must_not` **ne rend
 pas** le `should` facultatif.
 
+Et ce n'est pas seulement sa valeur par défaut : un minimum **explicite** qui
+retombe à zéro (`"50%"` d'une seule clause, `0`, `-100%`) ne le rend pas
+facultatif non plus. Lucene exige au moins une clause positive quand il n'y a
+aucune clause obligatoire, quel que soit le minimum demandé. Sous un `nested`,
+ferrite jetait alors le `should` entier et rendait un document dont un élément
+satisfaisait seulement le `must_not` — trouvé par une plage de contrôle du
+fuzzer, mesuré dans `sonde_msm.py`.
+
 Les bords, tous mesurés contre un vrai ES 8.15
-([`tests/compat/sonde_msm.py`](../tests/compat/sonde_msm.py), **47/47
+([`tests/compat/sonde_msm.py`](../tests/compat/sonde_msm.py), **53/53
 identiques**), parce que ce sont exactement ceux que la documentation ne dit
 pas :
 
@@ -666,7 +674,7 @@ empilement.
 
 ## Agrégations
 
-Comparées champ par champ à un vrai ES 8.15 sur 45 requêtes
+Comparées champ par champ à un vrai ES 8.15 sur 53 requêtes
 (`tests/compat/diff_aggs.py`), clés de réponse comprises.
 
 | Agrégation | État | Détail |
@@ -676,7 +684,7 @@ Comparées champ par champ à un vrai ES 8.15 sur 45 requêtes
 | `range` | 🟡 | `ranges` avec `from` / `to` / `key`, `keyed`. Sur un champ `date`, les bornes s'écrivent **en dates** (au `format` du champ) et les buckets rendent `from_as_string` / `to_as_string`. Les intervalles que le client n'a pas demandés sont écartés : tantivy comble les trous entre deux bornes, Elasticsearch non. Refusé : un **trou** entre deux intervalles, sur un champ `date` (tantivy comble les trous et ferrite écarte ensuite le bucket de remplissage ; sur une date, où les bornes passent en nanosecondes, ce remplissage avale l'intervalle demandé. Sur un champ numérique, les deux buckets sortent et le filtrage suffit), des intervalles qui se **chevauchent** (ES compte alors un document dans chaque bucket qui le contient ; l'agrégation de tantivy partitionne les valeurs et ne sait pas le faire), un champ **multivalué** (voir la ligne suivante) |
 | `histogram` | 🟡 | `interval`, `offset`, `min_doc_count`, `hard_bounds`, `extended_bounds`, `keyed`. Refusé : un champ **multivalué** (voir la ligne suivante) |
 | `date_histogram` | 🟡 | Supporté : `field`, `fixed_interval`, `offset`, `min_doc_count`, `hard_bounds`, `extended_bounds`, `keyed` (comme `histogram`). Refusé : `calendar_interval` (mois et années civils n'ont pas d'équivalent dans tantivy), `time_zone`, `format`, `order` |
-| Sous-agrégations | ✅ | sur tous les types de buckets, vérifiées jusqu'à trois niveaux |
+| Sous-agrégations | ✅ | sur tous les types de buckets, vérifiées jusqu'à trois niveaux. Un bucket **vide** porte les siennes, comme chez ES : tantivy comble les trous d'un `histogram` sans exécuter ce qu'il y a dessous, et ferrite y remet la forme « zéro document » — mesurée sur une recherche qui ne ramène rien, pas écrite à la main |
 | `histogram`, `date_histogram`, `range` sur un champ **multivalué** | ❌ | **divergence de moteur** — l'agrégation de tantivy compte les **valeurs**, Elasticsearch compte les **documents** : un document dont le champ vaut `[1, 2, 3]` tombe trois fois dans le bucket qui les contient (mesuré : `doc_count` de 4 là où ES en compte 2). Le refus n'est prononcé que si la colonne est réellement multivaluée — un champ à une valeur par document, le cas courant, reste servi et exact. `terms`, `value_count` et `stats` ne sont pas concernés : leurs comptes coïncident avec ceux d'ES |
 | `cardinality` | ❌ | **divergence de moteur** — l'estimation de tantivy diffère de celle d'ES (mesuré : 582 valeurs distinctes annoncées là où ES en compte 598), y compris sous le seuil où ES est exact — un compte approché sous le nom d'ES serait faux sans le dire |
 | `filter` | 🟡 | n'importe quelle requête du Query DSL, avec ses sous-agrégations. **Exécutée par ferrite**, pas par tantivy : compter les documents qui correspondent à la recherche *et* au filtre, c'est exécuter l'intersection des deux requêtes (voir les divergences). Refusé : sous une agrégation de buckets (il faudrait rejouer sa requête bucket par bucket) |
@@ -734,7 +742,7 @@ mesures : [`nested-join.md`](nested-join.md), `src/nested.rs`.
 | `score_mode` | 🟡 | le score est celui de la requête interne évaluée à plat, il n'y a pas de score par élément. Supporté : `none`, `avg`. Refusé : `max`, `min`, `sum` |
 | `inner_hits`, `ignore_unmapped` | ❌ | **pas encore** — `inner_hits` demande de rendre l'élément qui a correspondu : ferrite le sait (c'est la colonne jumelle), il ne l'expose simplement pas |
 | Champs devinés sous un `nested` | ✅ | le mapping dynamique fonctionne, et la corrélation avec |
-| Tri et agrégations sur un champ `nested` | ❌ | **divergence de moteur** — ils porteraient sur les valeurs à plat, donc sur autre chose que ce que la requête a filtré |
+| Tri et agrégations sur un sous-champ de `nested`, depuis la racine | ❌ | **divergence de moteur** — ils porteraient sur les valeurs à plat, donc sur autre chose que ce que la requête a filtré. Chez Elasticsearch ces valeurs vivent dans des documents cachés : une **agrégation** n'en voit aucune et rend son résultat vide (`null`, `0.0`, `buckets: []`), un **tri** est refusé (`it is mandatory to set the [nested] context on the nested sort field`). ferrite les porte sur le document parent : il rendait donc une moyenne de `7.0` là où ES rend `null`, et un ordre en 200 là où ES rend 400. Un chiffre plausible et faux est le pire des résultats — le refus est explicite, et c'est le même que pour la requête équivalente (divergence n° 10) |
 
 ### `join` (parent/enfant)
 
@@ -976,6 +984,20 @@ pas pour être découverts en production.
    en silence — un piège classique. ferrite les indexe sur le document parent, il
    pourrait donc y répondre, et rendrait alors des documents là où ES n'en rend
    aucun. Il refuse explicitement, en nommant la clause `nested` attendue.
+
+    La règle vaut aussi pour ce qui **lit** ces valeurs sans les filtrer, et
+    c'est là qu'elle manquait. Une **agrégation** sur `lignes.prix` posée depuis
+    la racine ne voit chez ES aucun document : il rend `null`, `0.0` ou
+    `buckets: []` selon l'agrégation. ferrite, lui, agrégeait à plat — mesuré :
+    une moyenne de `7.0` là où ES rend `null`, une somme de `21.0` là où ES rend
+    `0.0`. Un **tri** sur le même chemin est carrément refusé par ES
+    (`it is mandatory to set the [nested] context on the nested sort field`) là
+    où ferrite rendait un ordre en 200. Les deux sont maintenant refusés, pour
+    la raison qui vaut dans tout ce dépôt : un chiffre plausible et faux est
+    pire qu'une erreur. Rendre le résultat vide d'ES serait une autre option,
+    mais elle demanderait de savoir agréger *dans* le contexte `nested` pour ne
+    pas se contenter d'annoncer zéro — l'agrégation `nested` n'est pas encore
+    supportée, et ce zéro-là est justement le piège qu'ES tend à ses clients.
 
 11. **Un champ inconnu dans une agrégation reste une erreur.** ES rend un
     résultat vide (`buckets: []`, `value: null`, `sum: 0.0` selon l'agrégation) ;

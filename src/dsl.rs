@@ -1858,9 +1858,22 @@ fn clause_nested(v: &Value, ctx: &QueryCtx, racine: &str) -> EsResult<Clause> {
                 // element sans aucun `should` suffisait des lors qu'un *autre*
                 // element du meme document passait le pre-filtre (mesure :
                 // `tests/compat/sonde_msm.py`, document `ny`).
+                //
+                // Et ce n'est pas seulement la **valeur par defaut** qui est en
+                // jeu : un `minimum_should_match` explicite qui *retombe* a
+                // zero — `"50%"` d'une seule clause, la troncature vers zero
+                // d'ES le rend nul — ne rend pas non plus le `should`
+                // facultatif. Lucene exige au moins une clause positive quand
+                // il n'y a aucune clause obligatoire, quel que soit le minimum
+                // demande. ferrite jetait alors le `should` entier : un
+                // document dont un element satisfaisait seulement le
+                // `must_not` remontait, la ou ES n'en rend aucun (trouve par
+                // une plage de controle du fuzzer, graine 4242047 ; mesure
+                // reduite dans `sonde_msm.py`).
                 let defaut = usize::from(et.is_empty());
                 let minimum =
-                    crate::msm::resoudre(o.get("minimum_should_match"), should.len(), defaut)?;
+                    crate::msm::resoudre(o.get("minimum_should_match"), should.len(), defaut)?
+                        .max(defaut);
                 if minimum > 0 {
                     et.push(Clause::Ou(should, minimum));
                 }
