@@ -449,10 +449,10 @@ acceptés partout ; `pretty` est implémenté (indentation de la réponse).
 Trois façons de demander autre chose que le `_source` complet, et elles **ne
 lisent pas au même endroit**. C'est ce qui les sépare, et rien de ce qui suit
 n'était devinable — tout vient de
-[`sonde_fields.py`](../tests/compat/sonde_fields.py), qui pose 79 questions aux
+[`sonde_fields.py`](../tests/compat/sonde_fields.py), qui pose 96 questions aux
 deux serveurs et compare le **hit entier** : le bloc `fields` clé par clé, la
-présence de `_source`, la présence de `_id`. **78/79 identiques, 1 refus
-assumé, 0 écart.**
+présence de `_source`, la présence de `_id`. **94/96 identiques, 2 refus
+assumés écrits, 0 écart.**
 
 **`fields` lit le `_source`**, puis type chaque valeur selon le mapping. C'est
 la façon que la 7.10+ met en avant, et celle qu'envoie Kibana. La **forme** est
@@ -489,7 +489,11 @@ Reconstituer aurait rendu des valeurs **qu'ES ne rend pas** — le pire résulta
 possible ici. Ce qui s'implémente, c'est donc ce que `stored_fields` change
 vraiment à la réponse, et qui se voit : il **retire `_source`** (sauf `_source`
 explicite), `_none_` retire **aussi `_id`**, et `_none_` avec `fields` est un
-400.
+400. Deux bords sont venus de la suite de conformance d'Elastic plutôt que
+d'ici : `_source` **cité dans la liste** est un nom de champ stocké comme un
+autre, donc le citer ramène le `_source` ; et `_none_` mélangé à d'autres noms
+est une erreur (`cannot combine _none_ with other fields`), pas un `_none_` qui
+gagne.
 
 `script_fields` et `runtime_mappings` restent refusés : les deux définissent des
 champs calculés par un script Painless, hors périmètre. La décision n'est pas de

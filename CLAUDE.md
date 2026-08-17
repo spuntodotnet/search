@@ -151,7 +151,7 @@ développement, pas de CI).
 
 | Commande | La question à laquelle elle répond |
 |---|---|
-| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**98/98**, dont l'export par `helpers.scan`, le date math, la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats` et les templates) |
+| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**100/100**, dont l'export par `helpers.scan`, le date math, la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats`, les templates et ce que la réponse transporte — `fields`, `docvalue_fields`, `stored_fields`) |
 | `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (212/213, 0 écart réel) |
 | `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (45/46 ; le seul écart est `_cluster/health`, toujours vert par choix) |
 | `tests/compat/diff_aggs.py` | les mêmes agrégations ? (53/53, `filter` comprise, et ce qu'un bucket **vide** doit porter) |
@@ -161,7 +161,7 @@ développement, pas de CI).
 | `tests/compat/diff_multi_index.py` | `index=["a","b"]`, `logs-*`, les alias : **les mêmes index visés, fusionnés pareil** ? (87/87, 0 écart, plus aucune divergence assumée ; `--calibrer` : 87/87 contre deux ES) |
 | `tests/compat/sonde_msm.py` | les mêmes documents sur un **`minimum_should_match`** — entier, pourcentage, formes négatives, conditions `3<90%`, et sous un `nested` ? (53/53) |
 | `tests/compat/releve_mots_vides.py` | quelle est **vraiment** la liste de mots vides d'un analyzer d'ES ? |
-| `tests/compat/sonde_fields.py` | **ce que la réponse transporte** — `fields`, `docvalue_fields`, `stored_fields`. Compare le **hit entier** (bloc `fields` clé par clé, présence de `_source`, présence de `_id`) : 89/90 identiques, 1 refus assumé écrit, 0 écart. Refuse de tourner si elle ne trouve pas les deux serveurs |
+| `tests/compat/sonde_fields.py` | **ce que la réponse transporte** — `fields`, `docvalue_fields`, `stored_fields`. Compare le **hit entier** (bloc `fields` clé par clé, présence de `_source`, présence de `_id`) : 94/96 identiques, 2 refus assumés écrits, 0 écart. Refuse de tourner si elle ne trouve pas les deux serveurs |
 | `tests/compat/sonde_alias.py` | les mêmes alias sur une **expression de noms** — liste, joker, exclusion, `_all` — et le même 404 ? (21/21, corps et message compris) |
 | `tests/compat/sonde_vide.py` | sur un serveur **sans aucun index**, la même chose qu'ES — et rien accepté en silence ? (28/28 identiques, 0 refus muet ; les deux serveurs doivent être vides, c'est l'état mesuré) |
 | `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **1 950 cas, 81 255 requêtes, 1 divergence réelle** (une somme d'entiers au-delà de 2^53, ouverte et décrite dans [`docs/fuzz.md`](docs/fuzz.md)), sur sept plages de graines dont **cinq** n'ont jamais servi à corriger — celle sur laquelle on itère ne mesure plus rien. 21 défauts silencieux trouvés au premier passage, 3 de plus depuis. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (60 cas, 2 418 requêtes, 0) |
@@ -187,7 +187,7 @@ bouger**, pas après.
   de vérité de trois endroits. La source est maintenant
   [`compat.yaml`](compat.yaml) ; la doc et sa forme machine en sont générées, et
   le rapport de conformance **croise** chaque cas échoué avec elle. C'est ce qui
-  transforme « 393 échecs » en « 37 régressions et 356 coûts de périmètre »
+  transforme « 356 échecs » en « 40 régressions et 316 coûts de périmètre »
   (la mesure du jour, dans [`docs/conformance.json`](docs/conformance.json)) :
   la différence entre un chiffre qu'on subit et un chiffre qu'on pilote. Le
   garde-fou est le troisième verdict : un cas qu'aucune capacité ne réclame
