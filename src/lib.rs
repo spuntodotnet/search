@@ -17,6 +17,9 @@
 //!   index — alias, listes, motifs — et leur resolution en index concrets.
 //! - [`search`] : l'execution d'une recherche et la mise en forme du resultat au
 //!   format ES.
+//! - [`fetch`] : ce que la reponse transporte — `fields`, `docvalue_fields`,
+//!   `stored_fields`. Les trois lisent a trois endroits differents (le
+//!   `_source`, les colonnes, les champs stockes), et c'est tout le sujet.
 //! - [`reglages`] : les reglages d'index — ce qui est exploite, ce qui est
 //!   accepte sans effet, ce qui est refuse. Lu depuis trois routes, donc ecrit
 //!   une seule fois.
@@ -35,6 +38,7 @@ pub mod dismax;
 pub mod dsl;
 pub mod engine;
 pub mod error;
+pub mod fetch;
 pub mod mapping;
 pub mod msm;
 pub mod nested;

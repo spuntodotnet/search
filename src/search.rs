@@ -388,6 +388,10 @@ pub fn glob_match(pattern: &str, text: &str) -> bool {
 pub struct Cible {
     pub nom: String,
     pub gen: Arc<Generation>,
+    /// Ce que le hit transporte au-dela du `_source`, resolu **sur ce
+    /// mapping** : deux index ne rendent pas les memes champs pour le meme
+    /// motif.
+    pub plan: Arc<crate::fetch::Plan>,
     pub query: Box<dyn Query>,
     /// Les cles de tri resolues dans **cette** generation.
     pub sort: Vec<SortSpec>,
@@ -408,6 +412,9 @@ pub struct SearchRequest {
     /// Le sens de chaque cle de tri. Vide : tri par score.
     pub sort_asc: Vec<bool>,
     pub source: SourceFilter,
+    /// `_id` est-il rendu ? Seul `stored_fields: "_none_"` le retire (mesure
+    /// contre ES 8.15).
+    pub avec_id: bool,
 }
 
 pub struct SearchOutcome {
@@ -440,7 +447,13 @@ pub struct HitFige {
 /// adresses figees ne designeraient plus les memes documents. Un `Searcher`
 /// tantivy est un instantane — le retenir, c'est exactement le « point in
 /// time » que scroll promet chez Elasticsearch.
-pub type CibleFigee = (String, Arc<Generation>, Searcher);
+#[derive(Clone)]
+pub struct CibleFigee {
+    pub nom: String,
+    pub gen: Arc<Generation>,
+    pub searcher: Searcher,
+    pub plan: Arc<crate::fetch::Plan>,
+}
 
 /// Tous les documents qui correspondent, dans l'ordre final.
 pub struct Balayage {
@@ -519,7 +532,12 @@ pub fn balayer(cibles: Vec<Cible>, req: &SearchRequest) -> EsResult<Balayage> {
     let cibles = cibles
         .into_iter()
         .zip(searchers)
-        .map(|(c, s)| (c.nom, c.gen, s))
+        .map(|(c, s)| CibleFigee {
+            nom: c.nom,
+            gen: c.gen,
+            searcher: s,
+            plan: c.plan,
+        })
         .collect();
 
     Ok(Balayage {
@@ -540,24 +558,36 @@ pub fn balayer(cibles: Vec<Cible>, req: &SearchRequest) -> EsResult<Balayage> {
 pub fn rendre_page(
     cibles: &[CibleFigee],
     hits: &[HitFige],
-    source: &SourceFilter,
+    rendu: &Rendu,
     trie: bool,
     avec_score: bool,
 ) -> EsResult<Vec<Value>> {
     let mut out = Vec::with_capacity(hits.len());
     for hit in hits {
-        let (nom, gen, searcher) = &cibles[hit.cible];
+        let cible = &cibles[hit.cible];
         out.push(build_hit(
-            nom,
-            gen,
-            searcher,
+            &cible.nom,
+            &cible.gen,
+            &cible.plan,
+            &cible.searcher,
             DocAddress::new(hit.seg, hit.doc),
             avec_score.then_some(hit.score),
             trie.then(|| hit.sort.clone()),
-            source,
+            rendu,
         )?);
     }
     Ok(out)
+}
+
+/// Ce qu'un hit transporte au-dela des documents eux-memes.
+///
+/// `stored_fields` ne rend aucun champ chez ferrite (aucun n'est stocke, voir
+/// [`crate::fetch`]) mais change bel et bien la reponse : il retire `_source`,
+/// et `_none_` retire aussi `_id`.
+#[derive(Debug, Clone)]
+pub struct Rendu {
+    pub source: SourceFilter,
+    pub avec_id: bool,
 }
 
 /// Les index sur lesquels les agregations se collectent : ceux qui mappent tous
@@ -660,6 +690,10 @@ pub fn execute(cibles: &[Cible], req: &SearchRequest) -> EsResult<SearchOutcome>
 
     candidats.sort_by(|a, b| compare(&req.sort_asc, a, b));
 
+    let rendu = Rendu {
+        source: req.source.clone(),
+        avec_id: req.avec_id,
+    };
     let mut hits = Vec::new();
     for hit in candidats.into_iter().skip(req.from).take(req.size) {
         let cible = &cibles[hit.cible];
@@ -669,11 +703,12 @@ pub fn execute(cibles: &[Cible], req: &SearchRequest) -> EsResult<SearchOutcome>
         hits.push(build_hit(
             &cible.nom,
             &cible.gen,
+            &cible.plan,
             &searchers[hit.cible],
             addr,
             score,
             sort_values,
-            &req.source,
+            &rendu,
         )?);
     }
     Ok(SearchOutcome {
@@ -725,11 +760,12 @@ fn compare(sort_asc: &[bool], a: &Hit, b: &Hit) -> Ordering {
 fn build_hit(
     index_name: &str,
     gen: &Generation,
+    plan: &crate::fetch::Plan,
     searcher: &tantivy::Searcher,
     addr: DocAddress,
     score: Option<f32>,
     sort_values: Option<Vec<Value>>,
-    filter: &SourceFilter,
+    rendu: &Rendu,
 ) -> EsResult<Value> {
     let doc: tantivy::schema::TantivyDocument = searcher.doc(addr)?;
     let id = {
@@ -747,16 +783,39 @@ fn build_hit(
         serde_json::from_str::<Value>(&raw)
             .map_err(|e| EsError::internal(format!("_source illisible: {e}")))?
     };
+    let version = {
+        use tantivy::schema::Value as _;
+        doc.get_first(gen.fields.version).and_then(|v| v.as_u64())
+    };
 
     let mut hit = Map::new();
     hit.insert("_index".into(), json!(index_name));
-    hit.insert("_id".into(), json!(id));
+    if rendu.avec_id {
+        hit.insert("_id".into(), json!(id));
+    }
     hit.insert(
         "_score".into(),
         score.map_or(Value::Null, |s| json!(round_score(s))),
     );
-    if let Some(filtered) = filter.apply(source) {
+    // `fields` lit le `_source` **complet**, pas celui que `_source` a filtre :
+    // les deux se demandent ensemble et ne repondent pas a la meme question.
+    let bloc = crate::fetch::rendre(
+        plan,
+        gen,
+        searcher,
+        addr,
+        &crate::fetch::Document {
+            source: &source,
+            index: index_name,
+            id: &id,
+            version,
+        },
+    )?;
+    if let Some(filtered) = rendu.source.apply(source) {
         hit.insert("_source".into(), filtered);
+    }
+    if let Some(b) = bloc {
+        hit.insert("fields".into(), b);
     }
     if let Some(sv) = sort_values {
         hit.insert("sort".into(), Value::Array(sv));

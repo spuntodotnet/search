@@ -48,6 +48,14 @@ pub struct EsError {
     /// (mesure contre ES 8.15 : voir [`crate::dsl`]). Aucune autre erreur n'est
     /// avalee par `lenient` — un parametre non supporte reste un refus.
     pub valeur_illisible: bool,
+    /// L'erreur est celle d'**un** index, pas de la requete : chez ES, c'est un
+    /// echec de shard, groupe sous « all shards failed » quand tous echouent.
+    ///
+    /// C'est le cas d'un `format` pose sur un `keyword` ou d'un
+    /// `docvalue_fields` sur un `text` : la requete est valide, c'est *ce*
+    /// mapping-la qui ne sait pas y repondre. Sur une recherche multi-index,
+    /// les autres index repondent quand meme.
+    pub de_shard: bool,
 }
 
 impl EsError {
@@ -60,6 +68,7 @@ impl EsError {
             racines: None,
             champ_inconnu: None,
             valeur_illisible: false,
+            de_shard: false,
         }
     }
 
@@ -86,6 +95,13 @@ impl EsError {
     /// [`EsError::valeur_illisible`]).
     pub fn sur_valeur_illisible(mut self) -> Self {
         self.valeur_illisible = true;
+        self
+    }
+
+    /// Marque une erreur comme celle d'**un** index (voir
+    /// [`EsError::de_shard`]).
+    pub fn sur_un_shard(mut self) -> Self {
+        self.de_shard = true;
         self
     }
 

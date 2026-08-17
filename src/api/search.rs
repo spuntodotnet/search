@@ -11,10 +11,11 @@ use super::{elapsed_ms, expect_only, parse_body, selection_options, Json, Params
 use crate::dsl::{build_query, QueryCtx};
 use crate::engine::Generation;
 use crate::error::{EsError, EsResult};
+use crate::fetch::{self, Demande, Stored};
 use crate::mapping::FieldKind;
 use crate::scroll;
 use crate::search::{
-    balayer, execute, rendre_page, round_score, Cible, SearchRequest, SortKey, SortSpec,
+    balayer, execute, rendre_page, round_score, Cible, Rendu, SearchRequest, SortKey, SortSpec,
     SourceFilter,
 };
 use crate::selection::resoudre;
@@ -51,6 +52,11 @@ pub async fn search(
     let param_size = p.number("size")?;
     let param_sort = p.list("sort");
     let param_source = source_filter_opt(&mut p)?;
+    // `?docvalue_fields=` et `?stored_fields=` existent chez ES ; `?fields=`
+    // **non** — il le refuse comme un parametre inconnu, et ferrite fait de
+    // meme en ne le lisant nulle part.
+    let param_docvalue = p.list("docvalue_fields");
+    let param_stored = p.list("stored_fields");
     // `preference` choisit un shard : ferrite n'en a qu'un, le parametre est
     // donc sans objet — pas ignore, juste sans effet possible.
     p.opt("preference");
@@ -99,6 +105,11 @@ pub async fn search(
             "track_total_hits",
             "aggs",
             "aggregations",
+            "fields",
+            "docvalue_fields",
+            "stored_fields",
+            "script_fields",
+            "runtime_mappings",
         ],
         "_search",
     )?;
@@ -106,6 +117,8 @@ pub async fn search(
     if let Some(v) = body_obj.get("track_total_hits") {
         check_track_total_hits(v)?;
     }
+
+    let demande = lire_demande(&body_obj, param_docvalue, param_stored)?;
 
     let from = match param_from {
         Some(v) => v,
@@ -138,6 +151,9 @@ pub async fn search(
         Some(f) => f,
         None => match body_obj.get("_source") {
             Some(v) => parse_source_body(v)?,
+            // `stored_fields` demande des champs stockes un par un : ES ne rend
+            // alors plus `_source`, sauf s'il est demande explicitement.
+            None if demande.retire_le_source() => SourceFilter::None,
             None => SourceFilter::All,
         },
     };
@@ -237,12 +253,25 @@ pub async fn search(
                 Err(e) => return Err(e),
             },
         };
+        // `fields` et `docvalue_fields` se resolvent sur **ce** mapping : un
+        // `format` sur un `keyword`, un `docvalue_fields` sur un `text` sont
+        // des echecs de shard chez ES, pas des erreurs de requete. Un autre
+        // index vise peut tres bien y repondre.
+        let plan = match fetch::resoudre(&demande, &gen, &nom) {
+            Ok(p) => std::sync::Arc::new(p),
+            Err(e) if e.de_shard => {
+                echecs.push(echec_de_shard(&nom, &uuid, &e, &st.catalog.cluster_uuid));
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
         if sort_asc.is_empty() {
             sort_asc = sort.iter().map(|s| s.asc).collect();
         }
         cibles.push(Cible {
             nom,
             gen,
+            plan,
             query,
             sort,
             agrege,
@@ -275,6 +304,7 @@ pub async fn search(
         size,
         sort_asc,
         source,
+        avec_id: demande.avec_id(),
     };
 
     // Avec `?scroll=`, la recherche ne rend pas une page : elle ouvre un
@@ -286,17 +316,20 @@ pub async fn search(
         let echecs_du_scroll = echecs.clone();
         let (page, contexte, aggregations, total, max_score) =
             tokio::task::spawn_blocking(move || -> EsResult<_> {
+                let rendu = Rendu {
+                    source: req.source.clone(),
+                    avec_id: req.avec_id,
+                };
                 let b = balayer(cibles, &req)?;
                 let fin = req.size.min(b.hits.len());
-                let page =
-                    rendre_page(&b.cibles, &b.hits[..fin], &req.source, b.trie, b.avec_score)?;
+                let page = rendre_page(&b.cibles, &b.hits[..fin], &rendu, b.trie, b.avec_score)?;
                 let (total, max_score) = (b.total, b.max_score);
                 let contexte = crate::scroll::Contexte {
                     cibles: b.cibles,
                     hits: b.hits,
                     total,
                     max_score,
-                    source: req.source.clone(),
+                    rendu,
                     trie: b.trie,
                     avec_score: b.avec_score,
                     taille: req.size,
@@ -339,6 +372,71 @@ pub async fn search(
         reponse.insert("aggregations".into(), aggs);
     }
     Ok(Json::ok(Value::Object(reponse)))
+}
+
+/// Lit ce que la reponse doit transporter : `fields`, `docvalue_fields`,
+/// `stored_fields` — et refuse les deux qui supposent Painless.
+///
+/// `script_fields` et `runtime_mappings` **vides** sont acceptes : un objet
+/// sans entree ne definit aucun champ, donc ne demande rien, et ES rend la meme
+/// reponse avec ou sans (mesure contre ES 8.15). Ce n'est pas une complaisance :
+/// c'est la forme que 774 requetes du corpus envoient, parce que les gabarits
+/// des tracks Rally la laissent vide quand leur parametre n'est pas rempli. Un
+/// objet **non** vide, lui, est refuse : il porte un script Painless (18 des 19
+/// occurrences non vides du corpus), qui est hors du perimetre declare.
+fn lire_demande(
+    body: &Map<String, Value>,
+    param_docvalue: Option<Vec<String>>,
+    param_stored: Option<Vec<String>>,
+) -> EsResult<Demande> {
+    for cle in ["script_fields", "runtime_mappings"] {
+        match body.get(cle) {
+            None | Some(Value::Null) => {}
+            Some(Value::Object(o)) if o.is_empty() => {}
+            Some(_) => {
+                return Err(EsError::unsupported(format!(
+                    "ferrite ne supporte pas [{cle}] dans [_search] : il definit des champs \
+                     calcules par un script Painless, que ferrite n'execute pas (seul l'objet \
+                     vide, qui ne definit rien, est accepte)"
+                )))
+            }
+        }
+    }
+
+    let mut demande = Demande::default();
+    if let Some(v) = body.get("fields") {
+        demande.fields = fetch::lire_champs(v, "fields")?;
+    }
+    demande.docvalue = match (body.get("docvalue_fields"), param_docvalue) {
+        (Some(v), _) => fetch::lire_champs(v, "docvalue_fields")?,
+        (None, Some(liste)) => liste
+            .into_iter()
+            .map(|motif| fetch::Champ {
+                motif,
+                format: None,
+                include_unmapped: false,
+            })
+            .collect(),
+        (None, None) => Vec::new(),
+    };
+    demande.stored = match (body.get("stored_fields"), param_stored) {
+        (Some(v), _) => fetch::lire_stored(v)?,
+        (None, Some(liste)) => fetch::stored_des_params(&liste),
+        (None, None) => Stored::Absent,
+    };
+
+    // Retirer les champs stockes et en demander en meme temps est contradictoire
+    // — `fields` en a besoin pour lire le `_source`. Le message est celui d'ES,
+    // type compris.
+    if demande.stored == Stored::Aucun && !demande.fields.is_empty() {
+        return Err(EsError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            "action_request_validation_exception",
+            "Validation Failed: 1: [stored_fields] cannot be disabled when using the [fields] \
+             option;",
+        ));
+    }
+    Ok(demande)
 }
 
 /// Valide le corps d'une recherche qui ne vise **aucun** index.
@@ -520,7 +618,7 @@ async fn scroll_avec_id(
         rendre_page(
             &suite.cibles,
             &suite.hits,
-            &suite.source,
+            &suite.rendu,
             suite.trie,
             suite.avec_score,
         )
