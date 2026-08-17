@@ -74,6 +74,12 @@ MAPPING = {"mappings": {"properties": {
         # un `nested`, c'est une capacite declaree refusee.
         "sous": {"properties": {"z": {"type": "keyword"}}}}},
     "jamais": {"type": "keyword"},
+    # `ignore_above` : la valeur trop longue n'est pas indexee, donc elle ne
+    # sort **pas** dans `fields` — ES la rend a part, dans
+    # `ignored_field_values`. Sans ce champ, la sonde ne verrait pas la
+    # difference entre « lire le _source » et « lire ce qui a ete indexe ».
+    "court": {"type": "keyword", "ignore_above": 5},
+    "phrase": {"type": "text", "fields": {"kw": {"type": "keyword", "ignore_above": 5}}},
     # Une cle de tri stable des deux cotes : `_id` ne se trie pas chez ES
     # (« Fielddata access on the _id field is disallowed »).
     "ord": {"type": "keyword"},
@@ -88,6 +94,8 @@ DOCS = {
         "dbl": 0.1, "b": True, "d": ["2026-03-15", "2020-01-01T12:00:00Z"],
         "dfmt": "2026-03-15",
         "client": {"ville": "Lyon", "cp": 69000},
+        "court": ["ok", "beaucoup trop long", "aussi"],
+        "phrase": "une phrase longue",
         "lignes": [{"ref": "X1", "q": 2},
                    {"q": 5},
                    {"ref": "X3", "sous": [{"z": "z1"}, {"z": "z2"}]}],
@@ -170,6 +178,12 @@ def cas():
     q("fields, coercions", {"_source": False, "fields": ["tag", "n", "b", "d"]})
     q("fields, avec _source", {"fields": ["n"]})
     q("fields, sur un text", {"_source": False, "fields": ["titre"]})
+
+    # --- fields : ignore_above ----------------------------------------------
+    q("fields, ignore_above", {"_source": False, "fields": ["court"]})
+    q("fields, ignore_above sur un multi-field",
+      {"_source": False, "fields": ["phrase", "phrase.kw"]})
+    q("dv, ignore_above", {"_source": False, "docvalue_fields": ["court"]})
 
     # --- fields : les metadonnees ------------------------------------------
     for meta in ["_id", "_index", "_version", "_score", "_routing",
@@ -278,9 +292,38 @@ def cas():
     return out
 
 
+# Les cas ou ferrite refuse ce qu'ES sait faire, chacun avec sa raison. Un
+# refus assume se compte a part : le melanger aux identiques ferait passer un
+# manque pour une egalite, l'appeler « ecart » ferait passer un choix ecrit
+# pour un accident.
+REFUS_ASSUMES = {
+    "fields, metadonnee _ignored":
+        "ES y liste les champs qu'un `ignore_above` a ecartes ; ferrite ne "
+        "tient pas cette liste — ni comme cle du hit, ni comme champ "
+        "adressable — et rendre un tableau vide dirait « aucun champ ecarte » "
+        "alors qu'on ne le sait pas. Les valeurs ecartees, elles, sortent bien "
+        "dans `ignored_field_values`",
+}
+
+
 def normalise(hit):
-    """Ce qui se compare dans un hit : tout sauf le score et le tri."""
-    return {k: v for k, v in hit.items() if k not in ("_score", "sort")}
+    """Ce qui se compare dans un hit, et ce qui ne se compare pas.
+
+    Trois clefs sont retirees, chacune avec sa raison — une neutralisation
+    tacite est une divergence qu'on ne verra jamais :
+
+    - `_score` : BM25 par tantivy d'un cote, par Lucene de l'autre ;
+    - `sort` : c'est la cle de tri, pas ce que la reponse transporte ;
+    - `_ignored` : ES liste dans chaque hit les champs qu'un `ignore_above` a
+      ecartes, meme quand rien n'est demande. C'est une trace de
+      l'indexation, pas un resultat, et ferrite ne la rend nulle part — c'est
+      la meme divergence assumee que celle qu'a deja ecrite
+      [`fuzz_vs_es.py`](fuzz_vs_es.py). `ignored_field_values`, lui, **se
+      compare** : il ne sort qu'avec `fields`, il porte des valeurs que le
+      client a demandees, et il est donc du ressort de cette carte.
+    """
+    return {k: v for k, v in hit.items()
+            if k not in ("_score", "sort", "_ignored")}
 
 
 def interroge(base, chemin, corps):
@@ -318,19 +361,28 @@ def main():
             dispo.append((nom, base))
         except Exception as exc:  # noqa: BLE001
             print(f"# {nom} indisponible ({base}) : {exc}")
-    ecarts = total = 0
+    ecarts = assumes = total = 0
     for libelle, chemin, corps in cas():
         reps = [(nom, *interroge(base, chemin, corps)) for nom, base in dispo]
         vals = {cle for _, cle, _ in reps}
         differe = len(vals) > 1
-        print(f"{'*' if differe else ' '} {libelle:48} " +
+        assume = libelle in REFUS_ASSUMES
+        marque = "~" if assume and differe else ("*" if differe else " ")
+        print(f"{marque} {libelle:48} " +
               "  |  ".join(f"{nom}={vu}" for nom, _, vu in reps))
-        if differe or detail:
+        if assume and differe:
+            print(f"      refus assume : {REFUS_ASSUMES[libelle]}")
+        elif differe or detail:
             for nom, cle, _ in reps:
                 print(f"      {nom}: {cle}")
         total += 1
-        ecarts += differe
-    print(f"\n{total - ecarts}/{total} identiques")
+        if differe:
+            if assume:
+                assumes += 1
+            else:
+                ecarts += 1
+    print(f"\n{total - ecarts - assumes}/{total} identiques, "
+          f"{assumes} refus assume(s), {ecarts} ecart(s)")
     return 1 if ecarts else 0
 
 

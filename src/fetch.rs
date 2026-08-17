@@ -241,6 +241,12 @@ struct Lecture {
     /// `titre.keyword` n'existe pas dans le document, `titre` si.
     source: String,
     ty: FieldType,
+    /// `ignore_above` du champ. Une valeur plus longue n'a pas ete indexee :
+    /// elle ne sort **pas** dans `fields`, elle sort dans
+    /// `ignored_field_values` (mesure contre ES 8.15). Le test est celui de
+    /// l'indexation, au caractere pres — sinon les deux ne s'accorderaient pas
+    /// sur ce qui a ete ignore.
+    ignore_above: Option<usize>,
     /// Le format qui **lit** la date du `_source` : celui du mapping, puisque
     /// c'est lui qui a servi a l'indexer.
     lecture: DateFormat,
@@ -285,12 +291,19 @@ impl Plan {
 /// Les metadonnees que `fields` sait rendre.
 ///
 /// Mesure contre ES 8.15, nom par nom : `_id`, `_index` et `_version` rendent
-/// une valeur ; `_score`, `_routing`, `_ignored`, `_type` et `_doc` rendent
-/// **rien** (200, pas de cle) ; `_seq_no` et `_source` rendent un **500**
-/// (« Cannot fetch values for internal field »). Un 500 ne se reproduit pas :
-/// ferrite les refuse explicitement.
+/// une valeur ; `_score`, `_routing`, `_type` et `_doc` rendent **rien** (200,
+/// pas de cle) ; `_seq_no` et `_source` rendent un **500** (« Cannot fetch
+/// values for internal field »). Un 500 ne se reproduit pas : ferrite les
+/// refuse explicitement.
+///
+/// `_ignored` est le troisieme refus, et pour une autre raison : ES y liste
+/// les champs qu'un `ignore_above` a ecartes, et ferrite ne tient pas cette
+/// liste — ni comme cle du hit, ni comme champ adressable. Rendre un tableau
+/// vide serait dire « aucun champ ecarte » alors qu'on ne le sait pas. La meme
+/// information est disponible la ou elle a ete demandee : les valeurs ecartees
+/// sortent dans `ignored_field_values`.
 const META_RENDUES: [&str; 3] = ["_id", "_index", "_version"];
-const META_REFUSEES: [&str; 2] = ["_seq_no", "_source"];
+const META_REFUSEES: [&str; 3] = ["_seq_no", "_source", "_ignored"];
 
 /// Resout une demande sur le mapping d'un index.
 ///
@@ -325,7 +338,9 @@ fn resoudre_fields(champ: &Champ, gen: &Generation, plan: &mut Plan) -> EsResult
     if !joker && motif.starts_with('_') {
         if META_REFUSEES.contains(&motif) {
             return Err(EsError::unsupported(format!(
-                "ferrite ne supporte pas [{motif}] dans [fields] : c'est un champ interne"
+                "ferrite ne supporte pas [{motif}] dans [fields] : c'est un champ interne dont \
+                 ferrite ne tient pas la valeur ; les valeurs ecartees par [ignore_above] sortent \
+                 dans [ignored_field_values]"
             )));
         }
         if META_RENDUES.contains(&motif) {
@@ -359,6 +374,7 @@ fn resoudre_fields(champ: &Champ, gen: &Generation, plan: &mut Plan) -> EsResult
             source: chemin_source(chemin, gen),
             chemin: chemin.clone(),
             ty: mapped.ty,
+            ignore_above: mapped.ignore_above,
             rendu: champ
                 .format
                 .clone()
@@ -475,7 +491,18 @@ pub struct Document<'a> {
     pub version: Option<u64>,
 }
 
-/// Le bloc `fields` d'un hit, ou `None` s'il n'y a rien a rendre.
+/// Ce qu'un hit gagne : le bloc `fields`, et le bloc `ignored_field_values`
+/// des valeurs qu'`ignore_above` a laissees de cote.
+#[derive(Default)]
+pub struct Blocs {
+    pub fields: Option<Value>,
+    /// Les valeurs trop longues pour `ignore_above`. ES ne les met **pas**
+    /// dans `fields` — elles n'ont pas ete indexees — mais les rend a part,
+    /// et seulement quand `fields` est demande.
+    pub ignores: Option<Value>,
+}
+
+/// Les blocs d'un hit, vides s'il n'y a rien a rendre.
 ///
 /// ES n'ajoute pas de cle vide : un champ absent n'apparait pas, et un bloc
 /// entierement vide n'apparait pas non plus.
@@ -485,7 +512,7 @@ pub fn rendre(
     searcher: &tantivy::Searcher,
     addr: DocAddress,
     doc: &Document<'_>,
-) -> EsResult<Option<Value>> {
+) -> EsResult<Blocs> {
     let Document {
         source,
         index: index_name,
@@ -493,13 +520,14 @@ pub fn rendre(
         version,
     } = *doc;
     if plan.est_vide() {
-        return Ok(None);
+        return Ok(Blocs::default());
     }
     let mut bloc: Map<String, Value> = Map::new();
+    let mut ignores: Map<String, Value> = Map::new();
 
     // `fields`, depuis le `_source`.
     let refs: Vec<&Lecture> = plan.lectures.iter().collect();
-    for (cle, valeur) in rendre_niveau(source, "", &refs, &plan.nested)? {
+    for (cle, valeur) in rendre_niveau(source, "", &refs, &plan.nested, &mut ignores)? {
         bloc.insert(cle, valeur);
     }
 
@@ -548,11 +576,10 @@ pub fn rendre(
         }
     }
 
-    if bloc.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(Value::Object(bloc)))
-    }
+    Ok(Blocs {
+        fields: (!bloc.is_empty()).then(|| Value::Object(bloc)),
+        ignores: (!ignores.is_empty()).then(|| Value::Object(ignores)),
+    })
 }
 
 /// Rend les valeurs d'un niveau : les champs plats, et les `nested` groupes
@@ -567,6 +594,7 @@ fn rendre_niveau(
     prefixe: &str,
     lectures: &[&Lecture],
     nested: &BTreeSet<String>,
+    ignores: &mut Map<String, Value>,
 ) -> EsResult<Map<String, Value>> {
     let mut plat: Map<String, Value> = Map::new();
     let mut groupes: BTreeMap<String, Vec<&Lecture>> = BTreeMap::new();
@@ -579,6 +607,17 @@ fn rendre_niveau(
                 descendre(src, &l.source[prefixe.len()..], &mut brutes);
                 let mut valeurs = Vec::with_capacity(brutes.len());
                 for b in brutes {
+                    // Une valeur qu'`ignore_above` a ecartee n'a pas ete
+                    // indexee : la rendre dans `fields` serait rendre une
+                    // valeur qu'ES ne rend pas la. Elle part dans
+                    // `ignored_field_values`, telle quelle.
+                    if trop_longue(l, b) {
+                        match ignores.entry(l.chemin.clone()).or_insert_with(|| json!([])) {
+                            Value::Array(a) => a.push(b.clone()),
+                            _ => unreachable!("toujours un tableau"),
+                        }
+                        continue;
+                    }
                     valeurs.push(rendre_valeur(l, b)?);
                 }
                 if !valeurs.is_empty() {
@@ -593,7 +632,7 @@ fn rendre_niveau(
         collecter_elements(src, &racine[prefixe.len()..], &mut elements);
         let mut rendus = Vec::new();
         for e in elements {
-            let m = rendre_niveau(e, &format!("{racine}."), &sous, nested)?;
+            let m = rendre_niveau(e, &format!("{racine}."), &sous, nested, ignores)?;
             if !m.is_empty() {
                 rendus.push(Value::Object(m));
             }
@@ -673,6 +712,15 @@ fn collecter_elements<'a>(v: &'a Value, chemin: &str, out: &mut Vec<&'a Value>) 
             },
         },
         _ => {}
+    }
+}
+
+/// La valeur depasse-t-elle l'`ignore_above` du champ ? Le test est celui de
+/// l'indexation : un compte de **caracteres**, et seulement sur une chaine.
+fn trop_longue(l: &Lecture, brut: &Value) -> bool {
+    match l.ignore_above {
+        Some(n) => brut.as_str().is_some_and(|s| s.chars().count() > n),
+        None => false,
     }
 }
 

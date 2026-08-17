@@ -799,7 +799,7 @@ fn build_hit(
     );
     // `fields` lit le `_source` **complet**, pas celui que `_source` a filtre :
     // les deux se demandent ensemble et ne repondent pas a la meme question.
-    let bloc = crate::fetch::rendre(
+    let blocs = crate::fetch::rendre(
         plan,
         gen,
         searcher,
@@ -814,8 +814,11 @@ fn build_hit(
     if let Some(filtered) = rendu.source.apply(source) {
         hit.insert("_source".into(), filtered);
     }
-    if let Some(b) = bloc {
+    if let Some(b) = blocs.fields {
         hit.insert("fields".into(), b);
+    }
+    if let Some(b) = blocs.ignores {
+        hit.insert("ignored_field_values".into(), b);
     }
     if let Some(sv) = sort_values {
         hit.insert("sort".into(), Value::Array(sv));
