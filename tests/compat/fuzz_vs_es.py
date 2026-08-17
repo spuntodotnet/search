@@ -103,6 +103,7 @@ import datetime
 import json
 import os
 import random
+import re
 import struct
 import sys
 import urllib.error
@@ -1391,7 +1392,16 @@ def _court_circuit(e, requete, ecarts=()):
             return True
         return any(vide(v) for v in noeud.values())
 
-    return vide(requete)
+    if vide(requete):
+        return True
+    # Le troisieme declencheur n'est pas syntaxique : une clause qui ne peut
+    # correspondre a **aucun document** vide le `bool` a la reecriture, et ES
+    # n'a alors jamais construit les clauses suivantes. Aucune lecture de la
+    # requete ne le dit — il faut le mesurer, et c'est ce que fait le probe de
+    # `Cas.jouer` : il repose la clause fautive **seule** a ES. Si ES la refuse
+    # aussi quand elle est seule, son 200 prouve qu'il ne l'a pas construite ;
+    # s'il l'accepte seule, ferrite est trop strict et l'ecart est reel.
+    return bool(_illisible_confirme.get("court_circuite"))
 
 
 
@@ -1416,6 +1426,9 @@ def _nested_et_score(e, requete):
 # clause `exists` de cette requete rend vraiment moins de documents chez ferrite ?
 # La question se **mesure**, elle ne se suppose pas.
 _exists_confirme = {"ampute": False}
+# Meme mecanique pour le court-circuit d'ES : la question se mesure, elle ne se
+# lit pas dans la requete (voir `_court_circuit`).
+_illisible_confirme = {"court_circuite": False}
 
 
 def _corpus_ampute(ecarts):
@@ -1898,6 +1911,8 @@ class Cas:
                                                 positions_du_score(corps))
             if verdict != "ok":
                 _exists_confirme["ampute"] = self.exists_ampute(corps)
+                _illisible_confirme["court_circuite"] = \
+                    self.illisible_court_circuitee(corps, reps)
                 self.divergence(verdict, "recherche", ecarts, corps)
                 if self.bavard:
                     for nom, (st, r) in zip(self.noms, reps):
@@ -2013,6 +2028,64 @@ class Cas:
                         [f"valid : {self.noms[0]}={verdicts[0]} / "
                          f"{self.noms[1]}={verdicts[1]}"],
                         {"query": corps["query"]})
+
+    # Les clauses qui nomment un champ et lisent une valeur : ce sont elles qui
+    # peuvent porter une valeur illisible pour le type du champ.
+    CLAUSES_A_VALEUR = ("match", "match_phrase", "match_phrase_prefix", "term",
+                        "terms", "range", "prefix", "wildcard", "regexp",
+                        "fuzzy")
+
+    def illisible_court_circuitee(self, corps, reps):
+        """ferrite refuse une valeur illisible qu'ES n'a jamais lue — ou pas.
+
+        ES construit ses clauses dans l'ordre et **s'arrete** des qu'une d'elles
+        vide le `bool` : il ne voit alors jamais que la valeur d'une clause
+        suivante est illisible pour le type du champ. ferrite valide la requete
+        entiere avant de l'executer (le contraire ferait dependre la validation
+        de l'ordre d'evaluation), donc il refuse.
+
+        Rien dans la requete ne dit qu'ES s'est arrete : deux des declencheurs
+        sont syntaxiques (`match_none`, `must_not: match_all`), le troisieme ne
+        l'est pas — une clause qui ne correspond a aucun document est videe a la
+        **reecriture**. La question se mesure donc : la clause fautive est
+        reposee **seule** a ES.
+
+        * ES la refuse seule -> il ne sait pas lire cette valeur non plus, donc
+          son 200 sur la requete complete prouve qu'il ne l'a pas construite :
+          divergence assumee ;
+        * ES l'accepte seule -> ferrite est plus strict qu'ES sur cette valeur,
+          et l'ecart est **reel**. Le predicat ne le masque pas.
+        """
+        (st_a, ra), (st_b, _) = reps[0], reps[1]
+        if st_a == 200 or st_b != 200:
+            return False
+        phrase = motif(ra)
+        champ = re.search(r"parse (?:date )?field \[([^\]]+)\]", phrase)
+        if not champ:
+            return False
+        champ = champ.group(1)
+
+        clauses = []
+
+        def cueille(noeud):
+            if isinstance(noeud, list):
+                for x in noeud:
+                    cueille(x)
+            elif isinstance(noeud, dict):
+                for nom, params in noeud.items():
+                    if nom in self.CLAUSES_A_VALEUR and isinstance(params, dict) \
+                            and champ in params:
+                        clauses.append({nom: {champ: params[champ]}})
+                    cueille(params)
+
+        cueille(corps.get("query"))
+        for clause in clauses:
+            st, _ = http(self.serveurs[1], "POST", f"/{INDEX}/_search",
+                         {"query": clause, "size": 0})
+            self.requetes += 1
+            if st >= 400:
+                return True
+        return False
 
     def exists_ampute(self, corps):
         """Une clause `exists` de cette requete rend-elle moins de documents ?

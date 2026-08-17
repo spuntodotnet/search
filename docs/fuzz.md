@@ -107,29 +107,47 @@ avec sa raison, et `--tout` les imprime.
 
 ```
 graines 1–400          400 cas, 16 714 requêtes, 0 divergence réelle
-graines 5000–5299      300 cas, 12 475 requêtes, 0 divergence réelle
-graines 900000+        250 cas, 10 441 requêtes, 1 divergence réelle  (ouverte, décrite plus bas)
-graines 4242000+       250 cas, 10 417 requêtes, 0 divergence réelle
-graines 31337000+      250 cas, 10 395 requêtes, 0 divergence réelle
-graines 7770000+       250 cas, 10 413 requêtes, 0 divergence réelle
-graines 6060000+       250 cas, 10 400 requêtes, 0 divergence réelle
+graines 5000–5299      300 cas, 12 501 requêtes, 0 divergence réelle
+graines 900000+        250 cas, 10 468 requêtes, 0 divergence réelle
+graines 4242000+       250 cas, 10 410 requêtes, 0 divergence réelle
+graines 31337000+      250 cas, 10 400 requêtes, 0 divergence réelle
+graines 7770000+       250 cas, 10 416 requêtes, 0 divergence réelle
+graines 6060000+       250 cas, 10 446 requêtes, 0 divergence réelle
+graines 8181000+       250 cas, 10 480 requêtes, 0 divergence réelle
+graines 9494000+       250 cas, 10 466 requêtes, 0 divergence réelle
+graines 5150000+       250 cas, 10 438 requêtes, 1 divergence réelle  (ouverte, décrite plus bas)
                      ------------------------------------------------
-                     1 950 cas, 81 255 requêtes, 1 divergence réelle
+                     2 700 cas, 112 738 requêtes, 1 divergence réelle
 
-étalonnage ES vs ES     60 cas,  2 418 requêtes, 0 divergence
+étalonnage ES vs ES     50 cas,  2 014 requêtes, 0 divergence
 ```
 
-Deux de ces plages ont servi à corriger : 1–400, contre laquelle l'outil a été
-réglé, et 4242000+, qui a sorti le `minimum_should_match` décrit plus bas. Les
-cinq autres sont des plages **de contrôle**, et **6060000+ n'a jamais été
-regardée avant ce passage** : c'est son zéro qui mesure ferrite plutôt que mon
-itération. Le rapport machine ([`fuzz.json`](fuzz.json)) est le sien.
+Quatre de ces plages ont servi à corriger : 1–400, contre laquelle l'outil a été
+réglé, 4242000+, qui a sorti le `minimum_should_match` décrit plus bas,
+**8181000+**, qui a sorti les trois règles de précédence de `fields` (ci-dessous),
+et **9494000+**, qui a montré qu'un prédicat était trop étroit. Les **six**
+autres sont des plages **de contrôle**, et **5150000+ n'a jamais été regardée
+avant ce passage** : c'est elle qui porte la divergence ouverte, et son rapport
+machine est [`fuzz.json`](fuzz.json).
 
 Les graines ont toutes changé de sens depuis la mesure précédente : le
-générateur pose maintenant, en plus, un tri et une agrégation sur un sous-champ
-de `nested`. Chaque cas de chaque plage est donc un tirage différent — c'est
-exactement pour ça que ce qui compte devient un cas écrit dans
-[`sonde_fuzz.py`](../tests/compat/sonde_fuzz.py) et pas une graine.
+générateur pose maintenant, en plus, `fields`, `docvalue_fields` et
+`stored_fields` sur chaque recherche. Chaque cas de chaque plage est donc un
+tirage différent — c'est exactement pour ça que ce qui compte devient un cas
+écrit dans [`sonde_fuzz.py`](../tests/compat/sonde_fuzz.py) et pas une graine.
+
+### Ce que la brique `fields` a sorti, en un passage
+
+Le générateur ne pose une brique que si `compat.yaml` déclare la capacité
+tenue ; les trois paramètres de la carte 18 en ont donc reçu une le jour où ils
+ont été livrés. Premier passage sur une plage jamais regardée : **47
+divergences**, toutes ramenées à trois règles qu'aucune lecture ne donne.
+
+| Ce que le fuzzer a sorti | La règle mesurée |
+|---|---|
+| le même champ demandé deux fois rendait le premier format | **la dernière spécification gagne** : `fields: [{"field": "d", "format": "yyyy-MM-dd"}, "d*"]` rend la date au format du mapping, l'ordre inverse au format demandé |
+| un champ demandé dans `fields` **et** dans `docvalue_fields` sortait trié | c'est `fields` qui rend la valeur, donc l'ordre du `_source` et ses doublons. Le refus que porte la colonne, lui, reste |
+| un `docvalue_fields` sur un `text` refusait même sans document ramené | ces refus sont ceux de la phase de **fetch** : `size: 0` ou zéro correspondance rendent **200** chez ES, qui ne va chercher les valeurs que des documents qu'il ramène |
 
 ### Les deux divergences du passage précédent : corrigées
 
@@ -179,10 +197,32 @@ Elle est **ouverte** : elle ne se corrige pas dans la couche de mise en forme
 famille traitée par cette carte. Elle est publiée ici pour la même raison que
 les deux précédentes — c'est le seul usage honnête de cet outil.
 
+> Elle **ne sort plus** du passage courant : le tirage a changé, et aucune des
+> dix plages ne la repose. Elle reste écrite ici parce qu'une divergence qu'un
+> tirage cesse de poser n'est pas une divergence corrigée.
+
+### La divergence ouverte du passage courant : un ordre que BM25 sépare
+
+`5150000+`, la plage de contrôle jamais regardée, en a sorti une seule — et elle
+n'est **pas** de la famille de cette carte (sa requête ne porte ni `fields`, ni
+`docvalue_fields`, ni `stored_fields`).
+
+| Ce qui diffère | Ce que c'est |
+|---|---|
+| Sur `dis_max: [match_all^2, multi_match "tissu", range]` trié par `_score` puis par un `keyword`, ferrite place `d003` là où ES place `d009` | le `multi_match` note `d003` **2,0223** chez ferrite et **1,8970** chez ES. Le `dis_max` prend le maximum : chez ferrite la valeur passe **au-dessus** du `match_all` boosté à 2,0, chez ES elle reste dessous. C'est l'`avgdl` de BM25 — Lucene le calcule sur les documents **qui ont le champ**, tantivy sur **tous** (le champ `f` n'est rempli que par 20 des 25 documents), et c'est une divergence déjà déclarée dans [`compat.md`](compat.md) |
+
+Elle est **ouverte**, et le prédicat qui couvre cette famille ne l'absorbe
+**pas** — volontairement. Il n'accepte une inversion que si ES lui-même donne
+deux scores **différents** aux documents échangés ; ici ES les classe ex æquo à
+2,0 et c'est ferrite qui les sépare. Élargir la ligne pour l'absorber
+masquerait exactement ce qu'elle a été écrite pour attraper : une inversion
+causée par une **clé de tri** et non par le score. Le prix, c'est cette ligne
+rouge — et elle est le bon prix.
+
 Le détail machine est dans [`fuzz.json`](fuzz.json) : les divergences réelles y
 sont écrites entières, les assumées résumées par famille avec trois exemples.
 
-### Pourquoi cinq plages de graines, et pas une
+### Pourquoi dix plages de graines, et pas une
 
 Parce que la première ne prouvait pas ce qu'elle avait l'air de prouver.
 
@@ -200,13 +240,16 @@ La preuve : chaque nouvelle plage jamais regardée en a retrouvé.
 | 900000+ | **deux** défauts réels : `fuzzy` sur un champ `date` ou numérique rendait « zéro document » en 200, et le score d'un `bool` purement négatif valait le `boost` au lieu de `0.0` |
 | 4242000+ | un trou du **rapport**, pas du moteur : un `scroll` refusé ne transportait pas le motif de son refus, donc un refus déclaré s'y lisait comme une divergence réelle |
 | 31337000+ | rien de neuf — la première plage de contrôle qui n'ajoute rien |
+| 8181000+ | les **trois règles de précédence** de `fields` (ci-dessus), 47 divergences en un passage, le jour où la brique a été posée |
+| 9494000+ | un **quatrième** prédicat trop étroit : « ES casse sur `epoch_millis` » supposait que ferrite, lui, répondait |
+| 5150000+ | la divergence ouverte ci-dessus — un ordre que BM25 sépare, que le prédicat refuse d'absorber |
 
 Et au passage suivant, générateur changé, la règle a rejoué exactement pareil :
 la plage 1–400 — celle sur laquelle on avait itéré — a sorti le **troisième**
 prédicat trop étroit du tableau ci-dessous, et deux plages de contrôle ont sorti
 les deux divergences réelles décrites plus haut.
 
-Les trois prédicats trop étroits :
+Les prédicats trop étroits, un par passage :
 
 | Ce qui manquait | Ce que ça a coûté |
 |---|---|
@@ -214,6 +257,7 @@ Les trois prédicats trop étroits :
 | `exists` sur un `text` était reconnu à un **compte de documents** | sous un `bool { should: [exists], filter: […] }`, le manque ne se voit que dans le **score** : ES donne 1.0, ferrite 0.0, et aucun compte ne bouge. Le fuzzer repose maintenant la clause `exists` seule aux deux serveurs pour trancher — il le **mesure**, il ne le suppose pas |
 | le court-circuit d'ES n'était reconnu que sur le chemin `statut` d'une **recherche** | le même court-circuit se produit à l'ouverture d'un `scroll`, et l'écart s'y lisait comme réel. Un prédicat qui nomme un chemin plutôt qu'une propriété finit toujours par manquer une route |
 | « ES casse sur `epoch_millis` » supposait que ferrite, lui, **répondait** | il arrive que les **deux** refusent, pour deux raisons sans rapport : ferrite sur un de ses refus déclarés (un trou entre deux intervalles d'un `range` sur une date), ES sur son bug de formatage — 400 d'un côté, 500 de l'autre, et l'écart se lisait comme réel. Le prédicat porte maintenant sur le **message d'ES** : quand ES n'arrive pas à formater sa propre réponse, il n'y a pas d'oracle et le cas ne mesure rien. Un 500 d'ES pour une autre raison reste un écart |
+| « le court-circuit d'ES » ne connaissait que deux déclencheurs **syntaxiques** (`match_none`, `must_not: match_all`) | le troisième ne se lit pas dans la requête : une clause qui ne correspond à **aucun document** vide le `bool` à la réécriture, et ES n'a alors jamais construit les clauses suivantes — donc jamais vu qu'une valeur y était illisible pour le type du champ. Le prédicat le **mesure** maintenant, comme celui d'`exists` : il repose la clause fautive **seule** à ES. Si ES la refuse seule, son 200 sur la requête complète prouve qu'il ne l'a pas construite ; s'il l'accepte seule, ferrite est plus strict qu'ES et l'écart reste réel |
 | « refus déclaré » ne demandait pas qu'ES **sache répondre** | c'est pourtant la moitié qui compte, et sa docstring le disait déjà. Le défaut est arrivé par un **progrès** : le texte d'un écart de statut porte désormais les messages des deux serveurs (« statuts 400 / 500 » tout court ne se diagnostique pas), et la phrase de ferrite s'y trouve donc même quand ES échoue de son côté. Un prédicat se relit quand ce qu'il lit change |
 
 D'où la règle : **une plage de graines sur laquelle on a itéré ne mesure plus
