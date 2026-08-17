@@ -260,6 +260,40 @@ def cas():
     q("sf, _none_ en query string", None,
       f"/{INDEX}/_search?size=10&sort=ord&stored_fields=_none_")
 
+    # --- les regles de precedence, et le moment de l'erreur ------------------
+    # Le meme champ demande deux fois : la **derniere** specification gagne.
+    q("fields, format puis motif",
+      {"_source": False, "fields": [{"field": "d", "format": "yyyy-MM-dd"}, "d*"]})
+    q("fields, motif puis format",
+      {"_source": False, "fields": ["d*", {"field": "d", "format": "yyyy-MM-dd"}]})
+    q("dv, format puis nom nu",
+      {"_source": False, "docvalue_fields": [{"field": "d", "format": "yyyy"}, "d"]})
+    q("dv, nom nu puis format",
+      {"_source": False, "docvalue_fields": ["d", {"field": "d", "format": "yyyy"}]})
+    # Le meme champ des deux cotes : c'est `fields` qui rend la valeur, donc
+    # l'ordre du `_source` et non celui de la colonne.
+    q("fields l'emporte sur docvalue_fields",
+      {"_source": False, "fields": ["tag", "n"], "docvalue_fields": ["tag", "n"]})
+    q("fields sans format l'emporte sur dv avec format",
+      {"_source": False, "fields": ["d"],
+       "docvalue_fields": [{"field": "d", "format": "yyyy"}]})
+    # L'erreur est celle de la phase de *fetch* : sans document ramene, elle
+    # n'a pas lieu, et les deux serveurs rendent 200.
+    q("dv sur un text, aucun document ramene",
+      {"_source": False, "docvalue_fields": ["titre"],
+       "query": {"term": {"tag": "aucune-correspondance"}}})
+    q("dv sur un text, size 0",
+      {"_source": False, "docvalue_fields": ["titre"], "size": 0})
+    q("format sur un keyword, aucun document ramene",
+      {"_source": False, "fields": [{"field": "tag", "format": "yyyy"}],
+       "query": {"term": {"tag": "aucune-correspondance"}}})
+    # Une specification ecartee garde son refus : ES echoue sur le `format`
+    # meme quand une autre specification du meme champ l'emporte.
+    q("format invalide ecarte par une autre specification",
+      {"_source": False, "fields": [{"field": "tag", "format": "yyyy"}, "tag"]})
+    q("dv text ecarte par fields",
+      {"_source": False, "fields": ["titre"], "docvalue_fields": ["titre"]})
+
     # --- les trois ensemble, et les objets vides ----------------------------
     q("les trois ensemble", {"_source": ["n"], "fields": ["tag"],
                              "docvalue_fields": ["n"], "stored_fields": ["titre"]})
@@ -361,6 +395,13 @@ def main():
             dispo.append((nom, base))
         except Exception as exc:  # noqa: BLE001
             print(f"# {nom} indisponible ({base}) : {exc}")
+    # Une sonde differentielle qui ne trouve qu'un serveur annonce « tout
+    # identique » sans avoir rien compare. C'est le defaut d'outillage que ce
+    # depot a paye plusieurs fois : elle s'arrete plutot que de le faire.
+    if len(dispo) < 2:
+        raise SystemExit(
+            f"# {len(dispo)} serveur(s) sur 2 : une comparaison a besoin des "
+            f"deux, sinon son verdict ne veut rien dire.")
     ecarts = assumes = total = 0
     for libelle, chemin, corps in cas():
         reps = [(nom, *interroge(base, chemin, corps)) for nom, base in dispo]

@@ -444,6 +444,61 @@ acceptés partout ; `pretty` est implémenté (indentation de la réponse).
 **Tout paramètre de query string non reconnu est refusé** avec
 `request [...] contains unrecognized parameter: [...]`, comme chez ES.
 
+### Ce que la réponse transporte : `fields`, `docvalue_fields`, `stored_fields`
+
+Trois façons de demander autre chose que le `_source` complet, et elles **ne
+lisent pas au même endroit**. C'est ce qui les sépare, et rien de ce qui suit
+n'était devinable — tout vient de
+[`sonde_fields.py`](../tests/compat/sonde_fields.py), qui pose 79 questions aux
+deux serveurs et compare le **hit entier** : le bloc `fields` clé par clé, la
+présence de `_source`, la présence de `_id`. **78/79 identiques, 1 refus
+assumé, 0 écart.**
+
+**`fields` lit le `_source`**, puis type chaque valeur selon le mapping. C'est
+la façon que la 7.10+ met en avant, et celle qu'envoie Kibana. La **forme** est
+ce qui compte pour un client : chaque valeur est un **tableau**, même pour un
+champ mono-valué, et un champ absent n'a **pas de clé** — ce n'est pas une
+valeur nulle. Un client qui connaît cette forme lirait mal un scalaire, sans
+que rien ne le signale.
+
+Parce qu'il lit le `_source`, `fields` garde l'**ordre du document et ses
+doublons** : `["zoulou","alpha","alpha"]` ressort tel quel. Et parce qu'il type
+selon le mapping, `{"tag": 42}` sur un `keyword` ressort `["42"]`. Un
+multi-field (`titre.keyword`) est adressable et lit la valeur de son parent ; un
+sous-champ de `nested` se rend **groupé par élément** sous sa racine
+(`{"lignes": [{"ref": ["X1"]}, {"q": [5]}]}`), un élément qui ne porte aucune
+des valeurs demandées étant omis. Un motif `*` ne ramène **pas** les
+métadonnées ; `_id`, `_index` et `_version` nommés explicitement, si.
+
+**`docvalue_fields` lit les colonnes**, et une colonne n'est pas un `_source` :
+elle est **triée**. Un `keyword` en ressort donc trié **et dédoublonné**
+(`["alpha","zoulou"]`) là où `fields` rend `["zoulou","alpha","alpha"]` ; un
+numérique trié **avec** ses doublons (`[1,1,3]`) ; et un `float` avec la
+précision de son stockage sur 32 bits — ES rend `0.10000000149011612` là où le
+`_source` porte `0.1`. ferrite range les deux en `f64` : sans repasser par
+`f32`, il rendait `0.1`, et deux serveurs qui ont indexé la même chose ne
+rendaient pas la même valeur. Un champ `text` n'a pas de colonne : ES fait
+échouer le shard, ferrite rend la même phrase.
+
+**`stored_fields` est accepté, et il ne rend aucun champ — comme ES.** ferrite
+refuse `store` au mapping : aucun champ n'est stocké individuellement, et un
+Elasticsearch dont le mapping ne porte pas `store: true` ne rend rien non plus.
+L'énoncé de la carte laissait le choix entre refuser et reconstituer les valeurs
+depuis `_source` ; la règle du dépôt tranche pour ni l'un ni l'autre.
+Reconstituer aurait rendu des valeurs **qu'ES ne rend pas** — le pire résultat
+possible ici. Ce qui s'implémente, c'est donc ce que `stored_fields` change
+vraiment à la réponse, et qui se voit : il **retire `_source`** (sauf `_source`
+explicite), `_none_` retire **aussi `_id`**, et `_none_` avec `fields` est un
+400.
+
+`script_fields` et `runtime_mappings` restent refusés : les deux définissent des
+champs calculés par un script Painless, hors périmètre. La décision n'est pas de
+principe, elle est mesurée sur le corpus d'usage : sur les 444 requêtes qui
+portent `runtime_mappings`, **425 l'envoient vide** — des gabarits de tracks
+Rally — et sur les 19 non vides, **18 portent un script**. L'objet **vide** est
+donc accepté (il ne définit aucun champ, donc ne demande rien, et ES rend la même
+réponse avec ou sans) ; un objet non vide est refusé explicitement.
+
 ### Date math et arrondi des bornes
 
 Une borne de date d'une requête n'est pas une date : c'est une expression que le
@@ -819,6 +874,27 @@ pas pour être découverts en production.
     ment. Le fuzzer ne le tolère pas en bloc : il exige que le compte de ferrite
     égale ce que la recherche rend des deux côtés, et que celui d'ES lui soit
     strictement supérieur.
+
+16. **ferrite ne rend pas `_ignored`.** ES pose dans chaque hit la liste des
+    champs qu'un `ignore_above` (ou un `ignore_malformed`, que ferrite n'a pas)
+    a écartés à l'indexation, et il l'expose aussi comme champ adressable dans
+    `fields`. ferrite ne tient pas cette liste : la rendre vide dirait « aucun
+    champ écarté » alors qu'on ne le sait pas, donc `fields: ["_ignored"]` est
+    **refusé explicitement** plutôt que rendu vide. Ce que ferrite rend, en
+    revanche, c'est `ignored_field_values` — le bloc frère qui porte les
+    **valeurs** écartées, et qui ne sort qu'avec `fields`, donc là où le client
+    les a demandées. C'est ce qui fait qu'une valeur trop longue pour
+    `ignore_above` ne se retrouve **pas** dans `fields` : elle n'a pas été
+    indexée, ES ne la rend pas là, et ferrite non plus depuis qu'on l'a mesuré
+    ([`sonde_fields.py`](../tests/compat/sonde_fields.py)).
+
+17. **`docvalue_fields` ne rend rien sous un `nested`.** Chez ES, les valeurs
+    d'un sous-champ de `nested` vivent dans des documents cachés : il n'en voit
+    aucune et ne rend pas de clé. ferrite les porte, lui, sur le document parent
+    (voir [`nested-join.md`](nested-join.md)) — les rendre serait rendre **plus**
+    qu'ES, en silence. Il les écarte donc explicitement. `fields`, lui, les rend
+    des deux côtés, groupées par élément : c'est la lecture du `_source`, et le
+    `_source` porte bien le tableau.
 
 ## Limites connues (perf, pas fonctionnalité)
 

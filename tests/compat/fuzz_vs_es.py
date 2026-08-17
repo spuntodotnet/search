@@ -246,6 +246,9 @@ BRIQUES = {
     "corps.from_size": "recherche.from_size",
     "corps.sort": "recherche.sort",
     "corps.source": "recherche.source",
+    "corps.fields": "recherche.fields",
+    "corps.docvalue_fields": "recherche.docvalue_fields",
+    "corps.stored_fields": "recherche.stored_fields",
     "corps.track_total_hits": "recherche.track_total_hits",
     "corps.aggs": "recherche.aggs",
     "corps.scroll": "recherche.scroll",
@@ -1036,9 +1039,76 @@ class Generateur:
                 {"includes": ["*"], "excludes": [champs[0].nom]},
                 {"includes": [champs[0].nom + "*"]},
             ])
+        if rng.random() < 0.3 and self.brique("corps.fields"):
+            corps["fields"] = self._fields(champs)
+        if rng.random() < 0.2 and self.brique("corps.docvalue_fields"):
+            dv = self._docvalue(champs)
+            if dv:
+                corps["docvalue_fields"] = dv
+        if rng.random() < 0.1 and self.brique("corps.stored_fields"):
+            # Jamais `_none_` : il retire `_id`, et c'est `_id` qui apparie les
+            # hits des deux serveurs. Ce cas-la est mesure par
+            # `sonde_fields.py`, qui compare le hit entier sans l'apparier.
+            corps["stored_fields"] = rng.choice(
+                [[c.nom for c in champs[:2]], ["*"], []])
         if rng.random() < 0.4 and self.brique("corps.aggs"):
             corps["aggs"] = self.aggs(champs, docs)
         return corps
+
+    def _fields(self, champs):
+        """Ce que `fields` demande : des noms, des motifs, un `format`.
+
+        Les sous-champs de `nested` y sont **exprès** : c'est la seule forme du
+        bloc qui n'est pas plate (`{"lignes": [{"ref": [...]}, ...]}`), donc la
+        seule que le reste du fuzzer ne peut pas exercer par accident."""
+        rng = self.rng
+        adressables = [c for c in champs if c.ty not in ("object", "nested")]
+        adressables += feuilles_de_nested(champs)
+        out = []
+        for _ in range(rng.randint(1, 3)):
+            r = rng.random()
+            if r < 0.12:
+                out.append("*")
+            elif r < 0.2 and adressables:
+                out.append(rng.choice(adressables).chemin.split(".")[0] + "*")
+            elif r < 0.3:
+                # Un champ que le mapping ne connait pas : ES ne rend pas de
+                # cle du tout, et `include_unmapped` va le chercher dans le
+                # `_source` — ce que Kibana envoie sur chaque recherche.
+                out.append({"field": "*", "include_unmapped": True})
+            elif adressables:
+                c = rng.choice(adressables)
+                if c.ty == "date" and rng.random() < 0.5:
+                    out.append({"field": c.chemin,
+                                "format": rng.choice(
+                                    ["yyyy-MM-dd", "epoch_millis",
+                                     "strict_date_optional_time"])})
+                else:
+                    out.append(c.chemin)
+        return out or ["*"]
+
+    def _docvalue(self, champs):
+        """Ce que `docvalue_fields` demande : des colonnes.
+
+        Un `text` n'en a pas : ES fait echouer le shard, ferrite aussi, et le
+        cas sort une fois sur dix pour que ce refus reste exerce des deux
+        cotes."""
+        rng = self.rng
+        colonnes = [c for c in champs
+                    if c.ty not in ("object", "nested", "text", "text_devine")]
+        textes = [c for c in champs if c.ty in ("text", "text_devine")]
+        if textes and rng.random() < 0.1:
+            return [rng.choice(textes).chemin]
+        if not colonnes:
+            return []
+        out = []
+        for c in rng.sample(colonnes, min(len(colonnes), rng.randint(1, 3))):
+            if c.ty == "date" and rng.random() < 0.4:
+                out.append({"field": c.chemin,
+                            "format": rng.choice(["yyyy-MM-dd", "epoch_millis"])})
+            else:
+                out.append(c.chemin)
+        return out
 
     def aggs(self, champs, docs, prof=0):
         rng = self.rng

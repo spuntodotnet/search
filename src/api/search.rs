@@ -255,16 +255,19 @@ pub async fn search(
         };
         // `fields` et `docvalue_fields` se resolvent sur **ce** mapping : un
         // `format` sur un `keyword`, un `docvalue_fields` sur un `text` sont
-        // des echecs de shard chez ES, pas des erreurs de requete. Un autre
-        // index vise peut tres bien y repondre.
-        let plan = match fetch::resoudre(&demande, &gen, &nom) {
-            Ok(p) => std::sync::Arc::new(p),
-            Err(e) if e.de_shard => {
-                echecs.push(echec_de_shard(&nom, &uuid, &e, &st.catalog.cluster_uuid));
-                continue;
-            }
-            Err(e) => return Err(e),
-        };
+        // des echecs de shard chez ES, pas des erreurs de requete.
+        //
+        // Et ils n'ont lieu qu'a la phase de *fetch* : une recherche qui ne
+        // ramene aucun document rend 200 malgre eux (mesure contre ES 8.15).
+        // L'erreur est donc portee par le plan et levee au moment ou un hit de
+        // cet index est rendu — enveloppee des maintenant dans le « all shards
+        // failed » d'ES, la seule forme qu'il donne a un echec de fetch.
+        let mut plan = fetch::resoudre(&demande, &gen, &nom)?;
+        if let Some(e) = plan.erreur() {
+            let echec = echec_de_shard(&nom, &uuid, e, &st.catalog.cluster_uuid);
+            plan.poser_erreur(tous_les_shards_ont_echoue(&[echec]));
+        }
+        let plan = std::sync::Arc::new(plan);
         if sort_asc.is_empty() {
             sort_asc = sort.iter().map(|s| s.asc).collect();
         }

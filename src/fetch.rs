@@ -268,8 +268,12 @@ struct Colonne {
 /// les memes champs pour le meme motif, exactement comme deux shards chez ES.
 #[derive(Debug, Clone, Default)]
 pub struct Plan {
-    lectures: Vec<Lecture>,
-    colonnes: Vec<Colonne>,
+    /// Par chemin rendu — une table, pas une liste, parce que **la derniere
+    /// specification gagne** : `fields: [{"field": "d", "format": "yyyy"}, "d*"]`
+    /// rend la date au format du mapping, et l'ordre inverse au format demande
+    /// (mesure contre ES 8.15).
+    lectures: BTreeMap<String, Lecture>,
+    colonnes: BTreeMap<String, Colonne>,
     /// Les metadonnees demandees par leur nom (`_id`, `_index`, `_version`).
     meta: Vec<String>,
     /// Les motifs de `include_unmapped` : ce qui se cherche dans `_source`
@@ -277,6 +281,15 @@ pub struct Plan {
     libres: Vec<String>,
     /// Les racines `nested` de l'index, pour grouper les valeurs par element.
     nested: BTreeSet<String>,
+    /// L'erreur que ce mapping-la reserve — un `format` sur un `keyword`, un
+    /// `docvalue_fields` sur un `text`.
+    ///
+    /// Elle est **differee** : chez ES c'est la phase de *fetch* qui echoue,
+    /// donc une recherche qui ne ramene aucun document rend 200 malgre elle
+    /// (mesure : `{"docvalue_fields": ["un_text"]}` avec `size: 0` ou zero
+    /// correspondance rend 200 ; des qu'un document est ramene, 400). La lever
+    /// a la resolution ferait echouer une recherche qu'ES accepte.
+    erreur: Option<EsError>,
 }
 
 impl Plan {
@@ -285,6 +298,18 @@ impl Plan {
             && self.colonnes.is_empty()
             && self.meta.is_empty()
             && self.libres.is_empty()
+    }
+
+    /// L'erreur differee, s'il y en a une (voir [`Plan::erreur`]).
+    pub fn erreur(&self) -> Option<&EsError> {
+        self.erreur.as_ref()
+    }
+
+    /// Remplace l'erreur differee par celle qui sera vraiment rendue — la
+    /// couche HTTP l'enveloppe dans le « all shards failed » d'ES, qu'elle
+    /// seule sait construire (il lui faut le nom et l'uuid de l'index).
+    pub fn poser_erreur(&mut self, e: EsError) {
+        self.erreur = Some(e);
     }
 }
 
@@ -322,10 +347,13 @@ pub fn resoudre(demande: &Demande, gen: &Generation, index: &str) -> EsResult<Pl
     for champ in &demande.docvalue {
         resoudre_docvalue(champ, gen, index, &mut plan)?;
     }
-    plan.lectures.sort_by(|a, b| a.chemin.cmp(&b.chemin));
-    plan.lectures.dedup_by(|a, b| a.chemin == b.chemin);
-    plan.colonnes.sort_by(|a, b| a.chemin.cmp(&b.chemin));
-    plan.colonnes.dedup_by(|a, b| a.chemin == b.chemin);
+    // Un champ demande des deux cotes est rendu par `fields`, pas par
+    // `docvalue_fields` — donc dans l'ordre du `_source` et non dans celui de
+    // la colonne (mesure contre ES 8.15 : `{"fields": ["k"], "docvalue_fields":
+    // ["k"]}` rend `["b","a","b"]`, pas `["a","b"]`). Le refus que porte la
+    // colonne, lui, reste : ES echoue quand meme sur un `text`.
+    plan.colonnes
+        .retain(|chemin, _| !plan.lectures.contains_key(chemin));
     plan.meta.sort();
     plan.meta.dedup();
     Ok(plan)
@@ -357,30 +385,37 @@ fn resoudre_fields(champ: &Champ, gen: &Generation, plan: &mut Plan) -> EsResult
         // Un `format` ne veut dire quelque chose que sur une date. ES fait
         // echouer le shard, et cite le motif quand le champ vient d'un joker.
         if champ.format.is_some() && mapped.ty.kind() != FieldKind::Date {
-            return Err(EsError::illegal_argument(format!(
-                "error fetching [{chemin}]{}: Field [{chemin}] of type [{}] doesn't support \
-                 formats.",
-                if joker {
-                    format!(" which matched [{motif}] ")
-                } else {
-                    ": ".to_string()
-                },
-                mapped.ty.name()
-            ))
-            .sur_un_shard());
+            differe(
+                plan,
+                EsError::illegal_argument(format!(
+                    "error fetching [{chemin}]{}: Field [{chemin}] of type [{}] doesn't support \
+                     formats.",
+                    if joker {
+                        format!(" which matched [{motif}] ")
+                    } else {
+                        ": ".to_string()
+                    },
+                    mapped.ty.name()
+                ))
+                .sur_un_shard(),
+            );
+            continue;
         }
         let mapping_format = gen.fields.format_ou_defaut(chemin).clone();
-        plan.lectures.push(Lecture {
-            source: chemin_source(chemin, gen),
-            chemin: chemin.clone(),
-            ty: mapped.ty,
-            ignore_above: mapped.ignore_above,
-            rendu: champ
-                .format
-                .clone()
-                .unwrap_or_else(|| mapping_format.clone()),
-            lecture: mapping_format,
-        });
+        plan.lectures.insert(
+            chemin.clone(),
+            Lecture {
+                source: chemin_source(chemin, gen),
+                chemin: chemin.clone(),
+                ty: mapped.ty,
+                ignore_above: mapped.ignore_above,
+                rendu: champ
+                    .format
+                    .clone()
+                    .unwrap_or_else(|| mapping_format.clone()),
+                lecture: mapping_format,
+            },
+        );
     }
     if champ.include_unmapped {
         plan.libres.push(motif.to_string());
@@ -414,15 +449,19 @@ fn resoudre_docvalue(
         // ait ete nomme ou attrape par un joker (mesure : `t*` echoue comme
         // `titre`). La phrase est la sienne, mot pour mot.
         if mapped.ty.kind() == FieldKind::Text {
-            return Err(EsError::illegal_argument(format!(
+            differe(
+                plan,
+                EsError::illegal_argument(format!(
                 "Fielddata is disabled on [{chemin}] in [{index}]. Text fields are not optimised \
                  for operations that require per-document field data like aggregations and \
                  sorting, so these operations are disabled by default. Please use a keyword field \
                  instead. Alternatively, set fielddata=true on [{chemin}] in order to load field \
                  data by uninverting the inverted index. Note that this can use significant \
-                 memory."
-            ))
-            .sur_un_shard());
+                     memory."
+                ))
+                .sur_un_shard(),
+            );
+            continue;
         }
         // Sous un `nested`, les valeurs vivent chez ES dans les documents
         // enfants : `docvalue_fields` n'en rend aucune. ferrite les a bien dans
@@ -434,22 +473,37 @@ fn resoudre_docvalue(
             // Sur un `keyword`, ES refuse. Sur un numerique, il applique le
             // motif comme un `DecimalFormat` de Java (`format: "yyyy"` sur la
             // valeur 1 rend `"yyyy1"`) : ferrite ne l'imite pas, il le refuse.
-            return Err(EsError::illegal_argument(format!(
-                "Field [{chemin}] of type [{}] does not support custom formats",
-                mapped.ty.name()
-            ))
-            .sur_un_shard());
+            differe(
+                plan,
+                EsError::illegal_argument(format!(
+                    "Field [{chemin}] of type [{}] does not support custom formats",
+                    mapped.ty.name()
+                ))
+                .sur_un_shard(),
+            );
+            continue;
         }
-        plan.colonnes.push(Colonne {
-            rendu: champ
-                .format
-                .clone()
-                .unwrap_or_else(|| gen.fields.format_ou_defaut(chemin).clone()),
-            chemin: chemin.clone(),
-            ty: mapped.ty,
-        });
+        plan.colonnes.insert(
+            chemin.clone(),
+            Colonne {
+                rendu: champ
+                    .format
+                    .clone()
+                    .unwrap_or_else(|| gen.fields.format_ou_defaut(chemin).clone()),
+                chemin: chemin.clone(),
+                ty: mapped.ty,
+            },
+        );
     }
     Ok(())
+}
+
+/// Garde la **premiere** erreur differee : ES rend celle qu'il rencontre en
+/// premier, et une seule.
+fn differe(plan: &mut Plan, e: EsError) {
+    if plan.erreur.is_none() {
+        plan.erreur = Some(e);
+    }
 }
 
 /// Un motif ne matche les metadonnees chez personne : `fields: ["*"]` ne rend
@@ -519,6 +573,11 @@ pub fn rendre(
         id,
         version,
     } = *doc;
+    // La phase de fetch d'ES echoue ici, pas plus tot : un document est
+    // vraiment ramene, donc le refus a lieu (voir [`Plan::erreur`]).
+    if let Some(e) = &plan.erreur {
+        return Err(e.clone());
+    }
     if plan.est_vide() {
         return Ok(Blocs::default());
     }
@@ -526,7 +585,7 @@ pub fn rendre(
     let mut ignores: Map<String, Value> = Map::new();
 
     // `fields`, depuis le `_source`.
-    let refs: Vec<&Lecture> = plan.lectures.iter().collect();
+    let refs: Vec<&Lecture> = plan.lectures.values().collect();
     for (cle, valeur) in rendre_niveau(source, "", &refs, &plan.nested, &mut ignores)? {
         bloc.insert(cle, valeur);
     }
@@ -568,7 +627,7 @@ pub fn rendre(
             .segment_reader(addr.segment_ord)
             .fast_fields()
             .clone();
-        for col in &plan.colonnes {
+        for col in plan.colonnes.values() {
             let valeurs = lire_colonne(&ff, col, addr.doc_id)?;
             if !valeurs.is_empty() {
                 bloc.insert(col.chemin.clone(), Value::Array(valeurs));
