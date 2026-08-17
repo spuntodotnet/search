@@ -151,7 +151,7 @@ développement, pas de CI).
 
 | Commande | La question à laquelle elle répond |
 |---|---|
-| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**98/98**, dont l'export par `helpers.scan`, le date math, la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats` et les templates) |
+| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**100/100**, dont l'export par `helpers.scan`, le date math, la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats`, les templates et ce que la réponse transporte — `fields`, `docvalue_fields`, `stored_fields`) |
 | `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (212/213, 0 écart réel) |
 | `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (45/46 ; le seul écart est `_cluster/health`, toujours vert par choix) |
 | `tests/compat/diff_aggs.py` | les mêmes agrégations ? (53/53, `filter` comprise, et ce qu'un bucket **vide** doit porter) |
@@ -161,6 +161,7 @@ développement, pas de CI).
 | `tests/compat/diff_multi_index.py` | `index=["a","b"]`, `logs-*`, les alias : **les mêmes index visés, fusionnés pareil** ? (87/87, 0 écart, plus aucune divergence assumée ; `--calibrer` : 87/87 contre deux ES) |
 | `tests/compat/sonde_msm.py` | les mêmes documents sur un **`minimum_should_match`** — entier, pourcentage, formes négatives, conditions `3<90%`, et sous un `nested` ? (53/53) |
 | `tests/compat/releve_mots_vides.py` | quelle est **vraiment** la liste de mots vides d'un analyzer d'ES ? |
+| `tests/compat/sonde_fields.py` | **ce que la réponse transporte** — `fields`, `docvalue_fields`, `stored_fields`. Compare le **hit entier** (bloc `fields` clé par clé, présence de `_source`, présence de `_id`) : 94/96 identiques, 2 refus assumés écrits, 0 écart. Refuse de tourner si elle ne trouve pas les deux serveurs |
 | `tests/compat/sonde_alias.py` | les mêmes alias sur une **expression de noms** — liste, joker, exclusion, `_all` — et le même 404 ? (21/21, corps et message compris) |
 | `tests/compat/sonde_vide.py` | sur un serveur **sans aucun index**, la même chose qu'ES — et rien accepté en silence ? (28/28 identiques, 0 refus muet ; les deux serveurs doivent être vides, c'est l'état mesuré) |
 | `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **1 950 cas, 81 255 requêtes, 1 divergence réelle** (une somme d'entiers au-delà de 2^53, ouverte et décrite dans [`docs/fuzz.md`](docs/fuzz.md)), sur sept plages de graines dont **cinq** n'ont jamais servi à corriger — celle sur laquelle on itère ne mesure plus rien. 21 défauts silencieux trouvés au premier passage, 3 de plus depuis. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (60 cas, 2 418 requêtes, 0) |
@@ -186,7 +187,7 @@ bouger**, pas après.
   de vérité de trois endroits. La source est maintenant
   [`compat.yaml`](compat.yaml) ; la doc et sa forme machine en sont générées, et
   le rapport de conformance **croise** chaque cas échoué avec elle. C'est ce qui
-  transforme « 393 échecs » en « 37 régressions et 356 coûts de périmètre »
+  transforme « 356 échecs » en « 40 régressions et 316 coûts de périmètre »
   (la mesure du jour, dans [`docs/conformance.json`](docs/conformance.json)) :
   la différence entre un chiffre qu'on subit et un chiffre qu'on pilote. Le
   garde-fou est le troisième verdict : un cas qu'aucune capacité ne réclame
@@ -408,6 +409,26 @@ bouger**, pas après.
   massivement rouge est presque toujours un défaut d'outillage. `run.sh` refuse
   maintenant un port occupé, et rien d'autre ne doit toucher les serveurs
   pendant une campagne.
+- **Lire le `_source` n'est pas lire ce qui a été indexé.** `fields` se sert
+  dans le `_source` — c'est ce qu'ES fait, et c'est ce qui lui donne l'ordre du
+  document et ses doublons. Mais une valeur écartée par `ignore_above` est
+  encore dans le `_source` alors qu'elle n'a **pas** été indexée : ES ne la rend
+  donc pas dans `fields`, il la rend à part dans `ignored_field_values`. ferrite
+  la rendait, en 200, comme si elle était cherchable. Quand on lit une source de
+  vérité, se demander laquelle des deux questions on pose.
+- **Une sonde différentielle qui ne trouve qu'un serveur annonce « tout
+  identique ».** `sonde_fields.py` a rendu « 90/90 identiques » alors que
+  ferrite n'écoutait pas : elle ne comparait rien du tout. C'est le même défaut
+  d'outillage que la section 2, dans sa forme la plus sournoise — un résultat
+  massivement **vert** est aussi suspect qu'un massivement rouge. Toute sonde
+  s'arrête maintenant si elle n'a pas ses deux cibles.
+- **Un prédicat qui devient plus large en devenant plus lisible.** Ajouter le
+  message d'erreur des **deux** serveurs au texte d'un écart de statut — un
+  progrès, « statuts 400 / 500 » ne se diagnostique pas — a fait matcher le
+  prédicat « refus déclaré » sur un cas où ES échouait **aussi**. Il reconnaît
+  la phrase de ferrite ; sa raison d'être est « ferrite refuse là où ES sait
+  répondre ». Il lui manquait la seconde moitié. Un prédicat se relit quand ce
+  qu'il lit change.
 - **Un `curl` de vérification qui n'utilise pas le même texte que le test ne
   vérifie rien.** Une chasse au bug d'analyzer s'est terminée sur un faux
   positif : `match edition` ne trouvait pas `l'édition` — ce que fait aussi ES,
@@ -448,6 +469,17 @@ tableau de bord qui lit `_stats` se branchent aussi : `_field_caps`,
 7.x) sont servis. `_stats` ne rend que les quatre groupes que ferrite **mesure**
 et refuse les autres : un `index_total: 0` sur un index qu'on vient de remplir
 ferait passer « non mesuré » pour « aucune activité ».
+
+Une réponse ne transporte plus forcément tout le `_source` : `fields`,
+`docvalue_fields` et `stored_fields` sont servis. Les trois ne lisent pas au
+même endroit, et c'est tout le sujet — le `_source` pour `fields` (donc l'ordre
+du document et ses doublons), les colonnes pour `docvalue_fields` (donc trié, et
+dédoublonné sur un `keyword`), les champs stockés pour `stored_fields` (donc
+rien, puisque `store` est refusé au mapping — exactement ce que rend un ES dont
+le mapping ne le porte pas). Ce qui compte pour un client, c'est la **forme** :
+chaque valeur est un tableau, même mono-valuée, et un champ absent n'a pas de
+clé. `script_fields` et `runtime_mappings` restent refusés — leur objet **vide**
+est accepté, parce qu'il ne demande rien.
 
 Ce qui reste, par ordre de gêne pour un projet réel : `rest_total_hits_as_int`,
 `_msearch`, les templates de **composants** (`_component_template`, et le

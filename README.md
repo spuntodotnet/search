@@ -177,9 +177,22 @@ familles (`_index_template` et le `_template` déprécié qu'on trouve dans les
 scripts d'init venus de la 7.x). Un template s'applique à la création implicite
 de l'index comme à sa création explicite.
 
+**Ce que la réponse transporte** se choisit aussi : `fields` — la façon que la
+7.10+ met en avant, et celle qu'envoie Kibana — `docvalue_fields` et
+`stored_fields`. Les trois ne lisent pas au même endroit, et c'est tout le
+sujet : `fields` lit le `_source` (il garde donc l'ordre du document et ses
+doublons), `docvalue_fields` lit les colonnes (donc trié, et dédoublonné sur un
+`keyword`), `stored_fields` lit les champs stockés — donc rien, puisque `store`
+est refusé au mapping, exactement ce que rend un Elasticsearch dont le mapping
+ne le porte pas. La **forme** est ce qui compte pour un client : chaque valeur
+est un tableau, même pour un champ mono-valué, et un champ absent n'a pas de
+clé.
+
 **Ce qui n'y est pas encore** : `highlight`, `search_after`, `_msearch`,
 `_update_by_query` / `_reindex`, `query_string`, les templates de composants
-(`_component_template`), et les analyzers des autres langues.
+(`_component_template`), les champs calculés par un script Painless
+(`script_fields`, `runtime_mappings` — leur objet **vide** est accepté, il ne
+demande rien) et les analyzers des autres langues.
 
 L'inventaire complet — supporté, partiel, refusé, et les divergences assumées —
 est dans [`docs/compat.md`](docs/compat.md). Rien de ce qui n'est pas supporté
@@ -192,9 +205,9 @@ rang qu'un `significant_terms` avec script. Sur un corpus de **5 311 requêtes
 réelles** — la documentation de référence d'ES 8.15, les tracks Rally d'Elastic,
 les tests des clients officiels et le code de 184 dépôts open source — la
 question posée est « celle-ci passerait-elle **entièrement** ? », parce qu'une
-requête supportée à 90 % est une requête qui échoue. Réponse : **89,6 % des
-requêtes trouvées dans du code d'application**, 38,8 % des exemples de la
-documentation, 17,4 % des tracks de benchmark. L'écart entre ces trois nombres
+requête supportée à 90 % est une requête qui échoue. Réponse : **90,8 % des
+requêtes trouvées dans du code d'application**, 39,3 % des exemples de la
+documentation, 27,2 % des tracks de benchmark. L'écart entre ces trois nombres
 est le résultat ; la méthode, les sources et les biais sont dans
 [`docs/usage.md`](docs/usage.md), le corpus est publié avec.
 
@@ -211,8 +224,9 @@ Cet inventaire est aussi ce qui **borne un tirage au sort**. Un fuzzer
 différentiel ([`tests/compat/fuzz_vs_es.py`](tests/compat/fuzz_vs_es.py)) génère
 des mappings, des documents et des requêtes dans le périmètre que `compat.yaml`
 déclare, les pose à ferrite **et** à un vrai Elasticsearch 8.15, et compare les
-réponses champ par champ : **1 450 cas, 60 424 requêtes, 2 divergences réelles** sur cinq plages de graines, dont quatre jamais utilisées pour corriger — les deux
-sont dans les agrégations, ouvertes, et décrites plutôt que tues. Il
+réponses champ par champ : **2 700 cas, 112 738 requêtes, 1 divergence réelle**
+sur dix plages de graines, dont six jamais utilisées pour corriger — elle est un
+ordre que BM25 sépare, ouverte, et décrite plutôt que tue. Il
 s'étalonne d'abord contre deux Elasticsearch — tant qu'il n'y est pas à zéro, ce
 qu'il dit de ferrite ne vaut rien. Son premier passage a trouvé vingt et un défauts
 que personne n'avait signalés, tous silencieux ; ils sont racontés dans

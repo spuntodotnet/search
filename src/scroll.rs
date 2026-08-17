@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use crate::error::{EsError, EsResult};
-use crate::search::{CibleFigee, HitFige, SourceFilter};
+use crate::search::{CibleFigee, HitFige, Rendu};
 
 /// `search.max_open_scroll_context` d'ES : au-dela, ouvrir un contexte de plus
 /// est refuse. Un contexte retient un instantane de l'index — donc des fichiers
@@ -43,7 +43,10 @@ pub struct Contexte {
     pub hits: Vec<HitFige>,
     pub total: usize,
     pub max_score: Option<f32>,
-    pub source: SourceFilter,
+    /// Ce que le hit transporte : filtre de `_source`, et la presence de `_id`
+    /// que `stored_fields: "_none_"` retire. Fige a l'ouverture, comme le
+    /// reste.
+    pub rendu: Rendu,
     /// Un tri explicite a-t-il ete demande ? (le tableau `sort` du hit, et
     /// `max_score: null`, en dependent — comme dans une recherche normale)
     pub trie: bool,
@@ -66,7 +69,7 @@ pub struct Suite {
     pub hits: Vec<HitFige>,
     pub total: usize,
     pub max_score: Option<f32>,
-    pub source: SourceFilter,
+    pub rendu: Rendu,
     pub trie: bool,
     pub avec_score: bool,
     pub nb_index: usize,
@@ -115,7 +118,7 @@ impl Registre {
             hits: ctx.hits[debut..fin].to_vec(),
             total: ctx.total,
             max_score: ctx.max_score,
-            source: ctx.source.clone(),
+            rendu: ctx.rendu.clone(),
             trie: ctx.trie,
             avec_score: ctx.avec_score,
             nb_index: ctx.nb_index,

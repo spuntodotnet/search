@@ -476,10 +476,25 @@ def joue(serveur, actions, pile, trace, corps_precedent=None):
                 if attrape:
                     continue
                 continue
-            ty = reponse.get("error", {}) if isinstance(reponse, dict) else {}
-            ty = ty.get("type") if isinstance(ty, dict) else None
-            if ty == REFUS_FERRITE:
-                raise Refus((reponse["error"].get("reason") or "")[:150])
+            err = reponse.get("error", {}) if isinstance(reponse, dict) else {}
+            err = err if isinstance(err, dict) else {}
+            # Un refus de ferrite peut arriver **enveloppe** : une erreur de la
+            # phase de fetch (un `docvalue_fields` sur un `text`, un `format`
+            # sur un numerique) sort dans le « all shards failed » d'ES, dont le
+            # `type` est celui de l'enveloppe et non celui du refus. Ne regarder
+            # que le `type` de tete faisait alors passer un cout de perimetre
+            # pour une regression — le rapport designait la mauvaise chose a
+            # corriger.
+            racines = err.get("root_cause") or []
+            types = [err.get("type")] + [
+                r.get("type") for r in racines if isinstance(r, dict)]
+            if REFUS_FERRITE in types:
+                motif = err.get("reason") or ""
+                for r in racines:
+                    if isinstance(r, dict) and r.get("type") == REFUS_FERRITE:
+                        motif = r.get("reason") or motif
+                        break
+                raise Refus(motif[:150])
             if attrape:
                 attendu = CATCH.get(attrape)
                 if attendu is None and attrape.startswith("/"):

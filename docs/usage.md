@@ -81,19 +81,29 @@ mappings différents pour 1 756 recherches. Le même mapping est posé sur les d
 serveurs : une inférence de travers ne peut que sortir la requête du
 dénominateur, jamais flatter ferrite.
 
-**Les deux mesures sont d'accord sur 1 372 requêtes sur 1 381** (99,3 %). C'est
+**Les deux mesures sont d'accord sur 1 369 requêtes sur 1 381** (99,1 %). C'est
 ce qui rend le croisement utilisable là où le rejeu ne va pas — les routes, les
 mappings, tout ce qui n'est pas un corps de `_search`.
+
+Les onze désaccords sont tous dans le même sens — le croisement dit « servie »,
+le rejeu dit « refusée » — et ils sont **le vrai intérêt du rejeu** : ils
+nomment ce que le croisement ne sait pas modéliser. Trois d'entre eux sont
+apparus en livrant `stored_fields` : la requête n'était plus bloquée en amont,
+le rejeu l'a donc atteinte, et il a trouvé **autre chose** dessous — un
+`aggs: {}` vide qu'ES accepte et que ferrite refuse, un `multi_match` sans
+`fields` qu'ES résout sur son champ par défaut et que ferrite exige. Débloquer
+une capacité fait remonter les refus qui étaient cachés derrière elle ; c'est
+attendu, et c'est mesuré plutôt que supposé.
 
 ## Le résultat : le taux dépend surtout de qui pose la question
 
 | Sous-corpus | Requêtes | Servies entièrement |
 |---|---|---|
-| **`github` — du code d'application open source** | 338 | **89,6 %** |
+| **`github` — du code d'application open source** | 338 | **90,8 %** |
 | `clients` — tests et exemples des clients officiels | 143 | 79,7 % |
-| `doc` — la documentation de référence | 3 969 | 38,8 % |
-| `rally` — les tracks de benchmark d'Elastic | 861 | 17,4 % |
-| **tout le corpus** | 5 311 | 39,7 % |
+| `doc` — la documentation de référence | 3 969 | 39,3 % |
+| `rally` — les tracks de benchmark d'Elastic | 861 | 27,2 % |
+| **tout le corpus** | 5 311 | 41,7 % |
 
 Ces quatre nombres ne se contredisent pas, ils mesurent quatre choses
 différentes, et l'écart entre eux **est** le résultat :
@@ -103,13 +113,15 @@ différentes, et l'écart entre eux **est** le résultat :
   requêtes sur dix passent telles quelles** ;
 - la documentation de référence consacre **une page par fonctionnalité**, avec au
   moins un exemple chacune : elle sur-représente exactement ce qui est rare. Un
-  taux de 38,8 % s'y lit « ferrite couvre un peu plus d'un tiers de la surface
+  taux de 39,3 % s'y lit « ferrite couvre un peu plus d'un tiers de la surface
   d'API », ce qui est vrai et sans rapport avec la question précédente ;
 - les tracks Rally sont des **bancs d'essai analytiques** : `date_histogram`
   avec `calendar_interval`, `runtime_mappings`, `fields`, `percentiles`. Et le
   track `elastic/logs` rejoue les requêtes de **Kibana**, qui pose
-  systématiquement des `runtime_mappings` et des `fields`. 17,4 %, c'est le prix
-  d'entrée pour servir un Kibana, pas celui d'une application.
+  systématiquement des `runtime_mappings` et des `fields`. 27,2 % — c'était
+  17,4 % avant que `fields`, `docvalue_fields` et `stored_fields` ne soient
+  livrés — c'est le prix d'entrée pour servir un Kibana, pas celui d'une
+  application.
 
 Le corpus n'est pas homogène et il ne prétend pas l'être : la documentation en
 fait 74,7 %, et le seul répertoire `elastic/logs` des tracks Rally 8,3 %.
@@ -157,18 +169,35 @@ débloque. Deux colonnes, parce qu'elles ne disent pas la même chose :
   requête. C'est la colonne qui décide, parce qu'un chantier qui ne débloque
   rien tout seul ne change rien pour personne.
 
-> **Ce classement est celui du jour où il a été mesuré.** La carte 20 a été
-> faite depuis : elle a fait passer le corpus de **36,3 % à 39,7 %** servi
+> **Ce classement est celui du jour où il a été mesuré.** Deux cartes ont été
+> faites depuis. La **20** a fait passer le corpus de **36,3 % à 39,7 %** servi
 > entièrement (1 929 → 2 106 requêtes), et la documentation de 34,5 % à 38,8 %.
 > Sur le sous-corpus des applications réelles, elle en débloque **zéro** — la
 > mesure l'annonçait, et elle avait raison : cette carte vaut pour la surface
-> d'API, pas pour débloquer un utilisateur précis. Les autres lignes n'ont pas
-> été recalculées ; elles se refont avec la recette qui suit.
+> d'API, pas pour débloquer un utilisateur précis.
+>
+> La **18** a fait passer le corpus de **39,7 % à 41,7 %** (2 106 → 2 215), et
+> ce chiffre-là se lit en **deux morceaux**, parce que les mélanger tromperait :
+>
+> - `fields`, `docvalue_fields` et `stored_fields` livrés en débloquent **30**
+>   (39,7 % → 40,2 %), dont **4 sur le sous-corpus des applications réelles** —
+>   exactement ce que la ligne du tableau annonçait ;
+> - accepter l'objet **vide** de `script_fields` / `runtime_mappings` en
+>   débloque **79 de plus** (40,2 % → 41,7 %). C'est une vraie compatibilité —
+>   ES rend la même réponse avec ou sans, et 774 requêtes du corpus l'envoient
+>   sous cette forme — mais c'est **un artefact de gabarit** : les tracks Rally
+>   laissent le paramètre vide quand il n'est pas rempli. Ça ne prouve rien sur
+>   `script_fields`, qui reste ❌.
+>
+> Les **125** de la ligne 2 supposaient les cinq faits, `runtime_mappings` et
+> `script_fields` compris : ils demandent Painless, et la mesure a servi à
+> décider de ne pas les faire (voir plus bas). Les autres lignes n'ont pas été
+> recalculées ; elles se refont avec la recette qui suit.
 
 | Rang mesuré | Carte | bloque | débloque | débloque (applications) |
 |---|---|---|---|---|
 | 1 | **20** — `_validate`, `field_caps`, `_stats`, templates, `PUT _settings` — **faite** | 262 | **239** | 0 |
-| 2 | **18** — `fields`, `docvalue_fields`, `stored_fields` (+ `runtime_mappings`, `script_fields`) | 504 | **125** | 4 |
+| 2 | **18** — `fields`, `docvalue_fields`, `stored_fields` — **faite** (+ `runtime_mappings`, `script_fields`, mesurés puis écartés) | 504 | **125** | 4 |
 | 3 | **19** — `_delete_by_query`, `_update_by_query` | 77 | **75** | **10** |
 | 4 | **05** — `highlight` | 102 | 18 | 1 |
 | 5 | **09** — `sort` : `missing`, `mode`, `unmapped_type` | 94 | 15 | 1 |
@@ -242,6 +271,25 @@ comptés sur `tests/compat/usage/verdicts.jsonl` (`manques[].trait`).
   Le tableau de bord qui l'envoie envoie aussi `runtime_mappings` et `fields`
   (carte 18). Les deux ensemble sont un lot ; l'une sans l'autre ne sert pas un
   Kibana.
+- **La carte 18 contenait un chantier qu'il ne fallait pas faire, et c'est le
+  corpus qui l'a dit.** Sa ligne agrège cinq paramètres, dont
+  `runtime_mappings` — qui à lui seul *bloque* 439 requêtes, le plus gros
+  contributeur des 504. L'intuition dit donc « il faut le faire ». La mesure,
+  demandée avant de décider, dit l'inverse en deux chiffres :
+
+  - sur les **444** requêtes du corpus qui portent `runtime_mappings`, **425
+    l'envoient vide** (`{}`) — des gabarits de tracks Rally dont le paramètre
+    n'est pas rempli. Elles ne demandent rien ;
+  - sur les **19** qui ne sont pas vides, **18 portent un script Painless**, et
+    la dernière est un champ `lookup`. Il n'existe pas, dans ce corpus, de
+    `runtime_mappings` sans script — donc pas de version « facile » à livrer.
+
+  Seul, `runtime_mappings` débloque **6** requêtes, et **3** en sont les seules
+  bloquées. Painless est hors périmètre déclaré ; il reste ❌, et ce qui a été
+  livré à sa place est l'acceptation de l'objet vide, qui coûte trois lignes et
+  vaut 79 requêtes. **La bonne façon d'utiliser ce corpus n'est pas seulement de
+  choisir quoi faire en premier : c'est aussi de démontrer qu'un chantier gros
+  et cher ne vaut pas la peine.**
 
 Ordre proposé, une fois ces deux lectures superposées : **19** (les applications
 d'abord), **20**, puis le lot **18 + 13** (servir un tableau de bord), puis

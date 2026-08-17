@@ -1,11 +1,11 @@
 {
   "schema": 2,
   "mesure": {
-    "date": "2026-08-15T20:02:10Z",
-    "ferrite_sha": "67763128cb290edbf0c21b17fba7aa6e4765629f",
-    "ferrite_arbre_modifie": false,
+    "date": "2026-08-17T05:29:15Z",
+    "ferrite_sha": "be5fb4be4698cc803932edfa5d1dfd7c30fc32c2",
+    "ferrite_arbre_modifie": true,
     "cible": {
-      "url": "http://127.0.0.1:9400",
+      "url": "http://localhost:9200",
       "version_annoncee": "8.15.0",
       "build_hash": "ferrite-0.7.0"
     },
@@ -142,34 +142,34 @@
   },
   "totaux": {
     "cas": 1173,
-    "reussis": 158,
-    "refuses": 487,
+    "reussis": 165,
+    "refuses": 481,
     "sautes": 171,
-    "echecs": 357
+    "echecs": 356
   },
   "taux": {
     "fidelite_perimetre": {
-      "valeur": 0.3068,
-      "numerateur": 158,
-      "denominateur": 515,
+      "valeur": 0.3167,
+      "numerateur": 165,
+      "denominateur": 521,
       "definition": "reussis / (reussis + echecs) — la part des cas que ferrite n'a ni refuses ni fait sauter qui repond comme Elasticsearch. Un pis-aller : une partie des echecs sont des refus dont le type d'erreur imite celui d'ES au lieu de porter le marqueur, donc ils gonflent le denominateur alors qu'ils sont hors perimetre. Voir [fidelite_perimetre_declare]"
     },
     "couverture_brute": {
-      "valeur": 0.1347,
-      "numerateur": 158,
+      "valeur": 0.1407,
+      "numerateur": 165,
       "denominateur": 1173,
       "definition": "reussis / total — la part de la suite d'Elastic qui passe, perimetre non declare compris"
     },
     "fidelite_perimetre_declare": {
-      "valeur": 0.798,
-      "numerateur": 158,
-      "denominateur": 198,
+      "valeur": 0.8049,
+      "numerateur": 165,
+      "denominateur": 205,
       "definition": "reussis / (reussis + regressions + indetermines) — le taux precedent, mais en sortant du denominateur les echecs qui portent sur une capacite declaree refusee dans compat.yaml (le cout du perimetre). Les cas qu'aucune capacite ne reclame restent dedans"
     }
   },
   "perimetre": {
     "regressions": 40,
-    "couts_perimetre": 317,
+    "couts_perimetre": 316,
     "indetermines": 0,
     "par_capacite": {
       "hors.cycle_de_vie": 61,
@@ -198,7 +198,6 @@
       "index.suppression": 2,
       "ingestion.bulk": 2,
       "recherche.msearch": 2,
-      "recherche.non_supportes": 2,
       "reglages.destructive_requires_name": 2,
       "reglages.route": 2,
       "alias.remove_index_et_add": 1,
@@ -208,6 +207,7 @@
       "ingestion.exists": 1,
       "ingestion.get": 1,
       "recherche.field_caps": 1,
+      "recherche.non_supportes": 1,
       "recherche.reglages_de_shards": 1,
       "recherche.routing_filter_path": 1
     },
@@ -845,10 +845,10 @@
       "cas": 13
     },
     "search": {
-      "reussis": 14,
-      "refuses": 80,
+      "reussis": 21,
+      "refuses": 74,
       "sautes": 76,
-      "echecs": 40,
+      "echecs": 39,
       "cas": 210
     },
     "search.aggregation": {
@@ -6708,25 +6708,22 @@
       "suite": "search",
       "fichier": "10_source_filtering.yml",
       "cas": "docvalue_fields",
-      "categorie": "refus",
-      "raison": "ferrite ne supporte pas [docvalue_fields] dans [_search] ; cles acceptees : [\"query\", \"from\", \"size\", \"sort\", \"_source\", \"track_total_hits\", \"aggs\", \""
+      "categorie": "reussi",
+      "raison": ""
     },
     {
       "suite": "search",
       "fichier": "10_source_filtering.yml",
       "cas": "docvalue_fields - double",
-      "categorie": "refus",
-      "raison": "ferrite ne supporte pas [docvalue_fields] dans [_search] ; cles acceptees : [\"query\", \"from\", \"size\", \"sort\", \"_source\", \"track_total_hits\", \"aggs\", \""
+      "categorie": "reussi",
+      "raison": ""
     },
     {
       "suite": "search",
       "fichier": "10_source_filtering.yml",
       "cas": "docvalue_fields as url param",
-      "categorie": "echec",
-      "raison": "[search] 400 : request [/_search] contains unrecognized parameter: [docvalue_fields]",
-      "api": "search",
-      "perimetre": "cout_perimetre",
-      "capacite": "recherche.non_supportes"
+      "categorie": "reussi",
+      "raison": ""
     },
     {
       "suite": "search",
@@ -6741,28 +6738,28 @@
       "fichier": "10_source_filtering.yml",
       "cas": "docvalue_fields with explicit format",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas [docvalue_fields] dans [_search] ; cles acceptees : [\"query\", \"from\", \"size\", \"sort\", \"_source\", \"track_total_hits\", \"aggs\", \""
+      "raison": "ferrite ne supporte pas un [format] sur le champ numerique [count] dans [docvalue_fields] : ES l'interprete comme un [DecimalFormat] de Java, que ferr"
     },
     {
       "suite": "search",
       "fichier": "10_source_filtering.yml",
       "cas": "fields in body",
-      "categorie": "refus",
-      "raison": "ferrite ne supporte pas [stored_fields] dans [_search] ; cles acceptees : [\"query\", \"from\", \"size\", \"sort\", \"_source\", \"track_total_hits\", \"aggs\", \"ag"
+      "categorie": "reussi",
+      "raison": ""
     },
     {
       "suite": "search",
       "fichier": "10_source_filtering.yml",
       "cas": "fields in body with source",
-      "categorie": "refus",
-      "raison": "ferrite ne supporte pas [stored_fields] dans [_search] ; cles acceptees : [\"query\", \"from\", \"size\", \"sort\", \"_source\", \"track_total_hits\", \"aggs\", \"ag"
+      "categorie": "reussi",
+      "raison": ""
     },
     {
       "suite": "search",
       "fichier": "10_source_filtering.yml",
       "cas": "multiple docvalue_fields",
-      "categorie": "refus",
-      "raison": "ferrite ne supporte pas [docvalue_fields] dans [_search] ; cles acceptees : [\"query\", \"from\", \"size\", \"sort\", \"_source\", \"track_total_hits\", \"aggs\", \""
+      "categorie": "reussi",
+      "raison": ""
     },
     {
       "suite": "search",
@@ -8131,8 +8128,8 @@
       "suite": "search",
       "fichier": "330_fetch_fields.yml",
       "cas": "Test date formatting",
-      "categorie": "refus",
-      "raison": "ferrite ne supporte pas [fields] dans [_search] ; cles acceptees : [\"query\", \"from\", \"size\", \"sort\", \"_source\", \"track_total_hits\", \"aggs\", \"aggregati"
+      "categorie": "reussi",
+      "raison": ""
     },
     {
       "suite": "search",
@@ -8160,7 +8157,7 @@
       "fichier": "330_fetch_fields.yml",
       "cas": "Test search rewrite",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas [fields] dans [_search] ; cles acceptees : [\"query\", \"from\", \"size\", \"sort\", \"_source\", \"track_total_hits\", \"aggs\", \"aggregati"
+      "raison": "ferrite ne supporte pas [from] dans [range] ; parametres acceptes : [\"gte\", \"gt\", \"lte\", \"lt\", \"boost\", \"format\"]"
     },
     {
       "suite": "search",

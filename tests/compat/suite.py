@@ -2843,6 +2843,161 @@ def template_ancien(es):
     es.indices.delete(index="compat_leg-1")
 
 
+@scenario
+def fields_et_docvalue_fields(es):
+    """`fields` / `docvalue_fields` : ce que la reponse transporte, via le client.
+
+    Ce qu'un client officiel doit voir, et qui n'est pas negociable : dans le
+    bloc `fields`, **chaque valeur est un tableau**, meme pour un champ
+    mono-value, et un champ absent n'a **pas de cle**. Un code qui connait
+    cette forme lit `hit["fields"]["titre"][0]` — un scalaire lui casserait le
+    typage sans rien dire.
+    """
+    INDEX = "compat_fields"
+    es.options(ignore_status=404).indices.delete(index=INDEX)
+    es.indices.create(index=INDEX, mappings={"properties": {
+        "titre": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
+        "tag": {"type": "keyword"},
+        "n": {"type": "integer"},
+        "d": {"type": "date"},
+        "court": {"type": "keyword", "ignore_above": 5},
+        "lignes": {"type": "nested", "properties": {
+            "ref": {"type": "keyword"}, "q": {"type": "integer"}}},
+        "jamais": {"type": "keyword"},
+    }})
+    es.index(index=INDEX, id="1", refresh=True, document={
+        "titre": "le grand bleu", "tag": ["zoulou", "alpha", "alpha"],
+        "n": [3, 1, 1], "d": "2026-03-15",
+        "court": ["ok", "beaucoup trop long"],
+        "lignes": [{"ref": "X1", "q": 2}, {"q": 5}]})
+    es.index(index=INDEX, id="2", refresh=True, document={"titre": "petit"})
+
+    hits = es.search(index=INDEX, source=False, sort=["tag"],
+                     fields=["titre", "tag", "n", "jamais"])["hits"]["hits"]
+    par_id = {h["_id"]: h for h in hits}
+    # Chaque valeur est un tableau, meme mono-value.
+    assert par_id["1"]["fields"]["titre"] == ["le grand bleu"]
+    # L'ordre du document et ses doublons sont conserves : `fields` lit le
+    # `_source`, pas la colonne.
+    assert par_id["1"]["fields"]["tag"] == ["zoulou", "alpha", "alpha"]
+    assert par_id["1"]["fields"]["n"] == [3, 1, 1]
+    # Un champ jamais rempli n'a pas de cle — ce n'est pas une valeur nulle.
+    assert "jamais" not in par_id["1"]["fields"], par_id["1"]["fields"]
+    assert set(par_id["2"]["fields"]) == {"titre"}, par_id["2"]["fields"]
+    # `_source` a bien ete retire par `_source: false`.
+    assert "_source" not in par_id["1"]
+
+    # Un multi-field est adressable, et lit la valeur de son parent.
+    h = es.search(index=INDEX, source=False, q=None,
+                  query={"ids": {"values": ["1"]}},
+                  fields=["titre.keyword"])["hits"]["hits"][0]
+    assert h["fields"] == {"titre.keyword": ["le grand bleu"]}
+
+    # Un sous-champ de `nested` se rend **groupe par element**, cle relative a
+    # la racine ; un element sans valeur demandee est omis.
+    h = es.search(index=INDEX, source=False, query={"ids": {"values": ["1"]}},
+                  fields=["lignes.ref", "lignes.q"])["hits"]["hits"][0]
+    assert h["fields"] == {"lignes": [{"ref": ["X1"], "q": [2]}, {"q": [5]}]}, \
+        h["fields"]
+
+    # Le `format` d'une date remplace celui du mapping.
+    h = es.search(index=INDEX, source=False, query={"ids": {"values": ["1"]}},
+                  fields=[{"field": "d", "format": "yyyy-MM-dd"}]
+                  )["hits"]["hits"][0]
+    assert h["fields"] == {"d": ["2026-03-15"]}
+    h = es.search(index=INDEX, source=False, query={"ids": {"values": ["1"]}},
+                  fields=["d"])["hits"]["hits"][0]
+    assert h["fields"] == {"d": ["2026-03-15T00:00:00.000Z"]}
+
+    # Une valeur qu'`ignore_above` a ecartee n'est pas indexee : elle ne sort
+    # pas dans `fields`, elle sort dans `ignored_field_values`.
+    h = es.search(index=INDEX, source=False, query={"ids": {"values": ["1"]}},
+                  fields=["court"])["hits"]["hits"][0]
+    assert h["fields"] == {"court": ["ok"]}, h["fields"]
+    assert h["ignored_field_values"] == {"court": ["beaucoup trop long"]}, h
+
+    # `docvalue_fields` lit la colonne : triee, et dedoublonnee sur un keyword.
+    h = es.search(index=INDEX, source=False, query={"ids": {"values": ["1"]}},
+                  docvalue_fields=["tag", "n"])["hits"]["hits"][0]
+    assert h["fields"] == {"tag": ["alpha", "zoulou"], "n": [1, 1, 3]}, h["fields"]
+
+    # Le meme champ des deux cotes : c'est `fields` qui rend la valeur.
+    h = es.search(index=INDEX, source=False, query={"ids": {"values": ["1"]}},
+                  fields=["tag"], docvalue_fields=["tag"])["hits"]["hits"][0]
+    assert h["fields"] == {"tag": ["zoulou", "alpha", "alpha"]}, h["fields"]
+
+    # Un `text` n'a pas de colonne — mais le refus est celui de la phase de
+    # fetch : sans document ramene, les deux serveurs rendent 200.
+    assert es.search(index=INDEX, source=False, size=0,
+                     docvalue_fields=["titre"])["hits"]["total"]["value"] == 2
+    # Le refus arrive au **format d'ES** : un `search_phase_execution_exception`
+    # « all shards failed » dont la `root_cause` porte la vraie phrase.
+    err = refused(lambda: es.search(index=INDEX, source=False,
+                                    docvalue_fields=["titre"]))
+    assert err["type"] == "search_phase_execution_exception", err
+    assert "Fielddata is disabled on [titre]" in \
+        err["root_cause"][0]["reason"], err
+    es.indices.delete(index=INDEX)
+
+
+@scenario
+def stored_fields_change_la_forme(es):
+    """`stored_fields` : aucun champ stocke, mais une reponse differente.
+
+    ferrite refuse `store` au mapping, donc aucun champ n'est stocke — et un ES
+    dont le mapping ne porte pas `store: true` ne rend rien non plus. Ce qui se
+    verifie ici, c'est ce que `stored_fields` change vraiment : il retire
+    `_source`, et `_none_` retire aussi `_id`.
+    """
+    INDEX = "compat_stored"
+    es.options(ignore_status=404).indices.delete(index=INDEX)
+    es.indices.create(index=INDEX, mappings={
+        "properties": {"titre": {"type": "keyword"}}})
+    es.index(index=INDEX, id="1", document={"titre": "x"}, refresh=True)
+
+    h = es.search(index=INDEX, stored_fields=["titre"])["hits"]["hits"][0]
+    assert "fields" not in h, h
+    assert "_source" not in h, h
+    assert h["_id"] == "1"
+
+    # `_source` explicite le ramene.
+    h = es.search(index=INDEX, stored_fields=["titre"],
+                  source=True)["hits"]["hits"][0]
+    assert h["_source"] == {"titre": "x"}
+
+    # `_none_` retire aussi `_id`.
+    h = es.search(index=INDEX, stored_fields="_none_")["hits"]["hits"][0]
+    assert "_id" not in h, h
+    assert "_source" not in h, h
+
+    # `_none_` avec `fields` est contradictoire : ES le refuse, ferrite aussi,
+    # avec son type d'erreur.
+    err = refused(lambda: es.perform_request(
+        "POST", f"/{INDEX}/_search",
+        headers={"content-type": "application/json"},
+        body={"stored_fields": "_none_", "fields": ["titre"]}))
+    assert err["type"] == "action_request_validation_exception", err
+
+    # `store` reste refuse au mapping : c'est ce refus-la qui rend l'absence de
+    # champ stocke exacte plutot qu'approximative.
+    refused(lambda: es.indices.create(
+        index="compat_store", mappings={"properties": {
+            "a": {"type": "keyword", "store": True}}}),
+        contains="[store]")
+
+    # Painless est hors perimetre : `script_fields` non vide est refuse, mais
+    # l'objet **vide** ne definit aucun champ et passe, comme chez ES.
+    es.perform_request("POST", f"/{INDEX}/_search",
+                       headers={"content-type": "application/json"},
+                       body={"script_fields": {}, "runtime_mappings": {}})
+    refused(lambda: es.perform_request(
+        "POST", f"/{INDEX}/_search",
+        headers={"content-type": "application/json"},
+        body={"script_fields": {"x": {"script": "1"}}}),
+        contains="script Painless")
+    es.indices.delete(index=INDEX)
+
+
 # ---------------------------------------------------------------------------
 
 def main():
