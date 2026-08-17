@@ -69,10 +69,13 @@ python3 tests/compat/probe_es7.py http://localhost:9202   # elasticsearch:8.15.0
 |---|---|
 | Elasticsearch **7.10.2** | 32 OK / 0 KO |
 | Elasticsearch **8.15.0** | 26 OK / **6 KO** |
-| **ferrite** | 21 OK / **11 KO** |
+| **ferrite** | 22 OK / **10 KO** |
 
 Les 6 KO d'ES 8.15 sont le coût de la migration 7→8, indépendant de ferrite.
-Les 5 KO restants sont les manques de ferrite.
+Les 4 KO restants sont les manques de ferrite : `_type` dans une action `_bulk`,
+`rest_total_hits_as_int` et `_msearch`. Le cinquième — un `stored_fields` ou un
+`docvalue_fields` posé par du code 7.x — a été livré depuis
+([`compat.md`](compat.md)).
 
 Le client 7.10.2 n'est pas publié sur PyPI (7.10.0, 7.10.1 puis 7.11 le sont) :
 le 7.10.1 a été utilisé, c'est le même code de transport. Le **serveur** de
