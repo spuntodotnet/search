@@ -81,19 +81,29 @@ mappings différents pour 1 756 recherches. Le même mapping est posé sur les d
 serveurs : une inférence de travers ne peut que sortir la requête du
 dénominateur, jamais flatter ferrite.
 
-**Les deux mesures sont d'accord sur 1 372 requêtes sur 1 381** (99,3 %). C'est
+**Les deux mesures sont d'accord sur 1 369 requêtes sur 1 381** (99,1 %). C'est
 ce qui rend le croisement utilisable là où le rejeu ne va pas — les routes, les
 mappings, tout ce qui n'est pas un corps de `_search`.
+
+Les onze désaccords sont tous dans le même sens — le croisement dit « servie »,
+le rejeu dit « refusée » — et ils sont **le vrai intérêt du rejeu** : ils
+nomment ce que le croisement ne sait pas modéliser. Trois d'entre eux sont
+apparus en livrant `stored_fields` : la requête n'était plus bloquée en amont,
+le rejeu l'a donc atteinte, et il a trouvé **autre chose** dessous — un
+`aggs: {}` vide qu'ES accepte et que ferrite refuse, un `multi_match` sans
+`fields` qu'ES résout sur son champ par défaut et que ferrite exige. Débloquer
+une capacité fait remonter les refus qui étaient cachés derrière elle ; c'est
+attendu, et c'est mesuré plutôt que supposé.
 
 ## Le résultat : le taux dépend surtout de qui pose la question
 
 | Sous-corpus | Requêtes | Servies entièrement |
 |---|---|---|
-| **`github` — du code d'application open source** | 338 | **89,6 %** |
+| **`github` — du code d'application open source** | 338 | **90,8 %** |
 | `clients` — tests et exemples des clients officiels | 143 | 79,7 % |
-| `doc` — la documentation de référence | 3 969 | 38,8 % |
-| `rally` — les tracks de benchmark d'Elastic | 861 | 17,4 % |
-| **tout le corpus** | 5 311 | 39,7 % |
+| `doc` — la documentation de référence | 3 969 | 39,3 % |
+| `rally` — les tracks de benchmark d'Elastic | 861 | 27,2 % |
+| **tout le corpus** | 5 311 | 41,7 % |
 
 Ces quatre nombres ne se contredisent pas, ils mesurent quatre choses
 différentes, et l'écart entre eux **est** le résultat :
@@ -103,13 +113,15 @@ différentes, et l'écart entre eux **est** le résultat :
   requêtes sur dix passent telles quelles** ;
 - la documentation de référence consacre **une page par fonctionnalité**, avec au
   moins un exemple chacune : elle sur-représente exactement ce qui est rare. Un
-  taux de 38,8 % s'y lit « ferrite couvre un peu plus d'un tiers de la surface
+  taux de 39,3 % s'y lit « ferrite couvre un peu plus d'un tiers de la surface
   d'API », ce qui est vrai et sans rapport avec la question précédente ;
 - les tracks Rally sont des **bancs d'essai analytiques** : `date_histogram`
   avec `calendar_interval`, `runtime_mappings`, `fields`, `percentiles`. Et le
   track `elastic/logs` rejoue les requêtes de **Kibana**, qui pose
-  systématiquement des `runtime_mappings` et des `fields`. 17,4 %, c'est le prix
-  d'entrée pour servir un Kibana, pas celui d'une application.
+  systématiquement des `runtime_mappings` et des `fields`. 27,2 % — c'était
+  17,4 % avant que `fields`, `docvalue_fields` et `stored_fields` ne soient
+  livrés — c'est le prix d'entrée pour servir un Kibana, pas celui d'une
+  application.
 
 Le corpus n'est pas homogène et il ne prétend pas l'être : la documentation en
 fait 74,7 %, et le seul répertoire `elastic/logs` des tracks Rally 8,3 %.

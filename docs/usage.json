@@ -9263,11 +9263,11 @@
    },
    "traits": [
     {
-     "trait": "dsl:query_string",
+     "trait": "dsl:query_string.query",
      "requetes": 81
     },
     {
-     "trait": "dsl:query_string.query",
+     "trait": "dsl:query_string",
      "requetes": 81
     },
     {
@@ -9327,11 +9327,11 @@
      "requetes": 12
     },
     {
-     "trait": "dsl:script_score.script",
+     "trait": "dsl:script_score",
      "requetes": 11
     },
     {
-     "trait": "dsl:script_score",
+     "trait": "dsl:script_score.script",
      "requetes": 11
     },
     {
@@ -9387,15 +9387,15 @@
      "requetes": 5
     },
     {
-     "trait": "dsl:span_near.slop",
-     "requetes": 5
-    },
-    {
      "trait": "dsl:span_near.in_order",
      "requetes": 5
     },
     {
      "trait": "dsl:span_near",
+     "requetes": 5
+    },
+    {
+     "trait": "dsl:span_near.slop",
      "requetes": 5
     },
     {
@@ -9419,11 +9419,11 @@
      "requetes": 4
     },
     {
-     "trait": "dsl:geo_polygon.person.location",
+     "trait": "dsl:geo_polygon",
      "requetes": 4
     },
     {
-     "trait": "dsl:geo_polygon",
+     "trait": "dsl:geo_polygon.person.location",
      "requetes": 4
     },
     {
@@ -9459,10 +9459,6 @@
      "requetes": 3
     },
     {
-     "trait": "dsl:combined_fields.fields",
-     "requetes": 3
-    },
-    {
      "trait": "dsl:combined_fields.query",
      "requetes": 3
     },
@@ -9471,15 +9467,19 @@
      "requetes": 3
     },
     {
+     "trait": "dsl:combined_fields.fields",
+     "requetes": 3
+    },
+    {
      "trait": "dsl:intervals.match",
      "requetes": 3
     },
     {
-     "trait": "dsl:more_like_this.fields",
+     "trait": "dsl:more_like_this.max_query_terms",
      "requetes": 3
     },
     {
-     "trait": "dsl:more_like_this.max_query_terms",
+     "trait": "dsl:more_like_this.fields",
      "requetes": 3
     },
     {
@@ -9507,15 +9507,15 @@
      "requetes": 2
     },
     {
-     "trait": "dsl:rule",
-     "requetes": 2
-    },
-    {
      "trait": "dsl:rule.ruleset_ids",
      "requetes": 2
     },
     {
      "trait": "dsl:rule.match_criteria",
+     "requetes": 2
+    },
+    {
+     "trait": "dsl:rule",
      "requetes": 2
     },
     {
@@ -9531,11 +9531,11 @@
      "requetes": 2
     },
     {
-     "trait": "dsl:sample.bar",
+     "trait": "dsl:sample",
      "requetes": 2
     },
     {
-     "trait": "dsl:sample",
+     "trait": "dsl:sample.bar",
      "requetes": 2
     },
     {
@@ -9579,11 +9579,11 @@
      "requetes": 2
     },
     {
-     "trait": "dsl:span_multi.match",
+     "trait": "dsl:span_multi",
      "requetes": 2
     },
     {
-     "trait": "dsl:span_multi",
+     "trait": "dsl:span_multi.match",
      "requetes": 2
     },
     {
@@ -9591,19 +9591,19 @@
      "requetes": 2
     },
     {
-     "trait": "dsl:terms_set.terms",
-     "requetes": 2
-    },
-    {
      "trait": "dsl:terms_set",
      "requetes": 2
     },
     {
-     "trait": "dsl:weighted_tokens.tokens",
+     "trait": "dsl:terms_set.terms",
      "requetes": 2
     },
     {
      "trait": "dsl:weighted_tokens",
+     "requetes": 2
+    },
+    {
+     "trait": "dsl:weighted_tokens.tokens",
      "requetes": 2
     },
     {
@@ -9659,7 +9659,7 @@
      "requetes": 1
     },
     {
-     "trait": "dsl:geo_bounding_box.right",
+     "trait": "dsl:geo_bounding_box.bottom",
      "requetes": 1
     },
     {
@@ -9667,7 +9667,7 @@
      "requetes": 1
     },
     {
-     "trait": "dsl:geo_bounding_box.bottom",
+     "trait": "dsl:geo_bounding_box.right",
      "requetes": 1
     },
     {
@@ -9695,11 +9695,11 @@
      "requetes": 1
     },
     {
-     "trait": "dsl:percolate.index",
+     "trait": "dsl:percolate.version",
      "requetes": 1
     },
     {
-     "trait": "dsl:percolate.version",
+     "trait": "dsl:percolate.index",
      "requetes": 1
     },
     {
@@ -9751,11 +9751,11 @@
      "requetes": 1
     },
     {
-     "trait": "dsl:shape.relation",
+     "trait": "dsl:shape.shape",
      "requetes": 1
     },
     {
-     "trait": "dsl:shape.shape",
+     "trait": "dsl:shape.relation",
      "requetes": 1
     },
     {
@@ -9779,10 +9779,6 @@
      "requetes": 1
     },
     {
-     "trait": "dsl:span_field_masking.query",
-     "requetes": 1
-    },
-    {
      "trait": "dsl:span_field_masking",
      "requetes": 1
     },
@@ -9791,11 +9787,15 @@
      "requetes": 1
     },
     {
-     "trait": "dsl:span_first.end",
+     "trait": "dsl:span_field_masking.query",
      "requetes": 1
     },
     {
      "trait": "dsl:span_first",
+     "requetes": 1
+    },
+    {
+     "trait": "dsl:span_first.end",
      "requetes": 1
     },
     {
@@ -9847,11 +9847,11 @@
      "requetes": 1
     },
     {
-     "trait": "dsl:terms_set.minimum_should_match_script",
+     "trait": "dsl:terms_set.boost",
      "requetes": 1
     },
     {
-     "trait": "dsl:terms_set.boost",
+     "trait": "dsl:terms_set.minimum_should_match_script",
      "requetes": 1
     },
     {
@@ -9903,11 +9903,11 @@
      "requetes": 44
     },
     {
-     "trait": "agg:bucket_script",
+     "trait": "agg:bucket_script.buckets_path",
      "requetes": 44
     },
     {
-     "trait": "agg:bucket_script.buckets_path",
+     "trait": "agg:bucket_script",
      "requetes": 44
     },
     {
@@ -9915,7 +9915,7 @@
      "requetes": 43
     },
     {
-     "trait": "agg:moving_fn.script",
+     "trait": "agg:moving_fn.window",
      "requetes": 34
     },
     {
@@ -9923,11 +9923,11 @@
      "requetes": 34
     },
     {
-     "trait": "agg:moving_fn.window",
+     "trait": "agg:moving_fn",
      "requetes": 34
     },
     {
-     "trait": "agg:moving_fn",
+     "trait": "agg:moving_fn.script",
      "requetes": 34
     },
     {
@@ -9935,11 +9935,11 @@
      "requetes": 31
     },
     {
-     "trait": "agg:percentiles.field",
+     "trait": "agg:percentiles",
      "requetes": 31
     },
     {
-     "trait": "agg:percentiles",
+     "trait": "agg:percentiles.field",
      "requetes": 31
     },
     {
@@ -9955,7 +9955,7 @@
      "requetes": 29
     },
     {
-     "trait": "agg:geohash_grid.precision",
+     "trait": "agg:geohash_grid",
      "requetes": 24
     },
     {
@@ -9963,7 +9963,7 @@
      "requetes": 24
     },
     {
-     "trait": "agg:geohash_grid",
+     "trait": "agg:geohash_grid.precision",
      "requetes": 24
     },
     {
@@ -9975,11 +9975,11 @@
      "requetes": 24
     },
     {
-     "trait": "agg:auto_date_histogram",
+     "trait": "agg:auto_date_histogram.buckets",
      "requetes": 23
     },
     {
-     "trait": "agg:auto_date_histogram.buckets",
+     "trait": "agg:auto_date_histogram",
      "requetes": 23
     },
     {
@@ -9991,7 +9991,7 @@
      "requetes": 15
     },
     {
-     "trait": "agg:top_metrics.metrics",
+     "trait": "agg:top_metrics.sort",
      "requetes": 14
     },
     {
@@ -9999,23 +9999,23 @@
      "requetes": 14
     },
     {
-     "trait": "agg:top_metrics.sort",
+     "trait": "agg:top_metrics.metrics",
      "requetes": 14
-    },
-    {
-     "trait": "agg:filters.filters",
-     "requetes": 13
     },
     {
      "trait": "agg:filters",
      "requetes": 13
     },
     {
-     "trait": "agg:geotile_grid.field",
-     "requetes": 9
+     "trait": "agg:filters.filters",
+     "requetes": 13
     },
     {
      "trait": "agg:geotile_grid.precision",
+     "requetes": 9
+    },
+    {
+     "trait": "agg:geotile_grid.field",
      "requetes": 9
     },
     {
@@ -10047,11 +10047,11 @@
      "requetes": 6
     },
     {
-     "trait": "agg:geo_distance",
+     "trait": "agg:geo_distance.field",
      "requetes": 6
     },
     {
-     "trait": "agg:geo_distance.ranges",
+     "trait": "agg:geo_distance",
      "requetes": 6
     },
     {
@@ -10059,7 +10059,7 @@
      "requetes": 6
     },
     {
-     "trait": "agg:geo_distance.field",
+     "trait": "agg:geo_distance.ranges",
      "requetes": 6
     },
     {
@@ -10067,11 +10067,11 @@
      "requetes": 5
     },
     {
-     "trait": "agg:composite.sources",
+     "trait": "agg:composite",
      "requetes": 5
     },
     {
-     "trait": "agg:composite",
+     "trait": "agg:composite.sources",
      "requetes": 5
     },
     {
@@ -10083,7 +10083,7 @@
      "requetes": 5
     },
     {
-     "trait": "agg:percentile_ranks",
+     "trait": "agg:percentile_ranks.field",
      "requetes": 5
     },
     {
@@ -10091,7 +10091,7 @@
      "requetes": 5
     },
     {
-     "trait": "agg:percentile_ranks.field",
+     "trait": "agg:percentile_ranks",
      "requetes": 5
     },
     {
@@ -10099,11 +10099,11 @@
      "requetes": 5
     },
     {
-     "trait": "agg:top_hits.docvalue_fields",
+     "trait": "agg:top_hits.stored_fields",
      "requetes": 4
     },
     {
-     "trait": "agg:top_hits.stored_fields",
+     "trait": "agg:top_hits.docvalue_fields",
      "requetes": 4
     },
     {
@@ -10115,15 +10115,15 @@
      "requetes": 4
     },
     {
-     "trait": "agg:geohex_grid.precision",
-     "requetes": 4
-    },
-    {
      "trait": "agg:geohex_grid.field",
      "requetes": 4
     },
     {
      "trait": "agg:geohex_grid",
+     "requetes": 4
+    },
+    {
+     "trait": "agg:geohex_grid.precision",
      "requetes": 4
     },
     {
@@ -10135,19 +10135,19 @@
      "requetes": 4
     },
     {
-     "trait": "agg:string_stats.field",
-     "requetes": 4
-    },
-    {
      "trait": "agg:string_stats",
      "requetes": 4
     },
     {
-     "trait": "agg:categorize_text",
+     "trait": "agg:string_stats.field",
      "requetes": 4
     },
     {
      "trait": "agg:categorize_text.field",
+     "requetes": 4
+    },
+    {
+     "trait": "agg:categorize_text",
      "requetes": 4
     },
     {
@@ -10159,11 +10159,11 @@
      "requetes": 4
     },
     {
-     "trait": "agg:median_absolute_deviation.field",
+     "trait": "agg:median_absolute_deviation",
      "requetes": 4
     },
     {
-     "trait": "agg:median_absolute_deviation",
+     "trait": "agg:median_absolute_deviation.field",
      "requetes": 4
     },
     {
@@ -10195,19 +10195,19 @@
      "requetes": 3
     },
     {
-     "trait": "agg:frequent_item_sets.size",
-     "requetes": 3
-    },
-    {
      "trait": "agg:frequent_item_sets",
      "requetes": 3
     },
     {
-     "trait": "agg:frequent_item_sets.minimum_set_size",
+     "trait": "agg:frequent_item_sets.fields",
      "requetes": 3
     },
     {
-     "trait": "agg:frequent_item_sets.fields",
+     "trait": "agg:frequent_item_sets.size",
+     "requetes": 3
+    },
+    {
+     "trait": "agg:frequent_item_sets.minimum_set_size",
      "requetes": 3
     },
     {
@@ -10235,15 +10235,19 @@
      "requetes": 3
     },
     {
-     "trait": "agg:cartesian_centroid.field",
-     "requetes": 3
-    },
-    {
      "trait": "agg:cartesian_centroid",
      "requetes": 3
     },
     {
+     "trait": "agg:cartesian_centroid.field",
+     "requetes": 3
+    },
+    {
      "trait": "agg:t_test.b",
+     "requetes": 3
+    },
+    {
+     "trait": "agg:t_test.type",
      "requetes": 3
     },
     {
@@ -10255,7 +10259,7 @@
      "requetes": 3
     },
     {
-     "trait": "agg:t_test.type",
+     "trait": "agg:bucket_selector.buckets_path",
      "requetes": 3
     },
     {
@@ -10267,10 +10271,6 @@
      "requetes": 3
     },
     {
-     "trait": "agg:bucket_selector.buckets_path",
-     "requetes": 3
-    },
-    {
      "trait": "agg:sampler.shard_size",
      "requetes": 2
     },
@@ -10279,11 +10279,11 @@
      "requetes": 2
     },
     {
-     "trait": "agg:bucket_sort.sort",
+     "trait": "agg:bucket_sort.from",
      "requetes": 2
     },
     {
-     "trait": "agg:bucket_sort.from",
+     "trait": "agg:bucket_sort.sort",
      "requetes": 2
     },
     {
@@ -10311,10 +10311,6 @@
      "requetes": 2
     },
     {
-     "trait": "agg:scripted_metric.reduce_script",
-     "requetes": 2
-    },
-    {
      "trait": "agg:scripted_metric.init_script",
      "requetes": 2
     },
@@ -10331,7 +10327,7 @@
      "requetes": 2
     },
     {
-     "trait": "agg:weighted_avg.value",
+     "trait": "agg:scripted_metric.reduce_script",
      "requetes": 2
     },
     {
@@ -10339,11 +10335,11 @@
      "requetes": 2
     },
     {
-     "trait": "agg:weighted_avg.weight",
+     "trait": "agg:weighted_avg.value",
      "requetes": 2
     },
     {
-     "trait": "agg:cumulative_cardinality.buckets_path",
+     "trait": "agg:weighted_avg.weight",
      "requetes": 2
     },
     {
@@ -10351,11 +10347,11 @@
      "requetes": 2
     },
     {
-     "trait": "agg:categorize_text.similarity_threshold",
-     "requetes": 1
+     "trait": "agg:cumulative_cardinality.buckets_path",
+     "requetes": 2
     },
     {
-     "trait": "agg:children",
+     "trait": "agg:categorize_text.similarity_threshold",
      "requetes": 1
     },
     {
@@ -10363,11 +10359,11 @@
      "requetes": 1
     },
     {
-     "trait": "agg:geo_distance.distance_type",
+     "trait": "agg:children",
      "requetes": 1
     },
     {
-     "trait": "agg:parent.type",
+     "trait": "agg:geo_distance.distance_type",
      "requetes": 1
     },
     {
@@ -10375,7 +10371,7 @@
      "requetes": 1
     },
     {
-     "trait": "agg:random_sampler",
+     "trait": "agg:parent.type",
      "requetes": 1
     },
     {
@@ -10383,11 +10379,11 @@
      "requetes": 1
     },
     {
-     "trait": "agg:reverse_nested",
+     "trait": "agg:random_sampler",
      "requetes": 1
     },
     {
-     "trait": "agg:significant_terms.p_value",
+     "trait": "agg:reverse_nested",
      "requetes": 1
     },
     {
@@ -10395,15 +10391,19 @@
      "requetes": 1
     },
     {
+     "trait": "agg:significant_terms.p_value",
+     "requetes": 1
+    },
+    {
      "trait": "agg:variable_width_histogram.field",
      "requetes": 1
     },
     {
-     "trait": "agg:variable_width_histogram",
+     "trait": "agg:variable_width_histogram.buckets",
      "requetes": 1
     },
     {
-     "trait": "agg:variable_width_histogram.buckets",
+     "trait": "agg:variable_width_histogram",
      "requetes": 1
     },
     {
@@ -10471,7 +10471,7 @@
      "requetes": 1
     },
     {
-     "trait": "agg:bucket_correlation.buckets_path",
+     "trait": "agg:bucket_correlation",
      "requetes": 1
     },
     {
@@ -10479,7 +10479,7 @@
      "requetes": 1
     },
     {
-     "trait": "agg:bucket_correlation",
+     "trait": "agg:bucket_correlation.buckets_path",
      "requetes": 1
     },
     {
@@ -10495,11 +10495,11 @@
      "requetes": 1
     },
     {
-     "trait": "agg:cumulative_sum",
+     "trait": "agg:cumulative_sum.buckets_path",
      "requetes": 1
     },
     {
-     "trait": "agg:cumulative_sum.buckets_path",
+     "trait": "agg:cumulative_sum",
      "requetes": 1
     },
     {
@@ -10507,15 +10507,15 @@
      "requetes": 1
     },
     {
-     "trait": "agg:extended_stats_bucket.buckets_path",
-     "requetes": 1
-    },
-    {
      "trait": "agg:extended_stats_bucket",
      "requetes": 1
     },
     {
-     "trait": "agg:inference",
+     "trait": "agg:extended_stats_bucket.buckets_path",
+     "requetes": 1
+    },
+    {
+     "trait": "agg:inference.buckets_path",
      "requetes": 1
     },
     {
@@ -10523,7 +10523,7 @@
      "requetes": 1
     },
     {
-     "trait": "agg:inference.buckets_path",
+     "trait": "agg:inference",
      "requetes": 1
     },
     {
@@ -10555,7 +10555,7 @@
      "requetes": 1
     },
     {
-     "trait": "agg:normalize.method",
+     "trait": "agg:normalize.buckets_path",
      "requetes": 1
     },
     {
@@ -10567,11 +10567,7 @@
      "requetes": 1
     },
     {
-     "trait": "agg:normalize.buckets_path",
-     "requetes": 1
-    },
-    {
-     "trait": "agg:percentiles_bucket",
+     "trait": "agg:normalize.method",
      "requetes": 1
     },
     {
@@ -10579,15 +10575,19 @@
      "requetes": 1
     },
     {
+     "trait": "agg:percentiles_bucket",
+     "requetes": 1
+    },
+    {
      "trait": "agg:percentiles_bucket.buckets_path",
      "requetes": 1
     },
     {
-     "trait": "agg:serial_diff.lag",
+     "trait": "agg:serial_diff",
      "requetes": 1
     },
     {
-     "trait": "agg:serial_diff",
+     "trait": "agg:serial_diff.lag",
      "requetes": 1
     },
     {
@@ -10603,11 +10603,11 @@
      "requetes": 1
     },
     {
-     "trait": "agg:sum_bucket.buckets_path",
+     "trait": "agg:sum_bucket",
      "requetes": 1
     },
     {
-     "trait": "agg:sum_bucket",
+     "trait": "agg:sum_bucket.buckets_path",
      "requetes": 1
     },
     {
@@ -11579,11 +11579,11 @@
    },
    "traits": [
     {
-     "trait": "agg:cardinality.field",
+     "trait": "agg:cardinality",
      "requetes": 80
     },
     {
-     "trait": "agg:cardinality",
+     "trait": "agg:cardinality.field",
      "requetes": 80
     },
     {
@@ -11967,11 +11967,11 @@
      "requetes": 1
     },
     {
-     "trait": "analyzer:trigram",
+     "trait": "analyzer:reverse",
      "requetes": 1
     },
     {
-     "trait": "analyzer:reverse",
+     "trait": "analyzer:trigram",
      "requetes": 1
     },
     {
@@ -12067,15 +12067,15 @@
      "requetes": 2
     },
     {
+     "trait": "dsl:match.fuzzy_transpositions",
+     "requetes": 1
+    },
+    {
      "trait": "dsl:match.max_expansions",
      "requetes": 1
     },
     {
      "trait": "dsl:match.prefix_length",
-     "requetes": 1
-    },
-    {
-     "trait": "dsl:match.fuzzy_transpositions",
      "requetes": 1
     }
    ]
@@ -12235,15 +12235,15 @@
      "requetes": 1
     },
     {
-     "trait": "dsl:has_child.score_mode=min",
-     "requetes": 1
-    },
-    {
      "trait": "dsl:has_child.min_children",
      "requetes": 1
     },
     {
      "trait": "dsl:has_child.max_children",
+     "requetes": 1
+    },
+    {
+     "trait": "dsl:has_child.score_mode=min",
      "requetes": 1
     },
     {
@@ -12419,11 +12419,11 @@
      "requetes": 1
     },
     {
-     "trait": "dsl:fuzzy.rewrite",
+     "trait": "dsl:fuzzy.prefix_length",
      "requetes": 1
     },
     {
-     "trait": "dsl:fuzzy.prefix_length",
+     "trait": "dsl:fuzzy.rewrite",
      "requetes": 1
     }
    ]
@@ -12473,5 +12473,282 @@
    ]
   }
  ],
- "rejeu": null
+ "rejeu": {
+  "requetes_rejouees": 1756,
+  "es_refuse_aussi": 375,
+  "acceptees_par_ferrite_seul": 0,
+  "denominateur": 1381,
+  "servies": 648,
+  "refusees": 733,
+  "taux": 46.9,
+  "mappings_supposes": 448,
+  "mappings_refuses": 2,
+  "erreurs_de_ferrite": [
+   {
+    "erreur": "ferrite ne supporte pas [highlight] dans [_search] ; cles acceptees : [\"query\", \"from\", \"size\", \"sort\", \"_source\", \"track_total_hits\", \"aggs\", \"aggregations\", \"",
+    "requetes": 99
+   },
+   {
+    "erreur": "ferrite ne supporte pas [timeout] dans [_search] ; cles acceptees : [\"query\", \"from\", \"size\", \"sort\", \"_source\", \"track_total_hits\", \"aggs\", \"aggregations\", \"fi",
+    "requetes": 91
+   },
+   {
+    "erreur": "ferrite ne supporte pas [time_zone] dans [date_histogram] (agregation [N]) ; parametres acceptes : [\"field\", \"fixed_interval\", \"offset\", \"min_doc_count\", \"hard_",
+    "requetes": 88
+   },
+   {
+    "erreur": "unknown query [query_string] : ferrite supporte [match_all, match_none, match, multi_match, match_phrase, match_phrase_prefix, exists, ids, prefix, wildcard, re",
+    "requetes": 35
+   },
+   {
+    "erreur": "ferrite ne supporte pas l'ordre [N] dans [aggs.N.order] ; cles acceptees : _count, _key (ordonner par une sous-agregation n'est pas supporte)",
+    "requetes": 28
+   },
+   {
+    "erreur": "ferrite ne supporte pas [runtime_mappings] dans [_search] : il definit des champs calcules par un script Painless, que ferrite n'execute pas (seul l'objet vide,",
+    "requetes": 14
+   },
+   {
+    "erreur": "ferrite ne supporte pas [calendar_interval] dans [date_histogram] (agregation [my_date_histo]) ; parametres acceptes : [\"field\", \"fixed_interval\", \"offset\", \"mi",
+    "requetes": 13
+   },
+   {
+    "erreur": "ferrite ne supporte pas l'ordre [bytes_in] dans [aggs.destination.order] ; cles acceptees : _count, _key (ordonner par une sous-agregation n'est pas supporte)",
+    "requetes": 12
+   },
+   {
+    "erreur": "ferrite ne supporte pas l'ordre [bytes_out] dans [aggs.source.order] ; cles acceptees : _count, _key (ordonner par une sous-agregation n'est pas supporte)",
+    "requetes": 12
+   },
+   {
+    "erreur": "ferrite ne supporte pas [calendar_interval] dans [date_histogram] (agregation [sales_per_month]) ; parametres acceptes : [\"field\", \"fixed_interval\", \"offset\", \"",
+    "requetes": 12
+   },
+   {
+    "erreur": "ferrite ne supporte pas [calendar_interval] dans [date_histogram] (agregation [date]) ; parametres acceptes : [\"field\", \"fixed_interval\", \"offset\", \"min_doc_cou",
+    "requetes": 11
+   },
+   {
+    "erreur": "[multi_match] : [fields] est obligatoire et doit etre une liste (ferrite n'a pas de champ de recherche par defaut)",
+    "requetes": 11
+   },
+   {
+    "erreur": "unknown query [script_score] : ferrite supporte [match_all, match_none, match, multi_match, match_phrase, match_phrase_prefix, exists, ids, prefix, wildcard, re",
+    "requetes": 10
+   },
+   {
+    "erreur": "unknown query [rank_feature] : ferrite supporte [match_all, match_none, match, multi_match, match_phrase, match_phrase_prefix, exists, ids, prefix, wildcard, re",
+    "requetes": 10
+   },
+   {
+    "erreur": "unknown query [function_score] : ferrite supporte [match_all, match_none, match, multi_match, match_phrase, match_phrase_prefix, exists, ids, prefix, wildcard, ",
+    "requetes": 9
+   },
+   {
+    "erreur": "ferrite ne supporte pas [script_fields] dans [_search] : il definit des champs calcules par un script Painless, que ferrite n'execute pas (seul l'objet vide, qu",
+    "requetes": 9
+   },
+   {
+    "erreur": "unknown query [simple_query_string] : ferrite supporte [match_all, match_none, match, multi_match, match_phrase, match_phrase_prefix, exists, ids, prefix, wildc",
+    "requetes": 9
+   },
+   {
+    "erreur": "ferrite ne supporte pas [missing] dans [terms] (agregation [eventActionGroup]) ; parametres acceptes : [\"field\", \"size\", \"shard_size\", \"min_doc_count\", \"order\"]",
+    "requetes": 6
+   },
+   {
+    "erreur": "ferrite ne supporte pas [missing] dans [terms] (agregation [alertsGroup]) ; parametres acceptes : [\"field\", \"size\", \"shard_size\", \"min_doc_count\", \"order\"]",
+    "requetes": 6
+   },
+   {
+    "erreur": "ferrite ne supporte pas l'agregation [percentiles] (dans [aggs.load_time_outlier]) ; agregations supportees : min, max, sum, avg, value_count, stats, terms, ran",
+    "requetes": 6
+   },
+   {
+    "erreur": "unknown query [intervals] : ferrite supporte [match_all, match_none, match, multi_match, match_phrase, match_phrase_prefix, exists, ids, prefix, wildcard, regex",
+    "requetes": 6
+   },
+   {
+    "erreur": "ferrite ne supporte pas [track_total_hits: false] : le total est toujours exact",
+    "requetes": 5
+   },
+   {
+    "erreur": "ferrite ne supporte pas [unmapped_type] dans [sort] ; cles acceptees : [\"order\"]",
+    "requetes": 5
+   },
+   {
+    "erreur": "unknown query [geo_bounding_box] : ferrite supporte [match_all, match_none, match, multi_match, match_phrase, match_phrase_prefix, exists, ids, prefix, wildcard",
+    "requetes": 5
+   },
+   {
+    "erreur": "ferrite ne supporte pas l'agregation [auto_date_histogram] (dans [aggs.histogram]) ; agregations supportees : min, max, sum, avg, value_count, stats, terms, ran",
+    "requetes": 5
+   },
+   {
+    "erreur": "ferrite ne supporte pas l'agregation [cardinality] (dans [aggs.unique_flow_id]) : l'estimation de tantivy differe de celle d'Elasticsearch (mesure : N valeurs d",
+    "requetes": 5
+   },
+   {
+    "erreur": "ferrite ne supporte pas [search_after] dans [_search] ; cles acceptees : [\"query\", \"from\", \"size\", \"sort\", \"_source\", \"track_total_hits\", \"aggs\", \"aggregations\"",
+    "requetes": 4
+   },
+   {
+    "erreur": "ferrite ne supporte pas l'agregation [cardinality] (dans [aggs.host_count]) : l'estimation de tantivy differe de celle d'Elasticsearch (mesure : N valeurs disti",
+    "requetes": 4
+   },
+   {
+    "erreur": "ferrite ne supporte pas l'agregation [cardinality] (dans [aggs.unique_destination_ips]) : l'estimation de tantivy differe de celle d'Elasticsearch (mesure : N v",
+    "requetes": 4
+   },
+   {
+    "erreur": "ferrite ne supporte pas l'agregation [auto_date_histogram] (dans [aggs.authentication_failure_histogram]) ; agregations supportees : min, max, sum, avg, value_c",
+    "requetes": 4
+   }
+  ],
+  "accord_avec_le_croisement": {
+   "matrice": {
+    "refusee/refusee": 722,
+    "servie/servie": 647,
+    "servie/refusee": 10,
+    "refusee/servie": 1,
+    "indeterminee/refusee": 1
+   },
+   "desaccords": {
+    "servie/refusee": [
+     {
+      "ref": "https://github.com/elastic/rally-tracks/blob/b1cc31cd1afd68dbc0a0bebfef3a17ebd3747d79/elastic/security/workflows/hosts/7.json#L13",
+      "traits": [
+       "agg:date_histogram",
+       "agg:date_histogram.extended_bounds",
+       "agg:date_histogram.field",
+       "agg:date_histogram.fixed_interval",
+       "agg:date_histogram.min_doc_count",
+       "agg:sous_agregations",
+       "agg:terms",
+       "agg:terms.field"
+      ],
+      "erreur": "[query] doit etre un objet JSON"
+     },
+     {
+      "ref": "https://github.com/elastic/rally-tracks/blob/b1cc31cd1afd68dbc0a0bebfef3a17ebd3747d79/elastic/security/workflows/network/10.json#L13",
+      "traits": [
+       "agg:date_histogram",
+       "agg:date_histogram.extended_bounds",
+       "agg:date_histogram.field",
+       "agg:date_histogram.fixed_interval",
+       "agg:date_histogram.min_doc_count",
+       "agg:sous_agregations",
+       "agg:terms",
+       "agg:terms.field"
+      ],
+      "erreur": "[query] doit etre un objet JSON"
+     },
+     {
+      "ref": "https://github.com/elastic/rally-tracks/blob/b1cc31cd1afd68dbc0a0bebfef3a17ebd3747d79/elastic/logs/workflows/redis/9a.json#L11",
+      "traits": [
+       "corps:aggs",
+       "corps:query",
+       "corps:size",
+       "corps:stored_fields",
+       "dsl:bool",
+       "dsl:range",
+       "dsl:range.format",
+       "dsl:range.gte"
+      ],
+      "erreur": "[aggs] ne peut pas etre vide"
+     },
+     {
+      "ref": "https://github.com/elastic/rally-tracks/blob/b1cc31cd1afd68dbc0a0bebfef3a17ebd3747d79/elastic/logs/workflows/mysql/dashboard/6.json#L314",
+      "traits": [
+       "agg:terms",
+       "agg:terms.field",
+       "agg:terms.order",
+       "agg:terms.size",
+       "corps:aggs",
+       "corps:query",
+       "corps:size",
+       "corps:stored_fields"
+      ],
+      "erreur": "[multi_match] : [fields] est obligatoire et doit etre une liste (ferrite n'a pas de champ de recherche par defaut)"
+     },
+     {
+      "ref": "https://github.com/elastic/rally-tracks/blob/b1cc31cd1afd68dbc0a0bebfef3a17ebd3747d79/elastic/logs/workflows/mysql/dashboard/6.json#L244",
+      "traits": [
+       "agg:terms",
+       "agg:terms.field",
+       "agg:terms.order",
+       "agg:terms.size",
+       "corps:aggs",
+       "corps:query",
+       "corps:size",
+       "corps:stored_fields"
+      ],
+      "erreur": "[multi_match] : [fields] est obligatoire et doit etre une liste (ferrite n'a pas de champ de recherche par defaut)"
+     },
+     {
+      "ref": "https://github.com/elastic/elasticsearch/blob/1a77947f34deddb41af25e6f0ddb8e830159c179/docs/reference/aggregations.asciidoc#L240",
+      "traits": [
+       "agg:terms",
+       "agg:terms.field",
+       "corps:aggs",
+       "route:search"
+      ],
+      "erreur": "[aggs.my-agg-name] : une seule agregation par nom (deux trouvees)"
+     },
+     {
+      "ref": "https://github.com/elastic/elasticsearch/blob/1a77947f34deddb41af25e6f0ddb8e830159c179/docs/reference/api-conventions.asciidoc#L343",
+      "traits": [
+       "corps:size",
+       "expr:all",
+       "route:search"
+      ],
+      "erreur": "[size] : entier positif attendu, recu \"1000\""
+     },
+     {
+      "ref": "https://github.com/elastic/elasticsearch/blob/1a77947f34deddb41af25e6f0ddb8e830159c179/docs/reference/mapping/types/nested.asciidoc#L86",
+      "traits": [
+       "corps:query",
+       "dsl:bool",
+       "dsl:match",
+       "dsl:nested",
+       "dsl:nested.path",
+       "route:search"
+      ],
+      "erreur": "ferrite ne verifie pas un champ [text] element par element (champ [user.first] dans un [nested]) : les colonnes portent la valeur, pas les termes analyses. Interroge son multi-field [keyword], ou sors"
+     },
+     {
+      "ref": "https://github.com/elastic/elasticsearch-py/blob/f3e788b801778dea8bae1d5cc982c5557b61d3fc/examples/fastapi-apm/app.py#L77",
+      "traits": [
+       "corps:query",
+       "dsl:multi_match",
+       "dsl:multi_match.query",
+       "route:search"
+      ],
+      "erreur": "[multi_match] : [fields] est obligatoire et doit etre une liste (ferrite n'a pas de champ de recherche par defaut)"
+     },
+     {
+      "ref": "https://github.com/ritwik12/Satellite-Log-Data-Analyses/blob/5a950d5cf2bfc2a39f5a08371224a18fbd57bc7f/main.py#L87",
+      "traits": [
+       "corps:size",
+       "route:search"
+      ],
+      "erreur": "[size] : entier positif attendu, recu \"10000\""
+     }
+    ],
+    "refusee/servie": [
+     {
+      "ref": "https://github.com/elastic/elasticsearch/blob/1a77947f34deddb41af25e6f0ddb8e830159c179/docs/reference/mapping/fields/ignored-field.asciidoc#L35",
+      "traits": [
+       "champ:reserve",
+       "corps:query",
+       "dsl:term",
+       "expr:all",
+       "route:search"
+      ],
+      "erreur": ""
+     }
+    ]
+   }
+  }
+ }
 }
