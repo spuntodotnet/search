@@ -157,18 +157,35 @@ débloque. Deux colonnes, parce qu'elles ne disent pas la même chose :
   requête. C'est la colonne qui décide, parce qu'un chantier qui ne débloque
   rien tout seul ne change rien pour personne.
 
-> **Ce classement est celui du jour où il a été mesuré.** La carte 20 a été
-> faite depuis : elle a fait passer le corpus de **36,3 % à 39,7 %** servi
+> **Ce classement est celui du jour où il a été mesuré.** Deux cartes ont été
+> faites depuis. La **20** a fait passer le corpus de **36,3 % à 39,7 %** servi
 > entièrement (1 929 → 2 106 requêtes), et la documentation de 34,5 % à 38,8 %.
 > Sur le sous-corpus des applications réelles, elle en débloque **zéro** — la
 > mesure l'annonçait, et elle avait raison : cette carte vaut pour la surface
-> d'API, pas pour débloquer un utilisateur précis. Les autres lignes n'ont pas
-> été recalculées ; elles se refont avec la recette qui suit.
+> d'API, pas pour débloquer un utilisateur précis.
+>
+> La **18** a fait passer le corpus de **39,7 % à 41,7 %** (2 106 → 2 215), et
+> ce chiffre-là se lit en **deux morceaux**, parce que les mélanger tromperait :
+>
+> - `fields`, `docvalue_fields` et `stored_fields` livrés en débloquent **30**
+>   (39,7 % → 40,2 %), dont **4 sur le sous-corpus des applications réelles** —
+>   exactement ce que la ligne du tableau annonçait ;
+> - accepter l'objet **vide** de `script_fields` / `runtime_mappings` en
+>   débloque **79 de plus** (40,2 % → 41,7 %). C'est une vraie compatibilité —
+>   ES rend la même réponse avec ou sans, et 774 requêtes du corpus l'envoient
+>   sous cette forme — mais c'est **un artefact de gabarit** : les tracks Rally
+>   laissent le paramètre vide quand il n'est pas rempli. Ça ne prouve rien sur
+>   `script_fields`, qui reste ❌.
+>
+> Les **125** de la ligne 2 supposaient les cinq faits, `runtime_mappings` et
+> `script_fields` compris : ils demandent Painless, et la mesure a servi à
+> décider de ne pas les faire (voir plus bas). Les autres lignes n'ont pas été
+> recalculées ; elles se refont avec la recette qui suit.
 
 | Rang mesuré | Carte | bloque | débloque | débloque (applications) |
 |---|---|---|---|---|
 | 1 | **20** — `_validate`, `field_caps`, `_stats`, templates, `PUT _settings` — **faite** | 262 | **239** | 0 |
-| 2 | **18** — `fields`, `docvalue_fields`, `stored_fields` (+ `runtime_mappings`, `script_fields`) | 504 | **125** | 4 |
+| 2 | **18** — `fields`, `docvalue_fields`, `stored_fields` — **faite** (+ `runtime_mappings`, `script_fields`, mesurés puis écartés) | 504 | **125** | 4 |
 | 3 | **19** — `_delete_by_query`, `_update_by_query` | 77 | **75** | **10** |
 | 4 | **05** — `highlight` | 102 | 18 | 1 |
 | 5 | **09** — `sort` : `missing`, `mode`, `unmapped_type` | 94 | 15 | 1 |
@@ -242,6 +259,25 @@ comptés sur `tests/compat/usage/verdicts.jsonl` (`manques[].trait`).
   Le tableau de bord qui l'envoie envoie aussi `runtime_mappings` et `fields`
   (carte 18). Les deux ensemble sont un lot ; l'une sans l'autre ne sert pas un
   Kibana.
+- **La carte 18 contenait un chantier qu'il ne fallait pas faire, et c'est le
+  corpus qui l'a dit.** Sa ligne agrège cinq paramètres, dont
+  `runtime_mappings` — qui à lui seul *bloque* 439 requêtes, le plus gros
+  contributeur des 504. L'intuition dit donc « il faut le faire ». La mesure,
+  demandée avant de décider, dit l'inverse en deux chiffres :
+
+  - sur les **444** requêtes du corpus qui portent `runtime_mappings`, **425
+    l'envoient vide** (`{}`) — des gabarits de tracks Rally dont le paramètre
+    n'est pas rempli. Elles ne demandent rien ;
+  - sur les **19** qui ne sont pas vides, **18 portent un script Painless**, et
+    la dernière est un champ `lookup`. Il n'existe pas, dans ce corpus, de
+    `runtime_mappings` sans script — donc pas de version « facile » à livrer.
+
+  Seul, `runtime_mappings` débloque **6** requêtes, et **3** en sont les seules
+  bloquées. Painless est hors périmètre déclaré ; il reste ❌, et ce qui a été
+  livré à sa place est l'acceptation de l'objet vide, qui coûte trois lignes et
+  vaut 79 requêtes. **La bonne façon d'utiliser ce corpus n'est pas seulement de
+  choisir quoi faire en premier : c'est aussi de démontrer qu'un chantier gros
+  et cher ne vaut pas la peine.**
 
 Ordre proposé, une fois ces deux lectures superposées : **19** (les applications
 d'abord), **20**, puis le lot **18 + 13** (servir un tableau de bord), puis

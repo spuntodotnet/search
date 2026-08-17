@@ -240,6 +240,12 @@ def cas():
     q("dv, format sur une date",
       {"_source": False, "docvalue_fields": [{"field": "d", "format": "yyyy-MM-dd"}]})
     q("dv, format du mapping", {"_source": False, "docvalue_fields": ["dfmt"]})
+    # Sur un numerique, ES applique le motif comme un `DecimalFormat` de Java
+    # (`"#.0"` sur 1 rend `"1.0"`) ; ferrite refuse, et c'est un refus assume.
+    q("dv, format sur un numerique",
+      {"_source": False, "docvalue_fields": [{"field": "n", "format": "#.0"}]})
+    q("dv, format sur un booleen",
+      {"_source": False, "docvalue_fields": [{"field": "b", "format": "#.0"}]})
     q("dv, garde le _source", {"docvalue_fields": ["n"]})
     q("dv, chaine au lieu d'une liste", {"_source": False, "docvalue_fields": "n"})
     q("dv, en query string", None, f"/{INDEX}/_search?size=10&sort=ord"
@@ -255,6 +261,14 @@ def cas():
     q("sf, _none_ + docvalue_fields",
       {"stored_fields": "_none_", "docvalue_fields": ["n"]})
     q("sf, _none_ + fields", {"stored_fields": "_none_", "fields": ["n"]})
+    # `_source` cite dans la liste est un nom de champ stocke comme un autre :
+    # le citer ramene le `_source`. C'est la suite de conformance d'Elastic qui
+    # l'a trouve, pas cette sonde — elle le fige maintenant.
+    q("sf, _source cite dans la liste", {"stored_fields": ["titre", "_source"]})
+    q("sf, _source seul dans la liste", {"stored_fields": ["_source"]})
+    # « ne rien rendre » et « rendre ces champs-la » sont contradictoires.
+    q("sf, _none_ melange a un nom", {"stored_fields": ["_none_", "titre"]})
+    q("sf, _none_ melange a _source", {"stored_fields": ["_source", "_none_"]})
     q("sf, en query string", None,
       f"/{INDEX}/_search?size=10&sort=ord&stored_fields=titre")
     q("sf, _none_ en query string", None,
@@ -331,6 +345,12 @@ def cas():
 # manque pour une egalite, l'appeler « ecart » ferait passer un choix ecrit
 # pour un accident.
 REFUS_ASSUMES = {
+    "dv, format sur un numerique":
+        "ES interprete le motif comme un `DecimalFormat` de Java — `\"#.0\"` "
+        "sur la valeur 1 rend la chaine `\"1.0\"`. ferrite ne l'implemente pas "
+        "et le refuse explicitement, avec son propre type d'erreur pour que le "
+        "rapport de conformance le compte comme un cout de perimetre et non "
+        "comme une regression",
     "fields, metadonnee _ignored":
         "ES y liste les champs qu'un `ignore_above` a ecartes ; ferrite ne "
         "tient pas cette liste — ni comme cle du hit, ni comme champ "

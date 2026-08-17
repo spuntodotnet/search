@@ -79,20 +79,20 @@ qu'un zéro qui aurait l'air d'une mesure.
 | `from` / `size` | 16,3 % | ✅ |
 | `aggs` / `aggregations` | 14,0 % | 🟡 |
 | `bool` | 12,1 % | 🟡 |
-| `highlight`, `search_after`, `pit`, `collapse`, `knn`, `explain`, `seq_no_primary_term`, `post_filter`, `min_score`, `suggest`, `rescore`, `track_scores`, `q`, `timeout`, `terminate_after`, `version`, `indices_boost`, `profile`, `slice`, `stats`, `ext`, `retriever` | 12,0 % | ❌ |
 | `range` | 11,4 % | 🟡 |
 | `PUT /{index}` | 10,5 % | 🟡 |
 | Sous-agrégations | 8,8 % | ✅ |
 | `terms` | 7,5 % | 🟡 |
 | `match` | 6,8 % | 🟡 |
 | `PUT\|POST /{index}/_doc/{id}` | 6,8 % | 🟡 |
+| `stored_fields` | 6,6 % | 🟡 |
 | `query_string`, `simple_query_string`, `function_score`, `boosting`, `intervals`, `terms_set`, `script`… | 6,5 % | ❌ |
 | `percentiles`, `extended_stats`, `top_hits`, `composite`, `filters`, `nested`, `significant_terms`, `date_range`, `ip_range`… | 6,1 % | ❌ |
+| `highlight`, `search_after`, `pit`, `collapse`, `knn`, `explain`, `seq_no_primary_term`, `post_filter`, `min_score`, `suggest`, `rescore`, `track_scores`, `q`, `timeout`, `terminate_after`, `version`, `indices_boost`, `profile`, `slice`, `stats`, `ext`, `retriever` | 5,6 % | ❌ |
 | `date_histogram` | 5,3 % | 🟡 |
 | `match_phrase` | 4,5 % | 🟡 |
 | `_all`, `*`, URL sans index | 4,1 % | ✅ |
 | `_source` | 3,7 % | ✅ |
-| `min`, `max`, `sum`, `avg`, `value_count`, `stats` | 3,6 % | ✅ |
 
 ---
 

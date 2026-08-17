@@ -1488,10 +1488,19 @@ def _es_casse(e):
     the SignStyle », « Cannot format stat [max] with format […epoch_millis…] ») :
     un `sort` sur un document sans valeur, ou un `stats` sur un bucket vide,
     rendent 400 ou 500. ferrite rend 200 et une reponse correcte. Le fuzzer le
-    signale, mais ce n'est pas un defaut de ferrite."""
+    signale, mais ce n'est pas un defaut de ferrite.
+
+    Le cas ne se limite pas a « ferrite repond, ES casse ». Il arrive aussi que
+    **les deux** refusent, pour deux raisons sans rapport : ferrite sur un de
+    ses refus declares (un trou entre deux intervalles d'un `range` sur une
+    date), ES sur ce bug de formatage — 400 d'un cote, 500 de l'autre. Le
+    predicat porte donc sur **le message d'ES**, pas sur les codes : quand ES
+    n'arrive pas a formater sa propre reponse, il n'y a pas d'oracle, et le cas
+    ne mesure rien. Ce qui n'est **pas** tolere, c'est un 500 d'ES pour une
+    autre raison : celui-la reste un ecart."""
     if e.get("chemin") != "statut":
         return False
-    return "gauche 200" in e["texte"] and any(m in e["texte"] for m in (
+    return any(m in e["texte"] for m in (
         "cannot be negative according to the SignStyle",
         "Cannot format stat",
     ))
@@ -1548,6 +1557,12 @@ def _refus_declare(e, _requete=None, ecarts=()):
         return any(_refus_declare(x) for x in ecarts
                    if x.get("chemin") == "scroll.motif")
     if chemin not in ("statut", "scroll.motif"):
+        return False
+    # « la ou ES sait repondre » est la moitie qui compte : depuis que le
+    # texte d'un ecart de statut porte les **deux** messages, la phrase de
+    # ferrite s'y trouve meme quand ES echoue de son cote. Sans cette
+    # condition, un 500 d'ES passerait pour un cout de perimetre de ferrite.
+    if chemin == "statut" and "droite 200" not in e["texte"]:
         return False
     return any(m in e["texte"] for m in (
         "champ multivalue",           # histogram / range / date_histogram
@@ -1649,7 +1664,13 @@ def compare_recherche(st_a, ra, st_b, rb, tri_score=()):
                   f"gauche {st_a} ({(ra.get('error') or {}).get('type', '?')} : "
                   f"{motif(ra)[:160]}), droite 200")
             return "refus", ecarts
-        ecart(ecarts, "statut", st_a, st_b, f"statuts {st_a} / {st_b}")
+        # Les deux refusent, mais pas pareil. Le message des deux cotes part
+        # dans le texte : sans lui, « statuts 400 / 500 » ne se diagnostique
+        # pas — et c'est justement ce qu'il faut pour qu'un predicat puisse
+        # trancher (voir `_es_casse`).
+        ecart(ecarts, "statut", st_a, st_b,
+              f"statuts {st_a} / {st_b} (gauche {motif(ra)[:120]} | "
+              f"droite {motif(rb)[:160]})")
         return "ecart", ecarts
     if st_a != 200:
         # Les deux refusent : seul le statut se compare (voir l'entete).

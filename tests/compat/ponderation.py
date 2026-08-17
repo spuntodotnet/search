@@ -173,6 +173,21 @@ def traits_corps(corps):
             vus |= traits_tri(valeur)
         elif clef == "track_total_hits" and valeur is False:
             vus.add("corps:track_total_hits=false")
+        elif clef in ("script_fields", "runtime_mappings") and valeur == {}:
+            # Un objet **vide** ne definit aucun champ calcule : il ne demande
+            # rien, et ES rend la meme reponse avec ou sans (mesure contre ES
+            # 8.15). Ce n'est donc pas une demande, et ferrite l'accepte tel
+            # quel — comme une clef absente.
+            #
+            # Ce cas n'est pas anecdotique et il est **compte a part** : 425
+            # des 444 requetes du corpus qui portent `runtime_mappings`, et 349
+            # des 359 qui portent `script_fields`, l'envoient vide. Ce sont des
+            # gabarits de tracks Rally dont le parametre n'est pas rempli. Les
+            # compter comme une demande refusee dirait que ferrite echoue la ou
+            # il rend exactement la reponse d'ES ; les compter comme un support
+            # de `script_fields` serait le mensonge inverse. Ils ne comptent ni
+            # pour ni contre : la capacite reste ❌ dans la table.
+            vus.discard(f"corps:{clef}")
     return vus
 
 
@@ -376,6 +391,10 @@ CORPS = {
     "sort": "recherche.sort", "_source": "recherche.source",
     "track_total_hits": "recherche.track_total_hits", "aggs": "recherche.aggs",
     "aggregations": "recherche.aggs",
+    "fields": "recherche.fields", "docvalue_fields": "recherche.docvalue_fields",
+    "stored_fields": "recherche.stored_fields",
+    "script_fields": "recherche.script_fields",
+    "runtime_mappings": "recherche.script_fields",
 }
 # La liste des clefs refusees n'est pas recopiee ici : elle se lit dans le
 # `nom` de la capacite `recherche.non_supportes`, qui les cite entre accents

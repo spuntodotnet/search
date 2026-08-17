@@ -424,7 +424,7 @@ fn lire_demande(
     };
     demande.stored = match (body.get("stored_fields"), param_stored) {
         (Some(v), _) => fetch::lire_stored(v)?,
-        (None, Some(liste)) => fetch::stored_des_params(&liste),
+        (None, Some(liste)) => fetch::stored_des_params(&liste)?,
         (None, None) => Stored::Absent,
     };
 

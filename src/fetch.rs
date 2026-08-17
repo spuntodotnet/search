@@ -56,8 +56,11 @@ pub enum Stored {
     /// `_none_` : ni `_source`, ni `_id`.
     Aucun,
     /// Une liste de noms. Aucun champ n'etant stocke, elle ne rend rien — mais
-    /// elle retire quand meme `_source`.
-    Liste,
+    /// elle retire quand meme `_source`, **sauf** si `_source` y figure : c'est
+    /// un nom de champ stocke comme un autre, et le citer le ramene (mesure
+    /// contre ES 8.15, et cas de la suite de conformance d'Elastic
+    /// « fields in body with source »).
+    Liste { avec_source: bool },
 }
 
 /// Ce qu'une recherche demande de transporter, avant resolution sur un mapping.
@@ -76,9 +79,14 @@ impl Demande {
 
     /// `_source` est-il rendu ? `stored_fields` le retire, sauf `_source`
     /// explicite (mesure contre ES 8.15 : `{"stored_fields": ["titre"]}` rend
-    /// un hit sans `_source`, `+ {"_source": true}` le rend).
+    /// un hit sans `_source`, `+ {"_source": true}` le rend) — et sauf
+    /// `_source` cite **dans la liste**, qui est la facon dont la suite
+    /// d'Elastic le demande.
     pub fn retire_le_source(&self) -> bool {
-        self.stored != Stored::Absent
+        !matches!(
+            self.stored,
+            Stored::Absent | Stored::Liste { avec_source: true }
+        )
     }
 
     /// `_id` est-il rendu ? Seul `_none_` le retire.
@@ -197,12 +205,10 @@ pub fn lire_stored(v: &Value) -> EsResult<Stored> {
         Value::Array(a) => a.iter().collect(),
         autre => vec![autre],
     };
-    let mut aucun = false;
-    let mut nommes = false;
+    let mut lus = Vec::with_capacity(noms.len());
     for n in noms {
         match n {
-            Value::String(s) if s == "_none_" => aucun = true,
-            Value::String(_) => nommes = true,
+            Value::String(s) => lus.push(s.as_str()),
             autre => {
                 return Err(EsError::illegal_argument(format!(
                     "[stored_fields] : liste de chaines attendue, recu {autre}"
@@ -210,22 +216,33 @@ pub fn lire_stored(v: &Value) -> EsResult<Stored> {
             }
         }
     }
-    Ok(match (aucun, nommes) {
-        (true, _) => Stored::Aucun,
-        (false, _) => Stored::Liste,
-    })
+    stored_de_noms(&lus)
 }
 
 /// La meme lecture, depuis la query string (`?stored_fields=a,b`).
 ///
 /// `?fields=` n'existe pas chez ES — il le refuse comme un parametre inconnu,
 /// et ferrite fait pareil en ne le lisant nulle part.
-pub fn stored_des_params(liste: &[String]) -> Stored {
-    if liste.iter().any(|s| s == "_none_") {
+pub fn stored_des_params(liste: &[String]) -> EsResult<Stored> {
+    stored_de_noms(&liste.iter().map(String::as_str).collect::<Vec<_>>())
+}
+
+fn stored_de_noms(noms: &[&str]) -> EsResult<Stored> {
+    let aucun = noms.contains(&"_none_");
+    // « ne rien rendre » et « rendre ces champs-la » sont contradictoires : ES
+    // le refuse, avec cette phrase.
+    if aucun && noms.len() > 1 {
+        return Err(EsError::illegal_argument(
+            "cannot combine _none_ with other fields",
+        ));
+    }
+    Ok(if aucun {
         Stored::Aucun
     } else {
-        Stored::Liste
-    }
+        Stored::Liste {
+            avec_source: noms.contains(&"_source"),
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -470,17 +487,27 @@ fn resoudre_docvalue(
             continue;
         }
         if champ.format.is_some() && mapped.ty.kind() != FieldKind::Date {
-            // Sur un `keyword`, ES refuse. Sur un numerique, il applique le
-            // motif comme un `DecimalFormat` de Java (`format: "yyyy"` sur la
-            // valeur 1 rend `"yyyy1"`) : ferrite ne l'imite pas, il le refuse.
-            differe(
-                plan,
-                EsError::illegal_argument(format!(
+            // Deux refus qui n'ont pas le meme auteur, donc pas le meme type.
+            //
+            // Sur un `keyword` ou un `boolean`, **ES refuse** : ferrite reprend
+            // sa phrase et son type. Sur un **numerique**, ES accepte et
+            // applique le motif comme un `DecimalFormat` de Java (`"#.0"` sur
+            // la valeur 1 rend `"1.0"`) ; ferrite ne l'imite pas, et c'est donc
+            // un refus **de ferrite**, qui doit porter son marqueur — sinon il
+            // se lirait comme une regression dans le rapport de conformance au
+            // lieu du cout de perimetre qu'il est.
+            let e = match mapped.ty.kind() {
+                FieldKind::I64 | FieldKind::F64 => EsError::unsupported(format!(
+                    "ferrite ne supporte pas un [format] sur le champ numerique [{chemin}] dans \
+                     [docvalue_fields] : ES l'interprete comme un [DecimalFormat] de Java, que \
+                     ferrite n'implemente pas"
+                )),
+                _ => EsError::illegal_argument(format!(
                     "Field [{chemin}] of type [{}] does not support custom formats",
                     mapped.ty.name()
-                ))
-                .sur_un_shard(),
-            );
+                )),
+            };
+            differe(plan, e.sur_un_shard());
             continue;
         }
         plan.colonnes.insert(
@@ -938,8 +965,31 @@ mod tests {
     #[test]
     fn stored_none() {
         assert_eq!(lire_stored(&json!("_none_")).unwrap(), Stored::Aucun);
-        assert_eq!(lire_stored(&json!(["a", "b"])).unwrap(), Stored::Liste);
-        assert_eq!(lire_stored(&json!([])).unwrap(), Stored::Liste);
+        assert_eq!(
+            lire_stored(&json!(["a", "b"])).unwrap(),
+            Stored::Liste { avec_source: false }
+        );
+        assert_eq!(
+            lire_stored(&json!([])).unwrap(),
+            Stored::Liste { avec_source: false }
+        );
+    }
+
+    #[test]
+    fn stored_source_ramene_le_source() {
+        let s = lire_stored(&json!(["include.field2", "_source"])).unwrap();
+        assert_eq!(s, Stored::Liste { avec_source: true });
+        let d = Demande {
+            stored: s,
+            ..Demande::default()
+        };
+        assert!(!d.retire_le_source());
+    }
+
+    #[test]
+    fn stored_none_melange_est_refuse() {
+        let e = lire_stored(&json!(["_none_", "a"])).unwrap_err();
+        assert_eq!(e.reason, "cannot combine _none_ with other fields");
     }
 
     #[test]

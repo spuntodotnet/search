@@ -1582,7 +1582,7 @@ tables:
       - id: recherche.fields
         nom: "`fields`"
         etat: partiel
-        poids: null
+        poids: 2.4
         detail: >-
           la façon que la 7.10+ met en avant — et celle qu'envoie Kibana — de
           demander autre chose que le `_source` complet. Les valeurs sont lues
@@ -1612,7 +1612,7 @@ tables:
       - id: recherche.docvalue_fields
         nom: "`docvalue_fields`"
         etat: partiel
-        poids: null
+        poids: 0.5
         detail: >-
           la valeur telle qu'elle est **stockée en colonne**, et ce n'est pas la
           même que celle du `_source` : les colonnes sont triées, donc un
@@ -1637,7 +1637,7 @@ tables:
       - id: recherche.stored_fields
         nom: "`stored_fields`"
         etat: partiel
-        poids: null
+        poids: 6.6
         detail: >-
           **accepté, et il ne rend aucun champ — comme ES.** ferrite refuse
           `store` au mapping : aucun champ n'est stocké individuellement, et un
@@ -1660,7 +1660,7 @@ tables:
         nom: "`script_fields`, `runtime_mappings`"
         etat: refuse
         motif: hors_perimetre
-        poids: null
+        poids: 0.5
         raison: >-
           les deux définissent des champs **calculés par un script Painless**,
           que ferrite n'exécute pas. La mesure le confirme plutôt que la
@@ -1750,7 +1750,7 @@ tables:
           `retriever`
         etat: refuse
         motif: pas_encore
-        poids: 12.0
+        poids: 5.6
         raison: >-
           aucun n'est un obstacle de moteur ; `highlight` et `search_after`
           sont les deux qui manquent le plus, le premier pour une liste de
