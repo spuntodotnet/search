@@ -144,7 +144,7 @@ source » compte autant que le total :
 | `agg.date_histogram` — `calendar_interval`, `time_zone`, `format` | 4,9 % | 0,9 % | 25,8 % | 0,6 % |
 | `ingestion.reecriture_en_masse` — `_update_by_query`… | 3,6 % | 4,4 % | 0,8 % | 2,4 % |
 | `hors.cycle_de_vie` — `_close`, `_open`, `_forcemerge`… | 3,4 % | 4,6 % | — | — |
-| `type.autres_parametres` — `index`, `null_value`, `doc_values`… | 3,0 % | 3,2 % | 3,8 % | — |
+| `type.autres_parametres` — `null_value`, `doc_values`, `store`… | 3,0 % | 3,1 % | 3,8 % | — |
 | `type.autres` — `geo_point`, `ip`, `binary`… | 3,0 % | 3,2 % | 3,6 % | — |
 | `agg.terms` — `include`, `exclude`, ordre par sous-agrégation… | 2,0 % | 0,1 % | 11,7 % | 0,3 % |
 
@@ -394,6 +394,15 @@ premier lecteur attentif.
 - **Le sous-corpus « applications » est petit** : 481 requêtes, 184 dépôts. Ses
   pourcentages ont trois chiffres significatifs de trop ; c'est un ordre de
   grandeur, pas une mesure fine.
+- **Un corpus de requêtes ne voit pas le premier appel d'une application.**
+  Celui-là n'est pas une recherche : c'est un `PUT /{index}` avec un mapping
+  écrit par un générateur. Brancher une vraie application
+  ([`application.md`](application.md)) a trouvé un refus qui bloquait Gitea
+  **entièrement** au démarrage — `"index": true` sur chacun de ses champs, le
+  défaut d'ES — sans que ce corpus bouge d'une requête (42,1 % avant, 42,1 %
+  après) ni la suite REST d'Elastic d'un cas (356 échecs avant et après). Un
+  corpus fait de corps de recherche pèse presque tout son poids sur `_search`,
+  et ce biais-là ne se lit pas dans la colonne des sources.
 
 ## Les poids dans `compat.yaml`
 

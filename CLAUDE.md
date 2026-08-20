@@ -144,6 +144,25 @@ support de `nested`. Elles ne sont pas documentées comme des garanties : le
 spike les verrouille, et cassera bruyamment à la montée de version plutôt que le
 jour où on s'appuiera dessus.
 
+### 8. Brancher un logiciel que personne ici n'a écrit
+
+Les sept gestes précédents mesurent des **surfaces d'API**, avec trois
+dénominateurs différents. Aucun ne répondait à la question dont dépend le
+produit : *un logiciel écrit par quelqu'un d'autre démarre-t-il ?*
+`tests/compat/appli_reelle.py` clone une vraie application à une révision figée,
+**vérifie que rien n'y a bougé**, et lance sa propre suite d'intégration contre
+un vrai ES puis contre ferrite. Gitea v1.27.2 y passe ses 34 cas des deux côtés.
+
+Ce qui l'en empêchait est la leçon : `"index": true`, écrit sur chacun de ses
+champs par son générateur de mapping, était refusé. C'est le **défaut** d'ES —
+qu'ES lui-même ne conserve pas dans le mapping qu'il rend — donc une demande
+vide, du même genre que l'objet vide de `script_fields`. Et surtout : **ni le
+corpus de 5 311 requêtes ni la suite REST d'Elastic ne l'avaient vu** (42,1 %
+avant et après, 356 échecs avant et après). Une application ne commence pas par
+une recherche, elle commence par créer son index — et un corpus fait de corps de
+requêtes ne pèse presque rien sur ce geste-là. Voir
+[`docs/application.md`](docs/application.md).
+
 ## Les outils, et ce que chacun répond
 
 Tous depuis la racine. Les diffs exigent Docker (ce sont des outils de
@@ -151,7 +170,7 @@ développement, pas de CI).
 
 | Commande | La question à laquelle elle répond |
 |---|---|
-| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**104/104**, dont l'export par `helpers.scan`, le date math, la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats`, les templates, ce que la réponse transporte — `fields`, `docvalue_fields`, `stored_fields` — et la modification par requête, `_delete_by_query` / `_update_by_query`) |
+| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**105/105**, dont l'export par `helpers.scan`, le date math, la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats`, les templates, ce que la réponse transporte — `fields`, `docvalue_fields`, `stored_fields` — et la modification par requête, `_delete_by_query` / `_update_by_query`) |
 | `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (212/213, 0 écart réel) |
 | `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (45/46 ; le seul écart est `_cluster/health`, toujours vert par choix) |
 | `tests/compat/diff_aggs.py` | les mêmes agrégations ? (53/53, `filter` comprise, et ce qu'un bucket **vide** doit porter) |
@@ -167,6 +186,7 @@ développement, pas de CI).
 | `tests/compat/sonde_vide.py` | sur un serveur **sans aucun index**, la même chose qu'ES — et rien accepté en silence ? (28/28 identiques, 0 refus muet ; les deux serveurs doivent être vides, c'est l'état mesuré) |
 | `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **3 200 cas, 141 260 requêtes, 1 divergence réelle** (un ordre que BM25 sépare, ouverte et décrite dans [`docs/fuzz.md`](docs/fuzz.md)), sur douze plages de graines dont **six** n'ont jamais servi à corriger — celle sur laquelle on itère ne mesure plus rien. 21 défauts silencieux trouvés au premier passage, 4 de plus depuis, dont un `max_docs` qui ne supprimait pas les mêmes documents qu'ES. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (60 cas, 2 532 requêtes, 0) |
 | `tests/compat/sonde_fuzz.py` | les écarts trouvés par le fuzzing, **figés** hors d'une graine (42/42, plus 10 refus assumés) |
+| `tests/compat/appli_reelle.py` | **un logiciel écrit par d'autres démarre-t-il ?** Clone une vraie application à une révision figée, vérifie que rien n'y a bougé, lance sa **propre** suite d'intégration contre un vrai ES puis contre ferrite, et relève tout le trafic HTTP au passage. Gitea v1.27.2 : **34/34 des deux côtés**, arbre intact. Voir [`docs/application.md`](docs/application.md) |
 | `tests/compat/genere_compat.py` | le périmètre déclaré et la doc disent-ils la **même chose** ? [`compat.yaml`](compat.yaml) est la source (une entrée par capacité : état, paramètres, motif du refus, poids d'usage) ; [`docs/compat.md`](docs/compat.md) et [`docs/compat.json`](docs/compat.json) en sont **générés**, et la CI échoue s'ils divergent |
 | `tests/compat/perimetre.py` | ce cas qui échoue, il porte sur quoi ? Il rattache un échec de conformance à une capacité déclarée : **régression** si elle est annoncée supportée, **coût de périmètre** si elle est annoncée refusée |
 | `tests/compat/recolte_usage.py` | à quoi ressemblent les requêtes que les gens envoient **vraiment** ? Constitue le corpus ([`tests/compat/usage/corpus.jsonl`](tests/compat/usage/corpus.jsonl), 5 311 requêtes) depuis quatre sources citables : doc de référence 8.15, tracks Rally, clients officiels, code open source. Chaque requête porte l'URL d'où elle vient |
@@ -456,6 +476,15 @@ bouger**, pas après.
   négation en fait.
 
 ## Où va le projet
+
+**Une vraie application tourne dessus sans être modifiée** : Gitea v1.27.2 y
+indexe et cherche ses issues, et sa suite d'intégration passe ses 34 cas — les
+mêmes que contre un vrai ES 8.15. La seconde cible mesurée, Wagtail v7.1, ne
+passe **aucun** de ses 81 tests de backend, pour une raison écrite et unique :
+son index déclare des n-grammes (`ngram`, `edge_ngram`), et cinq autres
+paramètres de déclaration d'index lui manqueraient derrière. Les deux résultats
+sont dans [`docs/application.md`](docs/application.md) — celui qui échoue est
+une feuille de route sourcée, pas un aveu.
 
 Une migration depuis une instance 7.10.2 se reprend maintenant **entière** sur
 l'index d'exemple, et un projet qui découpe ses données en plusieurs index —

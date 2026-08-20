@@ -382,6 +382,13 @@ def traits_mapping(corps, prefixe=""):
                 if param in ("type", "properties"):
                     continue
                 vus.add(f"champ:{param}")
+                # `index` est le seul parametre de champ dont la **valeur**
+                # decide : `true` est le defaut d'ES (ferrite l'accepte),
+                # `false` demande un champ hors de l'index (refuse). Compter
+                # les deux ensemble ferait passer pour refusee la requete qui
+                # ne demande rien.
+                if param == "index" and str(valeur).lower() == "false":
+                    vus.add("champ:index=false")
                 if param in ("analyzer", "search_analyzer") and isinstance(valeur, str):
                     vus.add(f"analyzer:{valeur}")
             if "properties" in definition:
@@ -460,7 +467,8 @@ ANALYZERS = {"standard": "analyzer.standard", "simple": "analyzer.simple",
 ANALYZERS_DEFAUT = "analyzer.autres_langues"
 
 CHAMPS = {"fields": "type.multi_fields", "ignore_above": "type.ignore_above",
-          "analyzer": "type.analyzer", "search_analyzer": "type.analyzer"}
+          "analyzer": "type.analyzer", "search_analyzer": "type.analyzer",
+          "index": "type.index"}
 CHAMPS_DEFAUT = "type.autres_parametres"
 
 EXPRESSIONS = {"expr:liste": "expr.liste", "expr:joker": "expr.joker",
@@ -484,6 +492,7 @@ TRAITS_REFUSES = {
     "dsl:multi_match.fields=motif": "dsl.multi_match",   # « les motifs de champ (`tit*`) »
     "agg:filter.sous_bucket": "agg.filter",              # « sous une agregation de buckets »
     "champ:reserve": "type.noms_reserves",               # `_type`, `_tsid`, `_ignored`…
+    "champ:index=false": "type.index",                   # « le champ serait indexe quand meme »
     # la jointure rend un score constant : tout `score_mode` autre que `none`
     # est refuse, et c'est une note de compat.yaml qu'aucun nom ne porte
     "dsl:has_child.score_mode=min": "join.has_child",
@@ -989,11 +998,25 @@ def rejoue(corpus, resultats, url_ferrite, url_es, journal=None):
 # 5. Rapport, poids, verification
 # ===========================================================================
 
+def par_frequence(compte, combien=None):
+    """Les entrees d'un compteur, de la plus frequente a la moins — et, a
+    egalite, par ordre alphabetique.
+
+    `Counter.most_common()` laisse les ex aequo dans leur ordre d'insertion,
+    qui depend de l'ordre de parcours des ensembles : deux lancers du meme
+    fichier sur le meme corpus rendaient deux `usage.json` differents. Un
+    rapport publie qui bouge tout seul rend illisible celui qui bouge pour une
+    raison.
+    """
+    items = sorted(compte.items(), key=lambda kv: (-kv[1], kv[0]))
+    return items[:combien] if combien else items
+
+
 def rapport(corpus, resultats, comptes, croisement, poids, compte_rejeu, sources):
     total = comptes["total"]
     servies = comptes["verdicts"][SERVI]
     manques = []
-    for cid, n in comptes["manques_par_capacite"].most_common():
+    for cid, n in par_frequence(comptes["manques_par_capacite"]):
         cap = croisement.capacites[cid]
         detail, par_source = collections.Counter(), collections.Counter()
         for res in resultats:
@@ -1012,7 +1035,7 @@ def rapport(corpus, resultats, comptes, croisement, poids, compte_rejeu, sources
             "par_source": {s: {"requetes": k,
                                "part": round(100.0 * k / (comptes["par_source"][s]["total"] or 1), 1)}
                            for s, k in sorted(par_source.items())},
-            "traits": [{"trait": t, "requetes": c} for t, c in detail.most_common()],
+            "traits": [{"trait": t, "requetes": c} for t, c in par_frequence(detail)],
         })
     rejeu = None
     if compte_rejeu:
@@ -1049,9 +1072,9 @@ def rapport(corpus, resultats, comptes, croisement, poids, compte_rejeu, sources
         "par_api": distribution(resultats, "api"),
         "distribution": {
             "traits": [{"trait": t, "requetes": n, "part": round(100.0 * n / (total or 1), 1)}
-                       for t, n in comptes["par_trait"].most_common()],
+                       for t, n in par_frequence(comptes["par_trait"])],
             "non_rattaches": [{"trait": t, "requetes": n}
-                              for t, n in comptes["non_rattaches"].most_common()],
+                              for t, n in par_frequence(comptes["non_rattaches"])],
         },
         "poids": {cid: poids[cid] for cid in sorted(poids)},
         "manques_par_frequence": manques,
@@ -1077,7 +1100,7 @@ def concentration(corpus, combien=15):
         compte[f"{m.group(1)}/{m.group(2)}" if m else "?"] += 1
     total = len(corpus) or 1
     return [{"origine": o, "requetes": n, "part": round(100.0 * n / total, 1)}
-            for o, n in compte.most_common(combien)]
+            for o, n in par_frequence(compte, combien)]
 
 
 def distribution(resultats, clef):
@@ -1095,7 +1118,7 @@ def erreurs_frequentes(resultats, combien=30):
         rej = res.get("rejeu") or {}
         if rej.get("etat") == "refusee":
             compte[normalise_erreur(rej.get("ferrite_erreur", ""))] += 1
-    return [{"erreur": e, "requetes": n} for e, n in compte.most_common(combien)]
+    return [{"erreur": e, "requetes": n} for e, n in par_frequence(compte, combien)]
 
 
 NOMBRES = re.compile(r"\b\d+\b")
