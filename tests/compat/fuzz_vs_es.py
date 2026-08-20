@@ -277,6 +277,11 @@ BRIQUES = {
     "route.validate": "recherche.validate_query",
     "route.stats": "index.stats",
     "route.template": "index.templates",
+    # Modifier ou purger par requete. Ces deux-la sont les seules briques qui
+    # **ecrivent** : elles passent donc en dernier, une fois tout le reste
+    # compare, et ce qu'elles laissent derriere elles est compare a son tour.
+    "route.delete_by_query": "ingestion.delete_by_query",
+    "route.update_by_query": "ingestion.update_by_query",
 }
 
 # Les analyzers integres, cites par leur propre capacite : un `analyzer` tire au
@@ -1445,6 +1450,59 @@ def _corpus_ampute(ecarts):
     return False
 
 
+def _exists_tous_nies(noeud, nie=False):
+    """Tous les `exists` de cette requete sont-ils sous un `must_not` ?
+
+    La question decide du **sens** de la divergence declaree : ferrite voit
+    moins de documents qu'ES sur un `exists` (voir [`_exists_sur_text`]), donc
+    il en voit **plus** des que la clause est niee. Un pre-filtre doit etre un
+    sur-ensemble ; une negation retourne l'inegalite, elle ne l'annule pas.
+
+    Le predicat exige que **tous** les `exists` soient nies : melanger les deux
+    sens rendrait n'importe quel ecart explicable, et c'est exactement ce qu'un
+    predicat ne doit pas devenir.
+    """
+    trouves = []
+
+    def descendre(n, nie):
+        if isinstance(n, list):
+            for x in n:
+                descendre(x, nie)
+        elif isinstance(n, dict):
+            for cle, v in n.items():
+                if cle == "exists":
+                    trouves.append(nie)
+                else:
+                    descendre(v, nie or cle == "must_not")
+
+    descendre(noeud, nie)
+    return bool(trouves) and all(trouves)
+
+
+def _en_trop_a_gauche(e, ecarts):
+    """L'ecart est-il « ferrite en rend **plus** », et rien d'autre ?
+
+    Le miroir de [`_corpus_ampute`], pour une divergence dont la negation a
+    retourne le signe. Tout ce qu'une reponse porte en decoule — un document de
+    plus, un bucket de plus, un `max_score` non nul la ou l'autre n'a rien
+    trouve — mais chaque chemin est nomme, pour la meme raison que le predicat
+    d'origine : une tolerance en bloc masquerait le defaut suivant.
+    """
+    if e["chemin"].endswith(("hits.total.value", "doc_count")):
+        return isinstance(e["a"], int) and isinstance(e["b"], int) and e["a"] > e["b"]
+    if e["chemin"] in ("hits.max_score", "hits.ordre"):
+        return True
+    if e["chemin"] == "hits.hits":
+        return len(set(e["a"])) >= len(set(e["b"])) and set(e["b"]) <= set(e["a"])
+    if e["chemin"].startswith("scroll"):
+        return True
+    # Un compte plus grand quelque part suffit a expliquer le reste de la
+    # reponse, comme dans le sens d'origine.
+    return any(x["chemin"].endswith(("hits.total.value", "doc_count"))
+               and isinstance(x["a"], int) and isinstance(x["b"], int)
+               and x["a"] > x["b"] for x in ecarts)
+
+
 def _exists_sur_text(e, requete, ecarts):
     """`exists` sur un `text` dont la valeur ne produit aucun terme.
 
@@ -1459,9 +1517,20 @@ def _exists_sur_text(e, requete, ecarts):
     et uniquement sous une requete qui contient un `exists`. Il masquerait un
     autre defaut d'`exists` qui rendrait lui aussi moins de documents — c'est le
     prix, et c'est pour ca qu'il est ecrit ici et pas dans une liste de codes
-    d'etat."""
+    d'etat.
+
+    Une exception, et elle a ete trouvee par une plage de controle : sous un
+    `must_not`, la meme divergence rend **plus** de documents a gauche. Le
+    document dont ES juge le champ present est exclu par ES et garde par
+    ferrite. C'est le meme defaut, pas un autre — mais son signe est inverse, et
+    un predicat qui ne connaissait qu'un sens le lisait comme reel. Le sens
+    n'est retourne que si **tous** les `exists` sont nies, et seulement quand la
+    sonde a confirme que ferrite en voit moins sur la clause seule : la
+    difference se mesure, elle ne se suppose pas."""
     if '"exists"' not in json.dumps(requete):
         return False
+    if _exists_tous_nies(requete) and _exists_confirme.get("ampute"):
+        return _en_trop_a_gauche(e, ecarts)
     # Des qu'un ecart montre que ferrite a vu moins de documents, tout ce que la
     # meme reponse porte en decoule : un bucket de moins, une cle de bucket
     # differente, un ordre decale. Les compter separement ferait passer une seule
@@ -1923,7 +1992,111 @@ class Cas:
         #    exactement les memes documents, une fois chacun, sur ses pages.
         if rng.random() < 0.35:
             self.scroll(champs, docs)
+
+        # 7. et enfin, la seule etape qui **ecrit**. Elle vient en dernier parce
+        #    qu'elle change le corpus : tout ce qui precede l'aurait alors
+        #    compare sur deux etats differents.
+        if rng.random() < 0.35:
+            self.par_requete(champs, docs)
         return self.nettoyer()
+
+    def par_requete(self, champs, docs):
+        """`_delete_by_query` / `_update_by_query` : les compteurs **et** l'etat.
+
+        Deux choses se comparent ici, et la seconde est la vraie :
+
+        * la reponse — `total`, `deleted`/`updated`, `batches`,
+          `version_conflicts`. Trois valeurs en sont retirees, chacune pour une
+          raison : `took` (une duree), `throttled_millis` et
+          `throttled_until_millis` (une regulation qu'aucun des deux ne fait, et
+          dont le compteur d'ES bouge quand une seconde de mur passe) ;
+        * ce qui **reste** dans l'index, identifiant par identifiant, avec sa
+          `_version` (relue par `_mget`, la seule route qui la rende sans
+          parametre de recherche). Une commande qui rend les bons compteurs en
+          supprimant les mauvais documents serait verte sur les compteurs seuls
+          — et c'est precisement le genre d'echec silencieux que ce depot
+          chasse. La `_version` est le **seul** effet observable d'un
+          `_update_by_query` sans script : sans elle, une commande qui ne ferait
+          rien passerait pour une commande qui reindexe tout.
+
+        `max_docs` est tire au sort : il decide **quels** documents partent,
+        donc il exerce l'ordre du balayage (`_doc`), pas seulement le compte.
+        C'est lui qui a sorti le premier defaut de cette brique : ferrite
+        balayait dans l'ordre des numeros de document de tantivy, qui **n'est
+        pas** l'ordre d'ecriture.
+
+        Deux garde-fous, sans lesquels cette brique mesurerait autre chose que
+        ce qu'elle croit :
+
+        * la **meme requete est d'abord posee en recherche** aux deux serveurs.
+          Si elle n'y trouve pas les memes documents, l'ecart est celui du Query
+          DSL — l'etape 5 le mesure deja, avec ses predicats. Comparer ce que la
+          commande a supprime reviendrait alors a compter deux fois la meme
+          divergence, sous un nom qui ne la designe pas ;
+        * le **motif** d'un refus n'est pas compare, seulement son statut :
+          ferrite nomme ses refus avec ses propres mots, expres. C'est la meme
+          regle que pour le `scroll`.
+        """
+        gen, rng = self.gen, self.gen.rng
+        supprime = rng.random() < 0.5
+        if not gen.brique("route.delete_by_query" if supprime
+                          else "route.update_by_query"):
+            return
+        route = "_delete_by_query" if supprime else "_update_by_query"
+        corps = {"query": gen.feuille(champs, docs)}
+        params = []
+        if rng.random() < 0.4:
+            corps["max_docs"] = rng.randint(1, NB_DOCS)
+        if rng.random() < 0.3:
+            params.append(f"scroll_size={rng.choice([1, 2, 3, 50])}")
+        if rng.random() < 0.2:
+            params.append("conflicts=proceed")
+        chemin = f"/{INDEX}/{route}?refresh=true" + "".join("&" + p for p in params)
+
+        # Le garde-fou : la meme requete, en recherche, avant d'ecrire.
+        vises = []
+        for base in self.serveurs:
+            st, r = http(base, "POST", f"/{INDEX}/_search",
+                         {"query": corps["query"], "size": 100, "_source": False,
+                          "sort": [{TIEBREAK: {"order": "asc"}}]})
+            self.requetes += 1
+            vises.append(sorted(h["_id"] for h in (r.get("hits", {}).get("hits") or []))
+                         if st == 200 else None)
+        if vises[0] != vises[1]:
+            return          # divergence du Query DSL : c'est l'etape 5 qui la dit
+
+        self.requetes += 1
+        vus, motifs = [], []
+        for base in self.serveurs:
+            st, r = http(base, "POST", chemin, corps)
+            refuse = not isinstance(r, dict) or "error" in r
+            motifs.append(motif(r) if refuse else "")
+            compteurs = "refus" if refuse else {
+                c: v for c, v in r.items()
+                if c not in ("took", "throttled_millis", "throttled_until_millis")}
+            _, reste = http(base, "POST", f"/{INDEX}/_search",
+                            {"size": 100, "sort": [{TIEBREAK: {"order": "asc"}}]})
+            self.requetes += 1
+            ids = [h["_id"] for h in (reste.get("hits", {}).get("hits") or [])]
+            versions = {}
+            if ids:
+                _, lus = http(base, "POST", f"/{INDEX}/_mget", {"ids": ids})
+                self.requetes += 1
+                versions = {d["_id"]: d.get("_version")
+                            for d in (lus.get("docs") or [])}
+            vus.append({
+                "statut": st,
+                "reponse": compteurs,
+                "restants": [(i, versions.get(i)) for i in ids],
+            })
+        ecarts = []
+        arbre_egal(vus[0], vus[1], route, ecarts)
+        if ecarts:
+            if any(motifs):
+                ecart(ecarts, f"{route}.motif", motifs[0], motifs[1],
+                      f"{route}.motif (non compare) : {motifs[0][:80]} / "
+                      f"{motifs[1][:80]}")
+            self.divergence("ecart", route, ecarts, {"POST " + chemin: corps})
 
     def decrire(self, props):
         """`_field_caps` et `_stats` sur l'index qu'on vient de remplir.

@@ -921,18 +921,95 @@ tables:
           et rien ne l'a encore réclamé.
         conformance: {erreurs: ["unrecognized parameter: \\[version(_type)?\\]"]}
 
+      - id: ingestion.delete_by_query
+        nom: "`POST /{index}/_delete_by_query`"
+        etat: partiel
+        poids: 0.4
+        detail: >-
+          purge par requête, synchrone. La réponse porte les compteurs d'ES —
+          `total`, `deleted`, `batches`, `version_conflicts`, `noops`,
+          `retries`, `failures[]` — et son statut passe à **409** dès qu'un
+          conflit n'est pas absorbé par `conflicts=proceed`. Le relevé se fait
+          sur l'instantané de la recherche, et chaque écriture est conditionnée
+          par le `_seq_no` observé : c'est ce qui produit les
+          `version_conflicts`, comme chez ES
+        parametres:
+          supportes:
+            - {nom: "query", note: "obligatoire — sans lui, 400 `query is missing`"}
+            - {nom: "conflicts", note: "`abort` (défaut) / `proceed`, en paramètre ou dans le corps"}
+            - {nom: "max_docs", note: "en paramètre ou dans le corps ; les deux à des valeurs différentes = 400"}
+            - {nom: "scroll_size", note: "1 à 10 000 ; change `batches` et l'endroit où `abort` s'arrête"}
+            - {nom: "refresh", note: "`true` / `false` seulement — `wait_for` y est refusé, comme chez ES"}
+            - {nom: "wait_for_completion", note: "`true` seulement"}
+            - {nom: "slices", note: "`1` seulement — la valeur par défaut"}
+            - {nom: "requests_per_second", note: "`-1` seulement — la valeur par défaut"}
+            - {texte: "les tolérances d'expression d'index", note: "`ignore_unavailable`, `allow_no_indices`, `expand_wildcards`"}
+          refuses:
+            - {nom: "wait_for_completion=false", note: "il rend une **tâche**, et ferrite n'a pas d'API `_tasks`"}
+            - {nom: "slices", note: "> 1 ou `auto` : des tâches parallèles, et une section `slices` en plus dans la réponse"}
+            - {nom: "slice", note: "dans le corps — une tranche n'a de sens qu'à plusieurs"}
+            - {nom: "requests_per_second", note: "il régule le débit et remplit `throttled_millis`, que ferrite rendrait à zéro"}
+            - {nom: "terminate_after", note: "il arrête la recherche sans arrêter l'écriture : `total` ne dirait plus ce qu'il dit"}
+            - {nom: "sort", note: "dans le corps — il choisit **quels** documents `max_docs` retient"}
+            - {nom: "size", note: "l'ancien nom de `scroll_size` dans le corps"}
+            - {texte: "la recherche par chaîne", note: "`q`, `df`, `analyzer`, `default_operator`, `lenient`, `analyze_wildcard`"}
+            - {nom: "routing", note: "ferrite est mono-shard, il n'y a rien à choisir"}
+            - {texte: "les paramètres de la recherche interne", note: "`scroll`, `search_timeout`, `search_type`, `request_cache`, `stats`, `version` — la commande ne rend aucun document"}
+        conformance:
+          apis: [delete_by_query]
+
+      - id: ingestion.update_by_query
+        nom: "`POST /{index}/_update_by_query`"
+        etat: partiel
+        poids: 0.3
+        detail: >-
+          **sans script**, la route réindexe depuis le `_source` — le geste
+          utile après un `PUT /{index}/_mapping`. La réponse porte `updated` en
+          plus des compteurs de `_delete_by_query` ; `noops` reste à 0, parce
+          qu'ES n'en compte que sur ordre d'un script. Sans corps du tout, la
+          requête vaut `match_all` (contrairement à `_delete_by_query`, où
+          l'absence de `query` est une erreur)
+        parametres:
+          supportes:
+            - {nom: "query", note: "facultatif ici — absent, il vaut `match_all`"}
+            - {nom: "conflicts", note: "`abort` (défaut) / `proceed`, en paramètre ou dans le corps"}
+            - {nom: "max_docs", note: "en paramètre ou dans le corps"}
+            - {nom: "scroll_size", note: "1 à 10 000"}
+            - {nom: "refresh", note: "`true` / `false` seulement"}
+            - {nom: "wait_for_completion", note: "`true` seulement"}
+            - {nom: "slices", note: "`1` seulement — la valeur par défaut"}
+            - {nom: "requests_per_second", note: "`-1` seulement — la valeur par défaut"}
+            - {texte: "les tolérances d'expression d'index", note: "`ignore_unavailable`, `allow_no_indices`, `expand_wildcards`"}
+          refuses:
+            - {nom: "script", note: "c'est Painless, hors périmètre — y compris un objet `script` vide"}
+            - {nom: "pipeline", note: "les pipelines d'ingestion sont hors périmètre"}
+            - {nom: "wait_for_completion=false", note: "il rend une **tâche**, et ferrite n'a pas d'API `_tasks`"}
+            - {nom: "slices", note: "> 1 ou `auto`"}
+            - {nom: "slice", note: "dans le corps"}
+            - {nom: "requests_per_second", note: "il régule le débit et remplit `throttled_millis`"}
+            - {nom: "terminate_after"}
+            - {nom: "sort", note: "dans le corps"}
+            - {nom: "size", note: "l'ancien nom de `scroll_size` dans le corps"}
+            - {texte: "la recherche par chaîne", note: "`q`, `df`, `analyzer`, `default_operator`, `lenient`, `analyze_wildcard`"}
+            - {nom: "routing", note: "ferrite est mono-shard, il n'y a rien à choisir"}
+            - {texte: "les paramètres de la recherche interne", note: "`scroll`, `search_timeout`, `search_type`, `request_cache`, `stats`, `version` — la commande ne rend aucun document"}
+        conformance:
+          apis: [update_by_query]
+
       - id: ingestion.reecriture_en_masse
-        nom: "`_update_by_query`, `_delete_by_query`, `_reindex`, pipelines d'ingestion"
+        nom: "`_reindex`, pipelines d'ingestion"
         etat: refuse
         motif: pas_encore
-        poids: 3.6
+        poids: 3.0
         raison: >-
-          ce sont des tâches longues, donc l'API `_tasks` et son suivi ; le même
-          travail s'écrit aujourd'hui côté client avec `scroll` + `_bulk`.
+          `_reindex` copie d'un index vers un autre, et son intérêt est
+          justement ce que ferrite n'a pas : une source distante, un pipeline,
+          un script. Rien ne s'y oppose, ce n'est pas écrit — et `scroll` +
+          `_bulk` le font aujourd'hui côté client, ce que ni
+          `_delete_by_query` ni `_update_by_query` ne permettaient.
         conformance:
-          apis: [update_by_query, delete_by_query, reindex, reindex_rethrottle,
-                 update_by_query_rethrottle, delete_by_query_rethrottle, "ingest.*",
-                 "simulate.*"]
+          apis: [reindex, reindex_rethrottle, delete_by_query_rethrottle,
+                 update_by_query_rethrottle, "ingest.*", "simulate.*"]
 
   # ---------------------------------------------------------------------------
   - id: scroll

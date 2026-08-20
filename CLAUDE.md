@@ -151,7 +151,7 @@ développement, pas de CI).
 
 | Commande | La question à laquelle elle répond |
 |---|---|
-| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**100/100**, dont l'export par `helpers.scan`, le date math, la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats`, les templates et ce que la réponse transporte — `fields`, `docvalue_fields`, `stored_fields`) |
+| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**104/104**, dont l'export par `helpers.scan`, le date math, la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats`, les templates, ce que la réponse transporte — `fields`, `docvalue_fields`, `stored_fields` — et la modification par requête, `_delete_by_query` / `_update_by_query`) |
 | `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (212/213, 0 écart réel) |
 | `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (45/46 ; le seul écart est `_cluster/health`, toujours vert par choix) |
 | `tests/compat/diff_aggs.py` | les mêmes agrégations ? (53/53, `filter` comprise, et ce qu'un bucket **vide** doit porter) |
@@ -162,14 +162,15 @@ développement, pas de CI).
 | `tests/compat/sonde_msm.py` | les mêmes documents sur un **`minimum_should_match`** — entier, pourcentage, formes négatives, conditions `3<90%`, et sous un `nested` ? (53/53) |
 | `tests/compat/releve_mots_vides.py` | quelle est **vraiment** la liste de mots vides d'un analyzer d'ES ? |
 | `tests/compat/sonde_fields.py` | **ce que la réponse transporte** — `fields`, `docvalue_fields`, `stored_fields`. Compare le **hit entier** (bloc `fields` clé par clé, présence de `_source`, présence de `_id`) : 94/96 identiques, 2 refus assumés écrits, 0 écart. Refuse de tourner si elle ne trouve pas les deux serveurs |
+| `tests/compat/sonde_par_requete.py` | **modifier ou purger par requête** — `_delete_by_query`, `_update_by_query`. Compare les compteurs de la réponse **et l'état laissé derrière** (documents restants, `_version`, `_source`) : 62/74 identiques, 12 refus assumés écrits, 0 écart. Les conflits sont provoqués pour de vrai, par une écriture non rafraîchie. Refuse de tourner sans ses deux cibles |
 | `tests/compat/sonde_alias.py` | les mêmes alias sur une **expression de noms** — liste, joker, exclusion, `_all` — et le même 404 ? (21/21, corps et message compris) |
 | `tests/compat/sonde_vide.py` | sur un serveur **sans aucun index**, la même chose qu'ES — et rien accepté en silence ? (28/28 identiques, 0 refus muet ; les deux serveurs doivent être vides, c'est l'état mesuré) |
-| `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **1 950 cas, 81 255 requêtes, 1 divergence réelle** (une somme d'entiers au-delà de 2^53, ouverte et décrite dans [`docs/fuzz.md`](docs/fuzz.md)), sur sept plages de graines dont **cinq** n'ont jamais servi à corriger — celle sur laquelle on itère ne mesure plus rien. 21 défauts silencieux trouvés au premier passage, 3 de plus depuis. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (60 cas, 2 418 requêtes, 0) |
+| `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **3 200 cas, 141 260 requêtes, 1 divergence réelle** (un ordre que BM25 sépare, ouverte et décrite dans [`docs/fuzz.md`](docs/fuzz.md)), sur douze plages de graines dont **six** n'ont jamais servi à corriger — celle sur laquelle on itère ne mesure plus rien. 21 défauts silencieux trouvés au premier passage, 4 de plus depuis, dont un `max_docs` qui ne supprimait pas les mêmes documents qu'ES. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (60 cas, 2 532 requêtes, 0) |
 | `tests/compat/sonde_fuzz.py` | les écarts trouvés par le fuzzing, **figés** hors d'une graine (42/42, plus 10 refus assumés) |
 | `tests/compat/genere_compat.py` | le périmètre déclaré et la doc disent-ils la **même chose** ? [`compat.yaml`](compat.yaml) est la source (une entrée par capacité : état, paramètres, motif du refus, poids d'usage) ; [`docs/compat.md`](docs/compat.md) et [`docs/compat.json`](docs/compat.json) en sont **générés**, et la CI échoue s'ils divergent |
 | `tests/compat/perimetre.py` | ce cas qui échoue, il porte sur quoi ? Il rattache un échec de conformance à une capacité déclarée : **régression** si elle est annoncée supportée, **coût de périmètre** si elle est annoncée refusée |
 | `tests/compat/recolte_usage.py` | à quoi ressemblent les requêtes que les gens envoient **vraiment** ? Constitue le corpus ([`tests/compat/usage/corpus.jsonl`](tests/compat/usage/corpus.jsonl), 5 311 requêtes) depuis quatre sources citables : doc de référence 8.15, tracks Rally, clients officiels, code open source. Chaque requête porte l'URL d'où elle vient |
-| `tests/compat/ponderation.py` | **quelle part de ces requêtes passe entièrement ?** (39,7 % du corpus, mais **89,6 % du code d'application** et 17,4 % des tracks Rally — l'écart *est* le résultat). Écrit les `poids` de `compat.yaml`, publie [`docs/usage.json`](docs/usage.json) et la table « ce qui manque, par fréquence d'usage ». `--rejoue` pose la même requête à ferrite et à un vrai ES 8.15 : les deux mesures s'accordent sur 99,3 % des cas |
+| `tests/compat/ponderation.py` | **quelle part de ces requêtes passe entièrement ?** (42,1 % du corpus, mais **93,2 % du code d'application** et 27,2 % des tracks Rally — l'écart *est* le résultat). Écrit les `poids` de `compat.yaml`, publie [`docs/usage.json`](docs/usage.json) et la table « ce qui manque, par fréquence d'usage ». `--rejoue` pose la même requête à ferrite et à un vrai ES 8.15 : les deux mesures s'accordent sur 99,3 % des cas |
 | `tests/compat/conformance_es.py` | que dit la suite de tests **d'Elastic** ? Ses **107 domaines**, sans liste blanche. Son rapport est un fichier, pas une phrase : [`docs/conformance.json`](docs/conformance.json) (totaux, deux taux, exclusions comptées, détail par cas), régénéré par `--json`, tenu par un cliquet en CI (`--diff`) |
 | `tests/compat/bench_vs_es.py` | mêmes résultats, **et à quel prix** ? (×3,6 en latence, ×6 en indexation) |
 | `tests/compat/probe_es7.py` | un **client** 7.x peut-il se brancher ? |
@@ -434,6 +435,25 @@ bouger**, pas après.
   positif : `match edition` ne trouvait pas `l'édition` — ce que fait aussi ES,
   puisque `standard` garde l'élision. Comparer aux **deux** serveurs avant de
   conclure, y compris quand on croit tenir le coupable.
+- **L'ordre des documents de tantivy n'est pas l'ordre d'écriture.** Chez
+  Lucene, le numéro interne d'un document (le `_doc` sur lequel un `scroll`
+  sans tri ordonne, donc celui qui décide **quels** documents un `max_docs`
+  retient) vaut l'ordre d'indexation. Chez tantivy, non : un `_bulk` de 25
+  documents ressort en `d002, d000, d003, d001, …`. `_delete_by_query
+  ?max_docs=1` supprimait donc *un autre document* qu'Elasticsearch, en 200 et
+  sans un mot. La bonne clé était sous la main : le `_seq_no`, attribué sous le
+  verrou d'écriture — il **est** l'ordre d'écriture, et il sert déjà de
+  condition de concurrence. Trouvé par une plage de graines jamais utilisée du
+  fuzzer (2727085), pas par le raisonnement qui avait écrit la première
+  version — lequel avait pris pour une garantie ce qui n'était qu'une
+  ressemblance entre deux moteurs.
+- **Une divergence déclarée a deux faces, et la seconde est l'inverse de la
+  première.** `exists` sur un `text` sans terme rend **moins** de documents
+  chez ferrite : c'est déclaré, mesuré, et le prédicat du fuzzer l'absorbe
+  depuis longtemps. Sous un `must_not`, le même défaut rend **plus** de
+  documents — le prédicat, qui ne connaissait qu'un sens, le lisait comme un
+  écart réel. Un prédicat écrit sur un signe doit se demander ce qu'une
+  négation en fait.
 
 ## Où va le projet
 
@@ -481,8 +501,18 @@ chaque valeur est un tableau, même mono-valuée, et un champ absent n'a pas de
 clé. `script_fields` et `runtime_mappings` restent refusés — leur objet **vide**
 est accepté, parce qu'il ne demande rien.
 
+**Modifier ou purger par requête** se fait maintenant côté serveur :
+`_delete_by_query` (purger un locataire, retirer un lot par filtre) et
+`_update_by_query`, qui **sans script** réindexe depuis le `_source` — le geste
+d'après un `PUT /_mapping`. Les compteurs sont ceux d'ES, `version_conflicts`
+compris, et ils ne sont pas décoratifs : la commande relève chaque document sur
+l'instantané de la recherche puis n'écrit **que s'il n'a pas bougé depuis**.
+`_reindex` reste hors périmètre, et c'est le seul des trois : la copie d'un
+index vers un autre s'écrit encore côté client avec `scroll` + `_bulk`, ce que
+les deux autres ne permettaient pas.
+
 Ce qui reste, par ordre de gêne pour un projet réel : `rest_total_hits_as_int`,
-`_msearch`, les templates de **composants** (`_component_template`, et le
+`_msearch`, `_reindex`, les templates de **composants** (`_component_template`, et le
 `composed_of` qui les cite — refusé à la pose plutôt qu'appliqué à moitié),
 `GET /_cat/aliases` et les colonnes `h` / `s` des `_cat`,
 `GET /{index}/_mapping/field/{champs}`, l'agrégation `filters` (la sœur

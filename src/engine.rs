@@ -275,7 +275,7 @@ impl FerriteIndex {
             if opts.require_absent && live.is_some() {
                 return Err(EsError::version_conflict(&self.name, id));
             }
-            verifier_concurrence(&self.name, id, live, &opts)?;
+            verifier_concurrence(&self.name, &self.uuid, id, live, &opts)?;
             let version = existing.map_or(1, |m| m.version + 1);
             let seq_no = self.seq_counter.fetch_add(1, Ordering::Relaxed);
 
@@ -315,7 +315,13 @@ impl FerriteIndex {
         let mut docs = self.docs.write().expect("docs lock");
         let existing = docs.get(id).copied();
         let was_live = existing.is_some_and(|m| !m.deleted);
-        verifier_concurrence(&self.name, id, existing.filter(|m| !m.deleted), &opts)?;
+        verifier_concurrence(
+            &self.name,
+            &self.uuid,
+            id,
+            existing.filter(|m| !m.deleted),
+            &opts,
+        )?;
 
         if was_live {
             let w = gen.writer.lock().expect("writer lock");
@@ -568,8 +574,16 @@ impl FerriteIndex {
 
 /// Refuse l'ecriture si le document n'est plus dans l'etat observe par le
 /// client (`if_seq_no` / `if_primary_term`).
+///
+/// ES a **deux** messages, et la difference porte l'information : le document a
+/// bouge (« current document has seqNo [n] »), ou il n'est plus la (« but no
+/// document was found »). ferrite rendait le second dans les deux cas — lisible
+/// comme « quelqu'un a supprime le document » alors qu'il avait seulement ete
+/// reecrit. Mesure contre ES 8.15, et c'est ce message que `_delete_by_query`
+/// recopie dans ses `failures[]`.
 fn verifier_concurrence(
     index: &str,
+    uuid: &str,
     id: &str,
     live: Option<DocMeta>,
     opts: &WriteOptions,
@@ -583,16 +597,21 @@ fn verifier_concurrence(
     );
     let actuel = live.map(|m| m.seq_no);
     if actuel != Some(attendu_seq) || attendu_term != 1 {
+        let etat = match actuel {
+            Some(seq) => format!("current document has seqNo [{seq}] and primary term [1]"),
+            None => "but no document was found".to_string(),
+        };
         return Err(EsError::new(
             axum::http::StatusCode::CONFLICT,
             "version_conflict_engine_exception",
             format!(
                 "[{id}]: version conflict, required seqNo [{attendu_seq}], primary term \
-                 [{attendu_term}]. but no document was found"
+                 [{attendu_term}]. {etat}"
             ),
         )
-        .with("index", json!(index))
-        .with("shard", json!("0")));
+        .with("index_uuid", json!(uuid))
+        .with("shard", json!("0"))
+        .with("index", json!(index)));
     }
     Ok(())
 }

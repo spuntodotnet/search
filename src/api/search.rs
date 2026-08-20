@@ -487,6 +487,15 @@ fn valider_sans_index(
     Ok(())
 }
 
+/// La meme validation, pour une route qui n'a qu'une requete a valider
+/// (`_delete_by_query`, `_update_by_query`).
+///
+/// ES la fait aussi : `POST /rien-*/_delete_by_query` avec une clause inconnue
+/// rend 400 sur un cluster vide, alors qu'il ne vise aucun index.
+pub(crate) fn valider_sans_index_query(query: Option<&Value>, maintenant: i64) -> EsResult<()> {
+    valider_sans_index(query, None, None, None, maintenant)
+}
+
 /// Jette ce qu'une validation sans index a produit, et avec lui les erreurs
 /// qu'aucun mapping ne peut trancher (voir [`valider_sans_index`]).
 fn sans_verdict_de_mapping<T>(r: EsResult<T>) -> EsResult<()> {
@@ -786,13 +795,26 @@ pub async fn count(
 fn union_des_champs(
     generations: &[(String, String, std::sync::Arc<Generation>)],
 ) -> std::collections::BTreeSet<String> {
+    union_des_champs_de(
+        &generations
+            .iter()
+            .map(|(_, _, g)| g.clone())
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// La meme chose, pour les routes qui n'ont pas besoin du nom ni de l'uuid des
+/// index vises (`_delete_by_query`, `_update_by_query`).
+pub(crate) fn union_des_champs_de(
+    generations: &[std::sync::Arc<Generation>],
+) -> std::collections::BTreeSet<String> {
     let mut out = std::collections::BTreeSet::new();
     // Sur un index unique il n'y a pas d'« ailleurs » : l'ensemble reste vide,
     // et un champ inconnu redevient l'erreur qu'il doit etre.
     if generations.len() < 2 {
         return out;
     }
-    for (_, _, gen) in generations {
+    for gen in generations {
         out.extend(gen.fields.mapped.keys().cloned());
     }
     out

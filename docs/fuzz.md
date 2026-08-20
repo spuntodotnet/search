@@ -27,7 +27,7 @@ python3 tests/compat/fuzz_vs_es.py --couverture          # ce qu'il fuzze, et pa
 
 ## Le périmètre est lu, pas réécrit
 
-[`compat.yaml`](../compat.yaml) déclare 179 capacités avec leur état. Le
+[`compat.yaml`](../compat.yaml) déclare 191 capacités avec leur état. Le
 générateur ne redit pas cette liste : chaque **brique** (une clause du DSL, un
 type de champ, une agrégation, un paramètre du corps) cite l'identifiant de la
 capacité qu'elle exerce, et au démarrage le fuzzer
@@ -106,35 +106,68 @@ avec sa raison, et `--tout` les imprime.
 ## La mesure du jour
 
 ```
-graines 1–400          400 cas, 16 714 requêtes, 0 divergence réelle
-graines 5000–5299      300 cas, 12 501 requêtes, 0 divergence réelle
-graines 900000+        250 cas, 10 468 requêtes, 0 divergence réelle
-graines 4242000+       250 cas, 10 410 requêtes, 0 divergence réelle
-graines 31337000+      250 cas, 10 400 requêtes, 0 divergence réelle
-graines 7770000+       250 cas, 10 416 requêtes, 0 divergence réelle
-graines 6060000+       250 cas, 10 446 requêtes, 0 divergence réelle
-graines 8181000+       250 cas, 10 480 requêtes, 0 divergence réelle
-graines 9494000+       250 cas, 10 466 requêtes, 0 divergence réelle
-graines 5150000+       250 cas, 10 438 requêtes, 1 divergence réelle  (ouverte, décrite plus bas)
+graines 1–400          400 cas, 17 752 requêtes, 0 divergence réelle
+graines 5000–5299      300 cas, 13 213 requêtes, 0 divergence réelle
+graines 900000+        250 cas, 11 048 requêtes, 0 divergence réelle
+graines 4242000+       250 cas, 11 008 requêtes, 0 divergence réelle
+graines 31337000+      250 cas, 11 002 requêtes, 0 divergence réelle
+graines 7770000+       250 cas, 10 964 requêtes, 0 divergence réelle
+graines 6060000+       250 cas, 11 100 requêtes, 0 divergence réelle
+graines 8181000+       250 cas, 10 994 requêtes, 0 divergence réelle
+graines 9494000+       250 cas, 11 101 requêtes, 0 divergence réelle
+graines 5150000+       250 cas, 11 039 requêtes, 1 divergence réelle  (ouverte, décrite plus bas)
+graines 2727000+       250 cas, 11 028 requêtes, 0 divergence réelle
+graines 1414000+       250 cas, 11 011 requêtes, 0 divergence réelle
                      ------------------------------------------------
-                     2 700 cas, 112 738 requêtes, 1 divergence réelle
+                     3 200 cas, 141 260 requêtes, 1 divergence réelle
 
-étalonnage ES vs ES     50 cas,  2 014 requêtes, 0 divergence
+étalonnage ES vs ES     60 cas,  2 532 requêtes, 0 divergence
 ```
 
-Quatre de ces plages ont servi à corriger : 1–400, contre laquelle l'outil a été
+Six de ces plages ont servi à corriger : 1–400, contre laquelle l'outil a été
 réglé, 4242000+, qui a sorti le `minimum_should_match` décrit plus bas,
-**8181000+**, qui a sorti les trois règles de précédence de `fields` (ci-dessous),
-et **9494000+**, qui a montré qu'un prédicat était trop étroit. Les **six**
-autres sont des plages **de contrôle**, et **5150000+ n'a jamais été regardée
-avant ce passage** : c'est elle qui porte la divergence ouverte, et son rapport
-machine est [`fuzz.json`](fuzz.json).
+**8181000+**, qui a sorti les trois règles de précédence de `fields`,
+**9494000+**, qui a montré qu'un prédicat était trop étroit, et les deux
+nouvelles — **2727000+**, qui a sorti l'ordre de balayage de la commande par
+requête, et **1414000+**, qui a montré qu'un prédicat ne connaissait qu'un
+**sens** (les deux ci-dessous). Les **six** autres sont des plages **de
+contrôle** ; 5150000+ porte la divergence ouverte, et son rapport machine est
+[`fuzz.json`](fuzz.json).
 
 Les graines ont toutes changé de sens depuis la mesure précédente : le
-générateur pose maintenant, en plus, `fields`, `docvalue_fields` et
-`stored_fields` sur chaque recherche. Chaque cas de chaque plage est donc un
+générateur pose maintenant, en plus, un `_delete_by_query` ou un
+`_update_by_query` sur un cas sur trois. Chaque cas de chaque plage est donc un
 tirage différent — c'est exactement pour ça que ce qui compte devient un cas
 écrit dans [`sonde_fuzz.py`](../tests/compat/sonde_fuzz.py) et pas une graine.
+
+### Ce que la brique « par requête » a sorti, en un passage
+
+`_delete_by_query` et `_update_by_query` ont reçu leur brique le jour où ils ont
+été livrés. Elle est la seule qui **écrit** : elle passe donc en dernier, après
+que tout le reste a été comparé, et elle compare deux choses — les compteurs de
+la réponse, et **ce qui reste dans l'index**, identifiant par identifiant avec
+sa `_version`. Une commande qui rend les bons compteurs en supprimant les
+mauvais documents serait verte sur les compteurs seuls.
+
+| Ce que le fuzzer a sorti | La règle mesurée |
+|---|---|
+| avec `max_docs`, ferrite ne supprimait **pas les mêmes documents** qu'ES | l'ordre de balayage d'un `scroll` sans tri est le `_doc` de Lucene, c'est-à-dire l'ordre d'écriture. Celui de tantivy **n'est pas** l'ordre d'écriture : un `_bulk` de 25 documents en ressort en `d002, d000, d003, d001, …`. La bonne clé était déjà là — le `_seq_no`, attribué sous le verrou d'écriture, qui sert par ailleurs de condition de concurrence. C'était un résultat faux rendu en **200**, sur une commande destructrice |
+
+Et un **prédicat trop étroit de plus**, trouvé par l'autre plage neuve — celui
+d'`exists` sur un `text` sans terme, qui ne connaissait qu'un sens :
+
+| Ce qui manquait | Ce que ça a coûté |
+|---|---|
+| la divergence déclarée sur `exists` était reconnue à un manque **à gauche** | sous un `must_not`, elle rend **plus** de documents à gauche : le document qu'ES juge présent est exclu par ES et gardé par ferrite. Même défaut, signe inversé, et le prédicat le lisait comme un écart réel. Il retourne maintenant le sens quand **tous** les `exists` de la requête sont niés — et seulement après que la sonde a confirmé, en reposant la clause seule aux deux serveurs, que ferrite en voit bien moins. Un prédicat écrit sur un signe doit se demander ce qu'une négation en fait |
+
+Deux garde-fous ont été écrits avec la brique, parce que sans eux elle
+mesurerait autre chose que ce qu'elle croit : la même requête est d'abord posée
+**en recherche** aux deux serveurs, et le cas est abandonné si elle n'y trouve
+pas les mêmes documents (l'écart est alors celui du Query DSL, que l'étape 5
+mesure déjà, avec ses prédicats) ; et le **motif** d'un refus n'est pas comparé,
+seulement son statut — ferrite nomme ses refus avec ses propres mots, exprès.
+Sans le premier, la brique recomptait la divergence `exists` sous un autre nom ;
+sans le second, chaque refus légitime des deux serveurs sortait rouge.
 
 ### Ce que la brique `fields` a sorti, en un passage
 
@@ -222,7 +255,7 @@ rouge — et elle est le bon prix.
 Le détail machine est dans [`fuzz.json`](fuzz.json) : les divergences réelles y
 sont écrites entières, les assumées résumées par famille avec trois exemples.
 
-### Pourquoi dix plages de graines, et pas une
+### Pourquoi douze plages de graines, et pas une
 
 Parce que la première ne prouvait pas ce qu'elle avait l'air de prouver.
 
@@ -243,11 +276,16 @@ La preuve : chaque nouvelle plage jamais regardée en a retrouvé.
 | 8181000+ | les **trois règles de précédence** de `fields` (ci-dessus), 47 divergences en un passage, le jour où la brique a été posée |
 | 9494000+ | un **quatrième** prédicat trop étroit : « ES casse sur `epoch_millis` » supposait que ferrite, lui, répondait |
 | 5150000+ | la divergence ouverte ci-dessus — un ordre que BM25 sépare, que le prédicat refuse d'absorber |
+| 2727000+ | le défaut d'ordre de la commande par requête : `max_docs` ne supprimait pas les mêmes documents qu'ES, en 200 |
+| 1414000+ | un **cinquième** prédicat trop étroit : la divergence déclarée sur `exists` change de **signe** sous un `must_not` |
 
-Et au passage suivant, générateur changé, la règle a rejoué exactement pareil :
-la plage 1–400 — celle sur laquelle on avait itéré — a sorti le **troisième**
-prédicat trop étroit du tableau ci-dessous, et deux plages de contrôle ont sorti
-les deux divergences réelles décrites plus haut.
+Et à chaque passage suivant, générateur changé, la règle a rejoué exactement
+pareil : la plage 1–400 — celle sur laquelle on avait itéré — a sorti le
+**troisième** prédicat trop étroit du tableau ci-dessous, deux plages de contrôle
+ont sorti les deux divergences réelles décrites plus haut, et les **deux plages
+neuves** de ce passage en ont sorti une chacune : un résultat faux rendu en 200
+sur une commande destructrice, et un cinquième prédicat trop étroit. Douze
+plages, cinq passages, et aucun n'a encore rendu une plage neuve muette.
 
 Les prédicats trop étroits, un par passage :
 
@@ -259,6 +297,7 @@ Les prédicats trop étroits, un par passage :
 | « ES casse sur `epoch_millis` » supposait que ferrite, lui, **répondait** | il arrive que les **deux** refusent, pour deux raisons sans rapport : ferrite sur un de ses refus déclarés (un trou entre deux intervalles d'un `range` sur une date), ES sur son bug de formatage — 400 d'un côté, 500 de l'autre, et l'écart se lisait comme réel. Le prédicat porte maintenant sur le **message d'ES** : quand ES n'arrive pas à formater sa propre réponse, il n'y a pas d'oracle et le cas ne mesure rien. Un 500 d'ES pour une autre raison reste un écart |
 | « le court-circuit d'ES » ne connaissait que deux déclencheurs **syntaxiques** (`match_none`, `must_not: match_all`) | le troisième ne se lit pas dans la requête : une clause qui ne correspond à **aucun document** vide le `bool` à la réécriture, et ES n'a alors jamais construit les clauses suivantes — donc jamais vu qu'une valeur y était illisible pour le type du champ. Le prédicat le **mesure** maintenant, comme celui d'`exists` : il repose la clause fautive **seule** à ES. Si ES la refuse seule, son 200 sur la requête complète prouve qu'il ne l'a pas construite ; s'il l'accepte seule, ferrite est plus strict qu'ES et l'écart reste réel |
 | « refus déclaré » ne demandait pas qu'ES **sache répondre** | c'est pourtant la moitié qui compte, et sa docstring le disait déjà. Le défaut est arrivé par un **progrès** : le texte d'un écart de statut porte désormais les messages des deux serveurs (« statuts 400 / 500 » tout court ne se diagnostique pas), et la phrase de ferrite s'y trouve donc même quand ES échoue de son côté. Un prédicat se relit quand ce qu'il lit change |
+| la divergence déclarée sur `exists` était reconnue à un manque **à gauche** | sous un `must_not`, le même défaut rend **plus** de documents à gauche. Un prédicat écrit sur un signe doit se demander ce qu'une négation en fait : il retourne maintenant le sens quand **tous** les `exists` de la requête sont niés, et seulement quand la sonde a confirmé, clause seule, que ferrite en voit moins |
 
 D'où la règle : **une plage de graines sur laquelle on a itéré ne mesure plus
 rien.** Il en faut une qu'on n'a jamais regardée, et la publier séparément.

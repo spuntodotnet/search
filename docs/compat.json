@@ -36,11 +36,11 @@
     }
   },
   "totaux": {
-    "capacites": 189,
+    "capacites": 191,
     "supporte": 89,
-    "partiel": 56,
+    "partiel": 58,
     "refuse": 44,
-    "poids_renseignes": 133
+    "poids_renseignes": 135
   },
   "capacites": [
     {
@@ -946,14 +946,84 @@
       "raison": "la version d'un document est gérée par ferrite ; l'imposer de l'extérieur demande de tenir un ordre que le serveur ne contrôle plus, et rien ne l'a encore réclamé."
     },
     {
+      "id": "ingestion.delete_by_query",
+      "table": "ingestion",
+      "nom": "`POST /{index}/_delete_by_query`",
+      "nom_texte": "POST /{index}/_delete_by_query",
+      "etat": "partiel",
+      "poids": 0.4,
+      "detail": "purge par requête, synchrone. La réponse porte les compteurs d'ES — `total`, `deleted`, `batches`, `version_conflicts`, `noops`, `retries`, `failures[]` — et son statut passe à **409** dès qu'un conflit n'est pas absorbé par `conflicts=proceed`. Le relevé se fait sur l'instantané de la recherche, et chaque écriture est conditionnée par le `_seq_no` observé : c'est ce qui produit les `version_conflicts`, comme chez ES",
+      "parametres": {
+        "supportes": [
+          "query",
+          "conflicts",
+          "max_docs",
+          "scroll_size",
+          "refresh",
+          "wait_for_completion",
+          "slices",
+          "requests_per_second",
+          "les tolérances d'expression d'index"
+        ],
+        "refuses": [
+          "wait_for_completion=false",
+          "slices",
+          "slice",
+          "requests_per_second",
+          "terminate_after",
+          "sort",
+          "size",
+          "la recherche par chaîne",
+          "routing",
+          "les paramètres de la recherche interne"
+        ]
+      }
+    },
+    {
+      "id": "ingestion.update_by_query",
+      "table": "ingestion",
+      "nom": "`POST /{index}/_update_by_query`",
+      "nom_texte": "POST /{index}/_update_by_query",
+      "etat": "partiel",
+      "poids": 0.3,
+      "detail": "**sans script**, la route réindexe depuis le `_source` — le geste utile après un `PUT /{index}/_mapping`. La réponse porte `updated` en plus des compteurs de `_delete_by_query` ; `noops` reste à 0, parce qu'ES n'en compte que sur ordre d'un script. Sans corps du tout, la requête vaut `match_all` (contrairement à `_delete_by_query`, où l'absence de `query` est une erreur)",
+      "parametres": {
+        "supportes": [
+          "query",
+          "conflicts",
+          "max_docs",
+          "scroll_size",
+          "refresh",
+          "wait_for_completion",
+          "slices",
+          "requests_per_second",
+          "les tolérances d'expression d'index"
+        ],
+        "refuses": [
+          "script",
+          "pipeline",
+          "wait_for_completion=false",
+          "slices",
+          "slice",
+          "requests_per_second",
+          "terminate_after",
+          "sort",
+          "size",
+          "la recherche par chaîne",
+          "routing",
+          "les paramètres de la recherche interne"
+        ]
+      }
+    },
+    {
       "id": "ingestion.reecriture_en_masse",
       "table": "ingestion",
-      "nom": "`_update_by_query`, `_delete_by_query`, `_reindex`, pipelines d'ingestion",
-      "nom_texte": "_update_by_query, _delete_by_query, _reindex, pipelines d'ingestion",
+      "nom": "`_reindex`, pipelines d'ingestion",
+      "nom_texte": "_reindex, pipelines d'ingestion",
       "etat": "refuse",
-      "poids": 3.6,
+      "poids": 3.0,
       "motif": "pas_encore",
-      "raison": "ce sont des tâches longues, donc l'API `_tasks` et son suivi ; le même travail s'écrit aujourd'hui côté client avec `scroll` + `_bulk`."
+      "raison": "`_reindex` copie d'un index vers un autre, et son intérêt est justement ce que ferrite n'a pas : une source distante, un pipeline, un script. Rien ne s'y oppose, ce n'est pas écrit — et `scroll` + `_bulk` le font aujourd'hui côté client, ce que ni `_delete_by_query` ni `_update_by_query` ne permettaient."
     },
     {
       "id": "scroll.ouverture",

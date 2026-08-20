@@ -99,11 +99,11 @@ attendu, et c'est mesuré plutôt que supposé.
 
 | Sous-corpus | Requêtes | Servies entièrement |
 |---|---|---|
-| **`github` — du code d'application open source** | 338 | **90,8 %** |
-| `clients` — tests et exemples des clients officiels | 143 | 79,7 % |
-| `doc` — la documentation de référence | 3 969 | 39,3 % |
+| **`github` — du code d'application open source** | 338 | **93,2 %** |
+| `clients` — tests et exemples des clients officiels | 143 | 81,1 % |
+| `doc` — la documentation de référence | 3 969 | 39,6 % |
 | `rally` — les tracks de benchmark d'Elastic | 861 | 27,2 % |
-| **tout le corpus** | 5 311 | 41,7 % |
+| **tout le corpus** | 5 311 | 42,1 % |
 
 Ces quatre nombres ne se contredisent pas, ils mesurent quatre choses
 différentes, et l'écart entre eux **est** le résultat :
@@ -113,7 +113,7 @@ différentes, et l'écart entre eux **est** le résultat :
   requêtes sur dix passent telles quelles** ;
 - la documentation de référence consacre **une page par fonctionnalité**, avec au
   moins un exemple chacune : elle sur-représente exactement ce qui est rare. Un
-  taux de 39,3 % s'y lit « ferrite couvre un peu plus d'un tiers de la surface
+  taux de 39,6 % s'y lit « ferrite couvre un peu plus d'un tiers de la surface
   d'API », ce qui est vrai et sans rapport avec la question précédente ;
 - les tracks Rally sont des **bancs d'essai analytiques** : `date_histogram`
   avec `calendar_interval`, `runtime_mappings`, `fields`, `percentiles`. Et le
@@ -188,6 +188,25 @@ débloque. Deux colonnes, parce qu'elles ne disent pas la même chose :
 >   sous cette forme — mais c'est **un artefact de gabarit** : les tracks Rally
 >   laissent le paramètre vide quand il n'est pas rempli. Ça ne prouve rien sur
 >   `script_fields`, qui reste ❌.
+>
+> La **19** a fait passer le corpus de **41,7 % à 42,1 %** (2 215 → 2 237), et
+> le sous-corpus des applications réelles de **90,8 % à 93,2 %** — c'est le plus
+> gros saut qu'une carte lui ait fait faire, et c'était l'annonce du tableau.
+> Mais **22 requêtes débloquées, pas 75**, et l'écart s'explique en deux temps :
+>
+> - la ligne 3 comptait `_delete_by_query`, `_update_by_query` **et
+>   `_reindex`** ensemble, parce que `compat.yaml` n'en faisait qu'une seule
+>   capacité. `_reindex` reste hors périmètre : ses **42** requêtes n'ont pas
+>   bougé, et la ligne du tableau ne le disait pas — trois routes derrière un
+>   seul identifiant se lisent comme une seule ;
+> - sur les 35 requêtes restantes, **13 demandent un paramètre refusé** :
+>   `script` (6, c'est Painless), `slice` (4), `slices` (2), `pipeline` (2),
+>   `routing` (2). Ces refus-là n'étaient pas comptés avant, parce que le
+>   croisement ne regardait que la **route** d'une commande par requête, jamais
+>   ses paramètres — un `_delete_by_query` en cinq tranches parallèles comptait
+>   donc « servie ». `ponderation.py` lit maintenant les deux, corps et query
+>   string : c'est la même règle que partout ailleurs, et elle rend le
+>   dénominateur un peu moins flatteur.
 >
 > Les **125** de la ligne 2 supposaient les cinq faits, `runtime_mappings` et
 > `script_fields` compris : ils demandent Painless, et la mesure a servi à
