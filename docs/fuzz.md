@@ -27,7 +27,7 @@ python3 tests/compat/fuzz_vs_es.py --couverture          # ce qu'il fuzze, et pa
 
 ## Le périmètre est lu, pas réécrit
 
-[`compat.yaml`](../compat.yaml) déclare 191 capacités avec leur état. Le
+[`compat.yaml`](../compat.yaml) déclare 192 capacités avec leur état. Le
 générateur ne redit pas cette liste : chaque **brique** (une clause du DSL, un
 type de champ, une agrégation, un paramètre du corps) cite l'identifiant de la
 capacité qu'elle exerce, et au démarrage le fuzzer

@@ -509,6 +509,46 @@ def parametre_de_champ_non_supporte(es):
 
 
 @scenario
+def index_vrai_est_le_defaut(es):
+    """Le mapping que pose Gitea : `"index": true` sur chaque champ.
+
+    C'est le defaut d'Elasticsearch — la valeur ne demande rien de plus que ce
+    que ferrite fait deja, et ES lui-meme ne la conserve pas dans le mapping
+    qu'il rend. La refuser bloquait une application entiere au demarrage, sans
+    qu'aucune de ses requetes ne soit hors perimetre. `index: false`, lui,
+    demande un champ absent de l'index : il reste refuse explicitement.
+    """
+    es.options(ignore_status=404).indices.delete(index="param_index")
+    es.indices.create(index="param_index", mappings={"properties": {
+        "id": {"type": "integer", "index": True},
+        "titre": {"type": "text", "index": "true"},
+        "tag": {"type": "keyword", "index": True,
+                "fields": {"texte": {"type": "text", "index": True}}},
+    }})
+    # Comme ES : le parametre ne ressort pas du mapping relu.
+    props = es.indices.get_mapping(index="param_index")["param_index"]["mappings"]["properties"]
+    assert props["id"] == {"type": "integer"}, props["id"]
+    assert "index" not in props["titre"], props["titre"]
+    assert "index" not in props["tag"]["fields"]["texte"], props["tag"]
+
+    # Et le champ est bien cherchable : accepter la valeur par defaut, c'est
+    # faire ce qu'elle demande.
+    es.index(index="param_index", id="1", document={"id": 7, "titre": "Bel-Ami",
+                                                    "tag": "roman"}, refresh=True)
+    assert ids(es.search(index="param_index", query={"match": {"titre": "bel"}})) == ["1"]
+    assert ids(es.search(index="param_index", query={"term": {"id": 7}})) == ["1"]
+
+    refused(lambda: es.indices.create(
+        index="param_index_faux", mappings={"properties": {
+            "t": {"type": "keyword", "index": False}}}),
+        contains="index: false")
+    refused(lambda: es.indices.create(
+        index="param_index_bizarre", mappings={"properties": {
+            "t": {"type": "keyword", "index": "no"}}}))
+    es.indices.delete(index="param_index")
+
+
+@scenario
 def multi_fields(es):
     """Le mapping que genere Elasticsearch tout seul pour une chaine :
     `text` pour chercher, `.keyword` pour trier et filtrer exactement."""

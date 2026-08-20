@@ -637,6 +637,21 @@ fn niche(props: &mut Map<String, Value>, chemin: &str, feuille: Value) {
 
 /// Parse la declaration d'un champ.
 ///
+/// Lit la valeur d'un `index` de mapping : `Some(true)`, `Some(false)`, ou
+/// `None` si la valeur n'est ni l'un ni l'autre.
+///
+/// Elasticsearch accepte les deux ecritures — le booleen et la chaine — et
+/// refuse tout le reste (`"no"`, `1`, `null`) par un `mapper_parsing_exception`
+/// « only [true] or [false] are allowed » (mesure contre 8.15.0).
+fn index_demande(val: &Value) -> Option<bool> {
+    match val {
+        Value::Bool(b) => Some(*b),
+        Value::String(s) if s == "true" => Some(true),
+        Value::String(s) if s == "false" => Some(false),
+        _ => None,
+    }
+}
+
 /// `sous_champ` indique qu'on est deja dans un `fields` : ES n'autorise qu'un
 /// seul niveau de multi-fields, et ferrite refuse le second explicitement.
 fn parse_field_mapping(
@@ -715,10 +730,35 @@ fn parse_field_mapping(
                         })?,
                 );
             }
+            // `index: true` est le **defaut** d'Elasticsearch : il ne demande
+            // rien de plus que ce que ferrite fait deja. ES lui-meme ne le
+            // garde pas — un `GET /{index}/_mapping` sur un champ pose avec
+            // `index: true` rend `{"type": "keyword"}` tout court, la ou il
+            // conserve `index: false` (mesure contre 8.15.0). L'accepter n'est
+            // donc pas un echec silencieux, c'est rendre la meme chose qu'ES
+            // sur la meme demande.
+            //
+            // `index: false` reste refuse : ferrite indexerait quand meme, et
+            // le client croirait le champ hors de l'index.
+            "index" => match index_demande(val) {
+                Some(true) => {}
+                Some(false) => {
+                    return Err(EsError::unsupported(format!(
+                        "ferrite ne supporte pas [index: false] (champ [{name}]) : le champ \
+                         serait indexe quand meme ; seul [index: true], qui est le defaut \
+                         d'Elasticsearch, est accepte"
+                    )))
+                }
+                None => {
+                    return Err(EsError::mapper_parsing(format!(
+                        "[{name}.index] : seuls [true] et [false] sont admis"
+                    )))
+                }
+            },
             other => {
                 return Err(EsError::unsupported(format!(
                     "ferrite ne supporte pas le parametre de champ [{other}] (champ [{name}]) ; \
-                     parametres acceptes : type, analyzer, fields, ignore_above, format"
+                     parametres acceptes : type, analyzer, fields, ignore_above, format, index"
                 )))
             }
         }
@@ -1319,6 +1359,49 @@ mod tests {
         let e = mapping(r#"{"properties":{"g":{"type":"geo_point"}}}"#).unwrap_err();
         assert_eq!(e.ty, UNSUPPORTED_TY);
         assert!(e.reason.contains("geo_point"));
+    }
+
+    #[test]
+    fn index_vrai_est_le_defaut_et_ne_ressort_pas() {
+        // Ce que Gitea pose sur chacun de ses champs. ES accepte, et ne garde
+        // pas le parametre : le mapping relu doit etre celui du champ nu.
+        let m = mapping(
+            r#"{"properties":{"id":{"type":"integer","index":true},
+                "title":{"type":"text","index":"true"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(m.get("id").unwrap().ty, FieldType::Integer);
+        assert_eq!(m.get("title").unwrap().ty, FieldType::Text);
+        let rendu = serde_json::to_string(&m.to_json()).unwrap();
+        assert!(!rendu.contains("index"), "rendu inattendu : {rendu}");
+    }
+
+    #[test]
+    fn refuse_index_faux() {
+        for corps in [
+            r#"{"properties":{"k":{"type":"keyword","index":false}}}"#,
+            r#"{"properties":{"k":{"type":"keyword","index":"false"}}}"#,
+        ] {
+            let e = mapping(corps).unwrap_err();
+            assert_eq!(e.ty, UNSUPPORTED_TY);
+            assert!(e.reason.contains("index: false"), "{}", e.reason);
+        }
+    }
+
+    #[test]
+    fn refuse_une_valeur_d_index_qui_n_est_ni_vraie_ni_fausse() {
+        for corps in [
+            r#"{"properties":{"k":{"type":"keyword","index":"no"}}}"#,
+            r#"{"properties":{"k":{"type":"keyword","index":1}}}"#,
+            r#"{"properties":{"k":{"type":"keyword","index":null}}}"#,
+        ] {
+            let e = mapping(corps).unwrap_err();
+            // Le type d'erreur des refus de mapping du depot (ES dit
+            // `mapper_parsing_exception` ; c'est un ecart anterieur a ce
+            // chantier, et le meme pour tous les refus de cette fonction).
+            assert_eq!(e.ty, "document_parsing_exception");
+            assert!(e.reason.contains("[true]"), "{}", e.reason);
+        }
     }
 
     #[test]

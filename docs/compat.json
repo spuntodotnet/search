@@ -36,11 +36,11 @@
     }
   },
   "totaux": {
-    "capacites": 191,
+    "capacites": 192,
     "supporte": 89,
-    "partiel": 58,
+    "partiel": 59,
     "refuse": 44,
-    "poids_renseignes": 135
+    "poids_renseignes": 136
   },
   "capacites": [
     {
@@ -781,14 +781,31 @@
       "detail": "sur un `keyword` : au-delà, la valeur reste dans `_source` sans être indexée"
     },
     {
+      "id": "type.index",
+      "table": "types_champ",
+      "nom": "`index`",
+      "nom_texte": "index",
+      "etat": "partiel",
+      "poids": 0.4,
+      "detail": "`index: true` est **accepté** : c'est le défaut d'Elasticsearch, il ne demande rien de plus que ce que ferrite fait déjà, et ES lui-même ne le garde pas — un `GET /{index}/_mapping` sur un champ posé avec `index: true` rend `{\"type\": \"keyword\"}` tout court (mesuré contre 8.15.0). `index: false` reste refusé : ferrite indexerait quand même. Les deux écritures d'ES sont admises, le booléen et la chaîne",
+      "parametres": {
+        "supportes": [
+          "true"
+        ],
+        "refuses": [
+          "false"
+        ]
+      }
+    },
+    {
       "id": "type.autres_parametres",
       "table": "types_champ",
-      "nom": "Autres paramètres de champ (`index`, `null_value`, `doc_values`…)",
-      "nom_texte": "Autres paramètres de champ (index, null_value, doc_values…)",
+      "nom": "Autres paramètres de champ (`null_value`, `doc_values`, `store`…)",
+      "nom_texte": "Autres paramètres de champ (null_value, doc_values, store…)",
       "etat": "refuse",
       "poids": 3.0,
       "motif": "pas_encore",
-      "raison": "les paramètres acceptés sont `type`, `analyzer`, `fields`, `ignore_above` et `format` ; les autres sont refusés plutôt qu'acceptés sans effet, faute de quoi un `index: false` laisserait croire qu'un champ n'est pas interrogeable."
+      "raison": "les paramètres acceptés sont `type`, `analyzer`, `fields`, `ignore_above`, `format` et `index` ; les autres sont refusés plutôt qu'acceptés sans effet, faute de quoi un `doc_values: false` laisserait croire qu'un champ n'est pas triable."
     },
     {
       "id": "type.noms_reserves",

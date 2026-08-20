@@ -288,7 +288,8 @@ différemment. ferrite applique désormais les frontières de mots d'Unicode
 | `analyzer` | 🟡 | sur un champ `text` — voir la section dédiée. Supporté : `standard`, `simple`, `whitespace`, `keyword`, `stop`, `english`, `french`. Refusé : `search_analyzer`, les analyzers des autres langues |
 | Multi-fields (`fields`) | ✅ | un seul niveau, comme ES. `titre.keyword` s'interroge et se trie comme un champ à part entière |
 | `ignore_above` | ✅ | sur un `keyword` : au-delà, la valeur reste dans `_source` sans être indexée |
-| Autres paramètres de champ (`index`, `null_value`, `doc_values`…) | ❌ | **pas encore** — les paramètres acceptés sont `type`, `analyzer`, `fields`, `ignore_above` et `format` ; les autres sont refusés plutôt qu'acceptés sans effet, faute de quoi un `index: false` laisserait croire qu'un champ n'est pas interrogeable |
+| `index` | 🟡 | `index: true` est **accepté** : c'est le défaut d'Elasticsearch, il ne demande rien de plus que ce que ferrite fait déjà, et ES lui-même ne le garde pas — un `GET /{index}/_mapping` sur un champ posé avec `index: true` rend `{"type": "keyword"}` tout court (mesuré contre 8.15.0). `index: false` reste refusé : ferrite indexerait quand même. Les deux écritures d'ES sont admises, le booléen et la chaîne. Supporté : `true`. Refusé : `false` (le champ serait indexé quand même) |
+| Autres paramètres de champ (`null_value`, `doc_values`, `store`…) | ❌ | **pas encore** — les paramètres acceptés sont `type`, `analyzer`, `fields`, `ignore_above`, `format` et `index` ; les autres sont refusés plutôt qu'acceptés sans effet, faute de quoi un `doc_values: false` laisserait croire qu'un champ n'est pas triable |
 | Noms de champ pointés (`a.b`) ou préfixés `_` | ❌ | **divergence de moteur** — un point est le séparateur de chemin d'un objet et un `_` initial est réservé aux métadonnées : accepter ces noms rendrait ambigu ce qu'un `client.ville` désigne |
 
 ## Ingestion
