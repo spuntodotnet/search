@@ -2999,6 +2999,230 @@ def stored_fields_change_la_forme(es):
 
 
 # ---------------------------------------------------------------------------
+# Modifier ou purger par requete
+# ---------------------------------------------------------------------------
+
+PQ = "compat_par_requete"
+PQ2 = "compat_par_requete_2"
+
+
+def remplir_pq(es, index=PQ, base=0, n=6):
+    """Six documents d'un index, deux locataires : de quoi purger la moitie."""
+    es.options(ignore_status=404).indices.delete(index=index)
+    es.indices.create(index=index, mappings={"properties": {
+        "tenant": {"type": "keyword"},
+        "n": {"type": "integer"},
+        "txt": {"type": "text"},
+    }})
+    es.bulk(operations=[op for i in range(n) for op in (
+        {"index": {"_index": index, "_id": str(base + i)}},
+        {"tenant": "a" if i % 2 == 0 else "b", "n": base + i,
+         "txt": f"document numero {base + i}"})], refresh=True)
+
+
+@scenario
+def purger_par_requete(es):
+    """`client.delete_by_query()` : purger les documents d'un locataire.
+
+    Le geste que le client officiel fait sans une ligne de plus, et pour lequel
+    il n'existe pas d'alternative cote client : sans lui, purger un lot par
+    filtre demande de tout lire puis de tout reecrire.
+    """
+    remplir_pq(es)
+    r = es.delete_by_query(index=PQ, query={"term": {"tenant": "a"}}, refresh=True)
+    assert r["total"] == 3 and r["deleted"] == 3, r
+    assert r["batches"] == 1 and r["version_conflicts"] == 0, r
+    assert r["failures"] == [] and r["timed_out"] is False, r
+    assert r["noops"] == 0 and r["retries"] == {"bulk": 0, "search": 0}, r
+    # `_delete_by_query` ne rend pas de cle `updated` du tout : la rendre a zero
+    # serait deja une divergence de forme.
+    assert "updated" not in r, r
+    assert sorted(ids(es.search(index=PQ, query={"match_all": {}}))) == ["1", "3", "5"]
+
+    # Zero correspondance : `batches` vaut 0, pas 1 — aucun lot n'a tourne.
+    r = es.delete_by_query(index=PQ, query={"term": {"tenant": "zzz"}}, refresh=True)
+    assert (r["total"], r["deleted"], r["batches"]) == (0, 0, 0), r
+
+    # `max_docs` : ES prend les premiers **dans l'ordre du document**.
+    remplir_pq(es)
+    r = es.delete_by_query(index=PQ, query={"match_all": {}}, max_docs=2, refresh=True)
+    assert (r["total"], r["deleted"], r["batches"]) == (2, 2, 1), r
+    assert sorted(ids(es.search(index=PQ, query={"match_all": {}}, size=10))) == \
+        ["2", "3", "4", "5"]
+
+    # `scroll_size` ne change pas le resultat, il change le **decoupage** — et
+    # `batches` est le seul endroit ou ca se voit.
+    remplir_pq(es)
+    r = es.delete_by_query(index=PQ, query={"match_all": {}},
+                           scroll_size=2, refresh=True)
+    assert (r["total"], r["deleted"], r["batches"]) == (6, 6, 3), r
+    assert es.count(index=PQ)["count"] == 0
+
+    # Une expression d'index, comme partout ailleurs.
+    remplir_pq(es)
+    remplir_pq(es, PQ2, base=100, n=4)
+    r = es.delete_by_query(index=f"{PQ}*", query={"term": {"tenant": "a"}},
+                           refresh=True)
+    assert (r["total"], r["deleted"]) == (5, 5), r
+    assert es.count(index=f"{PQ}*")["count"] == 5
+    es.indices.delete(index=PQ2)
+
+
+@scenario
+def reindexer_par_requete(es):
+    """`client.update_by_query()` : le geste d'apres un changement de mapping.
+
+    Sans script, la route reindexe chaque document depuis son `_source`. Ce que
+    le client observe, c'est que la `_version` avance d'un cran par document —
+    y compris quand le `_source` ne change pas, puisque ES ne compte un `noop`
+    que sur ordre d'un script.
+    """
+    remplir_pq(es)
+    avant = es.get(index=PQ, id="0")
+    r = es.update_by_query(index=PQ, query={"term": {"tenant": "a"}}, refresh=True)
+    assert (r["total"], r["updated"], r["deleted"]) == (3, 3, 0), r
+    assert r["noops"] == 0 and r["version_conflicts"] == 0, r
+    apres = es.get(index=PQ, id="0")
+    assert apres["_version"] == avant["_version"] + 1, (avant, apres)
+    assert apres["_source"] == avant["_source"], apres
+    # Un document que la requete ne vise pas ne bouge pas.
+    assert es.get(index=PQ, id="1")["_version"] == 1
+
+    # Sans corps du tout, ES reindexe tout l'index — c'est `match_all`.
+    r = es.update_by_query(index=PQ, refresh=True)
+    assert (r["total"], r["updated"]) == (6, 6), r
+
+    # Le cas qui motive la route : un champ ajoute au mapping apres coup.
+    es.indices.put_mapping(index=PQ, properties={"tenant_bis": {"type": "keyword"}})
+    es.index(index=PQ, id="7", document={"tenant": "c", "n": 7, "txt": "sept",
+                                         "tenant_bis": "c"}, refresh=True)
+    r = es.update_by_query(index=PQ, query={"match_all": {}}, refresh=True)
+    assert r["updated"] == 7, r
+    assert ids(es.search(index=PQ, query={"term": {"tenant_bis": "c"}})) == ["7"]
+
+
+@scenario
+def conflits_par_requete(es):
+    """Un document qui bouge entre la recherche et l'ecriture.
+
+    C'est ce que `version_conflicts` compte, et c'est la raison d'etre de
+    `conflicts`. Une ecriture **non rafraichie** le provoque a coup sur : la
+    recherche voit encore l'ancien document et son `_seq_no`, l'ecriture trouve
+    le nouveau.
+    """
+    remplir_pq(es)
+    es.index(index=PQ, id="0", document={"tenant": "a", "n": 99, "txt": "reecrit"})
+
+    # `abort` (le defaut) : 409, et le detail du conflit dans `failures[]`.
+    try:
+        es.delete_by_query(index=PQ, query={"match_all": {}}, refresh=True)
+        raise AssertionError("un conflit non traite aurait du rendre 409")
+    except ApiError as exc:
+        assert exc.meta.status == 409, exc.meta.status
+        corps = exc.body
+        assert corps["version_conflicts"] == 1, corps
+        assert corps["total"] == 6 and corps["deleted"] == 5, corps
+        echec = corps["failures"][0]
+        assert echec["index"] == PQ and echec["id"] == "0", echec
+        assert echec["status"] == 409, echec
+        assert echec["cause"]["type"] == "version_conflict_engine_exception", echec
+        # Le message dit **ce qui** a change : le document a bouge, il n'a pas
+        # disparu. ES a deux phrases pour ces deux cas, et la difference est
+        # exactement ce qu'un exploitant cherche a savoir.
+        assert "current document has seqNo" in echec["cause"]["reason"], echec
+
+    # `proceed` : 200, `failures[]` vide, seul le compteur bouge.
+    remplir_pq(es)
+    es.index(index=PQ, id="0", document={"tenant": "a", "n": 99, "txt": "reecrit"})
+    r = es.delete_by_query(index=PQ, query={"match_all": {}},
+                           conflicts="proceed", refresh=True)
+    assert r["version_conflicts"] == 1 and r["failures"] == [], r
+    assert (r["total"], r["deleted"]) == (6, 5), r
+    assert ids(es.search(index=PQ, query={"match_all": {}})) == ["0"]
+
+
+@scenario
+def refus_par_requete(es):
+    """Ce que ferrite refuse sur ces deux routes, et le dit.
+
+    Chaque refus est une chose qu'ES sait faire : c'est un cout de perimetre,
+    donc il se nomme. Le pire serait de les accepter en silence — un `slices=5`
+    ignore rendrait la meme reponse en ayant travaille autrement, et un
+    `conflicts: "proceed"` avale ferait echouer une purge que le client voulait
+    voir continuer.
+    """
+    remplir_pq(es)
+    # Une purge par distraction n'arrive pas : sans `query`, c'est 400. ES
+    # refuse aussi, avec ce type d'erreur.
+    err = refused(lambda: es.perform_request(
+        "POST", f"/{PQ}/_delete_by_query",
+        headers={"content-type": "application/json"}, body={}),
+        contains="query is missing")
+    assert err["type"] == "action_request_validation_exception", err
+
+    refused(lambda: es.update_by_query(
+        index=PQ, query={"match_all": {}},
+        script={"source": "ctx._source.n++"}), contains="[script]")
+    refused(lambda: es.delete_by_query(
+        index=PQ, query={"match_all": {}}, slices=5), contains="[slices=5]")
+    refused(lambda: es.delete_by_query(
+        index=PQ, query={"match_all": {}}, requests_per_second=10),
+        contains="[requests_per_second=10]")
+    refused(lambda: es.delete_by_query(
+        index=PQ, query={"match_all": {}}, wait_for_completion=False),
+        contains="[wait_for_completion=false]")
+    refused(lambda: es.delete_by_query(
+        index=PQ, query={"match_all": {}}, terminate_after=2),
+        contains="[terminate_after]")
+    refused(lambda: es.update_by_query(
+        index=PQ, query={"match_all": {}}, pipeline="p"), contains="[pipeline]")
+    # `slice` dans le corps est refuse par son nom — c'est la ou le client
+    # officiel le met, donc c'est la qu'il faut le reconnaitre.
+    refused(lambda: es.delete_by_query(
+        index=PQ, query={"match_all": {}}, slice={"id": 0, "max": 2}),
+        contains="[slice]")
+
+    # Les valeurs par defaut d'ES ecrites explicitement ne demandent rien : les
+    # refuser ferait echouer un client qui se contente de les poser.
+    r = es.delete_by_query(index=PQ, query={"term": {"tenant": "zzz"}},
+                           slices=1, requests_per_second=-1,
+                           wait_for_completion=True)
+    assert r["total"] == 0, r
+
+    # Les bornes des parametres, avec les messages d'ES.
+    refused(lambda: es.delete_by_query(index=PQ, query={"match_all": {}},
+                                       conflicts="zzz"),
+            contains='conflicts may only be "proceed" or "abort"')
+    refused(lambda: es.delete_by_query(index=PQ, query={"match_all": {}},
+                                       max_docs=0),
+            contains="[max_docs] should be >= [slices]")
+    refused(lambda: es.delete_by_query(index=PQ, query={"match_all": {}},
+                                       scroll_size=0),
+            contains="cannot be [0] in a scroll context")
+    refused(lambda: es.perform_request(
+        "POST", f"/{PQ}/_delete_by_query?refresh=wait_for",
+        headers={"content-type": "application/json"},
+        body={"query": {"match_all": {}}}),
+        contains="as only [true] or [false] are allowed")
+
+    # Une clause inconnue reste une clause inconnue, meme quand la commande ne
+    # vise aucun index : ES la refuse aussi sur un motif sans correspondance.
+    refused(lambda: es.delete_by_query(index="compat_rien_du_tout-*",
+                                       query={"pas_une_clause": {}}),
+            contains="unknown query")
+    refused(lambda: es.delete_by_query(index="compat_rien_du_tout",
+                                       query={"match_all": {}}),
+            status=404, contains="no such index")
+
+    # `_reindex` reste hors perimetre, et le dit par son nom.
+    refused(lambda: es.perform_request(
+        "POST", "/_reindex", headers={"content-type": "application/json"},
+        body={"source": {"index": PQ}, "dest": {"index": PQ2}}),
+        contains="/_reindex")
+    es.indices.delete(index=PQ)
+
+
+# ---------------------------------------------------------------------------
 
 def main():
     es = Elasticsearch(URL, request_timeout=30)
@@ -3013,7 +3237,7 @@ def main():
             print(f"[ echec] {name}")
             print("".join("        " + l for l in
                           traceback.format_exc().splitlines(keepends=True)))
-    for index in (INDEX, SCROLL_INDEX):
+    for index in (INDEX, SCROLL_INDEX, PQ, PQ2):
         es.options(ignore_status=404).indices.delete(index=index)
 
     print()

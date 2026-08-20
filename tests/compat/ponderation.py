@@ -131,12 +131,44 @@ def traits(requete):
         elif api in FAMILLE_QUERY_SEULE:
             source = corps.get("source") if isinstance(corps.get("source"), dict) else corps
             vus |= traits_requete(source.get("query") or {})
+            vus |= traits_par_requete(api, corps)
         if api in ("indices.create", "indices.put_mapping", "indices.put_template",
                    "indices.put_index_template", "cluster.put_component_template"):
             vus |= traits_mapping(corps)
+    if api in FAMILLE_QUERY_SEULE and requete.get("chemin"):
+        vus |= traits_par_requete(api, None, requete["chemin"])
     for ligne in requete.get("corps_lignes") or []:
         if isinstance(ligne, dict) and ("query" in ligne or "aggs" in ligne):
             vus |= traits_corps(ligne)
+    return vus
+
+
+# Les parametres de `_delete_by_query` / `_update_by_query` / `_reindex` que
+# compat.yaml declare un par un. Ils ne se lisent ni dans la requete DSL ni dans
+# le corps d'une recherche : ce sont eux qui disent si une purge est jouable
+# telle quelle, et sans eux le corpus comptait « servie » une purge en cinq
+# tranches paralleles.
+PARREQ_IGNORES = {"query", "source", "dest"}
+
+
+def traits_par_requete(api, corps=None, chemin=None):
+    """Ce qu'une commande par requete demande **autour** de sa requete.
+
+    `slice`, `max_docs` et `conflicts` s'ecrivent dans le corps ; `slices`,
+    `pipeline`, `routing`, `scroll_size` dans la query string. Les deux places
+    comptent — le client officiel lui-meme n'est pas d'accord avec la
+    documentation sur laquelle utiliser.
+    """
+    vus = set()
+    if isinstance(corps, dict):
+        for clef in corps:
+            if clef not in PARREQ_IGNORES:
+                vus.add(f"parreq:{api}.{clef}")
+    if chemin and "?" in chemin:
+        for paire in chemin.split("?", 1)[1].split("&"):
+            nom = paire.split("=", 1)[0]
+            if nom:
+                vus.add(f"parreq:{api}.{nom}")
     return vus
 
 
@@ -518,6 +550,10 @@ class Croisement:
             cid = CLAUSES.get(clause, CLAUSES_DEFAUT if clause_connue(clause) else None)
             valeur = param.split("=", 1)[1] if "=" in param else param
             return cid, valeur or None
+        if famille == "parreq":
+            api, _, param = reste.partition(".")
+            cid, _ = self.perimetre.capacite_de(api, "")
+            return cid, (param or None)
         if famille == "agg":
             nom, _, param = reste.partition(".")
             return AGGS.get(nom, AGGS_DEFAUT), (param or None)

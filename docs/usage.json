@@ -60,30 +60,30 @@
  },
  "totaux": {
   "requetes": 5311,
-  "servies": 2215,
-  "refusees": 3094,
+  "servies": 2237,
+  "refusees": 3072,
   "indeterminees": 2,
-  "taux_servies": 41.7
+  "taux_servies": 42.1
  },
  "par_source": {
   "clients": {
-   "servie": 114,
+   "servie": 116,
    "total": 143,
-   "refusee": 29,
-   "taux_servies": 79.7
+   "refusee": 27,
+   "taux_servies": 81.1
   },
   "doc": {
-   "servie": 1560,
+   "servie": 1572,
    "total": 3969,
-   "refusee": 2408,
+   "refusee": 2396,
    "indeterminee": 1,
-   "taux_servies": 39.3
+   "taux_servies": 39.6
   },
   "github": {
-   "refusee": 31,
+   "refusee": 23,
    "total": 338,
-   "servie": 307,
-   "taux_servies": 90.8
+   "servie": 315,
+   "taux_servies": 93.2
   },
   "rally": {
    "refusee": 626,
@@ -298,8 +298,9 @@
    "total": 20
   },
   "delete_by_query": {
-   "refusee": 20,
-   "total": 20
+   "servie": 16,
+   "total": 20,
+   "refusee": 4
   },
   "render_search_template": {
    "refusee": 20,
@@ -338,8 +339,9 @@
    "total": 16
   },
   "update_by_query": {
-   "refusee": 15,
-   "total": 15
+   "refusee": 9,
+   "total": 15,
+   "servie": 6
   },
   "ingest.delete_pipeline": {
    "refusee": 15,
@@ -3249,6 +3251,11 @@
     "part": 0.2
    },
    {
+    "trait": "parreq:reindex.wait_for_completion",
+    "requetes": 10,
+    "part": 0.2
+   },
+   {
     "trait": "dsl:sparse_vector",
     "requetes": 10,
     "part": 0.2
@@ -3664,6 +3671,11 @@
     "part": 0.1
    },
    {
+    "trait": "parreq:update_by_query.script",
+    "requetes": 6,
+    "part": 0.1
+   },
+   {
     "trait": "route:indices.get",
     "requetes": 6,
     "part": 0.1
@@ -3940,6 +3952,11 @@
    },
    {
     "trait": "dsl:span_near.slop",
+    "requetes": 5,
+    "part": 0.1
+   },
+   {
+    "trait": "parreq:delete_by_query.conflicts",
     "requetes": 5,
     "part": 0.1
    },
@@ -4839,6 +4856,16 @@
     "part": 0.1
    },
    {
+    "trait": "parreq:reindex.script",
+    "requetes": 3,
+    "part": 0.1
+   },
+   {
+    "trait": "parreq:update_by_query.conflicts",
+    "requetes": 3,
+    "part": 0.1
+   },
+   {
     "trait": "route:search_application.get_behavioral_analytics",
     "requetes": 3,
     "part": 0.1
@@ -4940,6 +4967,11 @@
    },
    {
     "trait": "route:cat.templates",
+    "requetes": 2,
+    "part": 0.0
+   },
+   {
+    "trait": "parreq:update_by_query.pipeline",
     "requetes": 2,
     "part": 0.0
    },
@@ -5055,6 +5087,11 @@
    },
    {
     "trait": "type:aggregate_metric_double",
+    "requetes": 2,
+    "part": 0.0
+   },
+   {
+    "trait": "parreq:reindex.refresh",
     "requetes": 2,
     "part": 0.0
    },
@@ -5669,7 +5706,27 @@
     "part": 0.0
    },
    {
+    "trait": "parreq:delete_by_query.slice",
+    "requetes": 2,
+    "part": 0.0
+   },
+   {
     "trait": "route:get_source",
+    "requetes": 2,
+    "part": 0.0
+   },
+   {
+    "trait": "parreq:reindex.max_docs",
+    "requetes": 2,
+    "part": 0.0
+   },
+   {
+    "trait": "parreq:update_by_query.slice",
+    "requetes": 2,
+    "part": 0.0
+   },
+   {
+    "trait": "parreq:update_by_query.refresh",
     "requetes": 2,
     "part": 0.0
    },
@@ -7404,6 +7461,31 @@
     "part": 0.0
    },
    {
+    "trait": "parreq:delete_by_query.routing",
+    "requetes": 1,
+    "part": 0.0
+   },
+   {
+    "trait": "parreq:delete_by_query.scroll_size",
+    "requetes": 1,
+    "part": 0.0
+   },
+   {
+    "trait": "parreq:delete_by_query.max_docs",
+    "requetes": 1,
+    "part": 0.0
+   },
+   {
+    "trait": "parreq:delete_by_query.refresh",
+    "requetes": 1,
+    "part": 0.0
+   },
+   {
+    "trait": "parreq:delete_by_query.slices",
+    "requetes": 1,
+    "part": 0.0
+   },
+   {
     "trait": "route:delete_by_query_rethrottle",
     "requetes": 1,
     "part": 0.0
@@ -7424,12 +7506,37 @@
     "part": 0.0
    },
    {
+    "trait": "parreq:reindex.slices",
+    "requetes": 1,
+    "part": 0.0
+   },
+   {
     "trait": "analyzer:fulltext_analyzer",
     "requetes": 1,
     "part": 0.0
    },
    {
+    "trait": "parreq:update_by_query.routing",
+    "requetes": 1,
+    "part": 0.0
+   },
+   {
+    "trait": "parreq:update_by_query.scroll_size",
+    "requetes": 1,
+    "part": 0.0
+   },
+   {
+    "trait": "parreq:update_by_query.max_docs",
+    "requetes": 1,
+    "part": 0.0
+   },
+   {
     "trait": "route:update_by_query_rethrottle",
+    "requetes": 1,
+    "part": 0.0
+   },
+   {
+    "trait": "parreq:update_by_query.slices",
     "requetes": 1,
     "part": 0.0
    },
@@ -7930,14 +8037,16 @@
   "ingestion.count": 0.4,
   "ingestion.create": 0.5,
   "ingestion.delete": 0.1,
+  "ingestion.delete_by_query": 0.4,
   "ingestion.exists": 0.0,
   "ingestion.get": 0.7,
   "ingestion.index_doc": 6.8,
   "ingestion.index_doc_sans_id": null,
   "ingestion.mget": 0.2,
-  "ingestion.reecriture_en_masse": 3.6,
+  "ingestion.reecriture_en_masse": 3.0,
   "ingestion.refresh": null,
   "ingestion.update": 0.7,
+  "ingestion.update_by_query": 0.3,
   "ingestion.version_externe": null,
   "ingestion.versionnage": null,
   "join.has_child": 0.1,
@@ -9263,11 +9372,11 @@
    },
    "traits": [
     {
-     "trait": "dsl:query_string.query",
+     "trait": "dsl:query_string",
      "requetes": 81
     },
     {
-     "trait": "dsl:query_string",
+     "trait": "dsl:query_string.query",
      "requetes": 81
     },
     {
@@ -9303,11 +9412,11 @@
      "requetes": 26
     },
     {
-     "trait": "dsl:percolate.field",
+     "trait": "dsl:percolate",
      "requetes": 20
     },
     {
-     "trait": "dsl:percolate",
+     "trait": "dsl:percolate.field",
      "requetes": 20
     },
     {
@@ -9327,11 +9436,11 @@
      "requetes": 12
     },
     {
-     "trait": "dsl:script_score",
+     "trait": "dsl:script_score.script",
      "requetes": 11
     },
     {
-     "trait": "dsl:script_score.script",
+     "trait": "dsl:script_score",
      "requetes": 11
     },
     {
@@ -9351,11 +9460,11 @@
      "requetes": 9
     },
     {
-     "trait": "dsl:simple_query_string.query",
+     "trait": "dsl:simple_query_string",
      "requetes": 9
     },
     {
-     "trait": "dsl:simple_query_string",
+     "trait": "dsl:simple_query_string.query",
      "requetes": 9
     },
     {
@@ -9399,19 +9508,19 @@
      "requetes": 5
     },
     {
-     "trait": "dsl:script.script",
-     "requetes": 4
-    },
-    {
      "trait": "dsl:script",
      "requetes": 4
     },
     {
-     "trait": "dsl:more_like_this",
+     "trait": "dsl:script.script",
      "requetes": 4
     },
     {
      "trait": "dsl:more_like_this.like",
+     "requetes": 4
+    },
+    {
+     "trait": "dsl:more_like_this",
      "requetes": 4
     },
     {
@@ -9431,15 +9540,15 @@
      "requetes": 4
     },
     {
-     "trait": "dsl:text_expansion.model_text",
-     "requetes": 4
-    },
-    {
      "trait": "dsl:text_expansion.model_id",
      "requetes": 4
     },
     {
      "trait": "dsl:text_expansion",
+     "requetes": 4
+    },
+    {
+     "trait": "dsl:text_expansion.model_text",
      "requetes": 4
     },
     {
@@ -9459,15 +9568,15 @@
      "requetes": 3
     },
     {
+     "trait": "dsl:combined_fields.fields",
+     "requetes": 3
+    },
+    {
      "trait": "dsl:combined_fields.query",
      "requetes": 3
     },
     {
      "trait": "dsl:combined_fields",
-     "requetes": 3
-    },
-    {
-     "trait": "dsl:combined_fields.fields",
      "requetes": 3
     },
     {
@@ -9479,11 +9588,11 @@
      "requetes": 3
     },
     {
-     "trait": "dsl:more_like_this.fields",
+     "trait": "dsl:more_like_this.min_term_freq",
      "requetes": 3
     },
     {
-     "trait": "dsl:more_like_this.min_term_freq",
+     "trait": "dsl:more_like_this.fields",
      "requetes": 3
     },
     {
@@ -9507,15 +9616,11 @@
      "requetes": 2
     },
     {
-     "trait": "dsl:rule.ruleset_ids",
-     "requetes": 2
-    },
-    {
      "trait": "dsl:rule.match_criteria",
      "requetes": 2
     },
     {
-     "trait": "dsl:rule",
+     "trait": "dsl:rule.ruleset_ids",
      "requetes": 2
     },
     {
@@ -9523,11 +9628,11 @@
      "requetes": 2
     },
     {
-     "trait": "dsl:sparse_vector.boost",
+     "trait": "dsl:rule",
      "requetes": 2
     },
     {
-     "trait": "dsl:sample.foo",
+     "trait": "dsl:sparse_vector.boost",
      "requetes": 2
     },
     {
@@ -9539,6 +9644,10 @@
      "requetes": 2
     },
     {
+     "trait": "dsl:sample.foo",
+     "requetes": 2
+    },
+    {
      "trait": "dsl:combined_fields.operator",
      "requetes": 2
     },
@@ -9547,19 +9656,19 @@
      "requetes": 2
     },
     {
-     "trait": "dsl:function_score.boost",
-     "requetes": 2
-    },
-    {
      "trait": "dsl:function_score.boost_mode",
      "requetes": 2
     },
     {
-     "trait": "dsl:function_score.score_mode",
+     "trait": "dsl:function_score.boost",
      "requetes": 2
     },
     {
      "trait": "dsl:function_score.min_score",
+     "requetes": 2
+    },
+    {
+     "trait": "dsl:function_score.score_mode",
      "requetes": 2
     },
     {
@@ -9599,11 +9708,11 @@
      "requetes": 2
     },
     {
-     "trait": "dsl:weighted_tokens",
+     "trait": "dsl:weighted_tokens.tokens",
      "requetes": 2
     },
     {
-     "trait": "dsl:weighted_tokens.tokens",
+     "trait": "dsl:weighted_tokens",
      "requetes": 2
     },
     {
@@ -9659,10 +9768,6 @@
      "requetes": 1
     },
     {
-     "trait": "dsl:geo_bounding_box.bottom",
-     "requetes": 1
-    },
-    {
      "trait": "dsl:geo_bounding_box.left",
      "requetes": 1
     },
@@ -9672,6 +9777,10 @@
     },
     {
      "trait": "dsl:geo_bounding_box.top",
+     "requetes": 1
+    },
+    {
+     "trait": "dsl:geo_bounding_box.bottom",
      "requetes": 1
     },
     {
@@ -9695,11 +9804,11 @@
      "requetes": 1
     },
     {
-     "trait": "dsl:percolate.version",
+     "trait": "dsl:percolate.index",
      "requetes": 1
     },
     {
-     "trait": "dsl:percolate.index",
+     "trait": "dsl:percolate.version",
      "requetes": 1
     },
     {
@@ -9783,11 +9892,11 @@
      "requetes": 1
     },
     {
-     "trait": "dsl:span_field_masking.field",
+     "trait": "dsl:span_field_masking.query",
      "requetes": 1
     },
     {
-     "trait": "dsl:span_field_masking.query",
+     "trait": "dsl:span_field_masking.field",
      "requetes": 1
     },
     {
@@ -9819,7 +9928,7 @@
      "requetes": 1
     },
     {
-     "trait": "dsl:sparse_vector.token2",
+     "trait": "dsl:sparse_vector.token3",
      "requetes": 1
     },
     {
@@ -9827,15 +9936,7 @@
      "requetes": 1
     },
     {
-     "trait": "dsl:sparse_vector.token3",
-     "requetes": 1
-    },
-    {
-     "trait": "dsl:sparse_vector.only_score_pruned_tokens",
-     "requetes": 1
-    },
-    {
-     "trait": "dsl:sparse_vector.tokens_freq_ratio_threshold",
+     "trait": "dsl:sparse_vector.token2",
      "requetes": 1
     },
     {
@@ -9843,15 +9944,23 @@
      "requetes": 1
     },
     {
+     "trait": "dsl:sparse_vector.tokens_freq_ratio_threshold",
+     "requetes": 1
+    },
+    {
+     "trait": "dsl:sparse_vector.only_score_pruned_tokens",
+     "requetes": 1
+    },
+    {
      "trait": "dsl:terms_set.minimum_should_match_field",
      "requetes": 1
     },
     {
-     "trait": "dsl:terms_set.boost",
+     "trait": "dsl:terms_set.minimum_should_match_script",
      "requetes": 1
     },
     {
-     "trait": "dsl:terms_set.minimum_should_match_script",
+     "trait": "dsl:terms_set.boost",
      "requetes": 1
     },
     {
@@ -9863,11 +9972,11 @@
      "requetes": 1
     },
     {
-     "trait": "dsl:wrapper.query",
+     "trait": "dsl:wrapper",
      "requetes": 1
     },
     {
-     "trait": "dsl:wrapper",
+     "trait": "dsl:wrapper.query",
      "requetes": 1
     },
     {
@@ -9919,10 +10028,6 @@
      "requetes": 34
     },
     {
-     "trait": "agg:moving_fn.buckets_path",
-     "requetes": 34
-    },
-    {
      "trait": "agg:moving_fn",
      "requetes": 34
     },
@@ -9931,11 +10036,11 @@
      "requetes": 34
     },
     {
-     "trait": "agg:top_hits",
-     "requetes": 31
+     "trait": "agg:moving_fn.buckets_path",
+     "requetes": 34
     },
     {
-     "trait": "agg:percentiles",
+     "trait": "agg:top_hits",
      "requetes": 31
     },
     {
@@ -9943,11 +10048,11 @@
      "requetes": 31
     },
     {
-     "trait": "agg:top_hits.size",
-     "requetes": 29
+     "trait": "agg:percentiles",
+     "requetes": 31
     },
     {
-     "trait": "agg:geo_centroid.field",
+     "trait": "agg:top_hits.size",
      "requetes": 29
     },
     {
@@ -9955,15 +10060,19 @@
      "requetes": 29
     },
     {
+     "trait": "agg:geo_centroid.field",
+     "requetes": 29
+    },
+    {
      "trait": "agg:geohash_grid",
      "requetes": 24
     },
     {
-     "trait": "agg:geohash_grid.field",
+     "trait": "agg:geohash_grid.precision",
      "requetes": 24
     },
     {
-     "trait": "agg:geohash_grid.precision",
+     "trait": "agg:geohash_grid.field",
      "requetes": 24
     },
     {
@@ -9979,11 +10088,11 @@
      "requetes": 23
     },
     {
-     "trait": "agg:auto_date_histogram",
+     "trait": "agg:auto_date_histogram.field",
      "requetes": 23
     },
     {
-     "trait": "agg:auto_date_histogram.field",
+     "trait": "agg:auto_date_histogram",
      "requetes": 23
     },
     {
@@ -9991,7 +10100,7 @@
      "requetes": 15
     },
     {
-     "trait": "agg:top_metrics.sort",
+     "trait": "agg:top_metrics.metrics",
      "requetes": 14
     },
     {
@@ -9999,23 +10108,23 @@
      "requetes": 14
     },
     {
-     "trait": "agg:top_metrics.metrics",
+     "trait": "agg:top_metrics.sort",
      "requetes": 14
-    },
-    {
-     "trait": "agg:filters",
-     "requetes": 13
     },
     {
      "trait": "agg:filters.filters",
      "requetes": 13
     },
     {
-     "trait": "agg:geotile_grid.precision",
-     "requetes": 9
+     "trait": "agg:filters",
+     "requetes": 13
     },
     {
      "trait": "agg:geotile_grid.field",
+     "requetes": 9
+    },
+    {
+     "trait": "agg:geotile_grid.precision",
      "requetes": 9
     },
     {
@@ -10031,11 +10140,11 @@
      "requetes": 7
     },
     {
-     "trait": "agg:geo_bounds.field",
+     "trait": "agg:geo_bounds",
      "requetes": 7
     },
     {
-     "trait": "agg:geo_bounds",
+     "trait": "agg:geo_bounds.field",
      "requetes": 7
     },
     {
@@ -10047,11 +10156,11 @@
      "requetes": 6
     },
     {
-     "trait": "agg:geo_distance.field",
+     "trait": "agg:geo_distance",
      "requetes": 6
     },
     {
-     "trait": "agg:geo_distance",
+     "trait": "agg:geo_distance.field",
      "requetes": 6
     },
     {
@@ -10083,7 +10192,7 @@
      "requetes": 5
     },
     {
-     "trait": "agg:percentile_ranks.field",
+     "trait": "agg:percentile_ranks",
      "requetes": 5
     },
     {
@@ -10091,7 +10200,7 @@
      "requetes": 5
     },
     {
-     "trait": "agg:percentile_ranks",
+     "trait": "agg:percentile_ranks.field",
      "requetes": 5
     },
     {
@@ -10107,19 +10216,19 @@
      "requetes": 4
     },
     {
-     "trait": "agg:significant_text",
-     "requetes": 4
-    },
-    {
      "trait": "agg:significant_text.field",
      "requetes": 4
     },
     {
-     "trait": "agg:geohex_grid.field",
+     "trait": "agg:significant_text",
      "requetes": 4
     },
     {
      "trait": "agg:geohex_grid",
+     "requetes": 4
+    },
+    {
+     "trait": "agg:geohex_grid.field",
      "requetes": 4
     },
     {
@@ -10135,19 +10244,19 @@
      "requetes": 4
     },
     {
-     "trait": "agg:string_stats",
-     "requetes": 4
-    },
-    {
      "trait": "agg:string_stats.field",
      "requetes": 4
     },
     {
-     "trait": "agg:categorize_text.field",
+     "trait": "agg:string_stats",
      "requetes": 4
     },
     {
      "trait": "agg:categorize_text",
+     "requetes": 4
+    },
+    {
+     "trait": "agg:categorize_text.field",
      "requetes": 4
     },
     {
@@ -10195,6 +10304,10 @@
      "requetes": 3
     },
     {
+     "trait": "agg:frequent_item_sets.minimum_support",
+     "requetes": 3
+    },
+    {
      "trait": "agg:frequent_item_sets",
      "requetes": 3
     },
@@ -10211,10 +10324,6 @@
      "requetes": 3
     },
     {
-     "trait": "agg:frequent_item_sets.minimum_support",
-     "requetes": 3
-    },
-    {
      "trait": "agg:geohex_grid.bounds",
      "requetes": 3
     },
@@ -10223,11 +10332,11 @@
      "requetes": 3
     },
     {
-     "trait": "agg:bucket_sort.size",
+     "trait": "agg:bucket_sort",
      "requetes": 3
     },
     {
-     "trait": "agg:bucket_sort",
+     "trait": "agg:bucket_sort.size",
      "requetes": 3
     },
     {
@@ -10235,19 +10344,11 @@
      "requetes": 3
     },
     {
-     "trait": "agg:cartesian_centroid",
-     "requetes": 3
-    },
-    {
      "trait": "agg:cartesian_centroid.field",
      "requetes": 3
     },
     {
-     "trait": "agg:t_test.b",
-     "requetes": 3
-    },
-    {
-     "trait": "agg:t_test.type",
+     "trait": "agg:cartesian_centroid",
      "requetes": 3
     },
     {
@@ -10256,6 +10357,14 @@
     },
     {
      "trait": "agg:t_test.a",
+     "requetes": 3
+    },
+    {
+     "trait": "agg:t_test.type",
+     "requetes": 3
+    },
+    {
+     "trait": "agg:t_test.b",
      "requetes": 3
     },
     {
@@ -10279,11 +10388,11 @@
      "requetes": 2
     },
     {
-     "trait": "agg:bucket_sort.from",
+     "trait": "agg:bucket_sort.sort",
      "requetes": 2
     },
     {
-     "trait": "agg:bucket_sort.sort",
+     "trait": "agg:bucket_sort.from",
      "requetes": 2
     },
     {
@@ -10311,15 +10420,7 @@
      "requetes": 2
     },
     {
-     "trait": "agg:scripted_metric.init_script",
-     "requetes": 2
-    },
-    {
      "trait": "agg:scripted_metric",
-     "requetes": 2
-    },
-    {
-     "trait": "agg:scripted_metric.combine_script",
      "requetes": 2
     },
     {
@@ -10331,11 +10432,19 @@
      "requetes": 2
     },
     {
-     "trait": "agg:weighted_avg",
+     "trait": "agg:scripted_metric.combine_script",
+     "requetes": 2
+    },
+    {
+     "trait": "agg:scripted_metric.init_script",
      "requetes": 2
     },
     {
      "trait": "agg:weighted_avg.value",
+     "requetes": 2
+    },
+    {
+     "trait": "agg:weighted_avg",
      "requetes": 2
     },
     {
@@ -10355,11 +10464,11 @@
      "requetes": 1
     },
     {
-     "trait": "agg:children.type",
+     "trait": "agg:children",
      "requetes": 1
     },
     {
-     "trait": "agg:children",
+     "trait": "agg:children.type",
      "requetes": 1
     },
     {
@@ -10375,11 +10484,11 @@
      "requetes": 1
     },
     {
-     "trait": "agg:random_sampler.probability",
+     "trait": "agg:random_sampler",
      "requetes": 1
     },
     {
-     "trait": "agg:random_sampler",
+     "trait": "agg:random_sampler.probability",
      "requetes": 1
     },
     {
@@ -10395,15 +10504,15 @@
      "requetes": 1
     },
     {
-     "trait": "agg:variable_width_histogram.field",
-     "requetes": 1
-    },
-    {
      "trait": "agg:variable_width_histogram.buckets",
      "requetes": 1
     },
     {
      "trait": "agg:variable_width_histogram",
+     "requetes": 1
+    },
+    {
+     "trait": "agg:variable_width_histogram.field",
      "requetes": 1
     },
     {
@@ -10483,15 +10592,15 @@
      "requetes": 1
     },
     {
-     "trait": "agg:bucket_count_ks_test.alternative",
-     "requetes": 1
-    },
-    {
      "trait": "agg:bucket_count_ks_test.buckets_path",
      "requetes": 1
     },
     {
      "trait": "agg:bucket_count_ks_test",
+     "requetes": 1
+    },
+    {
+     "trait": "agg:bucket_count_ks_test.alternative",
      "requetes": 1
     },
     {
@@ -10515,10 +10624,6 @@
      "requetes": 1
     },
     {
-     "trait": "agg:inference.buckets_path",
-     "requetes": 1
-    },
-    {
      "trait": "agg:inference.model_id",
      "requetes": 1
     },
@@ -10527,7 +10632,7 @@
      "requetes": 1
     },
     {
-     "trait": "agg:max_bucket",
+     "trait": "agg:inference.buckets_path",
      "requetes": 1
     },
     {
@@ -10535,7 +10640,7 @@
      "requetes": 1
     },
     {
-     "trait": "agg:min_bucket",
+     "trait": "agg:max_bucket",
      "requetes": 1
     },
     {
@@ -10543,11 +10648,11 @@
      "requetes": 1
     },
     {
-     "trait": "agg:moving_percentiles.window",
+     "trait": "agg:min_bucket",
      "requetes": 1
     },
     {
-     "trait": "agg:moving_percentiles.buckets_path",
+     "trait": "agg:moving_percentiles.window",
      "requetes": 1
     },
     {
@@ -10555,7 +10660,7 @@
      "requetes": 1
     },
     {
-     "trait": "agg:normalize.buckets_path",
+     "trait": "agg:moving_percentiles.buckets_path",
      "requetes": 1
     },
     {
@@ -10563,11 +10668,15 @@
      "requetes": 1
     },
     {
-     "trait": "agg:normalize",
+     "trait": "agg:normalize.buckets_path",
      "requetes": 1
     },
     {
      "trait": "agg:normalize.method",
+     "requetes": 1
+    },
+    {
+     "trait": "agg:normalize",
      "requetes": 1
     },
     {
@@ -10583,7 +10692,7 @@
      "requetes": 1
     },
     {
-     "trait": "agg:serial_diff",
+     "trait": "agg:serial_diff.buckets_path",
      "requetes": 1
     },
     {
@@ -10591,11 +10700,7 @@
      "requetes": 1
     },
     {
-     "trait": "agg:serial_diff.buckets_path",
-     "requetes": 1
-    },
-    {
-     "trait": "agg:stats_bucket.buckets_path",
+     "trait": "agg:serial_diff",
      "requetes": 1
     },
     {
@@ -10603,11 +10708,15 @@
      "requetes": 1
     },
     {
-     "trait": "agg:sum_bucket",
+     "trait": "agg:stats_bucket.buckets_path",
      "requetes": 1
     },
     {
      "trait": "agg:sum_bucket.buckets_path",
+     "requetes": 1
+    },
+    {
+     "trait": "agg:sum_bucket",
      "requetes": 1
     },
     {
@@ -10752,86 +10861,6 @@
     },
     {
      "trait": "agg:date_histogram.format",
-     "requetes": 1
-    }
-   ]
-  },
-  {
-   "capacite": "ingestion.reecriture_en_masse",
-   "nom": "_update_by_query, _delete_by_query, _reindex, pipelines d'ingestion",
-   "etat": "refuse",
-   "motif": "pas_encore",
-   "requetes": 192,
-   "part": 3.6,
-   "par_source": {
-    "clients": {
-     "requetes": 3,
-     "part": 2.1
-    },
-    "doc": {
-     "requetes": 174,
-     "part": 4.4
-    },
-    "github": {
-     "requetes": 8,
-     "part": 2.4
-    },
-    "rally": {
-     "requetes": 7,
-     "part": 0.8
-    }
-   },
-   "traits": [
-    {
-     "trait": "route:ingest.put_pipeline",
-     "requetes": 70
-    },
-    {
-     "trait": "route:reindex",
-     "requetes": 42
-    },
-    {
-     "trait": "route:delete_by_query",
-     "requetes": 20
-    },
-    {
-     "trait": "route:ingest.simulate",
-     "requetes": 19
-    },
-    {
-     "trait": "route:update_by_query",
-     "requetes": 15
-    },
-    {
-     "trait": "route:ingest.delete_pipeline",
-     "requetes": 15
-    },
-    {
-     "trait": "route:simulate.ingest",
-     "requetes": 3
-    },
-    {
-     "trait": "route:ingest.processor_grok",
-     "requetes": 3
-    },
-    {
-     "trait": "route:ingest.geo_ip_stats",
-     "requetes": 1
-    },
-    {
-     "trait": "route:ingest.get_pipeline",
-     "requetes": 1
-    },
-    {
-     "trait": "route:delete_by_query_rethrottle",
-     "requetes": 1
-    },
-    {
-     "trait": "route:reindex_rethrottle",
-     "requetes": 1
-    },
-    {
-     "trait": "route:update_by_query_rethrottle",
      "requetes": 1
     }
    ]
@@ -11103,11 +11132,11 @@
      "requetes": 2
     },
     {
-     "trait": "champ:metrics",
+     "trait": "champ:default_metric",
      "requetes": 2
     },
     {
-     "trait": "champ:default_metric",
+     "trait": "champ:metrics",
      "requetes": 2
     },
     {
@@ -11277,6 +11306,94 @@
    ]
   },
   {
+   "capacite": "ingestion.reecriture_en_masse",
+   "nom": "_reindex, pipelines d'ingestion",
+   "etat": "refuse",
+   "motif": "pas_encore",
+   "requetes": 157,
+   "part": 3.0,
+   "par_source": {
+    "clients": {
+     "requetes": 1,
+     "part": 0.7
+    },
+    "doc": {
+     "requetes": 149,
+     "part": 3.8
+    },
+    "rally": {
+     "requetes": 7,
+     "part": 0.8
+    }
+   },
+   "traits": [
+    {
+     "trait": "route:ingest.put_pipeline",
+     "requetes": 70
+    },
+    {
+     "trait": "route:reindex",
+     "requetes": 42
+    },
+    {
+     "trait": "route:ingest.simulate",
+     "requetes": 19
+    },
+    {
+     "trait": "route:ingest.delete_pipeline",
+     "requetes": 15
+    },
+    {
+     "trait": "parreq:reindex.wait_for_completion",
+     "requetes": 10
+    },
+    {
+     "trait": "route:simulate.ingest",
+     "requetes": 3
+    },
+    {
+     "trait": "route:ingest.processor_grok",
+     "requetes": 3
+    },
+    {
+     "trait": "parreq:reindex.script",
+     "requetes": 3
+    },
+    {
+     "trait": "parreq:reindex.refresh",
+     "requetes": 2
+    },
+    {
+     "trait": "parreq:reindex.max_docs",
+     "requetes": 2
+    },
+    {
+     "trait": "route:ingest.geo_ip_stats",
+     "requetes": 1
+    },
+    {
+     "trait": "route:ingest.get_pipeline",
+     "requetes": 1
+    },
+    {
+     "trait": "route:delete_by_query_rethrottle",
+     "requetes": 1
+    },
+    {
+     "trait": "route:reindex_rethrottle",
+     "requetes": 1
+    },
+    {
+     "trait": "parreq:reindex.slices",
+     "requetes": 1
+    },
+    {
+     "trait": "route:update_by_query_rethrottle",
+     "requetes": 1
+    }
+   ]
+  },
+  {
    "capacite": "agg.terms",
    "nom": "terms",
    "etat": "partiel",
@@ -11331,11 +11448,11 @@
      "requetes": 1
     },
     {
-     "trait": "agg:terms.show_term_doc_count_error",
+     "trait": "agg:terms.shard_min_doc_count",
      "requetes": 1
     },
     {
-     "trait": "agg:terms.shard_min_doc_count",
+     "trait": "agg:terms.show_term_doc_count_error",
      "requetes": 1
     }
    ]
@@ -11923,11 +12040,11 @@
    },
    "traits": [
     {
-     "trait": "analyzer:my_index_analyzer",
+     "trait": "analyzer:my_search_analyzer",
      "requetes": 5
     },
     {
-     "trait": "analyzer:my_search_analyzer",
+     "trait": "analyzer:my_index_analyzer",
      "requetes": 5
     },
     {
@@ -11951,11 +12068,11 @@
      "requetes": 1
     },
     {
-     "trait": "analyzer:wildcard_suffix",
+     "trait": "analyzer:wildcard_suffix_search_time",
      "requetes": 1
     },
     {
-     "trait": "analyzer:wildcard_suffix_search_time",
+     "trait": "analyzer:wildcard_suffix",
      "requetes": 1
     },
     {
@@ -12029,6 +12146,42 @@
    ]
   },
   {
+   "capacite": "ingestion.update_by_query",
+   "nom": "POST /{index}/_update_by_query",
+   "etat": "partiel",
+   "motif": null,
+   "requetes": 9,
+   "part": 0.2,
+   "par_source": {
+    "doc": {
+     "requetes": 9,
+     "part": 0.2
+    }
+   },
+   "traits": [
+    {
+     "trait": "parreq:update_by_query.script",
+     "requetes": 6
+    },
+    {
+     "trait": "parreq:update_by_query.pipeline",
+     "requetes": 2
+    },
+    {
+     "trait": "parreq:update_by_query.slice",
+     "requetes": 2
+    },
+    {
+     "trait": "parreq:update_by_query.routing",
+     "requetes": 1
+    },
+    {
+     "trait": "parreq:update_by_query.slices",
+     "requetes": 1
+    }
+   ]
+  },
+  {
    "capacite": "dsl.match",
    "nom": "match",
    "etat": "partiel",
@@ -12055,11 +12208,11 @@
      "requetes": 3
     },
     {
-     "trait": "dsl:match.zero_terms_query",
+     "trait": "dsl:match.auto_generate_synonyms_phrase_query",
      "requetes": 2
     },
     {
-     "trait": "dsl:match.auto_generate_synonyms_phrase_query",
+     "trait": "dsl:match.zero_terms_query",
      "requetes": 2
     },
     {
@@ -12067,7 +12220,7 @@
      "requetes": 2
     },
     {
-     "trait": "dsl:match.fuzzy_transpositions",
+     "trait": "dsl:match.prefix_length",
      "requetes": 1
     },
     {
@@ -12075,7 +12228,7 @@
      "requetes": 1
     },
     {
-     "trait": "dsl:match.prefix_length",
+     "trait": "dsl:match.fuzzy_transpositions",
      "requetes": 1
     }
    ]
@@ -12235,11 +12388,11 @@
      "requetes": 1
     },
     {
-     "trait": "dsl:has_child.min_children",
+     "trait": "dsl:has_child.max_children",
      "requetes": 1
     },
     {
-     "trait": "dsl:has_child.max_children",
+     "trait": "dsl:has_child.min_children",
      "requetes": 1
     },
     {
@@ -12252,6 +12405,34 @@
     },
     {
      "trait": "dsl:has_parent.score",
+     "requetes": 1
+    }
+   ]
+  },
+  {
+   "capacite": "ingestion.delete_by_query",
+   "nom": "POST /{index}/_delete_by_query",
+   "etat": "partiel",
+   "motif": null,
+   "requetes": 4,
+   "part": 0.1,
+   "par_source": {
+    "doc": {
+     "requetes": 4,
+     "part": 0.1
+    }
+   },
+   "traits": [
+    {
+     "trait": "parreq:delete_by_query.slice",
+     "requetes": 2
+    },
+    {
+     "trait": "parreq:delete_by_query.routing",
+     "requetes": 1
+    },
+    {
+     "trait": "parreq:delete_by_query.slices",
      "requetes": 1
     }
    ]
@@ -12415,15 +12596,15 @@
    },
    "traits": [
     {
+     "trait": "dsl:fuzzy.rewrite",
+     "requetes": 1
+    },
+    {
      "trait": "dsl:fuzzy.max_expansions",
      "requetes": 1
     },
     {
      "trait": "dsl:fuzzy.prefix_length",
-     "requetes": 1
-    },
-    {
-     "trait": "dsl:fuzzy.rewrite",
      "requetes": 1
     }
    ]

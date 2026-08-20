@@ -20,6 +20,9 @@
 //! - [`fetch`] : ce que la reponse transporte — `fields`, `docvalue_fields`,
 //!   `stored_fields`. Les trois lisent a trois endroits differents (le
 //!   `_source`, les colonnes, les champs stockes), et c'est tout le sujet.
+//! - [`parrequete`] : `_delete_by_query` et `_update_by_query` — chercher sur un
+//!   instantane, puis ecrire chaque document **a condition qu'il n'ait pas
+//!   bouge**. C'est cette condition qui fait les `version_conflicts`.
 //! - [`reglages`] : les reglages d'index — ce qui est exploite, ce qui est
 //!   accepte sans effet, ce qui est refuse. Lu depuis trois routes, donc ecrit
 //!   une seule fois.
@@ -42,6 +45,7 @@ pub mod fetch;
 pub mod mapping;
 pub mod msm;
 pub mod nested;
+pub mod parrequete;
 pub mod regexp;
 pub mod reglages;
 pub mod scroll;

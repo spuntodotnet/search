@@ -51,7 +51,8 @@ réel est la **couche de compatibilité** au-dessus.
   c'est ce que la 8 a supprimé — inventaire mesuré dans
   [`docs/compat-es7.md`](docs/compat-es7.md).
 - **Ingestion** : `_doc`, `_create`, `_update`, `_mget`, `_bulk` (NDJSON),
-  sémantique de `refresh`.
+  sémantique de `refresh`, et la modification **par requête**
+  (`_delete_by_query`, `_update_by_query`).
 - **Mappings** : types de base, multi-fields (`.keyword`), analyzers
   déclaratifs, `_source`, mapping dynamique.
 - **Recherche** : le noyau du Query DSL (`bool`, `match`, `multi_match` (avec
@@ -188,8 +189,21 @@ ne le porte pas. La **forme** est ce qui compte pour un client : chaque valeur
 est un tableau, même pour un champ mono-valué, et un champ absent n'a pas de
 clé.
 
+**Modifier ou purger par requête** — ce qu'un script de maintenance fait tous
+les jours — passe désormais : `_delete_by_query` (purger les documents d'un
+locataire, retirer un lot par filtre) et `_update_by_query`, qui **sans script**
+réindexe depuis le `_source`, c'est-à-dire exactement le geste d'après un
+`PUT /_mapping`. Les deux rendent les compteurs d'ES — `total`, `deleted` /
+`updated`, `batches`, `version_conflicts`, `failures[]` — et les
+`version_conflicts` ne sont pas un ornement : la commande relève chaque document
+sur l'instantané de la recherche puis n'écrit **que s'il n'a pas bougé depuis**,
+comme ES. `conflicts=proceed` les absorbe, `abort` (le défaut) s'arrête à la fin
+du lot fautif et rend 409. Ce qui reste refusé, par son nom : `script`
+(Painless), `slices`, `wait_for_completion=false` (il rendrait une tâche, et
+ferrite n'a pas d'API `_tasks`) et `requests_per_second`.
+
 **Ce qui n'y est pas encore** : `highlight`, `search_after`, `_msearch`,
-`_update_by_query` / `_reindex`, `query_string`, les templates de composants
+`_reindex`, `query_string`, les templates de composants
 (`_component_template`), les champs calculés par un script Painless
 (`script_fields`, `runtime_mappings` — leur objet **vide** est accepté, il ne
 demande rien) et les analyzers des autres langues.
@@ -205,8 +219,8 @@ rang qu'un `significant_terms` avec script. Sur un corpus de **5 311 requêtes
 réelles** — la documentation de référence d'ES 8.15, les tracks Rally d'Elastic,
 les tests des clients officiels et le code de 184 dépôts open source — la
 question posée est « celle-ci passerait-elle **entièrement** ? », parce qu'une
-requête supportée à 90 % est une requête qui échoue. Réponse : **90,8 % des
-requêtes trouvées dans du code d'application**, 39,3 % des exemples de la
+requête supportée à 90 % est une requête qui échoue. Réponse : **93,2 % des
+requêtes trouvées dans du code d'application**, 39,6 % des exemples de la
 documentation, 27,2 % des tracks de benchmark. L'écart entre ces trois nombres
 est le résultat ; la méthode, les sources et les biais sont dans
 [`docs/usage.md`](docs/usage.md), le corpus est publié avec.

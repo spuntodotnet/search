@@ -8,6 +8,7 @@ pub mod cluster;
 pub mod docs;
 pub mod fieldcaps;
 pub mod indices;
+pub mod parrequete;
 pub mod search;
 pub mod stats;
 pub mod templates;
@@ -54,7 +55,23 @@ impl IntoResponse for Json {
     }
 }
 
+/// Le routeur complet.
+///
+/// Les routes vivent dans un routeur **interne**, monte comme service de repli
+/// d'un routeur vide. C'est ce qui place [`elastic_headers`] a l'exterieur du
+/// routage lui-meme, et non autour de chaque poignee : le header
+/// `X-elastic-product` et le corps d'un 405 sont alors poses sur *toutes* les
+/// reponses, y compris celles qu'axum fabrique tout seul. Une middleware posee
+/// a l'interieur ne voit pas le `Allow` qu'axum ajoute apres coup, donc ne peut
+/// pas dire quelles methodes la route accepte — ce qui est exactement
+/// l'information qu'un 405 doit porter.
 pub fn router(state: SharedState) -> Router {
+    Router::new()
+        .fallback_service(routes(state))
+        .layer(axum::middleware::from_fn(elastic_headers))
+}
+
+fn routes(state: SharedState) -> Router {
     Router::new()
         .route("/", get(cluster::root))
         .route("/_cluster/health", get(cluster::health))
@@ -145,17 +162,25 @@ pub fn router(state: SharedState) -> Router {
             post(|s, p, u, b| docs::mget(s, Some(p), u, b))
                 .get(|s, p, u, b| docs::mget(s, Some(p), u, b)),
         )
+        // Modifier ou purger **par requete** : ce qu'un script de maintenance
+        // fait tous les jours. Les deux routes sont en `POST` seul, comme chez
+        // ES — un `GET` y rend 405, pas 400.
+        .route("/{index}/_update_by_query", post(parrequete::reindexer))
+        .route("/{index}/_delete_by_query", post(parrequete::supprimer))
         // Des routes qu'ES expose et que ferrite n'implemente pas : mieux vaut
-        // le dire que de laisser croire a une faute de frappe.
-        .route(
-            "/{index}/_update_by_query",
-            post(unsupported_route).get(unsupported_route),
-        )
-        .route(
-            "/{index}/_delete_by_query",
-            post(unsupported_route).get(unsupported_route),
-        )
+        // le dire que de laisser croire a une faute de frappe. Les
+        // `_rethrottle` en font partie : ils changent le debit d'une **tache**
+        // en cours, et une commande par requete de ferrite est finie quand elle
+        // repond.
         .route("/_reindex", post(unsupported_route))
+        .route(
+            "/_delete_by_query/{task_id}/_rethrottle",
+            post(unsupported_route),
+        )
+        .route(
+            "/_update_by_query/{task_id}/_rethrottle",
+            post(unsupported_route),
+        )
         .route(
             "/{index}/_settings",
             put(indices::put_settings)
@@ -255,7 +280,6 @@ pub fn router(state: SharedState) -> Router {
                 .delete(aliases::retirer),
         )
         .fallback(no_handler)
-        .layer(axum::middleware::from_fn(elastic_headers))
         .with_state(state)
 }
 
@@ -266,6 +290,42 @@ async fn unsupported_route(uri: Uri) -> EsError {
         "ferrite n'implemente pas la route [{}] dans cette version (voir docs/compat.md)",
         uri.path()
     ))
+}
+
+/// Le 405 d'ES quand la route existe mais pas pour cette methode.
+///
+/// axum le rend **vide** ; ES rend un corps, et il est utile : il dit quelles
+/// methodes la route accepte. `POST /{index}/_delete_by_query` existe,
+/// `GET /{index}/_delete_by_query` non, et un client qui recoit 405 sans corps
+/// n'a aucun moyen de savoir laquelle des deux il a manquee. Le header `Allow`
+/// est celui qu'axum a deja pose.
+fn methode_interdite(chemin: &str, methode: &str, resp: &Response) -> Response {
+    let permises = resp
+        .headers()
+        .get(header::ALLOW)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let body = json!({
+        "error": format!(
+            "Incorrect HTTP method for uri [{chemin}] and method [{methode}], allowed: [{permises}]"
+        ),
+        "status": 405,
+    });
+    let mut out = (
+        StatusCode::METHOD_NOT_ALLOWED,
+        [(header::CONTENT_TYPE, "application/json")],
+        serde_json::to_vec(&body).unwrap(),
+    )
+        .into_response();
+    if let Some(allow) = resp.headers().get(header::ALLOW) {
+        out.headers_mut().insert(header::ALLOW, allow.clone());
+    }
+    out
 }
 
 /// Le 400 d'ES pour une route inconnue, au format exact (une chaine, pas un
@@ -299,8 +359,12 @@ async fn elastic_headers(req: Request, next: Next) -> Response {
                 .any(|kv| kv == "pretty" || kv.starts_with("pretty="))
         })
         .unwrap_or(false);
+    let (chemin, methode) = (req.uri().to_string(), req.method().to_string());
 
     let mut resp = next.run(req).await;
+    if resp.status() == StatusCode::METHOD_NOT_ALLOWED {
+        resp = methode_interdite(&chemin, &methode, &resp);
+    }
     resp.headers_mut().insert(
         "X-elastic-product",
         HeaderValue::from_static("Elasticsearch"),
