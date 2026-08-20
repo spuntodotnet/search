@@ -974,7 +974,8 @@
           "sort",
           "size",
           "la recherche par chaîne",
-          "routing"
+          "routing",
+          "les paramètres de la recherche interne"
         ]
       }
     },
@@ -1009,7 +1010,8 @@
           "sort",
           "size",
           "la recherche par chaîne",
-          "routing"
+          "routing",
+          "les paramètres de la recherche interne"
         ]
       }
     },

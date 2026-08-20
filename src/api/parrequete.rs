@@ -408,6 +408,27 @@ fn refuser_les_parametres_non_tenus(p: &mut Params, route: &str, geste: Geste) -
              dit plus combien de documents la commande a traites (voir docs/compat.md)"
         )));
     }
+    // Les parametres de **recherche** qu'ES accepte ici parce que la commande
+    // ouvre un scroll : ils ne changent rien a ce qu'elle ecrit, mais ES les
+    // connait. Les laisser tomber dans « unrecognized parameter » les ferait
+    // passer pour des fautes de frappe.
+    for param in [
+        "scroll",
+        "search_timeout",
+        "search_type",
+        "request_cache",
+        "stats",
+        "version",
+        "sort",
+    ] {
+        if p.opt(param).is_some() {
+            return Err(EsError::unsupported(format!(
+                "ferrite ne supporte pas [{param}] sur [{route}] : il porte sur la **recherche** \
+                 interne de la commande, que ferrite n'expose pas — elle ne rend aucun document \
+                 (voir docs/compat.md)"
+            )));
+        }
+    }
     if geste == Geste::Reindexer && p.opt("pipeline").is_some() {
         return Err(EsError::unsupported(
             "ferrite ne supporte pas [pipeline] sur [_update_by_query] : les pipelines \

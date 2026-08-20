@@ -238,9 +238,9 @@ Cet inventaire est aussi ce qui **borne un tirage au sort**. Un fuzzer
 différentiel ([`tests/compat/fuzz_vs_es.py`](tests/compat/fuzz_vs_es.py)) génère
 des mappings, des documents et des requêtes dans le périmètre que `compat.yaml`
 déclare, les pose à ferrite **et** à un vrai Elasticsearch 8.15, et compare les
-réponses champ par champ : **2 700 cas, 112 738 requêtes, 1 divergence réelle**
-sur dix plages de graines, dont six jamais utilisées pour corriger — elle est un
-ordre que BM25 sépare, ouverte, et décrite plutôt que tue. Il
+réponses champ par champ : **3 200 cas, 141 260 requêtes, 1 divergence réelle**
+sur douze plages de graines, dont six jamais utilisées pour corriger — elle est
+un ordre que BM25 sépare, ouverte, et décrite plutôt que tue. Il
 s'étalonne d'abord contre deux Elasticsearch — tant qu'il n'y est pas à zéro, ce
 qu'il dit de ferrite ne vaut rien. Son premier passage a trouvé vingt et un défauts
 que personne n'avait signalés, tous silencieux ; ils sont racontés dans

@@ -954,6 +954,7 @@ tables:
             - {nom: "size", note: "l'ancien nom de `scroll_size` dans le corps"}
             - {texte: "la recherche par chaîne", note: "`q`, `df`, `analyzer`, `default_operator`, `lenient`, `analyze_wildcard`"}
             - {nom: "routing", note: "ferrite est mono-shard, il n'y a rien à choisir"}
+            - {texte: "les paramètres de la recherche interne", note: "`scroll`, `search_timeout`, `search_type`, `request_cache`, `stats`, `version` — la commande ne rend aucun document"}
         conformance:
           apis: [delete_by_query]
 
@@ -991,6 +992,7 @@ tables:
             - {nom: "size", note: "l'ancien nom de `scroll_size` dans le corps"}
             - {texte: "la recherche par chaîne", note: "`q`, `df`, `analyzer`, `default_operator`, `lenient`, `analyze_wildcard`"}
             - {nom: "routing", note: "ferrite est mono-shard, il n'y a rien à choisir"}
+            - {texte: "les paramètres de la recherche interne", note: "`scroll`, `search_timeout`, `search_type`, `request_cache`, `stats`, `version` — la commande ne rend aucun document"}
         conformance:
           apis: [update_by_query]
 
