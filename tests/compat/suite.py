@@ -796,11 +796,110 @@ def analyzers_sur_mesure(es):
         "x": {"type": "custom", "tokenizer": "standard", "filter": ["porter_stem"]}}}}),
         contains="ne supporte pas le filtre [porter_stem]")
     refused(lambda: es.indices.create(index="ana_ko", settings={"analysis": {"analyzer": {
-        "x": {"type": "custom", "tokenizer": "ngram"}}}}),
-        contains="ne supporte pas le tokenizer [ngram]")
+        "x": {"type": "custom", "tokenizer": "pattern"}}}}),
+        contains="ne supporte pas le tokenizer [pattern]")
     refused(lambda: es.indices.create(index="ana_ko", settings={"analysis": {"analyzer": {
         "x": {"type": "french"}}}}), contains="type [french]")
     es.indices.delete(index="ana")
+
+
+@scenario
+def n_grammes(es):
+    """`ngram` et `edge_ngram` — la brique de l'autocomplétion « au fil de la
+    frappe ». Elle travaille à l'**indexation**, là où `match_phrase_prefix`
+    travaille à la requête, et c'est ce qui manquait à Wagtail v7.1.
+
+    Les réglages posés ici sont ceux de Wagtail, mot pour mot."""
+    es.options(ignore_status=404).indices.delete(index="auto")
+    # Sans `max_ngram_diff`, l'écart par défaut est 1 : un `ngram` 3-15 est
+    # refusé, avec le message d'ES.
+    refused(lambda: es.indices.create(index="auto", settings={"analysis": {
+        "tokenizer": {"t": {"type": "ngram", "min_gram": 3, "max_gram": 15}},
+        "analyzer": {"a": {"type": "custom", "tokenizer": "t"}}}}),
+        contains="The difference between max_gram and min_gram in NGram Tokenizer")
+    # `edge_ngram`, lui, n'est pas borné par ce réglage — mesuré contre ES.
+    es.indices.create(index="auto", settings={
+        "index": {"max_ngram_diff": 12},
+        "analysis": {
+            "tokenizer": {
+                "ngram_tokenizer": {"type": "ngram", "min_gram": 3, "max_gram": 15},
+                # Wagtail écrit un `side` sur son tokenizer ; ES ne le lit pas
+                # là (il rend les grammes de tête), donc ferrite non plus.
+                "edgengram_tokenizer": {"type": "edge_ngram", "min_gram": 2,
+                                        "max_gram": 15, "side": "front"},
+                "mots": {"type": "edge_ngram", "min_gram": 1, "max_gram": 10,
+                         "token_chars": ["letter", "digit"]},
+            },
+            "filter": {
+                "ngram": {"type": "ngram", "min_gram": 3, "max_gram": 15},
+                "edgengram": {"type": "edge_ngram", "min_gram": 1, "max_gram": 15},
+            },
+            "analyzer": {
+                "ngram_analyzer": {"type": "custom", "tokenizer": "standard",
+                                   "filter": ["asciifolding", "lowercase", "ngram"]},
+                "edgengram_analyzer": {"type": "custom", "tokenizer": "standard",
+                                       "filter": ["asciifolding", "lowercase", "edgengram"]},
+                "par_mots": {"type": "custom", "tokenizer": "mots",
+                             "filter": ["lowercase"]},
+            },
+        },
+    }, mappings={"properties": {
+        "titre": {"type": "text", "analyzer": "edgengram_analyzer"},
+        "corps": {"type": "text", "analyzer": "ngram_analyzer"},
+    }})
+
+    def analyse(**kw):
+        return [(t["token"], t["position"]) for t in
+                es.indices.analyze(index="auto", **kw)["tokens"]]
+
+    # Le filtre pose tous les grammes d'un mot **a sa position** : c'est ce qui
+    # laisse `match_phrase` fonctionner par-dessus.
+    assert analyse(analyzer="edgengram_analyzer", text="Élan bleu") == [
+        ("e", 0), ("el", 0), ("ela", 0), ("elan", 0), ("b", 1), ("bl", 1),
+        ("ble", 1), ("bleu", 1)]
+    # L'ordre du tokenizer : par position de départ, longueurs croissantes.
+    assert [t for t, _ in analyse(analyzer="par_mots", text="abc de")] == [
+        "a", "ab", "abc", "d", "de"]
+    # Un mot plus court que `min_gram` est jeté, il ne ressort pas tel quel.
+    assert [t for t, _ in analyse(analyzer="ngram_analyzer", text="ab abcd")] == [
+        "abc", "abcd", "bcd"]
+
+    # Et la seule chose qui compte pour un client : chercher un début de mot.
+    es.bulk(operations=[
+        {"index": {"_index": "auto", "_id": "1"}},
+        {"titre": "Élan bleu", "corps": "la grande traversée"},
+        {"index": {"_index": "auto", "_id": "2"}},
+        {"titre": "Éléphant", "corps": "une autre histoire"},
+    ], refresh=True)
+    assert sorted(ids(es.search(index="auto", query={"match": {"titre": "ele"}}))) == ["1", "2"]
+    # Et le revers, mesuré identique chez ES : faute de `search_analyzer`, la
+    # requête est découpée en grammes elle aussi, donc `elan` rend les deux —
+    # `e` et `el` suffisent. C'est exactement ce que `search_analyzer` corrige,
+    # et il reste hors périmètre (voir docs/compat.md).
+    assert sorted(ids(es.search(index="auto", query={"match": {"titre": "elan"}}))) == ["1", "2"]
+    assert ids(es.search(index="auto", query={"match": {"titre": "bleu"}})) == ["1"]
+    # Le n-gramme cherche aussi **au milieu** d'un mot, ce qu'un préfixe ne fait pas.
+    assert ids(es.search(index="auto", query={"match": {"corps": "vers"}})) == ["1"]
+
+    # Le réglage et les déclarations ressortent des settings, et l'index se
+    # relit : un tokenizer rendu en ligne là où le parseur attend un nom
+    # casserait le redémarrage.
+    reglages = es.indices.get_settings(index="auto")["auto"]["settings"]["index"]
+    assert reglages["max_ngram_diff"] == "12", reglages
+
+    # Les bornes impossibles sont refusées, avec les messages d'ES.
+    for bornes, message in (
+        ({"min_gram": 0, "max_gram": 1}, "minGram must be greater than zero"),
+        ({"min_gram": 3, "max_gram": 2}, "minGram must not be greater than maxGram"),
+    ):
+        refused(lambda b=bornes: es.indices.create(index="auto_ko", settings={"analysis": {
+            "tokenizer": {"t": {"type": "edge_ngram", **b}},
+            "analyzer": {"a": {"type": "custom", "tokenizer": "t"}}}}), contains=message)
+    refused(lambda: es.indices.create(index="auto_ko", settings={"analysis": {
+        "tokenizer": {"t": {"type": "ngram", "token_chars": ["custom"]}},
+        "analyzer": {"a": {"type": "custom", "tokenizer": "t"}}}}),
+        contains="requires setting `custom_token_chars`")
+    es.indices.delete(index="auto")
 
 
 @scenario

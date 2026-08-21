@@ -65,7 +65,9 @@ impl Bornes {
             }
         }
         if min < 1 {
-            return Err(EsError::illegal_argument("minGram must be greater than zero"));
+            return Err(EsError::illegal_argument(
+                "minGram must be greater than zero",
+            ));
         }
         if min > max {
             return Err(EsError::illegal_argument(
@@ -385,7 +387,10 @@ impl NgramFilter {
             Some(Value::String(s)) if s == "front" => Cote::Front,
             Some(Value::String(s)) if s == "back" => Cote::Back,
             Some(v) => {
-                let brut = v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string());
+                let brut = v
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| v.to_string());
                 return Err(EsError::illegal_argument(format!("invalid side: {brut}")));
             }
         };
@@ -630,7 +635,10 @@ fn est_espace(c: char) -> bool {
     if matches!(c, '\u{a0}' | '\u{2007}' | '\u{202f}') {
         return false;
     }
-    matches!(c, '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | '\u{1c}'..='\u{1f}') || c.is_whitespace()
+    matches!(
+        c,
+        '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | '\u{1c}'..='\u{1f}'
+    ) || c.is_whitespace()
 }
 
 include!("unicode_classes.rs");
@@ -661,9 +669,7 @@ mod tests {
     fn ordre_des_grammes() {
         assert_eq!(
             tok(false, 3, 15, &[], "abcdef"),
-            [
-                "abc", "abcd", "abcde", "abcdef", "bcd", "bcde", "bcdef", "cde", "cdef", "def"
-            ]
+            ["abc", "abcd", "abcde", "abcdef", "bcd", "bcde", "bcdef", "cde", "cdef", "def"]
         );
     }
 
@@ -687,7 +693,10 @@ mod tests {
     /// Les grammes se comptent en points de code : un emoji est un gramme.
     #[test]
     fn les_grammes_comptent_des_points_de_code() {
-        assert_eq!(tok(false, 1, 1, &[], "a\u{1f600}b"), ["a", "\u{1f600}", "b"]);
+        assert_eq!(
+            tok(false, 1, 1, &[], "a\u{1f600}b"),
+            ["a", "\u{1f600}", "b"]
+        );
     }
 
     /// `Ⅰ` (Nl) n'est pas une lettre chez Java, `½` (No) n'est pas un chiffre :
@@ -701,7 +710,10 @@ mod tests {
         assert!(est_ponctuation('-') && est_ponctuation('_') && est_ponctuation('«'));
         assert!(est_symbole('+') && est_symbole('€') && est_symbole('©'));
         assert!(est_espace(' ') && est_espace('\t') && est_espace('\u{2028}'));
-        assert!(!est_espace('\u{a0}'), "l'insecable n'est pas un espace Java");
+        assert!(
+            !est_espace('\u{a0}'),
+            "l'insecable n'est pas un espace Java"
+        );
     }
 
     fn filtre(f: &NgramFilter, mots: &[&str]) -> Vec<(String, usize)> {
@@ -766,7 +778,10 @@ mod tests {
             cote: Cote::Front,
             preserve: false,
         };
-        assert_eq!(filtre(&f, &["ab", "abcd"]), [("abc".into(), 1), ("bcd".into(), 1)]);
+        assert_eq!(
+            filtre(&f, &["ab", "abcd"]),
+            [("abc".into(), 1), ("bcd".into(), 1)]
+        );
         f.preserve = true;
         assert_eq!(
             filtre(&f, &["ab", "abcd"]),
@@ -808,6 +823,11 @@ mod tests {
         // `edge_ngram` n'est pas borne par `max_ngram_diff`.
         assert!(Bornes::lire(&o(json!({"min_gram": 1, "max_gram": 15})), "t", None).is_ok());
         assert!(Bornes::lire(&o(json!({"min_gram": 1, "max_gram": 15})), "t", Some(1)).is_err());
-        assert!(Bornes::lire(&o(json!({"min_gram": "1", "max_gram": "15"})), "t", Some(14)).is_ok());
+        assert!(Bornes::lire(
+            &o(json!({"min_gram": "1", "max_gram": "15"})),
+            "t",
+            Some(14)
+        )
+        .is_ok());
     }
 }

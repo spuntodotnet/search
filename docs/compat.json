@@ -36,11 +36,11 @@
     }
   },
   "totaux": {
-    "capacites": 192,
-    "supporte": 89,
+    "capacites": 193,
+    "supporte": 90,
     "partiel": 59,
     "refuse": 44,
-    "poids_renseignes": 136
+    "poids_renseignes": 137
   },
   "capacites": [
     {
@@ -252,7 +252,9 @@
           "aliases",
           "settings.number_of_shards",
           "settings.number_of_replicas",
-          "settings.index.query.parse.allow_unmapped_fields"
+          "settings.index.query.parse.allow_unmapped_fields",
+          "settings.index.max_ngram_diff",
+          "settings.analysis"
         ],
         "refuses": [
           "tout autre réglage"
@@ -338,6 +340,7 @@
           "auto_expand_replicas",
           "refresh_interval",
           "preserve_existing",
+          "max_ngram_diff",
           "une valeur null"
         ],
         "refuses": [
@@ -377,16 +380,21 @@
       "nom_texte": "POST|GET /_analyze, /{index}/_analyze",
       "etat": "partiel",
       "poids": 2.2,
+      "detail": "les offsets sont comptés en **unités UTF-16**, comme chez ES (c'est la convention de Java) ; sur plusieurs `text`, chaque texte suivant décale les offsets de la longueur du précédent **plus un**, et les positions de 100 quand l'analyzer est sur mesure, de 0 quand il est intégré",
       "parametres": {
         "supportes": [
           "text",
           "analyzer",
-          "field"
+          "field",
+          "tokenizer",
+          "filter"
         ],
         "refuses": [
-          "tokenizer",
-          "filter",
-          "char_filter"
+          "char_filter",
+          "normalizer",
+          "explain",
+          "attributes",
+          "le champ type du token"
         ]
       }
     },
@@ -568,16 +576,36 @@
       "nom_texte": "Tokenizers",
       "etat": "partiel",
       "poids": 0.3,
+      "detail": "cités par leur nom, ou **déclarés** dans `analysis.tokenizer` avec leurs paramètres",
       "parametres": {
         "supportes": [
-          "standard",
-          "whitespace",
-          "keyword",
-          "letter",
-          "lowercase"
+          "standard, whitespace, keyword, letter, lowercase",
+          "ngram, edge_ngram"
         ],
         "refuses": [
-          "analysis.tokenizer"
+          "pattern, char_group, path_hierarchy, uax_url_email…"
+        ]
+      }
+    },
+    {
+      "id": "analyse.ngram",
+      "table": "analyzers_sur_mesure",
+      "nom": "`ngram` et `edge_ngram` — tokenizer **et** filtre",
+      "nom_texte": "ngram et edge_ngram — tokenizer et filtre",
+      "etat": "supporte",
+      "poids": 0.6,
+      "detail": "la brique de l'autocomplétion « au fil de la frappe » : elle travaille à l'**indexation**, là où `match_phrase_prefix` travaille à la requête. Mesurée identique à ES sur 210 textes, **positions et offsets compris** (`diff_analyzers.py`) : un n-gramme mal positionné casse `match_phrase` sans changer le compte de tokens",
+      "parametres": {
+        "supportes": [
+          "min_gram",
+          "max_gram",
+          "token_chars",
+          "custom_token_chars",
+          "side",
+          "preserve_original"
+        ],
+        "refuses": [
+          "les noms de catégories Unicode fines dans token_chars"
         ]
       }
     },
@@ -592,10 +620,12 @@
         "supportes": [
           "lowercase",
           "asciifolding",
-          "stop"
+          "stop",
+          "ngram, edge_ngram"
         ],
         "refuses": [
-          "tout filtre à base de stemmer"
+          "tout filtre à base de stemmer",
+          "synonym, shingle, word_delimiter, truncate…"
         ]
       }
     },

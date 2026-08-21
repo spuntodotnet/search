@@ -503,9 +503,9 @@ impl Analysis {
         // par leur nom, donc ils se resolvent avant lui.
         let mut tokenizers: BTreeMap<String, Tok> = BTreeMap::new();
         if let Some(t) = obj.get("tokenizer") {
-            let t = t
-                .as_object()
-                .ok_or_else(|| EsError::mapper_parsing("[analysis.tokenizer] doit etre un objet"))?;
+            let t = t.as_object().ok_or_else(|| {
+                EsError::mapper_parsing("[analysis.tokenizer] doit etre un objet")
+            })?;
             for (nom, decl) in t {
                 tokenizers.insert(nom.clone(), Tok::parse_declare(nom, decl, max_ngram_diff)?);
             }
@@ -517,7 +517,10 @@ impl Analysis {
                 .as_object()
                 .ok_or_else(|| EsError::mapper_parsing("[analysis.filter] doit etre un objet"))?;
             for (nom, decl) in f {
-                nommes.insert(nom.clone(), Filtre::parse_declare(nom, decl, max_ngram_diff)?);
+                nommes.insert(
+                    nom.clone(),
+                    Filtre::parse_declare(nom, decl, max_ngram_diff)?,
+                );
             }
         }
 
@@ -676,11 +679,9 @@ impl CustomAnalyzer {
     ) -> EsResult<Self> {
         let tokenizer = match tokenizer {
             None => Tok::Standard,
-            Some(Value::String(s)) => Tok::parse_declare(
-                "_analyze",
-                &json!({ "type": s.clone() }),
-                max_ngram_diff,
-            )?,
+            Some(Value::String(s)) => {
+                Tok::parse_declare("_analyze", &json!({ "type": s.clone() }), max_ngram_diff)?
+            }
             Some(v @ Value::Object(_)) => Tok::parse_declare("_analyze", v, max_ngram_diff)?,
             Some(_) => {
                 return Err(EsError::illegal_argument(
@@ -696,9 +697,7 @@ impl CustomAnalyzer {
             for x in f {
                 liste.push(match x {
                     Value::String(s) => Filtre::integre(s, "_analyze")?,
-                    v @ Value::Object(_) => {
-                        Filtre::parse_declare("_analyze", v, max_ngram_diff)?
-                    }
+                    v @ Value::Object(_) => Filtre::parse_declare("_analyze", v, max_ngram_diff)?,
                     _ => {
                         return Err(EsError::illegal_argument(
                             "[_analyze.filter] : des noms ou des objets sont attendus",
@@ -763,9 +762,9 @@ impl Tok {
             "lowercase" => Self::Lowercase,
             // Cites sans bornes, ils prennent les defauts d'ES (1 et 2) — dont
             // l'ecart vaut 1, donc toujours dans la limite par defaut.
-            "ngram" | "edge_ngram" => Self::Ngram(crate::ngram::NgramTokenizer::defaut(
-                nom == "edge_ngram",
-            )),
+            "ngram" | "edge_ngram" => {
+                Self::Ngram(crate::ngram::NgramTokenizer::defaut(nom == "edge_ngram"))
+            }
             autre => {
                 return Err(EsError::unsupported(format!(
                     "ferrite ne supporte pas le tokenizer [{autre}] (analyzer [{analyzer}]) ; \

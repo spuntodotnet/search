@@ -292,6 +292,12 @@ BRIQUES.update({f"analyzer.{a}": f"analyzer.{a}" for a in
 # Les formes de date math que le generateur pose vraiment sur une borne.
 BRIQUES.update({"datemath.decalage": "datemath.decalage",
                 "datemath.arrondi": "datemath.arrondi"})
+# Les analyzers a n-grammes declares par l'index : sans cette brique, la
+# capacite sortirait declaree tenue sans que rien ne l'exerce.
+BRIQUES.update({"analyse.custom": "analyse.custom",
+                "analyse.tokenizers": "analyse.tokenizers",
+                "analyse.filtres": "analyse.filtres",
+                "analyse.ngram": "analyse.ngram"})
 
 
 # ---------------------------------------------------------------------------
@@ -373,6 +379,10 @@ class Generateur:
         self.rng = random.Random(graine)
         self.p = perimetre
         self.graine = graine
+        # Ce que `settings` porte en plus, et les analyzers que l'index
+        # declare — remplis par `mapping()`.
+        self.reglages = {}
+        self.analyzers_declares = []
 
     def brique(self, nom):
         """Note qu'une brique est sortie, et dit si elle a le droit."""
@@ -392,6 +402,7 @@ class Generateur:
         pagination comparable (voir l'entete). Il ne sort jamais dans une
         requete generee, pour ne pas biaiser le tirage."""
         rng = self.rng
+        self._analyse_declaree()
         props, champs = {TIEBREAK: {"type": "keyword"}}, []
         noms = ["a", "b", "c", "d", "e", "f", "g", "h"]
         rng.shuffle(noms)
@@ -421,12 +432,57 @@ class Generateur:
             champs.extend(ch)
         return props, champs
 
+    def _analyse_declaree(self):
+        """Une section `analysis` tiree au sort — deux analyzers a n-grammes.
+
+        Un tokenizer d'un cote, un filtre de l'autre : ce ne sont pas les memes
+        positions (le tokenizer avance a chaque gramme, le filtre pose tous les
+        grammes d'un mot a la position de ce mot), donc pas les memes reponses
+        a un `match_phrase`."""
+        self.reglages, self.analyzers_declares = {}, []
+        rng = self.rng
+        if not (rng.random() < 0.3 and self.brique("analyse.ngram")):
+            return
+        self.brique("analyse.custom")
+        self.brique("analyse.tokenizers")
+        self.brique("analyse.filtres")
+        mini = rng.randint(1, 3)
+        tok = {"type": rng.choice(["ngram", "edge_ngram"]),
+               "min_gram": mini, "max_gram": mini + rng.randint(0, 4)}
+        if rng.random() < 0.5:
+            tok["token_chars"] = rng.choice(
+                [["letter"], ["letter", "digit"], ["letter", "digit", "punctuation"], []])
+        mini = rng.randint(1, 3)
+        filt = {"type": rng.choice(["ngram", "edge_ngram"]),
+                "min_gram": mini, "max_gram": mini + rng.randint(0, 3)}
+        if filt["type"] == "edge_ngram" and rng.random() < 0.3:
+            filt["side"] = "back"
+        if rng.random() < 0.3:
+            filt["preserve_original"] = True
+        self.reglages = {
+            # L'ecart par defaut est 1 : sans ce reglage, la moitie des tirages
+            # serait refusee des deux cotes et ne mesurerait rien.
+            "max_ngram_diff": 12,
+            "analysis": {
+                "tokenizer": {"tk": tok},
+                "filter": {"fl": filt},
+                "analyzer": {
+                    "ng_tok": {"type": "custom", "tokenizer": "tk",
+                               "filter": ["lowercase"]},
+                    "ng_filtre": {"type": "custom", "tokenizer": "standard",
+                                  "filter": ["lowercase", "fl"]},
+                },
+            },
+        }
+        self.analyzers_declares = ["ng_tok", "ng_filtre"]
+
     def _champ_text(self, nom):
         self.brique("champ.text")
         m = {"type": "text"}
         if self.rng.random() < 0.4 and self.brique("champ.analyzer"):
-            a = self.rng.choice(ANALYZERS)
-            self.brique(f"analyzer.{a}")
+            a = self.rng.choice(ANALYZERS + self.analyzers_declares)
+            if a in ANALYZERS:
+                self.brique(f"analyzer.{a}")
             m["analyzer"] = a
         champs = [Champ(nom, "text", m)]
         if self.rng.random() < 0.5 and self.brique("champ.multi_fields"):
@@ -1880,7 +1936,8 @@ class Cas:
         #    suivante. Le mapping compare a l'etape 3 mesure alors ce qu'un
         #    template applique vraiment, sur un mapping que personne n'a choisi.
         corps_index = {"mappings": {"properties": props},
-                       "settings": {"number_of_shards": 1, "number_of_replicas": 0}}
+                       "settings": {"number_of_shards": 1, "number_of_replicas": 0,
+                                    **gen.reglages}}
         par_template = (gen.p.jouable("index.templates")
                         and rng.random() < 0.25)
         reps = []
