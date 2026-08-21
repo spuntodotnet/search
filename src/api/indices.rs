@@ -401,17 +401,37 @@ pub async fn put_mapping(
     p.done()?;
 
     let body = parse_body(&body)?;
-    let mapping = Mapping::parse(&body)?;
-    if mapping.dynamic != crate::mapping::Dynamic::default() {
-        return Err(EsError::unsupported(
-            "ferrite ne supporte pas la modification de [dynamic] sur un index existant",
-        ));
+    // Lu sur le corps brut : le mapping, lui, se parse **par index** (voir
+    // plus bas), et un index sans cible ne doit pas pour autant avaler un
+    // `dynamic` qu'on refuse.
+    if let Some(d) = body.as_object().and_then(|o| o.get("dynamic")) {
+        if crate::mapping::Dynamic::parse(d)? != crate::mapping::Dynamic::default() {
+            return Err(EsError::unsupported(
+                "ferrite ne supporte pas la modification de [dynamic] sur un index existant",
+            ));
+        }
     }
 
     // `PUT /{index}/_mapping` accepte plusieurs index chez ES : le meme champ
     // est ajoute a chacun.
+    //
+    // Le mapping est lu **avec les analyzers de l'index vise** : un champ
+    // ajoute apres coup peut citer un analyzer que `settings.analysis` a
+    // declare a la creation. Sans ca, poser `settings.analysis` puis
+    // `PUT /_mapping` — l'ordre exact de Wagtail — echouait sur « ferrite ne
+    // supporte pas l'analyzer [edgengram_analyzer] », un analyzer que l'index
+    // portait pourtant.
     let vises = resoudre(&st.catalog, &index, &Options::default())?;
+    // Une expression qui ne vise aucun index ne doit pas faire passer un corps
+    // que ferrite refuserait ailleurs : c'est le meme piege que la recherche
+    // sans index. Faute d'analyzers a citer, il est lu contre une section
+    // `analysis` vide.
+    if vises.is_empty() {
+        Mapping::parse_avec(&body, &crate::analysis::Analysis::default())?;
+    }
     for idx in vises {
+        let declares = idx.mapping().analysis.clone();
+        let mapping = Mapping::parse_avec(&body, &declares)?;
         let props = mapping.properties.clone();
         tokio::task::spawn_blocking(move || idx.add_fields(props))
             .await
@@ -437,7 +457,11 @@ pub async fn analyze(
     let obj = body
         .as_object()
         .ok_or_else(|| EsError::parsing("le corps de [_analyze] doit etre un objet"))?;
-    expect_only(obj, &["text", "analyzer", "field"], "_analyze")?;
+    expect_only(
+        obj,
+        &["text", "analyzer", "field", "tokenizer", "filter"],
+        "_analyze",
+    )?;
 
     let textes: Vec<String> = match obj.get("text") {
         Some(Value::String(s)) => vec![s.clone()],
@@ -455,6 +479,37 @@ pub async fn analyze(
             ))
         }
     };
+
+    // Un analyzer declare **en ligne** : `tokenizer` + `filter`, sans index.
+    // C'est ce qui rend une brique d'analyse mesurable toute seule, et c'est
+    // par la que `diff_analyzers.py` interroge les n-grammes des deux cotes.
+    if obj.contains_key("tokenizer") || obj.contains_key("filter") {
+        if obj.contains_key("analyzer") || obj.contains_key("field") {
+            return Err(EsError::illegal_argument(
+                "[_analyze] : [analyzer] / [field] et [tokenizer] + [filter] sont exclusifs",
+            ));
+        }
+        // La borne de l'index vise, s'il y en a un : c'est elle qui dit si un
+        // `ngram` 3-15 est jouable.
+        let diff = match &index {
+            Some(Path(nom)) => {
+                let idx = index_unique(&st.catalog, nom)?;
+                crate::reglages::max_ngram_diff(&idx.inertes())
+            }
+            None => crate::ngram::MAX_NGRAM_DIFF_DEFAUT,
+        };
+        let decl = crate::analysis::CustomAnalyzer::en_ligne(
+            obj.get("tokenizer"),
+            obj.get("filter"),
+            diff,
+        )?;
+        let mut ta = decl.analyseur();
+        return Ok(Json::ok(json!({
+            "tokens": rendre_tokens(&textes, true, |texte| {
+                Ok(crate::analysis::analyser_avec(&mut ta, texte))
+            })?
+        })));
+    }
 
     // Soit un analyzer nomme, soit celui d'un champ de l'index.
     let (analyzer, gen) = match (obj.get("analyzer"), obj.get("field")) {
@@ -508,21 +563,71 @@ pub async fn analyze(
         }
     };
 
+    let tokens = rendre_tokens(&textes, analyzer.est_sur_mesure(), |texte| {
+        crate::analysis::analyser(&manager, analyzer, texte)
+    })?;
+    Ok(Json::ok(json!({"tokens": tokens})))
+}
+
+/// Le saut de position qu'ES intercale entre deux `text` d'un meme `_analyze`
+/// quand l'analyzer est sur mesure — c'est `position_increment_gap`, dont le
+/// defaut d'ES vaut 100 pour un champ `text`. Un analyzer **integre** n'en a
+/// pas (mesure : 0).
+const SAUT_DE_POSITION: usize = 100;
+
+/// Met en forme les tokens d'un `_analyze`, avec les deux conventions d'ES que
+/// personne ne devine :
+///
+/// * les offsets se comptent en **unites UTF-16**, pas en octets ni en points
+///   de code — `l'édition` finit a 9, pas a 10 ;
+/// * sur plusieurs `text`, chaque texte suivant decale les offsets de la
+///   longueur du precedent **plus un** (`offset_gap`), et les positions du
+///   saut ci-dessus.
+fn rendre_tokens(
+    textes: &[String],
+    sur_mesure: bool,
+    mut decouper: impl FnMut(&str) -> EsResult<Vec<crate::analysis::Token>>,
+) -> EsResult<Vec<Value>> {
+    let saut = if sur_mesure { SAUT_DE_POSITION } else { 0 };
     let mut tokens = Vec::new();
     let mut decalage = 0usize;
-    for texte in &textes {
-        for t in crate::analysis::analyser(&manager, analyzer, texte)? {
+    let mut base = 0usize;
+    for texte in textes {
+        let unites = utf16(texte);
+        let mut derniere = 0usize;
+        for t in decouper(texte)? {
+            let position = base + t.position;
+            derniere = derniere.max(t.position + 1);
             tokens.push(json!({
                 "token": t.text,
-                "start_offset": decalage + t.start_offset,
-                "end_offset": decalage + t.end_offset,
+                "start_offset": decalage + unites[t.start_offset.min(unites.len() - 1)],
+                "end_offset": decalage + unites[t.end_offset.min(unites.len() - 1)],
                 "type": "<ALPHANUM>",
-                "position": t.position,
+                "position": position,
             }));
         }
-        decalage += texte.chars().count();
+        base += derniere + saut;
+        decalage += unites[unites.len() - 1] + 1;
     }
-    Ok(Json::ok(json!({"tokens": tokens})))
+    Ok(tokens)
+}
+
+/// Pour chaque frontiere d'octet du texte, son offset en unites UTF-16.
+///
+/// Java compte les caracteres d'une chaine en unites UTF-16 (un emoji en vaut
+/// deux), et c'est ce que rendent les offsets d'`_analyze` chez ES. tantivy,
+/// lui, rend des offsets en octets.
+fn utf16(texte: &str) -> Vec<usize> {
+    let mut out = Vec::with_capacity(texte.len() + 1);
+    let mut n = 0usize;
+    for c in texte.chars() {
+        for _ in 0..c.len_utf8() {
+            out.push(n);
+        }
+        n += c.len_utf16();
+    }
+    out.push(n);
+    out
 }
 
 /// `POST /{index}/_refresh`

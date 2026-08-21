@@ -310,6 +310,52 @@ fn read_lenient(value: Option<&Value>) -> EsResult<bool> {
     }
 }
 
+/// Les termes analyses, regroupes par **position** : une requete sur un champ
+/// `text` est une suite de positions, et chaque position porte une ou plusieurs
+/// alternatives.
+///
+/// La distinction ne se voyait pas tant qu'un analyzer posait un terme par
+/// position. Un filtre `ngram` / `edge_ngram` pose **tous** les grammes d'un mot
+/// a la position de ce mot : c'est la que « une position » cesse de valoir
+/// « un terme », et c'est ce que Lucene appelle une `SynonymQuery`.
+fn par_position(field: tantivy::schema::Field, tokens: &[(usize, String)]) -> Vec<Box<dyn Query>> {
+    let terme = |t: &str| -> Box<dyn Query> {
+        Box::new(TermQuery::new(
+            tantivy::Term::from_field_text(field, t),
+            IndexRecordOption::WithFreqs,
+        ))
+    };
+    grouper(tokens)
+        .into_iter()
+        .map(|alternatives| match alternatives.as_slice() {
+            [seul] => terme(seul),
+            plusieurs => Box::new(BooleanQuery::new(
+                plusieurs
+                    .iter()
+                    .map(|t| (Occur::Should, terme(t)))
+                    .collect(),
+            )) as Box<dyn Query>,
+        })
+        .collect()
+}
+
+/// Les termes analyses, decoupes en positions — sans rien construire.
+fn grouper(tokens: &[(usize, String)]) -> Vec<Vec<&str>> {
+    let mut out: Vec<Vec<&str>> = Vec::new();
+    let mut precedente = None;
+    for (pos, texte) in tokens {
+        if precedente == Some(*pos) {
+            if let Some(derniere) = out.last_mut() {
+                derniere.push(texte);
+            }
+        } else {
+            out.push(vec![texte]);
+            precedente = Some(*pos);
+        }
+    }
+    out
+}
+
 /// Le coeur de `match` pour **un** champ : analyse la chaine avec l'analyzer du
 /// champ, ou compare la valeur telle quelle si le champ n'est pas analyse.
 ///
@@ -331,25 +377,20 @@ fn field_match(
     Ok(match ty.kind() {
         FieldKind::Text => {
             let tokens = ctx.analyze(&query_text(field_name, value, clause)?, analyzer)?;
-            match tokens.len() {
+            // `operator: and` porte sur les **positions**, pas sur les termes.
+            // Tant qu'un analyzer posait un terme par position les deux se
+            // confondaient ; un filtre a n-grammes en pose dix au meme endroit,
+            // et Lucene en fait une union (sa `SynonymQuery`) avant d'appliquer
+            // l'operateur. Les exiger tous rendrait « le document contient
+            // **tous** les grammes du mot cherche », donc beaucoup moins de
+            // documents — en 200 (mesure contre ES 8.15).
+            let groupes = par_position(field, &tokens);
+            match groupes.len() {
                 0 => Box::new(EmptyQuery),
-                1 => Box::new(TermQuery::new(
-                    tantivy::Term::from_field_text(field, &tokens[0].1),
-                    IndexRecordOption::WithFreqs,
+                1 => groupes.into_iter().next().expect("un groupe"),
+                _ => Box::new(BooleanQuery::new(
+                    groupes.into_iter().map(|q| (operator, q)).collect(),
                 )),
-                _ => {
-                    let clauses: Vec<(Occur, Box<dyn Query>)> = tokens
-                        .iter()
-                        .map(|(_, t)| {
-                            let q: Box<dyn Query> = Box::new(TermQuery::new(
-                                tantivy::Term::from_field_text(field, t),
-                                IndexRecordOption::WithFreqs,
-                            ));
-                            (operator, q)
-                        })
-                        .collect();
-                    Box::new(BooleanQuery::new(clauses))
-                }
             }
         }
         // Sur un champ non analyse, `match` se comporte comme `term` (ES fait
@@ -637,15 +678,41 @@ fn field_phrase(
     let inner: Box<dyn Query> = match ty.kind() {
         FieldKind::Text => {
             let tokens = ctx.analyze(&query_text(field_name, value, clause)?, analyzer)?;
-            match tokens.len() {
-                0 => Box::new(EmptyQuery),
+            // Une phrase n'est pas une suite de termes, c'est une suite de
+            // **positions** — et un analyzer a n-grammes en pose plusieurs a
+            // la meme.
+            let positions = grouper(&tokens);
+            let terme = |t: &str| {
+                Box::new(TermQuery::new(
+                    tantivy::Term::from_field_text(field, t),
+                    IndexRecordOption::WithFreqs,
+                )) as Box<dyn Query>
+            };
+            match positions.as_slice() {
+                [] => Box::new(EmptyQuery),
                 // Une phrase d'un seul terme est un `term` : tantivy exige au
                 // moins deux termes pour une PhraseQuery.
-                1 => Box::new(TermQuery::new(
-                    tantivy::Term::from_field_text(field, &tokens[0].1),
-                    IndexRecordOption::WithFreqs,
+                [seule] if seule.len() == 1 => terme(seule[0]),
+                // Plusieurs termes a une **seule** position : ce sont des
+                // alternatives, pas une suite. C'est ce que fait Lucene, et
+                // c'est le cas courant d'un champ a n-grammes — `match_phrase`
+                // y cherche un mot decoupe en grammes, tous poses au meme
+                // endroit. Les enchainer rendrait « le document contient
+                // exactement cette suite de grammes », c'est-a-dire beaucoup
+                // moins de documents, en silence.
+                [seule] => Box::new(BooleanQuery::new(
+                    seule.iter().map(|t| (Occur::Should, terme(t))).collect(),
                 )),
                 _ => {
+                    if positions.iter().any(|p| p.len() > 1) {
+                        return Err(EsError::unsupported(format!(
+                            "ferrite ne supporte pas plusieurs termes a la meme position dans \
+                             une phrase de plusieurs mots (champ [{field_name}], clause \
+                             [{clause}]) : c'est le cas d'un filtre [ngram] ou [edge_ngram], et \
+                             Lucene y construit une `MultiPhraseQuery` que tantivy n'a pas. Un \
+                             seul mot passe (voir docs/compat.md)"
+                        )));
+                    }
                     let terms: Vec<(usize, tantivy::Term)> = tokens
                         .iter()
                         .map(|(pos, t)| (*pos, tantivy::Term::from_field_text(field, t)))
@@ -735,6 +802,37 @@ fn field_phrase_prefix(
     let inner: Box<dyn Query> = match ty.kind() {
         FieldKind::Text => {
             let tokens = ctx.analyze(&query_text(field_name, value, clause)?, analyzer)?;
+            // Plusieurs termes a la meme position : meme regle que dans
+            // `field_phrase`. Une **seule** position, ce sont des
+            // alternatives, et chacune se developpe par son prefixe ; a
+            // plusieurs, il faudrait la `MultiPhraseQuery` que tantivy n'a pas.
+            let une_seule_position = tokens.first().map(|t| t.0) == tokens.last().map(|t| t.0);
+            if tokens.len() > 1 && une_seule_position {
+                let mut clauses: Vec<(Occur, Box<dyn Query>)> = Vec::new();
+                for (_, t) in &tokens {
+                    for dev in termes_avec_prefixe(ctx, field, t, max_expansions)? {
+                        let q: Box<dyn Query> = Box::new(TermQuery::new(
+                            tantivy::Term::from_field_text(field, &dev),
+                            IndexRecordOption::WithFreqs,
+                        ));
+                        clauses.push((Occur::Should, q));
+                    }
+                }
+                return Ok(if clauses.is_empty() {
+                    Box::new(EmptyQuery)
+                } else {
+                    Box::new(BooleanQuery::new(clauses))
+                });
+            }
+            if tokens.windows(2).any(|p| p[0].0 == p[1].0) {
+                return Err(EsError::unsupported(format!(
+                    "ferrite ne supporte pas plusieurs termes a la meme position dans un \
+                     [{clause}] de plusieurs mots (champ [{field_name}]) : c'est le cas d'un \
+                     filtre [ngram] ou [edge_ngram], et Lucene y construit une \
+                     `MultiPhraseQuery` que tantivy n'a pas. Un seul mot passe (voir \
+                     docs/compat.md)"
+                )));
+            }
             match tokens.len() {
                 0 => Box::new(EmptyQuery),
                 // Un seul terme : il n'y a plus de phrase, et Lucene reecrit

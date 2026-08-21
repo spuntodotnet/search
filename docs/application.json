@@ -15827,87 +15827,97 @@
     "echecs": 0,
     "ignores": 290,
     "passes": 273,
-    "queue": "t_filter (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_filter) ... ok\ntest_filter_and_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_filter_and_query) ... ok\ntest_filter_with_quotation_mark (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_filter_with_quotation_mark) ... ok\ntest_filter_with_quotation_mark_and_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_filter_with_quotation_mark_and_query) ... ok\ntest_filter_with_unclosed_quotation_mark_and_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_filter_with_unclosed_quotation_mark_and_query) ... ok\ntest_only_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_only_query) ... ok\ntest_return_list_of_multiple_instances_for_same_filter_key (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_return_list_of_multiple_instances_for_same_filter_key) ... ok\ntest_two_filters_and_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_two_filters_and_query) ... ok\ntest_two_filters_with_quotation_marks_and_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_two_filters_with_quotation_marks_and_query) ... ok\n\n----------------------------------------------------------------------\nRan 583 tests in 1013.517s\n\nOK (skipped=294, expected failures=9)\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\n",
+    "queue": "t_filter (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_filter) ... ok\ntest_filter_and_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_filter_and_query) ... ok\ntest_filter_with_quotation_mark (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_filter_with_quotation_mark) ... ok\ntest_filter_with_quotation_mark_and_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_filter_with_quotation_mark_and_query) ... ok\ntest_filter_with_unclosed_quotation_mark_and_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_filter_with_unclosed_quotation_mark_and_query) ... ok\ntest_only_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_only_query) ... ok\ntest_return_list_of_multiple_instances_for_same_filter_key (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_return_list_of_multiple_instances_for_same_filter_key) ... ok\ntest_two_filters_and_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_two_filters_and_query) ... ok\ntest_two_filters_with_quotation_marks_and_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_two_filters_with_quotation_marks_and_query) ... ok\n\n----------------------------------------------------------------------\nRan 583 tests in 1019.201s\n\nOK (skipped=294, expected failures=9)\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\n",
     "total": 563
    },
    "ferrite": {
     "echecs": 85,
     "ignores": 290,
     "passes": 192,
-    "queue": "ate(index=self.name, **self.backend.settings)\n  File \"/usr/local/lib/python3.12/site-packages/elasticsearch/_sync/client/utils.py\", line 458, in wrapped\n    return api(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/elasticsearch/_sync/client/indices.py\", line 701, in create\n    return self.perform_request(  # type: ignore[return-value]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/elasticsearch/_sync/client/_base.py\", line 422, in perform_request\n    return self._client.perform_request(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/elasticsearch/_sync/client/_base.py\", line 271, in perform_request\n    response = self._perform_request(\n               ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/elasticsearch/_sync/client/_base.py\", line 351, in _perform_request\n    raise HTTP_EXCEPTIONS.get(meta.status, ApiError)(\nelasticsearch.BadRequestError: BadRequestError(400, 'not_implemented_in_ferrite_exception', 'ferrite ne supporte pas les tokenizers definis dans [analysis.tokenizer] ; tokenizers integres : standard, whitespace, keyword, letter, lowercase')\n\n----------------------------------------------------------------------\nRan 583 tests in 15.958s\n\nFAILED (errors=87, skipped=294, expected failures=9)\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\n",
+    "queue": "(index=self.name, **mapping.get_mapping())\n  File \"/usr/local/lib/python3.12/site-packages/elasticsearch/_sync/client/utils.py\", line 458, in wrapped\n    return api(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/elasticsearch/_sync/client/indices.py\", line 4137, in put_mapping\n    return self.perform_request(  # type: ignore[return-value]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/elasticsearch/_sync/client/_base.py\", line 422, in perform_request\n    return self._client.perform_request(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/elasticsearch/_sync/client/_base.py\", line 271, in perform_request\n    response = self._perform_request(\n               ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/elasticsearch/_sync/client/_base.py\", line 351, in _perform_request\n    raise HTTP_EXCEPTIONS.get(meta.status, ApiError)(\nelasticsearch.BadRequestError: BadRequestError(400, 'not_implemented_in_ferrite_exception', 'ferrite ne supporte pas le parametre de champ [store] (champ [pk]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index')\n\n----------------------------------------------------------------------\nRan 583 tests in 19.786s\n\nFAILED (errors=87, skipped=294, expected failures=9)\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\n",
     "total": 567
    }
   },
   "intact": true,
   "refus": [
    {
-    "api": "indices.delete",
-    "capacite": null,
+    "api": "indices.put_mapping",
+    "capacite": "index.mapping_ecriture",
     "combien": 87,
-    "erreur": "index_not_found_exception: no such index [wagtail__wagtailcore_page]",
-    "exemple": null,
-    "genre": "etat",
-    "methode": "DELETE",
-    "statut": 404,
-    "verdict": "consequence_d_etat"
-   },
-   {
-    "api": "indices.create",
-    "capacite": "index.creation",
-    "combien": 87,
-    "erreur": "not_implemented_in_ferrite_exception: ferrite ne supporte pas les tokenizers definis dans [analysis.tokenizer] ; tokenizers integres : standard, whitespace, keyword, letter, lowercase",
+    "erreur": "not_implemented_in_ferrite_exception: ferrite ne supporte pas le parametre de champ [store] (champ [pk]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index",
     "exemple": {
-     "settings": {
-      "analysis": {
-       "analyzer": {
-        "edgengram_analyzer": {
-         "filter": [
-          "asciifolding",
-          "lowercase",
-          "edgengram"
-         ],
-         "tokenizer": "standard",
-         "type": "custom"
-        },
-        "ngram_analyzer": {
-         "filter": [
-          "asciifolding",
-          "lowercase",
-          "ngram"
-         ],
-         "tokenizer": "standard",
-         "type": "custom"
-        }
-       },
-       "filter": {
-        "edgengram": {
-         "max_gram": 15,
-         "min_gram": 1,
-         "type": "edge_ngram"
-        },
-        "ngram": {
-         "max_gram": 15,
-         "min_gram": 3,
-         "type": "ngram"
-        }
-       },
-       "tokenizer": {
-        "edgengram_tokenizer": {
-         "max_gram": 15,
-         "min_gram": 2,
-         "side": "front",
-         "type": "edge_ngram"
-        },
-        "ngram_tokenizer": {
-         "max_gram": 15,
-         "min_gram": 3,
-         "type": "ngram"
-        }
-       }
+     "properties": {
+      "_all_text": {
+       "type": "text"
       },
-      "index": {
-       "max_ngram_diff": 12,
-       "number_of_shards": 1
+      "_all_text_boost_2_0": {
+       "type": "text"
+      },
+      "_edgengrams": {
+       "analyzer": "edgengram_analyzer",
+       "search_analyzer": "standard",
+       "type": "text"
+      },
+      "content_type": {
+       "type": "keyword"
+      },
+      "content_type_id_filter": {
+       "type": "integer"
+      },
+      "depth_filter": {
+       "type": "integer"
+      },
+      "first_published_at_filter": {
+       "type": "date"
+      },
+      "id_filter": {
+       "type": "integer"
+      },
+      "last_published_at_filter": {
+       "type": "date"
+      },
+      "latest_revision_created_at_filter": {
+       "type": "date"
+      },
+      "live_filter": {
+       "type": "boolean"
+      },
+      "locale_id_filter": {
+       "type": "integer"
+      },
+      "locked_filter": {
+       "type": "boolean"
+      },
+      "owner_id_filter": {
+       "type": "integer"
+      },
+      "path_filter": {
+       "type": "keyword"
+      },
+      "pk": {
+       "store": true,
+       "type": "keyword"
+      },
+      "show_in_menus_filter": {
+       "type": "boolean"
+      },
+      "title": {
+       "copy_to": [
+        "_all_text",
+        "_all_text_boost_2_0"
+       ],
+       "type": "text"
+      },
+      "title_edgengrams": {
+       "analyzer": "edgengram_analyzer",
+       "search_analyzer": "standard",
+       "type": "text"
+      },
+      "title_filter": {
+       "type": "keyword"
+      },
+      "translation_key_filter": {
+       "type": "keyword"
       }
      }
     },
@@ -15920,7 +15930,7 @@
   "trafic": [
    {
     "api": "indices.delete",
-    "echecs": 87,
+    "echecs": 1,
     "exemple": null,
     "requetes": 87,
     "traits": [
@@ -15931,7 +15941,7 @@
    },
    {
     "api": "indices.create",
-    "echecs": 87,
+    "echecs": 0,
     "exemple": {
      "settings": {
       "analysis": {
@@ -15996,6 +16006,107 @@
     ],
     "traits_indetermines": [],
     "traits_refuses": []
+   },
+   {
+    "api": "indices.put_mapping",
+    "echecs": 87,
+    "exemple": {
+     "properties": {
+      "_all_text": {
+       "type": "text"
+      },
+      "_all_text_boost_2_0": {
+       "type": "text"
+      },
+      "_edgengrams": {
+       "analyzer": "edgengram_analyzer",
+       "search_analyzer": "standard",
+       "type": "text"
+      },
+      "content_type": {
+       "type": "keyword"
+      },
+      "content_type_id_filter": {
+       "type": "integer"
+      },
+      "depth_filter": {
+       "type": "integer"
+      },
+      "first_published_at_filter": {
+       "type": "date"
+      },
+      "id_filter": {
+       "type": "integer"
+      },
+      "last_published_at_filter": {
+       "type": "date"
+      },
+      "latest_revision_created_at_filter": {
+       "type": "date"
+      },
+      "live_filter": {
+       "type": "boolean"
+      },
+      "locale_id_filter": {
+       "type": "integer"
+      },
+      "locked_filter": {
+       "type": "boolean"
+      },
+      "owner_id_filter": {
+       "type": "integer"
+      },
+      "path_filter": {
+       "type": "keyword"
+      },
+      "pk": {
+       "store": true,
+       "type": "keyword"
+      },
+      "show_in_menus_filter": {
+       "type": "boolean"
+      },
+      "title": {
+       "copy_to": [
+        "_all_text",
+        "_all_text_boost_2_0"
+       ],
+       "type": "text"
+      },
+      "title_edgengrams": {
+       "analyzer": "edgengram_analyzer",
+       "search_analyzer": "standard",
+       "type": "text"
+      },
+      "title_filter": {
+       "type": "keyword"
+      },
+      "translation_key_filter": {
+       "type": "keyword"
+      }
+     }
+    },
+    "requetes": 87,
+    "traits": [
+     "analyzer:edgengram_analyzer",
+     "analyzer:standard",
+     "champ:analyzer",
+     "champ:copy_to",
+     "champ:search_analyzer",
+     "champ:store",
+     "route:indices.put_mapping",
+     "type:boolean",
+     "type:date",
+     "type:integer",
+     "type:keyword",
+     "type:text"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": [
+     "analyzer:edgengram_analyzer",
+     "champ:copy_to",
+     "champ:store"
+    ]
    }
   ]
  }

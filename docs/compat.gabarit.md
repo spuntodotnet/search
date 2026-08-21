@@ -174,7 +174,37 @@ briques que ferrite a :
 <!-- table:analyzers_sur_mesure -->
 
 Le nom déclaré est celui que rend `_mapping`, et un analyzer sur mesure n'existe
-que dans son index — `_analyze` sans index ne connaît que les intégrés.
+que dans son index — `_analyze` sans index ne connaît que les intégrés, sauf à
+lui donner son `tokenizer` et ses `filter` **en ligne**, comme le fait ES.
+
+**Les n-grammes** (`ngram`, `edge_ngram`) sont la brique de l'autocomplétion
+« au fil de la frappe ». Ils travaillent à l'**indexation**, là où
+`match_phrase_prefix` travaille à la requête — un CMS qui propose des pages
+pendant qu'on tape n'a pas d'autre moyen :
+
+```json
+"settings": {
+  "index": {"max_ngram_diff": 12},
+  "analysis": {
+    "filter":   {"edgengram": {"type": "edge_ngram", "min_gram": 1, "max_gram": 15}},
+    "analyzer": {"edgengram_analyzer": {"type": "custom", "tokenizer": "standard",
+                                        "filter": ["asciifolding", "lowercase", "edgengram"]}}
+  }
+}
+```
+
+Deux choses qu'aucune documentation ne dit, et qui décident du résultat. La
+première : le **tokenizer** avance d'une position par gramme, le **filtre** pose
+tous les grammes d'un mot **à la position de ce mot**. La seconde en découle —
+une phrase et un `operator: and` portent sur des **positions**, pas sur des
+termes, donc les grammes d'un même mot y sont des **alternatives** et non une
+suite. Les enchaîner rendait beaucoup moins de documents, en 200 ; c'est le
+fuzzer différentiel qui l'a trouvé, et `diff_analyzers.py` qui le tient — 210
+textes comparés sur `(terme, offsets, position)`.
+
+Ce qui reste refusé de ce côté-là est une conséquence de tantivy, écrite plutôt
+que silencieuse : une phrase de **plusieurs mots** sur un tel champ demanderait
+la `MultiPhraseQuery` de Lucene, qui n'a pas d'équivalent. Un mot seul passe.
 
 **À savoir sur l'élision.** `standard` garde `l'édition` en **un seul terme**,
 des deux côtés : c'est le filtre `elision` de l'analyzer `french` qui le

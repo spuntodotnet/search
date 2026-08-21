@@ -797,11 +797,7 @@ fn build_doc(
 /// Un champ devine ne doit pas pouvoir entrer en collision avec les champs
 /// internes du schema.
 fn validate_dynamic_field_name(name: &str) -> EsResult<()> {
-    if name.starts_with('_') {
-        return Err(EsError::mapper_parsing(format!(
-            "[{name}] : les noms de champ commencant par [_] sont reserves"
-        )));
-    }
+    mapping::nom_reserve(name)?;
     // Un chemin pointe est licite — il vient d'un sous-objet, ou d'une cle que
     // le document ecrit deja a plat (`{"client.ville": ...}`), qu'Elasticsearch
     // traite comme un chemin. Un segment vide, lui, ne l'est pas.
@@ -1514,8 +1510,22 @@ fn open_index(dir: &Path, name: &str) -> EsResult<FerriteIndex> {
     let uuid = meta["uuid"].as_str().unwrap_or_default().to_string();
     let created_at = meta["created_at"].as_i64().unwrap_or_else(util::now_millis);
     let seq = meta["generation"].as_u64().unwrap_or(0);
+    let inertes: BTreeMap<String, String> = meta
+        .get("reglages_inertes")
+        .and_then(Value::as_object)
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // `index.max_ngram_diff` valide la section `analysis` : le relire avant
+    // elle, sinon un index cree avec un ecart eleve ne rouvrirait pas.
     let declares = match meta.get("analysis") {
-        Some(a) if !a.is_null() => crate::analysis::Analysis::parse(a)?,
+        Some(a) if !a.is_null() => {
+            crate::analysis::Analysis::parse(a, crate::reglages::max_ngram_diff(&inertes))?
+        }
         _ => crate::analysis::Analysis::default(),
     };
     let mut mapping = Mapping::parse_avec(&meta["mappings"], &declares)?;
@@ -1527,16 +1537,6 @@ fn open_index(dir: &Path, name: &str) -> EsResult<FerriteIndex> {
     {
         mapping.allow_unmapped_fields = v;
     }
-
-    let inertes: BTreeMap<String, String> = meta
-        .get("reglages_inertes")
-        .and_then(Value::as_object)
-        .map(|o| {
-            o.iter()
-                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                .collect()
-        })
-        .unwrap_or_default();
 
     let gen_dir = dir.join(format!("{INDEX_DIR_PREFIX}{seq}"));
     let (schema, fields) = mapping::build_schema(&mapping);

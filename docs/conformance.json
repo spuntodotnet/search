@@ -1,8 +1,8 @@
 {
   "schema": 2,
   "mesure": {
-    "date": "2026-08-17T05:29:15Z",
-    "ferrite_sha": "be5fb4be4698cc803932edfa5d1dfd7c30fc32c2",
+    "date": "2026-08-21T11:35:12Z",
+    "ferrite_sha": "247aed49c7d2a48e1e913626bf19de42f2af09f8",
     "ferrite_arbre_modifie": true,
     "cible": {
       "url": "http://localhost:9200",
@@ -142,28 +142,28 @@
   },
   "totaux": {
     "cas": 1173,
-    "reussis": 165,
-    "refuses": 481,
+    "reussis": 166,
+    "refuses": 480,
     "sautes": 171,
     "echecs": 356
   },
   "taux": {
     "fidelite_perimetre": {
-      "valeur": 0.3167,
-      "numerateur": 165,
-      "denominateur": 521,
+      "valeur": 0.318,
+      "numerateur": 166,
+      "denominateur": 522,
       "definition": "reussis / (reussis + echecs) — la part des cas que ferrite n'a ni refuses ni fait sauter qui repond comme Elasticsearch. Un pis-aller : une partie des echecs sont des refus dont le type d'erreur imite celui d'ES au lieu de porter le marqueur, donc ils gonflent le denominateur alors qu'ils sont hors perimetre. Voir [fidelite_perimetre_declare]"
     },
     "couverture_brute": {
-      "valeur": 0.1407,
-      "numerateur": 165,
+      "valeur": 0.1415,
+      "numerateur": 166,
       "denominateur": 1173,
       "definition": "reussis / total — la part de la suite d'Elastic qui passe, perimetre non declare compris"
     },
     "fidelite_perimetre_declare": {
-      "valeur": 0.8049,
-      "numerateur": 165,
-      "denominateur": 205,
+      "valeur": 0.8058,
+      "numerateur": 166,
+      "denominateur": 206,
       "definition": "reussis / (reussis + regressions + indetermines) — le taux precedent, mais en sortant du denominateur les echecs qui portent sur une capacite declaree refusee dans compat.yaml (le cout du perimetre). Les cas qu'aucune capacite ne reclame restent dedans"
     }
   },
@@ -474,8 +474,8 @@
       "cas": 14
     },
     "indices.analyze": {
-      "reussis": 2,
-      "refuses": 6,
+      "reussis": 3,
+      "refuses": 5,
       "sautes": 0,
       "echecs": 0,
       "cas": 8
@@ -2692,7 +2692,7 @@
       "fichier": "20_meta.yml",
       "cas": "Merge metadata across multiple indices",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [meta] (champ [latency]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [meta] (champ [latency]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "field_caps",
@@ -2739,7 +2739,7 @@
       "fichier": "20_stored_fields.yml",
       "cas": "Stored fields",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [store] (champ [foo]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [store] (champ [foo]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "get",
@@ -2771,7 +2771,7 @@
       "fichier": "70_source_filtering.yml",
       "cas": "Source filtering",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [store] (champ [count]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [store] (champ [count]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "get",
@@ -3000,8 +3000,8 @@
       "suite": "indices.analyze",
       "fichier": "10_analyze.yml",
       "cas": "Array text",
-      "categorie": "refus",
-      "raison": "ferrite ne supporte pas [tokenizer] dans [_analyze] ; cles acceptees : [\"text\", \"analyzer\", \"field\"]"
+      "categorie": "reussi",
+      "raison": ""
     },
     {
       "suite": "indices.analyze",
@@ -3015,14 +3015,14 @@
       "fichier": "10_analyze.yml",
       "cas": "Custom filter in request",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas [tokenizer] dans [_analyze] ; cles acceptees : [\"text\", \"analyzer\", \"field\"]"
+      "raison": "ferrite ne supporte pas [explain] dans [_analyze] ; cles acceptees : [\"text\", \"analyzer\", \"field\", \"tokenizer\", \"filter\"]"
     },
     {
       "suite": "indices.analyze",
       "fichier": "10_analyze.yml",
       "cas": "Detail response with Analyzer",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas [explain] dans [_analyze] ; cles acceptees : [\"text\", \"analyzer\", \"field\"]"
+      "raison": "ferrite ne supporte pas [explain] dans [_analyze] ; cles acceptees : [\"text\", \"analyzer\", \"field\", \"tokenizer\", \"filter\"]"
     },
     {
       "suite": "indices.analyze",
@@ -4654,7 +4654,7 @@
       "fichier": "10_basic.yml",
       "cas": "Update per-field metadata",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [meta] (champ [foo]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [meta] (champ [foo]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "indices.put_mapping",
@@ -5402,161 +5402,161 @@
       "fichier": "13_fields.yml",
       "cas": "Completion - all metric",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "indices.stats",
       "fichier": "13_fields.yml",
       "cas": "Completion - multi metric",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "indices.stats",
       "fichier": "13_fields.yml",
       "cas": "Completion - one metric",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "indices.stats",
       "fichier": "13_fields.yml",
       "cas": "Completion - pattern",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "indices.stats",
       "fichier": "13_fields.yml",
       "cas": "Completion fields - multi",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "indices.stats",
       "fichier": "13_fields.yml",
       "cas": "Completion fields - one",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "indices.stats",
       "fichier": "13_fields.yml",
       "cas": "Completion fields - star",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "indices.stats",
       "fichier": "13_fields.yml",
       "cas": "Fielddata fields - all metric",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "indices.stats",
       "fichier": "13_fields.yml",
       "cas": "Fielddata fields - multi",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "indices.stats",
       "fichier": "13_fields.yml",
       "cas": "Fielddata fields - multi metric",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "indices.stats",
       "fichier": "13_fields.yml",
       "cas": "Fielddata fields - one",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "indices.stats",
       "fichier": "13_fields.yml",
       "cas": "Fielddata fields - one metric",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "indices.stats",
       "fichier": "13_fields.yml",
       "cas": "Fielddata fields - pattern",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "indices.stats",
       "fichier": "13_fields.yml",
       "cas": "Fielddata fields - star",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "indices.stats",
       "fichier": "13_fields.yml",
       "cas": "Fields - _all metric",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "indices.stats",
       "fichier": "13_fields.yml",
       "cas": "Fields - blank",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "indices.stats",
       "fichier": "13_fields.yml",
       "cas": "Fields - completion metric",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "indices.stats",
       "fichier": "13_fields.yml",
       "cas": "Fields - fielddata metric",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "indices.stats",
       "fichier": "13_fields.yml",
       "cas": "Fields - multi",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "indices.stats",
       "fichier": "13_fields.yml",
       "cas": "Fields - multi metric",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "indices.stats",
       "fichier": "13_fields.yml",
       "cas": "Fields - one",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "indices.stats",
       "fichier": "13_fields.yml",
       "cas": "Fields - pattern",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "indices.stats",
       "fichier": "13_fields.yml",
       "cas": "Fields - star",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "indices.stats",
@@ -5771,7 +5771,7 @@
       "fichier": "40_updates_on_refresh.yml",
       "cas": "Completion stats",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [bar]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "indices.update_aliases",
@@ -6051,7 +6051,7 @@
       "fichier": "20_stored_fields.yml",
       "cas": "Stored fields",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [store] (champ [foo]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [store] (champ [foo]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "mget",
@@ -6226,7 +6226,7 @@
       "fichier": "10_basic.yml",
       "cas": "Basic tests for multi termvector get",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [term_vector] (champ [text]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [term_vector] (champ [text]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "mtermvectors",
@@ -7553,14 +7553,14 @@
       "fichier": "190_index_prefix_search.yml",
       "cas": "search index prefixes with span_multi",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [index_prefixes] (champ [text]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [index_prefixes] (champ [text]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, in"
     },
     {
       "suite": "search",
       "fichier": "190_index_prefix_search.yml",
       "cas": "search with index prefixes",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [index_prefixes] (champ [text]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [index_prefixes] (champ [text]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, in"
     },
     {
       "suite": "search",
@@ -7602,7 +7602,7 @@
       "fichier": "200_index_phrase_search.yml",
       "cas": "search with indexed phrases",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [index_phrases] (champ [text]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [index_phrases] (champ [text]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, ind"
     },
     {
       "suite": "search",
@@ -8136,7 +8136,7 @@
       "fichier": "330_fetch_fields.yml",
       "cas": "Test disable _source loading",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [store] (champ [integer]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [store] (champ [integer]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "search",
@@ -9495,7 +9495,7 @@
       "fichier": "30_sig_terms.yml",
       "cas": "Default index",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [text]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [text]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "search.aggregation",
@@ -9785,42 +9785,42 @@
       "fichier": "90_sig_text.yml",
       "cas": "Dedup noise",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [text]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [text]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "search.aggregation",
       "fichier": "90_sig_text.yml",
       "cas": "Default index",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [text]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [fielddata] (champ [text]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "search.highlight",
       "fichier": "10_unified.yml",
       "cas": "Basic",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [term_vector] (champ [text.fvh]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [term_vector] (champ [text.fvh]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, i"
     },
     {
       "suite": "search.highlight",
       "fichier": "20_fvh.yml",
       "cas": "Highlight multiple documents",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [term_vector] (champ [title]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [term_vector] (champ [title]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, inde"
     },
     {
       "suite": "search.highlight",
       "fichier": "20_fvh.yml",
       "cas": "Highlight multiple nested documents",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [term_vector] (champ [title]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [term_vector] (champ [title]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, inde"
     },
     {
       "suite": "search.highlight",
       "fichier": "20_fvh.yml",
       "cas": "Highlight query",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [term_vector] (champ [title]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [term_vector] (champ [title]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, inde"
     },
     {
       "suite": "search.highlight",
@@ -10313,7 +10313,7 @@
       "fichier": "10_basic.yml",
       "cas": "Basic tests for termvector get",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas le parametre de champ [term_vector] (champ [text]) ; parametres acceptes : type, analyzer, fields, ignore_above, format"
+      "raison": "ferrite ne supporte pas le parametre de champ [term_vector] (champ [text]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index"
     },
     {
       "suite": "termvectors",

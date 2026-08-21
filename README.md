@@ -153,10 +153,17 @@ Les **agrégations** sont là aussi : métriques, `terms`, `range`, `histogram`,
 `date_histogram`, et sous-agrégations — de quoi construire des facettes.
 
 Les **analyzers** `standard`, `simple`, `whitespace`, `keyword`, `stop`,
-`english` et `french` sont vérifiés token par token identiques à ceux d'ES sur
-210 textes, et `_analyze` permet de le constater. Les autres langues restent
-**refusées** : leur stemmer n'est pas porté, et porter le nom d'ES en indexant
-autre chose changerait silencieusement les résultats.
+`english` et `french` sont vérifiés identiques à ceux d'ES sur 210 textes —
+**positions et offsets compris** — et `_analyze` permet de le constater. Les
+autres langues restent **refusées** : leur stemmer n'est pas porté, et porter le
+nom d'ES en indexant autre chose changerait silencieusement les résultats.
+
+Un index peut aussi **déclarer son analyse** (`settings.analysis`) : ses propres
+analyzers `custom`, ses tokenizers et ses filtres. Les **n-grammes** (`ngram`,
+`edge_ngram`) en font partie, côté tokenizer comme côté filtre — c'est la brique
+de l'**autocomplétion « au fil de la frappe »**, celle qui travaille à
+l'indexation là où `match_phrase_prefix` travaille à la requête.
+`index.max_ngram_diff` est honoré, avec le message d'ES.
 
 Côté API de documents : `_update` (fusion partielle, `upsert`), `_mget`,
 `_count`, l'action `update` du `_bulk`, le versionnage optimiste
@@ -250,9 +257,8 @@ Cet inventaire est aussi ce qui **borne un tirage au sort**. Un fuzzer
 différentiel ([`tests/compat/fuzz_vs_es.py`](tests/compat/fuzz_vs_es.py)) génère
 des mappings, des documents et des requêtes dans le périmètre que `compat.yaml`
 déclare, les pose à ferrite **et** à un vrai Elasticsearch 8.15, et compare les
-réponses champ par champ : **3 200 cas, 141 260 requêtes, 1 divergence réelle**
-sur douze plages de graines, dont six jamais utilisées pour corriger — elle est
-un ordre que BM25 sépare, ouverte, et décrite plutôt que tue. Il
+réponses champ par champ : **3 950 cas, 174 207 requêtes, 0 divergence réelle**
+sur quinze plages de graines, dont huit jamais utilisées pour corriger. Il
 s'étalonne d'abord contre deux Elasticsearch — tant qu'il n'y est pas à zéro, ce
 qu'il dit de ferrite ne vaut rien. Son premier passage a trouvé vingt et un défauts
 que personne n'avait signalés, tous silencieux ; ils sont racontés dans

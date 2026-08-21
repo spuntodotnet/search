@@ -310,6 +310,8 @@ tables:
             - {nom: "settings.number_of_shards", note: "accepté, sans effet : ferrite est mono-shard"}
             - {nom: "settings.number_of_replicas", note: "accepté, sans effet"}
             - {nom: "settings.index.query.parse.allow_unmapped_fields", note: "voir plus bas"}
+            - {nom: "settings.index.max_ngram_diff", note: "voir plus bas"}
+            - {nom: "settings.analysis", note: "`analyzer`, `tokenizer`, `filter` — voir la section des analyzers sur mesure"}
           refuses:
             - {texte: "tout autre réglage", note: "refusé plutôt qu'ignoré"}
         conformance: {apis: [indices.create]}
@@ -365,6 +367,7 @@ tables:
         parametres:
           refuses:
             - {nom: "include_defaults", note: "il ajoute une section `defaults` avec les dizaines de réglages qu'ES a et que ferrite n'a pas"}
+            - {texte: "la section `analysis`", note: "ES rend la déclaration d'analyse de l'index ; ferrite ne la rend pas. Il n'en garde que la forme **normalisée** dont il a besoin pour rejouer les analyzers, et rendre celle-là ferait lire au client des noms de filtres qu'il n'a jamais écrits — ce qui serait pire qu'une absence. Les analyzers eux-mêmes sont bien là : `GET /{index}/_mapping` rend le nom déclaré sur chaque champ, et `_analyze` les exerce"}
           supportes:
             - {texte: "`GET /_settings` sans index", note: "vaut `_all`"}
             - {texte: "`/{index}/_settings/{nom}`", note: "filtrer par nom de réglage — liste, jokers, `_all`. Le filtre porte sur les clés **aplaties**, sans quoi le même nom filtrerait autrement selon `flat_settings`"}
@@ -392,6 +395,7 @@ tables:
             - {nom: "auto_expand_replicas", note: "sans effet, même raison"}
             - {nom: "refresh_interval", note: "`-1` désactive vraiment le rafraîchissement de fond ; une valeur positive est honorée, ferrite rafraîchissant toutes les secondes"}
             - {nom: "preserve_existing"}
+            - {nom: "max_ngram_diff", note: "l'écart maximal entre `max_gram` et `min_gram` d'un `ngram` (défaut 1) ; il **valide** ce que `settings.analysis` déclare, c'est le seul réglage d'index dans ce cas"}
             - {texte: "une valeur `null`", note: "efface le réglage, comme chez ES"}
           refuses:
             - {nom: "number_of_shards", note: "figé à la création, comme chez ES (`Can't update non dynamic settings`)"}
@@ -427,12 +431,24 @@ tables:
         nom: "`POST|GET /_analyze`, `/{index}/_analyze`"
         etat: partiel
         poids: 2.2
+        detail: >-
+          les offsets sont comptés en **unités UTF-16**, comme chez ES (c'est la
+          convention de Java) ; sur plusieurs `text`, chaque texte suivant décale
+          les offsets de la longueur du précédent **plus un**, et les positions
+          de 100 quand l'analyzer est sur mesure, de 0 quand il est intégré
         parametres:
           supportes:
             - {nom: "text", note: "chaîne ou liste"}
             - {nom: "analyzer"}
             - {nom: "field"}
-          refuses: ["tokenizer", "filter", "char_filter"]
+            - {nom: "tokenizer", note: "un nom (`ngram`) ou un objet (`{\"type\": \"ngram\", …}`), sans index — c'est ce qui rend une brique d'analyse mesurable toute seule"}
+            - {nom: "filter", note: "une liste de noms ou d'objets, même règle"}
+          refuses:
+            - {nom: "char_filter"}
+            - {nom: "normalizer"}
+            - {nom: "explain"}
+            - {nom: "attributes"}
+            - {texte: "le champ `type` du token", note: "ferrite rend toujours `<ALPHANUM>`, là où ES distingue `<NUM>`, `word`, `<EMOJI>`… ; il ne change ni les termes indexés ni les résultats"}
         conformance: {apis: [indices.analyze]}
 
       - id: index.mapping_dynamique
@@ -584,7 +600,7 @@ tables:
         nom: "`german`, `spanish`, `snowball` et les autres langues"
         etat: refuse
         motif: divergence_moteur
-        poids: 0.4
+        poids: 0.0
         raison: >-
           leur stemmer n'est pas porté, et livrer sous le nom d'ES un analyzer
           qui indexe autre chose changerait silencieusement les résultats d'un
@@ -611,10 +627,36 @@ tables:
         nom: "Tokenizers"
         etat: partiel
         poids: 0.3
+        detail: >-
+          cités par leur nom, ou **déclarés** dans `analysis.tokenizer` avec
+          leurs paramètres
         parametres:
-          supportes: ["standard", "whitespace", "keyword", "letter", "lowercase"]
+          supportes:
+            - {texte: "`standard`, `whitespace`, `keyword`, `letter`, `lowercase`"}
+            - {texte: "`ngram`, `edge_ngram`", note: "voir la ligne dédiée"}
           refuses:
-            - {nom: "analysis.tokenizer", note: "un tokenizer défini par l'index — n-grams, `pattern`…"}
+            - {texte: "`pattern`, `char_group`, `path_hierarchy`, `uax_url_email`…", note: "aucun mapping venu d'une instance réelle n'en a encore demandé"}
+
+      - id: analyse.ngram
+        nom: "`ngram` et `edge_ngram` — tokenizer **et** filtre"
+        etat: supporte
+        poids: null
+        detail: >-
+          la brique de l'autocomplétion « au fil de la frappe » : elle travaille
+          à l'**indexation**, là où `match_phrase_prefix` travaille à la
+          requête. Mesurée identique à ES sur 210 textes, **positions et offsets
+          compris** (`diff_analyzers.py`) : un n-gramme mal positionné casse
+          `match_phrase` sans changer le compte de tokens
+        parametres:
+          supportes:
+            - {nom: "min_gram", note: "défaut 1"}
+            - {nom: "max_gram", note: "défaut 2 — sauf le filtre `edge_ngram` **cité par son nom**, qui vaut 1, le défaut de Lucene"}
+            - {nom: "token_chars", note: "tokenizer — `letter`, `digit`, `whitespace`, `punctuation`, `symbol`, `custom`. Les classes sont celles de `Character.getType`, mesurées caractère par caractère contre ES sur 710 caractères"}
+            - {nom: "custom_token_chars", note: "tokenizer, exigé par `token_chars: [custom]`"}
+            - {nom: "side", note: "filtre `edge_ngram` : `front` (défaut) ou `back`. Sur le **tokenizer**, ES ne le lit pas et rend les grammes de tête ; ferrite fait pareil"}
+            - {nom: "preserve_original", note: "filtre : ajoute le token entier, et le garde quand il est plus court que `min_gram`"}
+          refuses:
+            - {texte: "les noms de catégories Unicode fines dans `token_chars`", note: "ES accepte aussi `math_symbol`, `connector_punctuation`… ; ferrite s'en tient aux six classes documentées et refuse le reste explicitement"}
 
       - id: analyse.filtres
         nom: "Filtres"
@@ -625,8 +667,10 @@ tables:
             - {nom: "lowercase"}
             - {nom: "asciifolding"}
             - {nom: "stop", note: "liste explicite ou `_english_`"}
+            - {texte: "`ngram`, `edge_ngram`", note: "voir la ligne dédiée"}
           refuses:
             - {texte: "tout filtre à base de stemmer", note: "même raison que les analyzers de langue"}
+            - {texte: "`synonym`, `shingle`, `word_delimiter`, `truncate`…", note: "pas encore écrits"}
 
       - id: analyse.char_filter
         nom: "`char_filter`"
@@ -1359,12 +1403,19 @@ tables:
         nom: "`match_phrase`"
         etat: partiel
         poids: 4.5
-        detail: "les termes dans l'ordre, adjacents"
+        detail: >-
+          les termes dans l'ordre, adjacents. Sur un champ dont l'analyzer pose
+          plusieurs termes à la **même position** (un filtre `ngram` ou
+          `edge_ngram`), un mot **seul** passe — ce sont des alternatives, et
+          ferrite en fait l'union comme Lucene ; **plusieurs mots** sont refusés
+          explicitement (Lucene y construit une `MultiPhraseQuery` que tantivy
+          n'a pas, et les enchaîner rendrait moins de documents en silence)
         parametres:
           supportes: ["query", "boost"]
           refuses:
             - {nom: "slop", note: "voir les divergences"}
             - {nom: "analyzer"}
+            - {texte: "plusieurs mots sur un champ à n-grammes", note: "voir le détail ci-dessus"}
 
       - id: dsl.match_phrase_prefix
         nom: "`match_phrase_prefix`"
@@ -1379,7 +1430,11 @@ tables:
             - {nom: "query"}
             - {nom: "max_expansions", note: "défaut 50, comme ES"}
             - {nom: "boost"}
-          refuses: ["slop", "analyzer", "zero_terms_query"]
+          refuses:
+            - {nom: "slop"}
+            - {nom: "analyzer"}
+            - {nom: "zero_terms_query"}
+            - {texte: "plusieurs mots sur un champ à n-grammes", note: "même raison que pour `match_phrase` ; un mot seul passe, chaque n-gramme y étant développé par son préfixe"}
 
       - id: dsl.exists
         nom: "`exists`"

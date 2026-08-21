@@ -114,6 +114,23 @@ DOCS_NESTE = [("n1", {"k": "a", "b": [{"x": 1.0, "y": "2026-01-01"},
                                       {"x": 3.0, "y": "2026-02-01"}]}),
               ("n2", {"k": "b", "b": [{"x": 8.0, "y": "2026-03-01"}]})]
 
+# Un champ dont l'analyzer porte un filtre a n-grammes : ses grammes occupent
+# **tous** la meme position. C'est le seul cas ou une phrase cesse d'etre une
+# suite de termes pour devenir une suite de positions a alternatives.
+GRAMMES = {
+    "settings": {
+        "index": {"max_ngram_diff": 12},
+        "analysis": {
+            "filter": {"gr": {"type": "ngram", "min_gram": 2, "max_gram": 5}},
+            "analyzer": {"a": {"type": "custom", "tokenizer": "standard",
+                               "filter": ["lowercase", "gr"]}},
+        },
+    },
+    "mappings": {"properties": {"g": {"type": "text", "analyzer": "a"}}},
+}
+DOCS_GRAMMES = [("g1", {"g": "ecole normale"}), ("g2", {"g": "ecologie"}),
+                ("g3", {"g": "le pre"}), ("g4", {"g": "une grande ecole"})]
+
 TERMES = {"mappings": {"properties": {"k": {"type": "keyword"}}}}
 DOCS_TERMES = [(f"t{i:02d}", {"k": f"v{i:02d}"}) for i in range(20)]
 
@@ -392,6 +409,31 @@ CAS = [
      "refuse (« it is mandatory to set the [nested] context on the nested sort "
      "field »). Les deux refusent maintenant",
      {"sort": [{"b.x": "asc"}], "_source": False}, statut),
+    # -- n-grammes ---------------------------------------------------------
+    (GRAMMES, DOCS_GRAMMES, "match_phrase d'un mot sur un champ a n-grammes",
+     "un filtre a n-grammes pose **tous** les grammes d'un mot a la meme "
+     "position : ce sont des alternatives, pas une suite. ferrite les "
+     "enchainait, donc il rendait 1 document (« g3 » n'a que le gramme `le ») "
+     "la ou ES en rend 4 — en 200",
+     {"query": {"match_phrase": {"g": "ecole"}}, "_source": False, "size": 10},
+     lambda r: sorted(h["_id"] for h in r["hits"]["hits"])),
+    (GRAMMES, DOCS_GRAMMES, "match operator=and sur un champ a n-grammes",
+     "`and` porte sur les **positions**, pas sur les termes : Lucene fait "
+     "l'union des grammes d'un mot avant d'appliquer l'operateur. ferrite les "
+     "exigeait tous, donc « le document contient tous les grammes du mot "
+     "cherche » — 1 document au lieu de 4, en 200",
+     {"query": {"match": {"g": {"query": "ecole", "operator": "and"}}},
+      "_source": False, "size": 10},
+     lambda r: sorted(h["_id"] for h in r["hits"]["hits"])),
+    (GRAMMES, DOCS_GRAMMES, "match d'un mot sur un champ a n-grammes",
+     "le meme decoupage vu par la clause qui, elle, a toujours ete une union : "
+     "c'est la reponse de reference du cas precedent",
+     {"query": {"match": {"g": "ecole"}}, "_source": False, "size": 10},
+     lambda r: sorted(h["_id"] for h in r["hits"]["hits"])),
+    (GRAMMES, DOCS_GRAMMES, "match_phrase_prefix d'un mot sur un champ a n-grammes",
+     "meme cause, autre clause : chaque gramme y est developpe par son prefixe",
+     {"query": {"match_phrase_prefix": {"g": "ecol"}}, "_source": False,
+      "size": 10}, lambda r: sorted(h["_id"] for h in r["hits"]["hits"])),
 ]
 
 # Ce que ferrite refuse **expres** plutot que de rendre un resultat faux. ES sait
@@ -420,6 +462,14 @@ REFUS = [
      "refus)",
      {"size": 0, "aggs": {"a": {"terms": {"field": "k", "size": 2,
                                           "min_doc_count": 2}}}}),
+    (GRAMMES, DOCS_GRAMMES, "match_phrase de plusieurs mots sur un champ a n-grammes",
+     "chaque position y porte des alternatives : Lucene construit une "
+     "`MultiPhraseQuery`, que tantivy n'a pas. Enchainer les grammes rendrait "
+     "moins de documents, en silence — un mot seul, lui, passe",
+     {"query": {"match_phrase": {"g": "ecole normale"}}, "_source": False}),
+    (GRAMMES, DOCS_GRAMMES, "match_phrase_prefix de plusieurs mots, meme champ",
+     "meme cause, autre clause",
+     {"query": {"match_phrase_prefix": {"g": "ecole norm"}}, "_source": False}),
     (TROUS, DOCS_TROUS, "range agg sur une date, avec un trou",
      "le bucket de remplissage de tantivy avale l'intervalle demande quand les "
      "bornes sont des dates : le bucket `2026-02-01-*` disparaissait",
@@ -466,8 +516,11 @@ ES_CASSE = [
 
 def preparer(base, mapping, docs):
     http(base, "DELETE", f"/{INDEX}")
+    # Un cas peut porter ses propres `settings` — un analyzer declare, par
+    # exemple : sans ca, aucun ecart lie a l'analyse ne serait exprimable ici.
     http(base, "PUT", f"/{INDEX}",
-         dict(mapping, settings={"number_of_shards": 1, "number_of_replicas": 0}))
+         dict(mapping, settings={"number_of_shards": 1, "number_of_replicas": 0,
+                                 **mapping.get("settings", {})}))
     lignes = []
     for doc_id, doc in docs:
         lignes.append(json.dumps({"index": {"_index": INDEX, "_id": doc_id}}))

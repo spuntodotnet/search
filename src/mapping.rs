@@ -183,7 +183,7 @@ pub enum Dynamic {
 }
 
 impl Dynamic {
-    fn parse(v: &Value) -> EsResult<Self> {
+    pub fn parse(v: &Value) -> EsResult<Self> {
         let s = match v {
             Value::Bool(true) => "true",
             Value::Bool(false) => "false",
@@ -472,6 +472,56 @@ impl Mapping {
     }
 }
 
+/// Les champs de **metadonnees** d'Elasticsearch : les redeclarer est une
+/// erreur, chez lui comme ici, et il la dit avec cette phrase-la.
+///
+/// Ce n'est **pas** « tout nom qui commence par `_` » : `_score`, `_doc`,
+/// `_type`, `_size`, `_all` et `_parent` passent chez ES, mesure a l'appui.
+/// Le prefixe entier a longtemps ete refuse ici, et ca bloquait une application
+/// reelle — Wagtail nomme ses champs `_all_text` et `_edgengrams` — sur un nom
+/// qu'un vrai ES accepte.
+const METADONNEES: &[&str] = &[
+    "_id",
+    "_index",
+    "_source",
+    "_routing",
+    "_field_names",
+    "_ignored",
+    "_seq_no",
+    "_version",
+    "_nested_path",
+    "_feature",
+    "_data_stream_timestamp",
+    "_tier",
+];
+
+/// Les noms que **ferrite** se reserve en plus : ce sont ceux de ses colonnes
+/// internes, et un champ utilisateur qui les porterait ecraserait la colonne
+/// jumelle d'un `nested` ou le lien parent d'un `join`.
+///
+/// ES les accepte ; ferrite les refuse **explicitement**, avec sa raison. Un
+/// nom qui n'y est pas ne peut pas entrer en collision : les colonnes internes
+/// sont `_elem.{chemin}`, `_nelem.{chemin}` et `_join_parent`.
+const INTERNES: &[&str] = &["_elem", "_nelem", "_join_parent"];
+
+/// Refuse un nom de champ reserve — par ES, ou par ferrite.
+pub fn nom_reserve(chemin: &str) -> EsResult<()> {
+    let racine = chemin.split('.').next().unwrap_or(chemin);
+    if METADONNEES.contains(&chemin) {
+        return Err(EsError::mapper_parsing(format!(
+            "Field [{chemin}] is defined more than once"
+        )));
+    }
+    if INTERNES.contains(&racine) {
+        return Err(EsError::mapper_parsing(format!(
+            "[{chemin}] : le nom [{racine}] est celui d'une colonne interne de ferrite (l'indice \
+             d'element d'un [nested], le lien parent d'un [join]) ; un champ qui le porterait \
+             l'ecraserait"
+        )));
+    }
+    Ok(())
+}
+
 /// Parse une propriete du mapping, qui peut etre un champ ou un sous-objet.
 ///
 /// Un sous-objet ne produit aucune entree pour lui-meme : il n'existe que par
@@ -489,11 +539,7 @@ fn parse_propriete(
     for part in chemin.split('.') {
         validate_field_name_part(part, chemin)?;
     }
-    if chemin.starts_with('_') {
-        return Err(EsError::mapper_parsing(format!(
-            "[{chemin}] : les noms de champ commencant par [_] sont reserves"
-        )));
-    }
+    nom_reserve(chemin)?;
 
     let obj = spec.as_object().ok_or_else(|| {
         EsError::mapper_parsing(format!("[mappings.properties.{chemin}] doit etre un objet"))

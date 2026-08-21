@@ -341,6 +341,15 @@ fn normaliser_settings(v: Value) -> Value {
     let mut index = Map::new();
     for (cle, valeur) in plats {
         let court = cle.strip_prefix("index.").unwrap_or(&cle).to_string();
+        // `analysis` n'est pas un reglage scalaire : il **declare** des
+        // analyzers, et le mettre en chaine comme les autres le rendait
+        // illisible au parseur (« [analysis] doit etre un objet » a la pose
+        // d'un template qui declare le moindre analyzer). Trouve par le fuzzer
+        // le jour ou une brique a pose un `settings.analysis` dans un template.
+        if court == "analysis" {
+            nicher(&mut index, &court, en_chaines(valeur));
+            continue;
+        }
         let texte = match &valeur {
             Value::String(s) => s.clone(),
             autre => autre.to_string(),
@@ -348,6 +357,23 @@ fn normaliser_settings(v: Value) -> Value {
         nicher(&mut index, &court, Value::String(texte));
     }
     json!({ "index": Value::Object(index) })
+}
+
+/// Les feuilles d'un reglage passent en chaines, sa forme est gardee.
+///
+/// C'est ce que fait ES sur `settings.analysis` d'un template : `min_gram: 1`
+/// s'y relit `"1"`, mais `token_chars: ["letter"]` reste une liste.
+fn en_chaines(v: Value) -> Value {
+    match v {
+        Value::Object(o) => Value::Object(
+            o.into_iter()
+                .map(|(cle, valeur)| (cle, en_chaines(valeur)))
+                .collect(),
+        ),
+        Value::Array(a) => Value::Array(a.into_iter().map(en_chaines).collect()),
+        Value::String(s) => Value::String(s),
+        autre => Value::String(autre.to_string()),
+    }
 }
 
 fn aplatir(prefixe: &str, o: &Map<String, Value>, out: &mut Vec<(String, Value)>) {
@@ -401,10 +427,13 @@ fn valider(tpl: &Template) -> EsResult<()> {
     }
     let mut declares = crate::analysis::Analysis::default();
     if let Some(s) = &tpl.settings {
+        // Meme ordre qu'a la creation d'un index : `index.max_ngram_diff` borne
+        // ce que `analysis` declare, donc il se lit avant.
+        let lus = crate::reglages::lire(s)?;
         if let Some(a) = crate::reglages::section_analysis(s) {
-            declares = crate::analysis::Analysis::parse(a)?;
+            declares =
+                crate::analysis::Analysis::parse(a, crate::reglages::max_ngram_diff(&lus.inertes))?;
         }
-        crate::reglages::lire(s)?;
     }
     if let Some(m) = &tpl.mappings {
         crate::mapping::Mapping::parse_avec(m, &declares)?;

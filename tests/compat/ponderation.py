@@ -464,7 +464,22 @@ ANALYZERS = {"standard": "analyzer.standard", "simple": "analyzer.simple",
              "whitespace": "analyzer.whitespace", "keyword": "analyzer.keyword",
              "stop": "analyzer.stop", "english": "analyzer.english",
              "french": "analyzer.french"}
-ANALYZERS_DEFAUT = "analyzer.autres_langues"
+# Les analyzers de langue d'ES, nommes un par un. Tout autre nom est celui d'un
+# analyzer **declare par l'index** : `settings.analysis` l'a pose dans une
+# requete precedente, que ce corps-ci ne porte pas. On ne peut donc pas trancher
+# depuis la requete seule, et le verdict est `indeterminee` — qui compte contre
+# nous, comme dans le rapport de conformance.
+#
+# Longtemps, tout nom inconnu tombait dans « analyzer de langue », donc refuse :
+# la campagne Wagtail affichait « trait refuse : analyzer:edgengram_analyzer »
+# pour un analyzer que l'index venait de declarer et que ferrite sert.
+ANALYZERS_LANGUE = {
+    "arabic", "armenian", "basque", "bengali", "brazilian", "bulgarian", "catalan", "cjk",
+    "czech", "danish", "dutch", "estonian", "finnish", "galician", "german", "greek", "hindi",
+    "hungarian", "indonesian", "irish", "italian", "latvian", "lithuanian", "norwegian",
+    "persian", "portuguese", "romanian", "russian", "serbian", "sorani", "spanish", "swedish",
+    "thai", "turkish", "snowball", "pattern", "fingerprint",
+}
 
 CHAMPS = {"fields": "type.multi_fields", "ignore_above": "type.ignore_above",
           "analyzer": "type.analyzer", "search_analyzer": "type.analyzer",
@@ -580,7 +595,9 @@ class Croisement:
         if famille == "champ":
             return CHAMPS.get(reste, CHAMPS_DEFAUT), None
         if famille == "analyzer":
-            return ANALYZERS.get(reste, ANALYZERS_DEFAUT), None
+            if reste in ANALYZERS:
+                return ANALYZERS[reste], None
+            return ("analyzer.autres_langues" if reste in ANALYZERS_LANGUE else None), None
         if famille == "analyse":
             return ANALYSE.get(trait), None
         if famille == "expr":
@@ -751,7 +768,8 @@ def capacites_mesurables(croisement):
                   DATE_MATH, ANALYSE, TRAITS_REFUSES, TRAITS_SERVIS):
         atteignables |= set(table.values())
     atteignables |= {CLAUSES_DEFAUT, AGGS_DEFAUT, TYPES_DEFAUT, CHAMPS_DEFAUT,
-                     ANALYZERS_DEFAUT, "recherche.non_supportes", "recherche.sort"}
+                     "analyzer.autres_langues", "recherche.non_supportes",
+                     "recherche.sort"}
     atteignables |= set(croisement.perimetre.apis.values())
     atteignables |= {cid for _, cid in croisement.perimetre.familles}
     return atteignables & set(croisement.capacites)
