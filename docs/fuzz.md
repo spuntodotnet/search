@@ -140,6 +140,31 @@ générateur pose maintenant, en plus, un `_delete_by_query` ou un
 tirage différent — c'est exactement pour ça que ce qui compte devient un cas
 écrit dans [`sonde_fuzz.py`](../tests/compat/sonde_fuzz.py) et pas une graine.
 
+### Ce que la brique « n-grammes » a sorti, en un passage
+
+Les n-grammes ont reçu leur brique le jour où ils ont été livrés : un mapping
+tiré au sort déclare, une fois sur trois, une section `analysis` avec un
+tokenizer `ngram` ou `edge_ngram` **et** un filtre du même genre, aux bornes
+tirées au sort, puis un champ `text` peut citer l'un des deux analyzers. Les
+deux formes ne sont pas la même : le tokenizer avance d'une position par
+gramme, le filtre pose **tous** les grammes d'un mot à la position de ce mot.
+
+C'est cette seconde forme qui a sorti le défaut, sur une plage jamais regardée
+(3535000+), deux fois en 250 cas.
+
+| Ce que le fuzzer a sorti | La règle mesurée |
+|---|---|
+| `match_phrase` sur un champ à n-grammes rendait **3 documents là où ES en rend 12**, en 200 | une phrase n'est pas une suite de **termes**, c'est une suite de **positions**. Tant qu'un analyzer posait un terme par position, la distinction ne se voyait pas ; un filtre à n-grammes en pose dix au même endroit, et Lucene en fait des **alternatives** — une seule position, c'est une union ; plusieurs positions à alternatives, c'est une `MultiPhraseQuery`. ferrite les enchaînait, donc il demandait « ce document contient exactement cette suite de grammes ». La première moitié est faite, la seconde est refusée explicitement (tantivy n'a pas de `MultiPhraseQuery`) |
+
+Deux autres défauts sont sortis de la brique **avant** qu'elle ne pose la
+moindre requête, sur les 250 premières graines : un `settings.analysis` posé
+dans un **template** était mis en chaîne par la normalisation des réglages, donc
+illisible au parseur, et `PUT /{index}/_mapping` lisait son corps avec une
+section `analysis` vide. Les deux étaient antérieurs à la carte et invisibles :
+ils demandaient qu'un analyzer déclaré rencontre une **autre** fonctionnalité,
+ce qui n'arrivait dans aucun test écrit. Une brique nouvelle ne mesure pas
+qu'elle-même — elle mesure tout ce qui la traverse.
+
 ### Ce que la brique « par requête » a sorti, en un passage
 
 `_delete_by_query` et `_update_by_query` ont reçu leur brique le jour où ils ont

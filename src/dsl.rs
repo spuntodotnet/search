@@ -676,12 +676,11 @@ fn field_phrase(
                 _ => {
                     if positions.iter().any(|p| p.len() > 1) {
                         return Err(EsError::unsupported(format!(
-                            "ferrite ne supporte pas une phrase de plusieurs mots sur un champ \
-                             dont l'analyzer pose plusieurs termes a la meme position (champ \
-                             [{field_name}], clause [{clause}]) : c'est le cas d'un filtre \
-                             [ngram] ou [edge_ngram], et Lucene y construit une \
-                             `MultiPhraseQuery` que tantivy n'a pas. Un seul mot passe (voir \
-                             docs/compat.md)"
+                            "ferrite ne supporte pas plusieurs termes a la meme position dans \
+                             une phrase de plusieurs mots (champ [{field_name}], clause \
+                             [{clause}]) : c'est le cas d'un filtre [ngram] ou [edge_ngram], et \
+                             Lucene y construit une `MultiPhraseQuery` que tantivy n'a pas. Un \
+                             seul mot passe (voir docs/compat.md)"
                         )));
                     }
                     let terms: Vec<(usize, tantivy::Term)> = tokens
@@ -797,11 +796,11 @@ fn field_phrase_prefix(
             }
             if tokens.windows(2).any(|p| p[0].0 == p[1].0) {
                 return Err(EsError::unsupported(format!(
-                    "ferrite ne supporte pas [{clause}] de plusieurs mots sur un champ dont \
-                     l'analyzer pose plusieurs termes a la meme position (champ \
-                     [{field_name}]) : c'est le cas d'un filtre [ngram] ou [edge_ngram], et \
-                     Lucene y construit une `MultiPhraseQuery` que tantivy n'a pas. Un seul mot \
-                     passe (voir docs/compat.md)"
+                    "ferrite ne supporte pas plusieurs termes a la meme position dans un \
+                     [{clause}] de plusieurs mots (champ [{field_name}]) : c'est le cas d'un \
+                     filtre [ngram] ou [edge_ngram], et Lucene y construit une \
+                     `MultiPhraseQuery` que tantivy n'a pas. Un seul mot passe (voir \
+                     docs/compat.md)"
                 )));
             }
             match tokens.len() {
