@@ -27,7 +27,7 @@ python3 tests/compat/fuzz_vs_es.py --couverture          # ce qu'il fuzze, et pa
 
 ## Le périmètre est lu, pas réécrit
 
-[`compat.yaml`](../compat.yaml) déclare 192 capacités avec leur état. Le
+[`compat.yaml`](../compat.yaml) déclare 193 capacités avec leur état. Le
 générateur ne redit pas cette liste : chaque **brique** (une clause du DSL, un
 type de champ, une agrégation, un paramètre du corps) cite l'identifiant de la
 capacité qu'elle exerce, et au démarrage le fuzzer
@@ -106,39 +106,46 @@ avec sa raison, et `--tout` les imprime.
 ## La mesure du jour
 
 ```
-graines 1–400          400 cas, 17 752 requêtes, 0 divergence réelle
-graines 5000–5299      300 cas, 13 213 requêtes, 0 divergence réelle
-graines 900000+        250 cas, 11 048 requêtes, 0 divergence réelle
-graines 4242000+       250 cas, 11 008 requêtes, 0 divergence réelle
-graines 31337000+      250 cas, 11 002 requêtes, 0 divergence réelle
-graines 7770000+       250 cas, 10 964 requêtes, 0 divergence réelle
-graines 6060000+       250 cas, 11 100 requêtes, 0 divergence réelle
-graines 8181000+       250 cas, 10 994 requêtes, 0 divergence réelle
-graines 9494000+       250 cas, 11 101 requêtes, 0 divergence réelle
-graines 5150000+       250 cas, 11 039 requêtes, 1 divergence réelle  (ouverte, décrite plus bas)
-graines 2727000+       250 cas, 11 028 requêtes, 0 divergence réelle
-graines 1414000+       250 cas, 11 011 requêtes, 0 divergence réelle
+graines 1–400          400 cas, 17 655 requêtes, 0 divergence réelle
+graines 5000–5299      300 cas, 13 241 requêtes, 0 divergence réelle
+graines 900000+        250 cas, 11 061 requêtes, 0 divergence réelle
+graines 4242000+       250 cas, 11 010 requêtes, 0 divergence réelle
+graines 31337000+      250 cas, 11 027 requêtes, 0 divergence réelle
+graines 7770000+       250 cas, 11 073 requêtes, 0 divergence réelle
+graines 6060000+       250 cas, 10 992 requêtes, 0 divergence réelle
+graines 8181000+       250 cas, 11 036 requêtes, 0 divergence réelle
+graines 9494000+       250 cas, 11 064 requêtes, 0 divergence réelle
+graines 5150000+       250 cas, 11 040 requêtes, 0 divergence réelle
+graines 2727000+       250 cas, 10 986 requêtes, 0 divergence réelle
+graines 1414000+       250 cas, 11 047 requêtes, 0 divergence réelle
+graines 3535000+       250 cas, 10 899 requêtes, 0 divergence réelle
+graines 6262000+       250 cas, 10 984 requêtes, 0 divergence réelle
+graines 8383000+       250 cas, 11 092 requêtes, 0 divergence réelle
                      ------------------------------------------------
-                     3 200 cas, 141 260 requêtes, 1 divergence réelle
+                     3 950 cas, 174 207 requêtes, 0 divergence réelle
 
-étalonnage ES vs ES     60 cas,  2 532 requêtes, 0 divergence
+étalonnage ES vs ES     50 cas,  2 157 requêtes, 0 divergence
 ```
 
-Six de ces plages ont servi à corriger : 1–400, contre laquelle l'outil a été
+Sept de ces plages ont servi à corriger : 1–400, contre laquelle l'outil a été
 réglé, 4242000+, qui a sorti le `minimum_should_match` décrit plus bas,
 **8181000+**, qui a sorti les trois règles de précédence de `fields`,
-**9494000+**, qui a montré qu'un prédicat était trop étroit, et les deux
-nouvelles — **2727000+**, qui a sorti l'ordre de balayage de la commande par
-requête, et **1414000+**, qui a montré qu'un prédicat ne connaissait qu'un
-**sens** (les deux ci-dessous). Les **six** autres sont des plages **de
-contrôle** ; 5150000+ porte la divergence ouverte, et son rapport machine est
-[`fuzz.json`](fuzz.json).
+**9494000+**, qui a montré qu'un prédicat était trop étroit, **2727000+**, qui a
+sorti l'ordre de balayage de la commande par requête, **1414000+**, qui a montré
+qu'un prédicat ne connaissait qu'un **sens**, et les deux nouvelles —
+**3535000+** et **5150000+**, qui ont sorti les deux moitiés du défaut des
+n-grammes (la phrase, puis l'opérateur `and`). Les **huit** autres sont des
+plages **de contrôle**, jamais utilisées pour corriger ; le rapport machine
+publié est celui de la dernière d'entre elles, [`fuzz.json`](fuzz.json).
 
-Les graines ont toutes changé de sens depuis la mesure précédente : le
-générateur pose maintenant, en plus, un `_delete_by_query` ou un
-`_update_by_query` sur un cas sur trois. Chaque cas de chaque plage est donc un
-tirage différent — c'est exactement pour ça que ce qui compte devient un cas
-écrit dans [`sonde_fuzz.py`](../tests/compat/sonde_fuzz.py) et pas une graine.
+**La divergence ouverte du passage précédent n'a pas été rejouée.** Elle portait
+sur un ordre par pertinence que BM25 sépare (elle est toujours décrite plus
+bas) : ce n'est pas un défaut corrigé, c'est un tirage qui n'est pas revenu. Les
+graines ont toutes changé de sens — le générateur déclare maintenant, sur un cas
+sur trois, une section `analysis` à n-grammes, donc chaque cas de chaque plage
+est un tirage différent. C'est exactement pour ça que ce qui compte devient un
+cas écrit dans [`sonde_fuzz.py`](../tests/compat/sonde_fuzz.py) et pas une
+graine.
 
 ### Ce que la brique « n-grammes » a sorti, en un passage
 
@@ -259,11 +266,11 @@ les deux précédentes — c'est le seul usage honnête de cet outil.
 > dix plages ne la repose. Elle reste écrite ici parce qu'une divergence qu'un
 > tirage cesse de poser n'est pas une divergence corrigée.
 
-### La divergence ouverte du passage courant : un ordre que BM25 sépare
+### La divergence ouverte du passage précédent : un ordre que BM25 sépare
 
-`5150000+`, la plage de contrôle jamais regardée, en a sorti une seule — et elle
-n'est **pas** de la famille de cette carte (sa requête ne porte ni `fields`, ni
-`docvalue_fields`, ni `stored_fields`).
+`5150000+`, alors plage de contrôle jamais regardée, en avait sorti une seule —
+qui n'était **pas** de la famille de la carte d'alors (sa requête ne portait ni
+`fields`, ni `docvalue_fields`, ni `stored_fields`).
 
 | Ce qui diffère | Ce que c'est |
 |---|---|
@@ -277,10 +284,16 @@ masquerait exactement ce qu'elle a été écrite pour attraper : une inversion
 causée par une **clé de tri** et non par le score. Le prix, c'est cette ligne
 rouge — et elle est le bon prix.
 
+> Elle **ne sort plus** du passage courant, et pour la même raison que la
+> précédente : le tirage a changé, aucune des quinze plages ne la repose. Ce
+> n'est pas une correction. La cause — l'`avgdl` calculé sur tous les documents
+> plutôt que sur ceux qui ont le champ — est toujours là, déclarée dans
+> [`compat.md`](compat.md), et un autre tirage la reposera.
+
 Le détail machine est dans [`fuzz.json`](fuzz.json) : les divergences réelles y
 sont écrites entières, les assumées résumées par famille avec trois exemples.
 
-### Pourquoi douze plages de graines, et pas une
+### Pourquoi quinze plages de graines, et pas une
 
 Parce que la première ne prouvait pas ce qu'elle avait l'air de prouver.
 

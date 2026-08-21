@@ -1,9 +1,9 @@
 {
   "schema": 2,
   "mesure": {
-    "date": "2026-08-21T04:45:45Z",
-    "ferrite_sha": "463ec13d2cdb7ac8400970b4e6e58e4f13ba0cfe",
-    "ferrite_arbre_modifie": false,
+    "date": "2026-08-21T11:35:12Z",
+    "ferrite_sha": "247aed49c7d2a48e1e913626bf19de42f2af09f8",
+    "ferrite_arbre_modifie": true,
     "cible": {
       "url": "http://localhost:9200",
       "version_annoncee": "8.15.0",
