@@ -170,11 +170,11 @@ développement, pas de CI).
 
 | Commande | La question à laquelle elle répond |
 |---|---|
-| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**105/105**, dont l'export par `helpers.scan`, le date math, la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats`, les templates, ce que la réponse transporte — `fields`, `docvalue_fields`, `stored_fields` — et la modification par requête, `_delete_by_query` / `_update_by_query`) |
+| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**107/107**, dont l'export par `helpers.scan`, le date math, la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats`, les templates, ce que la réponse transporte — `fields`, `docvalue_fields`, `stored_fields` — la modification par requête, `_delete_by_query` / `_update_by_query`, et les n-grammes de l'autocomplétion) |
 | `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (212/213, 0 écart réel) |
 | `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (45/46 ; le seul écart est `_cluster/health`, toujours vert par choix) |
 | `tests/compat/diff_aggs.py` | les mêmes agrégations ? (53/53, `filter` comprise, et ce qu'un bucket **vide** doit porter) |
-| `tests/compat/diff_analyzers.py` | les mêmes tokens ? (7 analyzers, 210 textes, tous identiques) |
+| `tests/compat/diff_analyzers.py` | les mêmes tokens, **aux mêmes positions et aux mêmes offsets** ? (38 batteries × 210 textes : 7 analyzers intégrés, 21 déclarations de n-grammes, les 5 analyzers de Wagtail, et les 5 classes de `token_chars` demandées caractère par caractère — toutes identiques) |
 | `tests/compat/diff_datemath.py` | les mêmes documents sur une **borne de date** — `now`, `now-1d/d`, `2026-03-15\|\|+1M`, et l'arrondi selon le côté de la borne ? (276/276, messages d'erreur compris ; 45/276 avant le chantier) |
 | `tests/compat/diff_motifs.py` | les mêmes documents sur un **motif** — `regexp`, `wildcard`, `prefix`, `match_phrase_prefix` ? (101/101) |
 | `tests/compat/diff_multi_index.py` | `index=["a","b"]`, `logs-*`, les alias : **les mêmes index visés, fusionnés pareil** ? (87/87, 0 écart, plus aucune divergence assumée ; `--calibrer` : 87/87 contre deux ES) |
@@ -186,7 +186,7 @@ développement, pas de CI).
 | `tests/compat/sonde_vide.py` | sur un serveur **sans aucun index**, la même chose qu'ES — et rien accepté en silence ? (28/28 identiques, 0 refus muet ; les deux serveurs doivent être vides, c'est l'état mesuré) |
 | `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **3 200 cas, 141 260 requêtes, 1 divergence réelle** (un ordre que BM25 sépare, ouverte et décrite dans [`docs/fuzz.md`](docs/fuzz.md)), sur douze plages de graines dont **six** n'ont jamais servi à corriger — celle sur laquelle on itère ne mesure plus rien. 21 défauts silencieux trouvés au premier passage, 4 de plus depuis, dont un `max_docs` qui ne supprimait pas les mêmes documents qu'ES. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (60 cas, 2 532 requêtes, 0) |
 | `tests/compat/sonde_fuzz.py` | les écarts trouvés par le fuzzing, **figés** hors d'une graine (42/42, plus 10 refus assumés) |
-| `tests/compat/appli_reelle.py` | **un logiciel écrit par d'autres démarre-t-il ?** Clone une vraie application à une révision figée, vérifie que rien n'y a bougé, lance sa **propre** suite d'intégration contre un vrai ES puis contre ferrite, et relève tout le trafic HTTP au passage. Gitea v1.27.2 : **34/34 des deux côtés**, arbre intact. Voir [`docs/application.md`](docs/application.md) |
+| `tests/compat/appli_reelle.py` | **un logiciel écrit par d'autres démarre-t-il ?** Clone une vraie application à une révision figée, vérifie que rien n'y a bougé, lance sa **propre** suite d'intégration contre un vrai ES puis contre ferrite, et relève tout le trafic HTTP au passage. Gitea v1.27.2 : **34/34 des deux côtés**, arbre intact. Wagtail v7.1 : **0/81**, mais son index se crée maintenant — il reste trois paramètres de mapping. Voir [`docs/application.md`](docs/application.md) |
 | `tests/compat/genere_compat.py` | le périmètre déclaré et la doc disent-ils la **même chose** ? [`compat.yaml`](compat.yaml) est la source (une entrée par capacité : état, paramètres, motif du refus, poids d'usage) ; [`docs/compat.md`](docs/compat.md) et [`docs/compat.json`](docs/compat.json) en sont **générés**, et la CI échoue s'ils divergent |
 | `tests/compat/perimetre.py` | ce cas qui échoue, il porte sur quoi ? Il rattache un échec de conformance à une capacité déclarée : **régression** si elle est annoncée supportée, **coût de périmètre** si elle est annoncée refusée |
 | `tests/compat/recolte_usage.py` | à quoi ressemblent les requêtes que les gens envoient **vraiment** ? Constitue le corpus ([`tests/compat/usage/corpus.jsonl`](tests/compat/usage/corpus.jsonl), 5 311 requêtes) depuis quatre sources citables : doc de référence 8.15, tracks Rally, clients officiels, code open source. Chaque requête porte l'URL d'où elle vient |
@@ -232,7 +232,32 @@ bouger**, pas après.
   **sur mesure**
   (`settings.analysis`), eux, sont supportés : ils se composent de briques que
   ferrite reproduit à l'identique (`standard`, `lowercase`, `asciifolding`,
-  `stop`).
+  `stop`, `ngram`, `edge_ngram`).
+- **Une phrase est une suite de positions, pas une suite de termes**
+  ([`src/dsl.rs`](src/dsl.rs)). Tant qu'un analyzer posait un terme par
+  position, la distinction ne se voyait pas ; un filtre à n-grammes pose **tous
+  les grammes d'un mot au même endroit**, et là elle décide de tout. Lucene en
+  fait des **alternatives** : une seule position, c'est une union ; plusieurs
+  positions à alternatives, c'est une `MultiPhraseQuery`. ferrite fait la
+  première et refuse explicitement la seconde, tantivy n'ayant pas
+  d'équivalent. Les enchaîner — ce qu'il faisait — rendait « ce document
+  contient exactement cette suite de grammes », donc beaucoup moins de
+  documents, en 200.
+- **`token_chars` nomme des catégories générales d'Unicode**
+  ([`src/ngram.rs`](src/ngram.rs)), lues chez Lucene par `Character.getType`.
+  Les prédicats de la bibliothèque standard de Rust n'y correspondent pas :
+  `is_alphabetic` accepte `Ⅰ` (Nl) et les signes vocaliques indiens que
+  `isLetter` refuse, `is_numeric` accepte `½` et `①` (No) que `isDigit` refuse,
+  et `is_whitespace` accepte l'espace insécable que `isWhitespace` refuse. D'où
+  les tables générées de [`src/unicode_classes.rs`](src/unicode_classes.rs), et
+  la mesure caractère par caractère contre ES dans `diff_analyzers.py`.
+- **Le préfixe `_` n'est pas réservé, les champs de métadonnées le sont.** ES
+  ne refuse que ses propres champs (`_id`, `_index`, `_source`, `_routing`,
+  `_field_names`, `_ignored`, `_seq_no`, `_version`, `_nested_path`,
+  `_feature`, `_data_stream_timestamp`, `_tier`) — `_score`, `_doc`, `_type`,
+  `_size`, `_all`, `_parent` et `_all_text` passent. ferrite y ajoute les
+  racines de ses **colonnes internes** (`_elem`, `_nelem`, `_join_parent`),
+  refusées avec leur raison écrite.
 - **La syntaxe de `regexp` est traduite, jamais transmise telle quelle**
   ([`src/regexp.rs`](src/regexp.rs)). Celle de Lucene et celle du crate `regex`
   se ressemblent assez pour qu'on croie pouvoir passer le motif directement, et
@@ -474,17 +499,43 @@ bouger**, pas après.
   documents — le prédicat, qui ne connaissait qu'un sens, le lisait comme un
   écart réel. Un prédicat écrit sur un signe doit se demander ce qu'une
   négation en fait.
+- **Une brique nouvelle réveille du code qui n'avait jamais été poussé.** Les
+  n-grammes n'ont rien cassé chez eux ; ils ont sorti trois défauts **ailleurs**,
+  tous antérieurs et tous invisibles jusque-là. Un `settings.analysis` posé dans
+  un **template** était mis en chaîne par la normalisation des réglages, donc
+  illisible au parseur — aucun template ne déclarait d'analyzer avant.
+  `PUT /{index}/_mapping` lisait son corps avec une section `analysis` **vide**,
+  donc un champ ajouté après coup ne pouvait pas citer un analyzer de son propre
+  index. Et `match_phrase` enchaînait les termes d'une même position. Le point
+  commun : chacun demandait qu'un analyzer déclaré **et** une seconde
+  fonctionnalité se rencontrent, ce qui n'arrivait dans aucun test. Quand on
+  livre une brique, il faut chercher ce qui la **traverse**, pas seulement ce
+  qui l'appelle.
+- **Un refus de trop en cache un autre.** Wagtail butait sur `analysis.tokenizer`
+  ; une fois celui-là levé, deux refus sont apparus qu'aucune des mesures
+  précédentes n'avait pu voir — le préfixe `_` interdit sur tout nom de champ, et
+  le `PUT /_mapping` ci-dessus. Une liste de manques établie derrière un mur
+  n'est complète que jusqu'au mur. C'est la raison pour laquelle
+  `docs/application.md` publie **où l'application s'arrête** et pas seulement
+  combien de ses tests passent.
 
 ## Où va le projet
 
 **Une vraie application tourne dessus sans être modifiée** : Gitea v1.27.2 y
 indexe et cherche ses issues, et sa suite d'intégration passe ses 34 cas — les
 mêmes que contre un vrai ES 8.15. La seconde cible mesurée, Wagtail v7.1, ne
-passe **aucun** de ses 81 tests de backend, pour une raison écrite et unique :
-son index déclare des n-grammes (`ngram`, `edge_ngram`), et cinq autres
-paramètres de déclaration d'index lui manqueraient derrière. Les deux résultats
-sont dans [`docs/application.md`](docs/application.md) — celui qui échoue est
-une feuille de route sourcée, pas un aveu.
+passe toujours **aucun** de ses 81 tests de backend — mais son index **se crée**
+maintenant : les n-grammes qui le bloquaient sont livrés, et ce qui reste tient
+en trois paramètres de mapping (`search_analyzer`, `copy_to`, `store`), contre
+six lignes auparavant. Les deux résultats sont dans
+[`docs/application.md`](docs/application.md) — celui qui échoue est une feuille
+de route sourcée, pas un aveu.
+
+**L'autocomplétion « au fil de la frappe »** est là : `ngram` et `edge_ngram`,
+tokenizer et filtre, déclarés dans `settings.analysis` et bornés par
+`index.max_ngram_diff`. Ils travaillent à l'**indexation**, là où
+`match_phrase_prefix` travaille à la requête — un CMS qui propose des pages
+pendant qu'on tape n'a pas d'autre moyen.
 
 Une migration depuis une instance 7.10.2 se reprend maintenant **entière** sur
 l'index d'exemple, et un projet qui découpe ses données en plusieurs index —
@@ -546,8 +597,9 @@ Ce qui reste, par ordre de gêne pour un projet réel : `rest_total_hits_as_int`
 `GET /_cat/aliases` et les colonnes `h` / `s` des `_cat`,
 `GET /{index}/_mapping/field/{champs}`, l'agrégation `filters` (la sœur
 plurielle de `filter`), `time_zone` sur un `range` (refusé explicitement), les
-alias **filtrés** (`filter`, refusé explicitement), et les analyzers des autres
-langues.
+alias **filtrés** (`filter`, refusé explicitement), les trois paramètres de
+mapping qui restent à Wagtail (`search_analyzer`, `copy_to`, `store`), et les
+analyzers des autres langues.
 
 Le seul échec silencieux connu du projet est **corrigé** : une recherche qui ne
 visait **aucun index** (cluster vide, ou motif sans correspondance) rendait 200

@@ -1712,6 +1712,11 @@ def _refus_declare(e, _requete=None, ecarts=()):
         # agregation. ES rend 0 hit / un resultat vide, ferrite le dit.
         "est sous le champ [nested]",
         "on the nested sort field",
+        # Une phrase de plusieurs mots sur un champ dont l'analyzer pose
+        # plusieurs termes a la meme position (un filtre `ngram` /
+        # `edge_ngram`) : Lucene y construit une `MultiPhraseQuery`, tantivy
+        # n'en a pas. Un mot seul passe.
+        "plusieurs termes a la meme position",
     ))
 
 

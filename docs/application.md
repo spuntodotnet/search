@@ -167,64 +167,91 @@ d'être un **chiffre** et une **liste**, pas une impression. Wagtail v7.1 a donc
 
 Les 192 verts de ferrite sont les tests qui ne touchent pas à Elasticsearch (le
 backend base de données de Wagtail). Sur ce que la carte mesure — les tests du
-backend Elasticsearch — le score est **0 sur 81**, et il n'y a **qu'une seule
-cause**, la toute première requête :
+backend Elasticsearch — le score est **0 sur 81**, et cette ligne-là n'a pas
+bougé depuis la mesure précédente. **Ce qui a bougé, c'est où il s'arrête**, et
+c'est ça que cette section publie.
 
-```
-PUT /wagtail__wagtailcore_page  → 400
-  ferrite ne supporte pas les tokenizers definis dans [analysis.tokenizer] ;
-  tokenizers integres : standard, whitespace, keyword, letter, lowercase
-```
+### Ce qui bloquait, et ne bloque plus
 
-Wagtail déclare son propre analyse dans les réglages de l'index :
+La première mesure s'arrêtait à la **toute première requête** : Wagtail déclare
+son analyse dans les réglages de son index, et ferrite refusait la section
+entière.
 
 ```json
 "analysis": {
   "tokenizer": {"ngram_tokenizer":     {"type": "ngram",      "min_gram": 3, "max_gram": 15},
-                "edgengram_tokenizer": {"type": "edge_ngram", "min_gram": 1, "max_gram": 15}},
+                "edgengram_tokenizer": {"type": "edge_ngram", "min_gram": 2, "max_gram": 15,
+                                        "side": "front"}},
   "filter":    {"ngram":     {"type": "ngram",      "min_gram": 3, "max_gram": 15},
                 "edgengram": {"type": "edge_ngram", "min_gram": 1, "max_gram": 15}},
   "analyzer":  {"ngram_analyzer": …, "edgengram_analyzer": …}
-}
+},
+"index": {"max_ngram_diff": 12}
 ```
 
-C'est l'**autocomplétion** de son admin : chaque titre est découpé en préfixes
-à l'indexation. ferrite compose des analyzers sur mesure, mais seulement à
-partir des briques qu'il reproduit à l'identique (`standard`, `lowercase`,
-`asciifolding`, `stop`) — un `edge_ngram` n'en fait pas partie, et il est refusé
-plutôt qu'ignoré. Les 87 `DELETE /{index}` qui suivent rendent
-`index_not_found_exception` : c'est la conséquence (Wagtail supprime avant de
-créer), pas une seconde cause — un vrai ES dans le même état rendrait la même
-chose.
+C'est l'**autocomplétion** de son admin : chaque titre est découpé en préfixes à
+l'indexation. Les n-grammes sont maintenant servis, tokenizer et filtre, et
+mesurés identiques à ES sur 210 textes — positions et offsets compris
+(`diff_analyzers.py`). Les **87 `PUT /{index}` de la campagne passent** ; le
+relevé du mouchard le dit sans commentaire : `indices.create`, 87 requêtes,
+**0 en erreur**.
 
-**Ce qu'il lui manque, exactement.** Un premier refus masque les suivants : une
-fois l'index créé, Wagtail poserait son mapping, et ce mapping-là sort lui aussi
-du périmètre. Chaque ligne ci-dessous a donc été **posée à ferrite** une par
-une, isolément — la liste n'est pas déduite du code, elle est mesurée, et
-chaque refus est explicite :
+Trois refus de ferrite ont sauté pour y arriver, et **deux d'entre eux
+n'étaient pas sur la liste des six** — ils étaient cachés derrière le premier :
+
+| Ce qui bloquait | Pourquoi c'était un refus de trop |
+|---|---|
+| `settings.analysis.tokenizer`, filtres `ngram` / `edge_ngram`, `index.max_ngram_diff` | le chantier de la carte : trois lignes de la liste des six, mesurées identiques à ES |
+| **tout** nom de champ commençant par `_` | Wagtail nomme les siens `_all_text`, `_all_text_boost_2_0`, `_edgengrams`. ES ne réserve que ses **champs de métadonnées** (mesure sur 29 noms : `_score`, `_doc`, `_type`, `_size`, `_all`, `_parent`, `_x` passent tous). ferrite refusait le préfixe entier — la raison était bonne (ses colonnes internes s'appellent `_elem.…`, `_nelem.…`, `_join_parent`), la règle était trop large |
+| un champ ajouté par `PUT /_mapping` ne pouvait pas citer un analyzer de l'index | `PUT /{index}/_mapping` lisait son corps avec une section `analysis` **vide**, donc « ferrite ne supporte pas l'analyzer [edgengram_analyzer] » pour un analyzer que l'index venait de déclarer. C'est exactement l'ordre de Wagtail : `PUT /{index}` avec les réglages, puis `PUT /_mapping` avec les champs |
+
+Ces deux derniers sont de la même famille que l'`index: true` de Gitea : ni un
+manque, ni un choix — le refus d'une demande qu'un vrai Elasticsearch sert. Et
+comme celui de Gitea, aucun des deux n'était visible depuis le corpus d'usage ou
+la suite d'Elastic : il faut une application qui **crée son index** pour les
+rencontrer.
+
+### Ce qui bloque encore, exactement
+
+Le blocage a reculé d'une requête : il est maintenant sur le `PUT /_mapping`,
+et il tient en **trois paramètres de champ**. La liste n'est pas déduite du
+code — le mapping que Wagtail envoie a été reposé à ferrite en lui retirant ses
+paramètres un par un, et il passe dès qu'on lui retire ces trois-là :
 
 | Ce que Wagtail demande | Où | Ce que ferrite répond |
 |---|---|---|
-| tokenizers `ngram`, `edge_ngram` | `settings.analysis.tokenizer` | « ne supporte pas les tokenizers definis dans [analysis.tokenizer] ; tokenizers integres : standard, whitespace, keyword, letter, lowercase » — **c'est le blocage** |
-| filtres `ngram`, `edge_ngram` | `settings.analysis.filter` | « ne supporte pas un filtre de type [edge_ngram] ; types acceptes : stop, lowercase, asciifolding » |
-| `index.max_ngram_diff` | `settings.index` | « ne supporte pas le reglage d'index [index.max_ngram_diff] » |
-| `store: true` sur `pk` | mapping | « ne supporte pas le parametre de champ [store] » |
+| `search_analyzer: "standard"` | mapping des deux champs d'autocomplétion | « ne supporte pas le parametre de champ [search_analyzer] » — **c'est le blocage** |
 | `copy_to: "_all_text"` | mapping — c'est ainsi que Wagtail se refait un `_all` | « ne supporte pas le parametre de champ [copy_to] » |
-| `search_analyzer: "standard"` | mapping des champs d'autocomplétion | « ne supporte pas le parametre de champ [search_analyzer] » |
+| `store: true` sur `pk` | mapping ; Wagtail relit ce champ par `stored_fields` | « ne supporte pas le parametre de champ [store] » |
 
-Six refus, six paramètres de **déclaration d'index** : Wagtail ne demande
-**aucune** clause de recherche hors périmètre — ses requêtes sont des `bool` +
-`multi_match` + `term`, comme celles de Gitea. Et aucun de ces six n'est du même
-genre que l'`index: true` de Gitea : `store: true` n'est pas un défaut, il
-demande des champs stockés que ferrite n'a pas ; `copy_to` demande une copie à
-l'indexation ; un `edge_ngram` change ce qui entre dans l'index. Les accepter en
-silence rendrait des résultats faux — c'est le pire résultat possible de ce
-projet, et il n'est pas préférable à un 400.
+```
+PUT /wagtail__wagtailcore_page/_mapping  → 400
+  ferrite ne supporte pas le parametre de champ [search_analyzer] (champ [_edgengrams])
+```
 
-La feuille de route est donc lisible : **un** chantier (les n-grammes, tokenizer
-et filtre) et **trois** paramètres de mapping séparent Wagtail de ferrite. Un
-analyzer ne se livrant sous le nom d'ES que mesuré identique, ce chantier-là se
-terminera dans `diff_analyzers.py`, pas dans une déclaration.
+Les 87 `DELETE /{index}` qui suivent rendent `index_not_found_exception` : c'est
+la conséquence (Wagtail supprime avant de créer), pas une cause de plus — un
+vrai ES dans le même état rendrait la même chose.
+
+Aucun de ces trois n'est une demande vide, et c'est ce qui les sépare d'`index:
+true` : `store: true` demande des champs stockés, `copy_to` une copie à
+l'indexation, `search_analyzer` un **second** analyzer pour le côté requête. Les
+accepter en silence rendrait des résultats faux — c'est le pire résultat
+possible de ce projet, et il n'est pas préférable à un 400.
+`search_analyzer` est d'ailleurs celui qui compte le plus ici : sans lui, la
+requête d'autocomplétion est découpée en grammes elle aussi, donc `elan` rend
+tout ce qui commence par `e`. Mesuré identique des deux côtés — c'est le
+comportement d'ES, pas un défaut — mais c'est exactement ce que Wagtail corrige
+en posant `search_analyzer: standard`.
+
+**Wagtail ne demande toujours aucune clause de recherche hors périmètre** : ses
+requêtes sont des `bool` + `multi_match` + `term`, comme celles de Gitea. Ce qui
+le sépare de ferrite tient entièrement dans la **déclaration** de son index, et
+la liste est passée de six lignes à trois.
+
+Ce n'est pas un succès, et cette page ne l'appelle pas ainsi : **0 sur 81**
+reste 0 sur 81. C'est une feuille de route qui a raccourci, et dont chaque ligne
+restante est mesurée plutôt que supposée.
 
 ## Le classement des échecs
 
@@ -234,14 +261,22 @@ donnent quatre catégories — et l'une d'elles n'était pas prévue :
 | Catégorie | Ce qui y tombe |
 |---|---|
 | **Un vrai écart** — ferrite se trompe là où il annonce tenir | **aucun**, sur les deux applications. Aucun cas ne rend un résultat différent d'ES : ce qui échoue, échoue en 400 explicite |
-| **Hors périmètre assumé** — déclaré refusé, avec son motif | les six paramètres de déclaration d'index de Wagtail (`analysis.tokenizer`, filtres `edge_ngram`, `index.max_ngram_diff`, `store`, `copy_to`, `search_analyzer`). Ils causent **85 échecs**, mais une seule cause : le premier |
-| **Ce qui manque, et vaut une carte** | les **n-grammes** — le tokenizer et le filtre `ngram` / `edge_ngram`. C'est ce qui sépare Wagtail de ferrite ; le reste de sa liste est trois paramètres de mapping |
-| **Un refus qui n'aurait pas dû en être un** | `index: true`. Ni un manque, ni un choix : le refus d'une demande vide. Corrigé dans cette même PR — c'est la seule ligne de code que cette carte a produite |
+| **Hors périmètre assumé** — déclaré refusé, avec son motif | les trois paramètres de mapping qui restent à Wagtail (`search_analyzer`, `copy_to`, `store`). Ils causent **85 échecs**, mais une seule cause : le premier |
+| **Ce qui manque, et vaut une carte** | les **n-grammes** — le tokenizer et le filtre `ngram` / `edge_ngram`. **Livrés depuis** : la section `analysis` de Wagtail passe, et son index se crée |
+| **Un refus qui n'aurait pas dû en être un** | `index: true`, puis — au passage suivant — **tout** nom de champ commençant par `_`, et un `PUT /_mapping` qui ignorait les analyzers de son propre index. Ni un manque, ni un choix : le refus d'une demande qu'un vrai ES sert |
 
-La dernière catégorie est celle qui justifie l'exercice. Elle ne pouvait pas
-sortir d'un corpus de requêtes ni d'une suite de conformance, parce qu'elle ne
-porte pas sur ce qu'un moteur **sait faire** — elle porte sur ce qu'un vrai
-client **écrit**, y compris quand il écrit une valeur qui ne demande rien.
+La dernière catégorie est celle qui justifie l'exercice, et elle s'est remplie
+**deux fois**. Elle ne pouvait pas sortir d'un corpus de requêtes ni d'une suite
+de conformance, parce qu'elle ne porte pas sur ce qu'un moteur **sait faire** —
+elle porte sur ce qu'un vrai client **écrit**, y compris quand il écrit une
+valeur qui ne demande rien, ou un nom de champ que la règle interdisait d'un cran
+trop large.
+
+Et elle a une propriété désagréable : **un refus de trop en cache un autre**.
+Les deux trouvés au second passage étaient derrière le premier, invisibles tant
+que l'index ne se créait pas. C'est la raison pour laquelle cette page publie
+« où l'application s'arrête » et pas seulement « combien de tests passent » :
+le second chiffre n'a pas bougé, le premier a reculé de deux requêtes.
 
 ## Reproduire
 
