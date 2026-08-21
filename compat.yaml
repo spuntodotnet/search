@@ -599,7 +599,7 @@ tables:
         nom: "`german`, `spanish`, `snowball` et les autres langues"
         etat: refuse
         motif: divergence_moteur
-        poids: 0.4
+        poids: 0.0
         raison: >-
           leur stemmer n'est pas porté, et livrer sous le nom d'ES un analyzer
           qui indexe autre chose changerait silencieusement les résultats d'un
@@ -1402,12 +1402,19 @@ tables:
         nom: "`match_phrase`"
         etat: partiel
         poids: 4.5
-        detail: "les termes dans l'ordre, adjacents"
+        detail: >-
+          les termes dans l'ordre, adjacents. Sur un champ dont l'analyzer pose
+          plusieurs termes à la **même position** (un filtre `ngram` ou
+          `edge_ngram`), un mot **seul** passe — ce sont des alternatives, et
+          ferrite en fait l'union comme Lucene ; **plusieurs mots** sont refusés
+          explicitement (Lucene y construit une `MultiPhraseQuery` que tantivy
+          n'a pas, et les enchaîner rendrait moins de documents en silence)
         parametres:
           supportes: ["query", "boost"]
           refuses:
             - {nom: "slop", note: "voir les divergences"}
             - {nom: "analyzer"}
+            - {texte: "plusieurs mots sur un champ à n-grammes", note: "voir le détail ci-dessus"}
 
       - id: dsl.match_phrase_prefix
         nom: "`match_phrase_prefix`"
@@ -1422,7 +1429,11 @@ tables:
             - {nom: "query"}
             - {nom: "max_expansions", note: "défaut 50, comme ES"}
             - {nom: "boost"}
-          refuses: ["slop", "analyzer", "zero_terms_query"]
+          refuses:
+            - {nom: "slop"}
+            - {nom: "analyzer"}
+            - {nom: "zero_terms_query"}
+            - {texte: "plusieurs mots sur un champ à n-grammes", note: "même raison que pour `match_phrase` ; un mot seul passe, chaque n-gramme y étant développé par son préfixe"}
 
       - id: dsl.exists
         nom: "`exists`"

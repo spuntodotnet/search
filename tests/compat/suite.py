@@ -914,6 +914,19 @@ def n_grammes(es):
     # Le n-gramme cherche aussi **au milieu** d'un mot, ce qu'un préfixe ne fait pas.
     assert ids(es.search(index="auto", query={"match": {"corps": "vers"}})) == ["1"]
 
+    # Une phrase sur un champ à n-grammes : les grammes d'un mot occupent tous
+    # la **même** position, donc ce sont des alternatives et non une suite.
+    # Les enchaîner rendrait moins de documents — en silence.
+    assert sorted(ids(es.search(index="auto",
+                                query={"match_phrase": {"corps": "vers"}}))) == ["1"]
+    assert sorted(ids(es.search(index="auto",
+                                query={"match_phrase_prefix": {"titre": "ele"}}))) == ["1", "2"]
+    # À plusieurs mots, il faudrait la `MultiPhraseQuery` de Lucene : refusé
+    # explicitement plutôt que rendu faux.
+    refused(lambda: es.search(index="auto",
+                              query={"match_phrase": {"corps": "grande traversee"}}),
+            contains="plusieurs termes a la meme position")
+
     # Le réglage et les déclarations ressortent des settings, et l'index se
     # relit : un tokenizer rendu en ligne là où le parseur attend un nom
     # casserait le redémarrage.

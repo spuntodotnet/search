@@ -547,7 +547,7 @@
       "nom": "`german`, `spanish`, `snowball` et les autres langues",
       "nom_texte": "german, spanish, snowball et les autres langues",
       "etat": "refuse",
-      "poids": 0.4,
+      "poids": 0.0,
       "motif": "divergence_moteur",
       "raison": "leur stemmer n'est pas porté, et livrer sous le nom d'ES un analyzer qui indexe autre chose changerait silencieusement les résultats d'un mapping existant."
     },
@@ -1442,7 +1442,7 @@
       "nom_texte": "match_phrase",
       "etat": "partiel",
       "poids": 4.5,
-      "detail": "les termes dans l'ordre, adjacents",
+      "detail": "les termes dans l'ordre, adjacents. Sur un champ dont l'analyzer pose plusieurs termes à la **même position** (un filtre `ngram` ou `edge_ngram`), un mot **seul** passe — ce sont des alternatives, et ferrite en fait l'union comme Lucene ; **plusieurs mots** sont refusés explicitement (Lucene y construit une `MultiPhraseQuery` que tantivy n'a pas, et les enchaîner rendrait moins de documents en silence)",
       "parametres": {
         "supportes": [
           "query",
@@ -1450,7 +1450,8 @@
         ],
         "refuses": [
           "slop",
-          "analyzer"
+          "analyzer",
+          "plusieurs mots sur un champ à n-grammes"
         ]
       }
     },
@@ -1471,7 +1472,8 @@
         "refuses": [
           "slop",
           "analyzer",
-          "zero_terms_query"
+          "zero_terms_query",
+          "plusieurs mots sur un champ à n-grammes"
         ]
       }
     },
