@@ -122,6 +122,18 @@ L'image finale est un `scratch` qui ne contient que le binaire statique.
 
 ## État
 
+**Une vraie application tourne dessus, sans être modifiée.** [Gitea](https://github.com/go-gitea/gitea)
+v1.27.2 — la forge Git — indexe ses issues dans Elasticsearch et les cherche
+avec `bool`, `multi_match`, `term`, `terms`, `range` et un tri. Sa propre suite
+d'intégration, lancée contre ferrite, passe ses **34 cas** : exactement les
+mêmes que contre un vrai Elasticsearch 8.15.0, l'arbre du dépôt vérifié intact.
+Ce qu'il a fallu corriger pour y arriver tient en un paramètre de mapping —
+`index: true`, le défaut d'ES, qu'ES lui-même ne conserve pas — et **ni le
+corpus de 5 311 requêtes ni la suite REST d'Elastic ne l'avaient vu** : une
+application ne commence pas par une recherche, elle commence par créer son
+index. La recette, le relevé de ce que l'application envoie et le second
+candidat mesuré sont dans [`docs/application.md`](docs/application.md).
+
 **Ce qui marche** : un client Elasticsearch officiel non modifié crée un index
 avec un mapping explicite, indexe des documents via `_bulk`, et les retrouve via
 `_search` — `match`, `multi_match`, `match_phrase`, `match_phrase_prefix`,
