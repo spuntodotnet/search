@@ -310,6 +310,52 @@ fn read_lenient(value: Option<&Value>) -> EsResult<bool> {
     }
 }
 
+/// Les termes analyses, regroupes par **position** : une requete sur un champ
+/// `text` est une suite de positions, et chaque position porte une ou plusieurs
+/// alternatives.
+///
+/// La distinction ne se voyait pas tant qu'un analyzer posait un terme par
+/// position. Un filtre `ngram` / `edge_ngram` pose **tous** les grammes d'un mot
+/// a la position de ce mot : c'est la que « une position » cesse de valoir
+/// « un terme », et c'est ce que Lucene appelle une `SynonymQuery`.
+fn par_position(field: tantivy::schema::Field, tokens: &[(usize, String)]) -> Vec<Box<dyn Query>> {
+    let terme = |t: &str| -> Box<dyn Query> {
+        Box::new(TermQuery::new(
+            tantivy::Term::from_field_text(field, t),
+            IndexRecordOption::WithFreqs,
+        ))
+    };
+    grouper(tokens)
+        .into_iter()
+        .map(|alternatives| match alternatives.as_slice() {
+            [seul] => terme(seul),
+            plusieurs => Box::new(BooleanQuery::new(
+                plusieurs
+                    .iter()
+                    .map(|t| (Occur::Should, terme(t)))
+                    .collect(),
+            )) as Box<dyn Query>,
+        })
+        .collect()
+}
+
+/// Les termes analyses, decoupes en positions — sans rien construire.
+fn grouper(tokens: &[(usize, String)]) -> Vec<Vec<&str>> {
+    let mut out: Vec<Vec<&str>> = Vec::new();
+    let mut precedente = None;
+    for (pos, texte) in tokens {
+        if precedente == Some(*pos) {
+            if let Some(derniere) = out.last_mut() {
+                derniere.push(texte);
+            }
+        } else {
+            out.push(vec![texte]);
+            precedente = Some(*pos);
+        }
+    }
+    out
+}
+
 /// Le coeur de `match` pour **un** champ : analyse la chaine avec l'analyzer du
 /// champ, ou compare la valeur telle quelle si le champ n'est pas analyse.
 ///
@@ -331,25 +377,20 @@ fn field_match(
     Ok(match ty.kind() {
         FieldKind::Text => {
             let tokens = ctx.analyze(&query_text(field_name, value, clause)?, analyzer)?;
-            match tokens.len() {
+            // `operator: and` porte sur les **positions**, pas sur les termes.
+            // Tant qu'un analyzer posait un terme par position les deux se
+            // confondaient ; un filtre a n-grammes en pose dix au meme endroit,
+            // et Lucene en fait une union (sa `SynonymQuery`) avant d'appliquer
+            // l'operateur. Les exiger tous rendrait « le document contient
+            // **tous** les grammes du mot cherche », donc beaucoup moins de
+            // documents — en 200 (mesure contre ES 8.15).
+            let groupes = par_position(field, &tokens);
+            match groupes.len() {
                 0 => Box::new(EmptyQuery),
-                1 => Box::new(TermQuery::new(
-                    tantivy::Term::from_field_text(field, &tokens[0].1),
-                    IndexRecordOption::WithFreqs,
+                1 => groupes.into_iter().next().expect("un groupe"),
+                _ => Box::new(BooleanQuery::new(
+                    groupes.into_iter().map(|q| (operator, q)).collect(),
                 )),
-                _ => {
-                    let clauses: Vec<(Occur, Box<dyn Query>)> = tokens
-                        .iter()
-                        .map(|(_, t)| {
-                            let q: Box<dyn Query> = Box::new(TermQuery::new(
-                                tantivy::Term::from_field_text(field, t),
-                                IndexRecordOption::WithFreqs,
-                            ));
-                            (operator, q)
-                        })
-                        .collect();
-                    Box::new(BooleanQuery::new(clauses))
-                }
             }
         }
         // Sur un champ non analyse, `match` se comporte comme `term` (ES fait
@@ -639,19 +680,8 @@ fn field_phrase(
             let tokens = ctx.analyze(&query_text(field_name, value, clause)?, analyzer)?;
             // Une phrase n'est pas une suite de termes, c'est une suite de
             // **positions** — et un analyzer a n-grammes en pose plusieurs a
-            // la meme. Les regrouper avant de construire quoi que ce soit.
-            let mut positions: Vec<Vec<&str>> = Vec::new();
-            let mut precedente = None;
-            for (pos, texte) in &tokens {
-                if precedente == Some(*pos) {
-                    if let Some(derniere) = positions.last_mut() {
-                        derniere.push(texte);
-                    }
-                } else {
-                    positions.push(vec![texte]);
-                    precedente = Some(*pos);
-                }
-            }
+            // la meme.
+            let positions = grouper(&tokens);
             let terme = |t: &str| {
                 Box::new(TermQuery::new(
                     tantivy::Term::from_field_text(field, t),

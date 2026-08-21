@@ -422,6 +422,13 @@ pub async fn put_mapping(
     // supporte pas l'analyzer [edgengram_analyzer] », un analyzer que l'index
     // portait pourtant.
     let vises = resoudre(&st.catalog, &index, &Options::default())?;
+    // Une expression qui ne vise aucun index ne doit pas faire passer un corps
+    // que ferrite refuserait ailleurs : c'est le meme piege que la recherche
+    // sans index. Faute d'analyzers a citer, il est lu contre une section
+    // `analysis` vide.
+    if vises.is_empty() {
+        Mapping::parse_avec(&body, &crate::analysis::Analysis::default())?;
+    }
     for idx in vises {
         let declares = idx.mapping().analysis.clone();
         let mapping = Mapping::parse_avec(&body, &declares)?;
