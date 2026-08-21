@@ -401,10 +401,15 @@ fn valider(tpl: &Template) -> EsResult<()> {
     }
     let mut declares = crate::analysis::Analysis::default();
     if let Some(s) = &tpl.settings {
+        // Meme ordre qu'a la creation d'un index : `index.max_ngram_diff` borne
+        // ce que `analysis` declare, donc il se lit avant.
+        let lus = crate::reglages::lire(s)?;
         if let Some(a) = crate::reglages::section_analysis(s) {
-            declares = crate::analysis::Analysis::parse(a)?;
+            declares = crate::analysis::Analysis::parse(
+                a,
+                crate::reglages::max_ngram_diff(&lus.inertes),
+            )?;
         }
-        crate::reglages::lire(s)?;
     }
     if let Some(m) = &tpl.mappings {
         crate::mapping::Mapping::parse_avec(m, &declares)?;

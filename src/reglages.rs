@@ -30,6 +30,13 @@ use crate::error::{EsError, EsResult};
 /// [`crate::mapping::Mapping::allow_unmapped_fields`]).
 pub const ALLOW_UNMAPPED: &str = "index.query.parse.allow_unmapped_fields";
 
+/// L'ecart maximal entre `max_gram` et `min_gram` d'un `ngram` (defaut 1).
+///
+/// Il n'est pas inerte : il **valide** ce que `settings.analysis` declare, et
+/// c'est le seul reglage d'index dans ce cas. Il est stocke avec les inertes
+/// parce qu'ES le rend dans `GET /_settings` comme les autres.
+pub const MAX_NGRAM_DIFF: &str = "index.max_ngram_diff";
+
 /// Les reglages acceptes, gardes et rendus — sans effet sur les reponses.
 ///
 /// `number_of_shards` et `number_of_replicas` decrivent deja ce que ferrite
@@ -80,6 +87,20 @@ pub fn lire(settings: &Value) -> EsResult<Reglages> {
             out.allow_unmapped = Some(lire_booleen(valeur, &cle)?);
             continue;
         }
+        if complete == MAX_NGRAM_DIFF {
+            if valeur.is_null() {
+                out.inertes.remove(&complete);
+                continue;
+            }
+            let n = lire_entier(valeur, &complete)?;
+            if n < 0 {
+                return Err(EsError::illegal_argument(format!(
+                    "Failed to parse value [{n}] for setting [{complete}] must be >= 0"
+                )));
+            }
+            out.inertes.insert(complete, n.to_string());
+            continue;
+        }
         if INERTES.contains(&complete.as_str()) {
             // `null` efface le reglage, comme chez ES (`PUT _settings` avec une
             // valeur nulle remet le defaut).
@@ -92,7 +113,7 @@ pub fn lire(settings: &Value) -> EsResult<Reglages> {
         }
         return Err(EsError::unsupported(format!(
             "ferrite ne supporte pas le reglage d'index [{cle}] ; reglages acceptes : {INERTES:?} \
-             (sans effet, ferrite etant mono-shard) et [{ALLOW_UNMAPPED}]"
+             (sans effet, ferrite etant mono-shard), [{ALLOW_UNMAPPED}] et [{MAX_NGRAM_DIFF}]"
         )));
     }
     Ok(out)
@@ -270,6 +291,29 @@ fn aplatir<'a>(
     }
 }
 
+/// L'ecart maximal declare par l'index, ou le defaut d'ES.
+pub fn max_ngram_diff(inertes: &BTreeMap<String, String>) -> i64 {
+    inertes
+        .get(MAX_NGRAM_DIFF)
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(crate::ngram::MAX_NGRAM_DIFF_DEFAUT)
+}
+
+/// ES accepte un entier comme sa forme chaine (`"12"`) dans les settings.
+fn lire_entier(v: &Value, cle: &str) -> EsResult<i64> {
+    match v {
+        Value::Number(n) if n.is_i64() => Ok(n.as_i64().unwrap_or_default()),
+        Value::String(s) => s.trim().parse::<i64>().map_err(|_| {
+            EsError::illegal_argument(format!(
+                "Failed to parse value [{s}] for setting [{cle}] as a number"
+            ))
+        }),
+        autre => Err(EsError::illegal_argument(format!(
+            "Failed to parse value [{autre}] for setting [{cle}] as a number"
+        ))),
+    }
+}
+
 /// ES accepte un booleen comme sa forme chaine (`"false"`) dans les settings.
 fn lire_booleen(v: &Value, cle: &str) -> EsResult<bool> {
     match v {
@@ -308,12 +352,15 @@ pub fn mapping_et_inertes(
     let mut declares = crate::analysis::Analysis::default();
     let mut lus = Reglages::default();
     if let Some(s) = settings {
-        // `analysis` est extrait avant la verification : c'est la seule section
-        // de `settings` qui declare quelque chose plutot que de regler.
-        if let Some(a) = section_analysis(s) {
-            declares = crate::analysis::Analysis::parse(a)?;
-        }
+        // Les reglages d'abord : `index.max_ngram_diff` valide ce que la
+        // section `analysis` declare, donc le lire apres elle le rendrait sans
+        // effet sur la declaration qu'il est cense borner.
         lus = lire(s)?;
+        // `analysis` est extrait a part : c'est la seule section de `settings`
+        // qui declare quelque chose plutot que de regler.
+        if let Some(a) = section_analysis(s) {
+            declares = crate::analysis::Analysis::parse(a, max_ngram_diff(&lus.inertes))?;
+        }
     }
     let mut mapping = match mappings {
         Some(m) => crate::mapping::Mapping::parse_avec(m, &declares)?,

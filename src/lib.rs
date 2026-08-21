@@ -45,6 +45,7 @@ pub mod fetch;
 pub mod mapping;
 pub mod msm;
 pub mod nested;
+pub mod ngram;
 pub mod parrequete;
 pub mod regexp;
 pub mod reglages;
