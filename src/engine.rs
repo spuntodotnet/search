@@ -797,11 +797,7 @@ fn build_doc(
 /// Un champ devine ne doit pas pouvoir entrer en collision avec les champs
 /// internes du schema.
 fn validate_dynamic_field_name(name: &str) -> EsResult<()> {
-    if name.starts_with('_') {
-        return Err(EsError::mapper_parsing(format!(
-            "[{name}] : les noms de champ commencant par [_] sont reserves"
-        )));
-    }
+    mapping::nom_reserve(name)?;
     // Un chemin pointe est licite — il vient d'un sous-objet, ou d'une cle que
     // le document ecrit deja a plat (`{"client.ville": ...}`), qu'Elasticsearch
     // traite comme un chemin. Un segment vide, lui, ne l'est pas.

@@ -401,17 +401,30 @@ pub async fn put_mapping(
     p.done()?;
 
     let body = parse_body(&body)?;
-    let mapping = Mapping::parse(&body)?;
-    if mapping.dynamic != crate::mapping::Dynamic::default() {
-        return Err(EsError::unsupported(
-            "ferrite ne supporte pas la modification de [dynamic] sur un index existant",
-        ));
+    // Lu sur le corps brut : le mapping, lui, se parse **par index** (voir
+    // plus bas), et un index sans cible ne doit pas pour autant avaler un
+    // `dynamic` qu'on refuse.
+    if let Some(d) = body.as_object().and_then(|o| o.get("dynamic")) {
+        if crate::mapping::Dynamic::parse(d)? != crate::mapping::Dynamic::default() {
+            return Err(EsError::unsupported(
+                "ferrite ne supporte pas la modification de [dynamic] sur un index existant",
+            ));
+        }
     }
 
     // `PUT /{index}/_mapping` accepte plusieurs index chez ES : le meme champ
     // est ajoute a chacun.
+    //
+    // Le mapping est lu **avec les analyzers de l'index vise** : un champ
+    // ajoute apres coup peut citer un analyzer que `settings.analysis` a
+    // declare a la creation. Sans ca, poser `settings.analysis` puis
+    // `PUT /_mapping` — l'ordre exact de Wagtail — echouait sur « ferrite ne
+    // supporte pas l'analyzer [edgengram_analyzer] », un analyzer que l'index
+    // portait pourtant.
     let vises = resoudre(&st.catalog, &index, &Options::default())?;
     for idx in vises {
+        let declares = idx.mapping().analysis.clone();
+        let mapping = Mapping::parse_avec(&body, &declares)?;
         let props = mapping.properties.clone();
         tokio::task::spawn_blocking(move || idx.add_fields(props))
             .await

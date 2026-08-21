@@ -509,6 +509,39 @@ def parametre_de_champ_non_supporte(es):
 
 
 @scenario
+def noms_de_champ_reserves(es):
+    """Seuls les champs de **métadonnées** d'ES sont réservés, pas le préfixe
+    `_` entier : Wagtail nomme les siens `_all_text` et `_edgengrams`, et un
+    vrai ES 8.15 les accepte (mesuré, mapping relu compris)."""
+    es.options(ignore_status=404).indices.delete(index="souligne")
+    es.indices.create(index="souligne", mappings={"properties": {
+        "_all_text": {"type": "text"},
+        "_edgengrams": {"type": "text"},
+        "_score": {"type": "keyword"},
+    }})
+    props = es.indices.get_mapping(index="souligne")["souligne"]["mappings"]["properties"]
+    assert set(props) == {"_all_text", "_edgengrams", "_score"}, props
+    es.index(index="souligne", id="1", refresh=True,
+             document={"_all_text": "le cheval du pre", "_score": "abc"})
+    assert ids(es.search(index="souligne",
+                         query={"match": {"_all_text": "cheval"}})) == ["1"]
+    assert ids(es.search(index="souligne", query={"term": {"_score": "abc"}})) == ["1"]
+
+    # Un champ de métadonnées, lui, reste refusé — avec le message d'ES.
+    for nom in ("_id", "_source", "_seq_no"):
+        refused(lambda n=nom: es.indices.create(index="souligne_ko", mappings={
+            "properties": {n: {"type": "text"}}}),
+            contains=f"Field [{nom}] is defined more than once")
+    # Et les colonnes internes de ferrite, avec sa raison à lui : ES les
+    # accepte, ferrite ne peut pas — un champ nommé `_elem` écraserait l'indice
+    # d'élément d'un `nested`.
+    refused(lambda: es.indices.create(index="souligne_ko", mappings={
+        "properties": {"_elem": {"properties": {"x": {"type": "text"}}}}}),
+        contains="colonne interne de ferrite")
+    es.indices.delete(index="souligne")
+
+
+@scenario
 def index_vrai_est_le_defaut(es):
     """Le mapping que pose Gitea : `"index": true` sur chaque champ.
 

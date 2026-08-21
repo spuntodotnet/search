@@ -40,7 +40,7 @@
     "supporte": 90,
     "partiel": 59,
     "refuse": 44,
-    "poids_renseignes": 137
+    "poids_renseignes": 136
   },
   "capacites": [
     {
@@ -593,7 +593,7 @@
       "nom": "`ngram` et `edge_ngram` — tokenizer **et** filtre",
       "nom_texte": "ngram et edge_ngram — tokenizer et filtre",
       "etat": "supporte",
-      "poids": 0.6,
+      "poids": null,
       "detail": "la brique de l'autocomplétion « au fil de la frappe » : elle travaille à l'**indexation**, là où `match_phrase_prefix` travaille à la requête. Mesurée identique à ES sur 210 textes, **positions et offsets compris** (`diff_analyzers.py`) : un n-gramme mal positionné casse `match_phrase` sans changer le compte de tokens",
       "parametres": {
         "supportes": [

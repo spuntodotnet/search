@@ -639,7 +639,7 @@ tables:
       - id: analyse.ngram
         nom: "`ngram` et `edge_ngram` — tokenizer **et** filtre"
         etat: supporte
-        poids: 0.6
+        poids: null
         detail: >-
           la brique de l'autocomplétion « au fil de la frappe » : elle travaille
           à l'**indexation**, là où `match_phrase_prefix` travaille à la
