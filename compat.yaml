@@ -367,6 +367,7 @@ tables:
         parametres:
           refuses:
             - {nom: "include_defaults", note: "il ajoute une section `defaults` avec les dizaines de réglages qu'ES a et que ferrite n'a pas"}
+            - {texte: "la section `analysis`", note: "ES rend la déclaration d'analyse de l'index ; ferrite ne la rend pas. Il n'en garde que la forme **normalisée** dont il a besoin pour rejouer les analyzers, et rendre celle-là ferait lire au client des noms de filtres qu'il n'a jamais écrits — ce qui serait pire qu'une absence. Les analyzers eux-mêmes sont bien là : `GET /{index}/_mapping` rend le nom déclaré sur chaque champ, et `_analyze` les exerce"}
           supportes:
             - {texte: "`GET /_settings` sans index", note: "vaut `_all`"}
             - {texte: "`/{index}/_settings/{nom}`", note: "filtrer par nom de réglage — liste, jokers, `_all`. Le filtre porte sur les clés **aplaties**, sans quoi le même nom filtrerait autrement selon `flat_settings`"}

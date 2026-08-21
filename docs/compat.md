@@ -146,7 +146,7 @@ périmètre** (une capacité déclarée refusée).
 | `GET /{index}` | ✅ | `aliases` / `mappings` / `settings`, une entrée par index visé |
 | `GET /{index}/_mapping` | ✅ | |
 | `GET /{index}/_mapping/field/{champs}` | ❌ | **pas encore** — route absente (`no handler found`) : ferrite a pourtant le mapping, c'est un manque et pas une impossibilité — 15 cas de la suite d'Elastic tombent dessus |
-| `GET /{index}/_settings` | 🟡 | les réglages d'ES qu'un index a vraiment (`number_of_shards`, `uuid`, `creation_date`…), et `index.query.parse.allow_unmapped_fields` s'il a été posé. Supporté : `GET /_settings` sans index (vaut `_all`), `/{index}/_settings/{nom}` (filtrer par nom de réglage — liste, jokers, `_all`. Le filtre porte sur les clés **aplaties**, sans quoi le même nom filtrerait autrement selon `flat_settings`), `flat_settings` (il aplatit les clés (`index.number_of_shards`) ; longtemps refusé, parce qu'accepté et ignoré il rendait une réponse que personne n'avait demandée — c'est une réécriture de clés, elle est maintenant faite), `local` (un seul nœud : la question ne se pose pas). Refusé : `include_defaults` (il ajoute une section `defaults` avec les dizaines de réglages qu'ES a et que ferrite n'a pas) |
+| `GET /{index}/_settings` | 🟡 | les réglages d'ES qu'un index a vraiment (`number_of_shards`, `uuid`, `creation_date`…), et `index.query.parse.allow_unmapped_fields` s'il a été posé. Supporté : `GET /_settings` sans index (vaut `_all`), `/{index}/_settings/{nom}` (filtrer par nom de réglage — liste, jokers, `_all`. Le filtre porte sur les clés **aplaties**, sans quoi le même nom filtrerait autrement selon `flat_settings`), `flat_settings` (il aplatit les clés (`index.number_of_shards`) ; longtemps refusé, parce qu'accepté et ignoré il rendait une réponse que personne n'avait demandée — c'est une réécriture de clés, elle est maintenant faite), `local` (un seul nœud : la question ne se pose pas). Refusé : `include_defaults` (il ajoute une section `defaults` avec les dizaines de réglages qu'ES a et que ferrite n'a pas), la section `analysis` (ES rend la déclaration d'analyse de l'index ; ferrite ne la rend pas. Il n'en garde que la forme **normalisée** dont il a besoin pour rejouer les analyzers, et rendre celle-là ferait lire au client des noms de filtres qu'il n'a jamais écrits — ce qui serait pire qu'une absence. Les analyzers eux-mêmes sont bien là : `GET /{index}/_mapping` rend le nom déclaré sur chaque champ, et `_analyze` les exerce) |
 | `PUT /{index}/_settings` | 🟡 | les réglages **inertes** sont acceptés, gardés et rendus par `GET /{index}/_settings` : ils décrivent déjà ce que ferrite est (mono-shard, sans réplique). Faire échouer un script d'init entier sur un `number_of_replicas: 1` qui ne changerait rien serait pire que de l'accepter. `index.refresh_interval` n'est pas accepté-et-ignoré : `-1` sort vraiment l'index de la boucle de rafraîchissement de fond. Supporté : `number_of_replicas` (sans effet — ferrite n'a pas de réplique), `auto_expand_replicas` (sans effet, même raison), `refresh_interval` (`-1` désactive vraiment le rafraîchissement de fond ; une valeur positive est honorée, ferrite rafraîchissant toutes les secondes), `preserve_existing`, `max_ngram_diff` (l'écart maximal entre `max_gram` et `min_gram` d'un `ngram` (défaut 1) ; il **valide** ce que `settings.analysis` déclare, c'est le seul réglage d'index dans ce cas), une valeur `null` (efface le réglage, comme chez ES). Refusé : `number_of_shards` (figé à la création, comme chez ES (`Can't update non dynamic settings`)), `index.query.parse.allow_unmapped_fields` (figé dans la génération courante du schéma ; un client qui le croirait changé chercherait longtemps), `reopen`, tout autre réglage d'ES (`index.blocks.*`, `index.max_result_window`… : les accepter puis les ignorer changerait le comportement en silence) |
 | `PUT /{index}/_mapping` | 🟡 | **ajoute** des champs (une nouvelle génération est construite). Changer le type d'un champ existant reste refusé, comme chez ES. Refusé : `dynamic` (le modifier après coup) |
 | `POST /{index}/_refresh` | ✅ | |
@@ -256,7 +256,37 @@ briques que ferrite a :
 | Un analyzer de type autre que `custom` (`french`, `standard` paramétré…) | ❌ | **pas encore** — paramétrer un analyzer intégré (`stopwords`, `stem_exclusion`) demande de reproduire sa composition interne exacte, qui n'est mesurée que dans sa forme par défaut |
 
 Le nom déclaré est celui que rend `_mapping`, et un analyzer sur mesure n'existe
-que dans son index — `_analyze` sans index ne connaît que les intégrés.
+que dans son index — `_analyze` sans index ne connaît que les intégrés, sauf à
+lui donner son `tokenizer` et ses `filter` **en ligne**, comme le fait ES.
+
+**Les n-grammes** (`ngram`, `edge_ngram`) sont la brique de l'autocomplétion
+« au fil de la frappe ». Ils travaillent à l'**indexation**, là où
+`match_phrase_prefix` travaille à la requête — un CMS qui propose des pages
+pendant qu'on tape n'a pas d'autre moyen :
+
+```json
+"settings": {
+  "index": {"max_ngram_diff": 12},
+  "analysis": {
+    "filter":   {"edgengram": {"type": "edge_ngram", "min_gram": 1, "max_gram": 15}},
+    "analyzer": {"edgengram_analyzer": {"type": "custom", "tokenizer": "standard",
+                                        "filter": ["asciifolding", "lowercase", "edgengram"]}}
+  }
+}
+```
+
+Deux choses qu'aucune documentation ne dit, et qui décident du résultat. La
+première : le **tokenizer** avance d'une position par gramme, le **filtre** pose
+tous les grammes d'un mot **à la position de ce mot**. La seconde en découle —
+une phrase et un `operator: and` portent sur des **positions**, pas sur des
+termes, donc les grammes d'un même mot y sont des **alternatives** et non une
+suite. Les enchaîner rendait beaucoup moins de documents, en 200 ; c'est le
+fuzzer différentiel qui l'a trouvé, et `diff_analyzers.py` qui le tient — 210
+textes comparés sur `(terme, offsets, position)`.
+
+Ce qui reste refusé de ce côté-là est une conséquence de tantivy, écrite plutôt
+que silencieuse : une phrase de **plusieurs mots** sur un tel champ demanderait
+la `MultiPhraseQuery` de Lucene, qui n'a pas d'équivalent. Un mot seul passe.
 
 **À savoir sur l'élision.** `standard` garde `l'édition` en **un seul terme**,
 des deux côtés : c'est le filtre `elision` de l'analyzer `french` qui le
