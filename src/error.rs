@@ -128,6 +128,17 @@ impl EsError {
         )
     }
 
+    /// **Declaration** de mapping refusee — pas un document.
+    ///
+    /// ES separe les deux, et pas seulement par cosmetique : un client qui
+    /// pose un mapping ne peut pas distinguer « ma declaration est invalide »
+    /// de « mon document l'est » si les deux portent le meme type d'erreur.
+    /// ferrite ne les separait pas ; les refus dont la phrase est reprise mot
+    /// pour mot a ES portent desormais aussi **son** type.
+    pub fn mapper_declaration(reason: impl Into<String>) -> Self {
+        Self::new(StatusCode::BAD_REQUEST, "mapper_parsing_exception", reason)
+    }
+
     /// Champ absent du mapping explicite. ferrite ne fait pas de mapping
     /// dynamique : c'est exactement la semantique de `dynamic: strict` d'ES.
     pub fn strict_mapping(index: &str, field: &str) -> Self {
