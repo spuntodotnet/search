@@ -69,6 +69,9 @@ pub struct GetResult {
     pub version: u64,
     pub seq_no: u64,
     pub source: Value,
+    /// Le bloc `fields` des champs **stockes** demandes, quand la lecture en
+    /// demande. `None` = aucun n'a ete demande, ou aucun n'a de valeur.
+    pub stockes: Option<Value>,
 }
 
 /// Une **generation** de l'index : un schema tantivy fige, et tout ce qui en
@@ -349,6 +352,15 @@ impl FerriteIndex {
     /// `GET /{index}/_doc/{id}`. Temps reel comme chez ES : si des ecritures
     /// sont en attente, on les rend visibles avant de lire.
     pub fn get_doc(&self, id: &str) -> EsResult<Option<GetResult>> {
+        self.get_doc_avec(id, &[])
+    }
+
+    /// Le meme, en lisant au passage les champs **stockes** demandes.
+    ///
+    /// `GET /{index}/_doc/{id}?stored_fields=` et `_mget` les servent comme
+    /// `_search` : c'est le meme stockage, lu au meme endroit. Les separer
+    /// aurait fait de `store` un parametre qui ne marche que sur une route.
+    pub fn get_doc_avec(&self, id: &str, noms: &[String]) -> EsResult<Option<GetResult>> {
         let meta = { self.docs.read().expect("docs lock").get(id).copied() };
         let Some(meta) = meta.filter(|m| !m.deleted) else {
             return Ok(None);
@@ -371,6 +383,7 @@ impl FerriteIndex {
             version: meta.version,
             seq_no: meta.seq_no,
             source,
+            stockes: crate::fetch::stockes_du_document(&gen, &doc, noms)?,
         }))
     }
 
@@ -460,6 +473,7 @@ impl FerriteIndex {
                             decl.ty.name()
                         )));
                     }
+                    conflit_de_parametre(&nom, existant, &decl, &gen.mapping.analysis)?;
                 }
                 None => {
                     a_creer.insert(nom, decl);
@@ -469,6 +483,15 @@ impl FerriteIndex {
         if a_creer.is_empty() {
             return Ok(());
         }
+        // Les refus de `copy_to` se lisent sur le mapping **entier** : le corps
+        // d'un `PUT /_mapping` ne dit pas si la cible qu'il cite est un objet
+        // de l'index. Sans cette relecture, la copie serait posee et jetee en
+        // silence a l'indexation.
+        let mut fusionne = gen.mapping.clone();
+        for (nom, decl) in &a_creer {
+            fusionne.properties.insert(nom.clone(), decl.clone());
+        }
+        fusionne.verifier_copies()?;
         self.evoluer(a_creer)
     }
 
@@ -492,6 +515,33 @@ impl FerriteIndex {
         // champ pour lui-meme, seulement pour ses feuilles (`client.ville`).
         mapping::parcours_feuilles(obj, &mut |chemin, valeur| {
             if gen.fields.targets_of(chemin).is_some() {
+                // La cible d'un `copy_to` est un champ comme un autre : si le
+                // mapping ne la declare pas, elle se devine — au type de la
+                // **valeur copiee**, comme chez ES (`copy_to` depuis un `long`
+                // cree un `long`, pas un `text`). Sans ca, la copie partirait
+                // dans le vide et la recherche sur `_all_text` ne rendrait rien,
+                // en silence.
+                if let Some(copies) = gen.fields.copies.get(chemin) {
+                    for cible in copies {
+                        if gen.fields.targets_of(cible).is_some()
+                            || nouveaux.contains_key(cible.as_str())
+                        {
+                            continue;
+                        }
+                        match gen.mapping.dynamic {
+                            Dynamic::Strict => {
+                                return Err(EsError::strict_mapping(&self.name, cible))
+                            }
+                            Dynamic::False => {}
+                            Dynamic::True => {
+                                validate_dynamic_field_name(cible)?;
+                                if let Some(fm) = mapping::infer(valeur) {
+                                    nouveaux.insert(cible.clone(), fm);
+                                }
+                            }
+                        }
+                    }
+                }
                 return Ok(());
             }
             // Le champ `join` est declare, jamais devine.
@@ -570,6 +620,57 @@ impl FerriteIndex {
         self.retirees.lock().expect("retirees lock").push(ancienne);
         Ok(())
     }
+}
+
+/// Un `PUT /{index}/_mapping` qui **redeclare** un champ autrement.
+///
+/// ES refuse de changer `analyzer` et `store` sur un champ existant, avec cette
+/// phrase-la (mesure contre 8.15). ferrite y ajoute `search_analyzer` et
+/// `copy_to`, qu'ES sait mettre a jour : les accepter en silence sans rien
+/// changer serait le pire des trois resultats — un client croirait sa copie
+/// posee. Redeclarer a l'identique reste licite : c'est ce que fait une
+/// application qui declare le meme champ pour deux de ses modeles.
+fn conflit_de_parametre(
+    nom: &str,
+    avant: &FieldMapping,
+    apres: &FieldMapping,
+    analysis: &crate::analysis::Analysis,
+) -> EsResult<()> {
+    let refus = |parametre: &str, a: String, b: String| {
+        Err(EsError::illegal_argument(format!(
+            "Mapper for [{nom}] conflicts with existing mapper:\n\tCannot update parameter \
+             [{parametre}] from [{a}] to [{b}]"
+        )))
+    };
+    // Ce qui se compare est l'analyzer **effectif**, pas la facon de l'ecrire :
+    // ne rien declarer, ecrire `default` ou ecrire `standard` demandent la meme
+    // chose, et refuser la redeclaration serait plus severe qu'ES sans rien
+    // proteger.
+    if avant.analyzer() != apres.analyzer() {
+        return refus(
+            "analyzer",
+            avant.analyzer().name(analysis),
+            apres.analyzer().name(analysis),
+        );
+    }
+    if avant.search_analyzer() != apres.search_analyzer() {
+        return refus(
+            "search_analyzer",
+            avant.search_analyzer().name(analysis),
+            apres.search_analyzer().name(analysis),
+        );
+    }
+    if avant.store != apres.store {
+        return refus("store", avant.store.to_string(), apres.store.to_string());
+    }
+    if avant.copy_to != apres.copy_to {
+        return refus(
+            "copy_to",
+            avant.copy_to.join(", "),
+            apres.copy_to.join(", "),
+        );
+    }
+    Ok(())
 }
 
 /// Refuse l'ecriture si le document n'est plus dans l'etat observe par le
@@ -752,9 +853,21 @@ fn build_doc(
     }
 
     for (chemin, value, elem) in valeurs {
-        let Some(cibles) = gen.fields.targets_of(&chemin) else {
+        // `copy_to` recopie la valeur **brute**, avant toute analyse, dans un
+        // autre champ — qui la lit avec **son** type et son analyzer. La copie
+        // ne se chaine pas : la cible d'une cible ne recoit rien (mesure contre
+        // ES 8.15), ce que ce parcours garantit en n'ajoutant les copies qu'aux
+        // valeurs venues du document.
+        let copies = gen
+            .fields
+            .copies
+            .get(&chemin)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let cibles = gen.fields.targets_of(&chemin).unwrap_or_default();
+        if cibles.is_empty() && copies.is_empty() {
             continue;
-        };
+        }
         let values: Vec<&Value> = match value {
             Value::Null => continue,
             Value::Array(a) => a.iter().collect(),
@@ -766,32 +879,54 @@ fn build_doc(
             }
             // Le meme contenu part dans le champ et dans chacun de ses
             // multi-fields, chacun avec son propre type.
+            let format = gen.fields.format_de(&chemin);
             for cible in cibles {
-                if let Some(limite) = cible.ignore_above {
-                    if v.as_str().is_some_and(|s| s.chars().count() > limite) {
-                        continue;
-                    }
-                }
-                let format = gen.fields.format_de(&chemin);
-                match mapping::coerce_avec(&chemin, cible.ty, v, format)? {
-                    TypedValue::Str(s) => doc.add_text(cible.field, s),
-                    TypedValue::I64(n) => doc.add_i64(cible.field, n),
-                    TypedValue::F64(n) => doc.add_f64(cible.field, n),
-                    TypedValue::Bool(b) => doc.add_bool(cible.field, b),
-                    TypedValue::Date(ms) => {
-                        doc.add_date(cible.field, DateTime::from_timestamp_millis(ms))
-                    }
-                }
-                // L'indice d'element est ecrit **exactement** quand une valeur
-                // l'est : les deux colonnes gardent la meme arite, meme si
-                // `ignore_above` en saute une.
-                if let (Some(e), Some(f)) = (elem, cible.elem) {
-                    doc.add_u64(f, u64::from(e));
+                ecrire(&mut doc, &chemin, cible, v, format, elem)?;
+            }
+            // Puis dans les cibles de `copy_to`, avec **leur** type et **leur**
+            // format : la copie de `n: 42` dans un `text` s'ecrit « 42 ».
+            for nom in copies {
+                let Some(vers) = gen.fields.targets_of(nom) else {
+                    continue;
+                };
+                let format = gen.fields.format_de(nom);
+                for cible in vers {
+                    ecrire(&mut doc, nom, cible, v, format, elem)?;
                 }
             }
         }
     }
     Ok(doc)
+}
+
+/// Ecrit une valeur dans une cible du schema, avec l'indice d'element qui va
+/// avec.
+fn ecrire(
+    doc: &mut TantivyDocument,
+    chemin: &str,
+    cible: &mapping::MappedField,
+    v: &Value,
+    format: Option<&crate::dateformat::DateFormat>,
+    elem: Option<u32>,
+) -> EsResult<()> {
+    if let Some(limite) = cible.ignore_above {
+        if v.as_str().is_some_and(|s| s.chars().count() > limite) {
+            return Ok(());
+        }
+    }
+    match mapping::coerce_avec(chemin, cible.ty, v, format)? {
+        TypedValue::Str(s) => doc.add_text(cible.field, s),
+        TypedValue::I64(n) => doc.add_i64(cible.field, n),
+        TypedValue::F64(n) => doc.add_f64(cible.field, n),
+        TypedValue::Bool(b) => doc.add_bool(cible.field, b),
+        TypedValue::Date(ms) => doc.add_date(cible.field, DateTime::from_timestamp_millis(ms)),
+    }
+    // L'indice d'element est ecrit **exactement** quand une valeur l'est : les
+    // deux colonnes gardent la meme arite, meme si `ignore_above` en saute une.
+    if let (Some(e), Some(f)) = (elem, cible.elem) {
+        doc.add_u64(f, u64::from(e));
+    }
+    Ok(())
 }
 
 /// Un champ devine ne doit pas pouvoir entrer en collision avec les champs

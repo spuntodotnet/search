@@ -60,10 +60,10 @@
  },
  "totaux": {
   "requetes": 5311,
-  "servies": 2237,
-  "refusees": 3058,
-  "indeterminees": 16,
-  "taux_servies": 42.1
+  "servies": 2259,
+  "refusees": 3035,
+  "indeterminees": 17,
+  "taux_servies": 42.5
  },
  "par_source": {
   "clients": {
@@ -73,24 +73,24 @@
    "taux_servies": 81.1
   },
   "doc": {
-   "servie": 1572,
+   "servie": 1581,
    "total": 3969,
-   "refusee": 2382,
+   "refusee": 2373,
    "indeterminee": 15,
-   "taux_servies": 39.6
+   "taux_servies": 39.8
   },
   "github": {
-   "refusee": 23,
+   "refusee": 22,
    "total": 338,
-   "servie": 315,
-   "taux_servies": 93.2
+   "servie": 316,
+   "taux_servies": 93.5
   },
   "rally": {
-   "refusee": 626,
+   "refusee": 613,
    "total": 861,
-   "servie": 234,
-   "indeterminee": 1,
-   "taux_servies": 27.2
+   "servie": 246,
+   "indeterminee": 2,
+   "taux_servies": 28.6
   }
  },
  "concentration": [
@@ -172,16 +172,16 @@
  ],
  "par_api": {
   "search": {
-   "refusee": 1064,
+   "refusee": 1050,
    "total": 1801,
-   "servie": 736,
+   "servie": 750,
    "indeterminee": 1
   },
   "indices.create": {
-   "refusee": 216,
+   "refusee": 207,
    "total": 558,
-   "servie": 328,
-   "indeterminee": 14
+   "servie": 336,
+   "indeterminee": 15
   },
   "index": {
    "servie": 360,
@@ -4102,11 +4102,6 @@
     "part": 0.1
    },
    {
-    "trait": "champ:reserve",
-    "requetes": 4,
-    "part": 0.1
-   },
-   {
     "trait": "champ:store",
     "requetes": 4,
     "part": 0.1
@@ -5068,6 +5063,11 @@
    },
    {
     "trait": "champ:metrics",
+    "requetes": 2,
+    "part": 0.0
+   },
+   {
+    "trait": "champ:reserve",
     "requetes": 2,
     "part": 0.0
    },
@@ -8191,8 +8191,9 @@
   "scroll.page_heritee": null,
   "type.analyzer": 0.6,
   "type.autres": 3.0,
-  "type.autres_parametres": 3.0,
+  "type.autres_parametres": 2.8,
   "type.boolean": 0.6,
+  "type.copy_to": 0.2,
   "type.date": 1.7,
   "type.entiers": 1.3,
   "type.flottants": 0.4,
@@ -8202,9 +8203,11 @@
   "type.keyword": 2.3,
   "type.multi_fields": 0.8,
   "type.nested": 0.6,
-  "type.noms_reserves": 0.1,
+  "type.noms_reserves": 0.0,
   "type.null": null,
   "type.object": 1.3,
+  "type.search_analyzer": 0.2,
+  "type.store": 0.1,
   "type.tableaux": null,
   "type.text": 2.6
  },
@@ -11319,19 +11322,19 @@
   },
   {
    "capacite": "type.autres_parametres",
-   "nom": "Autres paramètres de champ (null_value, doc_values, store…)",
+   "nom": "Autres paramètres de champ (null_value, doc_values, norms…)",
    "etat": "refuse",
    "motif": "pas_encore",
-   "requetes": 157,
-   "part": 3.0,
+   "requetes": 148,
+   "part": 2.8,
    "par_source": {
     "doc": {
-     "requetes": 124,
-     "part": 3.1
+     "requetes": 116,
+     "part": 2.9
     },
     "rally": {
-     "requetes": 33,
-     "part": 3.8
+     "requetes": 32,
+     "part": 3.7
     }
    },
    "traits": [
@@ -11372,10 +11375,6 @@
      "requetes": 11
     },
     {
-     "trait": "champ:copy_to",
-     "requetes": 10
-    },
-    {
      "trait": "champ:enabled",
      "requetes": 9
     },
@@ -11405,10 +11404,6 @@
     },
     {
      "trait": "champ:eager_global_ordinals",
-     "requetes": 4
-    },
-    {
-     "trait": "champ:store",
      "requetes": 4
     },
     {
@@ -11473,70 +11468,6 @@
     },
     {
      "trait": "champ:search_quote_analyzer",
-     "requetes": 1
-    }
-   ]
-  },
-  {
-   "capacite": "agg.terms",
-   "nom": "terms",
-   "etat": "partiel",
-   "motif": null,
-   "requetes": 104,
-   "part": 2.0,
-   "par_source": {
-    "doc": {
-     "requetes": 2,
-     "part": 0.1
-    },
-    "github": {
-     "requetes": 1,
-     "part": 0.3
-    },
-    "rally": {
-     "requetes": 101,
-     "part": 11.7
-    }
-   },
-   "traits": [
-    {
-     "trait": "agg:terms.order=sous_agregation",
-     "requetes": 77
-    },
-    {
-     "trait": "agg:terms.missing",
-     "requetes": 12
-    },
-    {
-     "trait": "agg:terms.exclude",
-     "requetes": 4
-    },
-    {
-     "trait": "agg:terms.collect_mode",
-     "requetes": 3
-    },
-    {
-     "trait": "agg:terms.execution_hint",
-     "requetes": 3
-    },
-    {
-     "trait": "agg:terms.min_doc_count",
-     "requetes": 2
-    },
-    {
-     "trait": "agg:terms.script",
-     "requetes": 2
-    },
-    {
-     "trait": "agg:terms.include",
-     "requetes": 1
-    },
-    {
-     "trait": "agg:terms.shard_min_doc_count",
-     "requetes": 1
-    },
-    {
-     "trait": "agg:terms.show_term_doc_count_error",
      "requetes": 1
     }
    ]
@@ -11753,6 +11684,66 @@
     },
     {
      "trait": "tri:missing",
+     "requetes": 1
+    }
+   ]
+  },
+  {
+   "capacite": "agg.terms",
+   "nom": "terms",
+   "etat": "partiel",
+   "motif": null,
+   "requetes": 92,
+   "part": 1.7,
+   "par_source": {
+    "doc": {
+     "requetes": 2,
+     "part": 0.1
+    },
+    "github": {
+     "requetes": 1,
+     "part": 0.3
+    },
+    "rally": {
+     "requetes": 89,
+     "part": 10.3
+    }
+   },
+   "traits": [
+    {
+     "trait": "agg:terms.order=sous_agregation",
+     "requetes": 77
+    },
+    {
+     "trait": "agg:terms.exclude",
+     "requetes": 4
+    },
+    {
+     "trait": "agg:terms.collect_mode",
+     "requetes": 3
+    },
+    {
+     "trait": "agg:terms.execution_hint",
+     "requetes": 3
+    },
+    {
+     "trait": "agg:terms.min_doc_count",
+     "requetes": 2
+    },
+    {
+     "trait": "agg:terms.script",
+     "requetes": 2
+    },
+    {
+     "trait": "agg:terms.include",
+     "requetes": 1
+    },
+    {
+     "trait": "agg:terms.shard_min_doc_count",
+     "requetes": 1
+    },
+    {
+     "trait": "agg:terms.show_term_doc_count_error",
      "requetes": 1
     }
    ]
@@ -12422,30 +12413,6 @@
    ]
   },
   {
-   "capacite": "type.noms_reserves",
-   "nom": "Noms de champ pointés (a.b) ou préfixés _",
-   "etat": "refuse",
-   "motif": "divergence_moteur",
-   "requetes": 4,
-   "part": 0.1,
-   "par_source": {
-    "doc": {
-     "requetes": 3,
-     "part": 0.1
-    },
-    "github": {
-     "requetes": 1,
-     "part": 0.3
-    }
-   },
-   "traits": [
-    {
-     "trait": "champ:reserve",
-     "requetes": 4
-    }
-   ]
-  },
-  {
    "capacite": "dsl.multi_match",
    "nom": "multi_match",
    "etat": "partiel",
@@ -12546,6 +12513,26 @@
     {
      "trait": "dsl:range.time_zone",
      "requetes": 1
+    }
+   ]
+  },
+  {
+   "capacite": "type.noms_reserves",
+   "nom": "Noms de champ pointés (a.b) ou réservés",
+   "etat": "refuse",
+   "motif": "divergence_moteur",
+   "requetes": 2,
+   "part": 0.0,
+   "par_source": {
+    "doc": {
+     "requetes": 2,
+     "part": 0.1
+    }
+   },
+   "traits": [
+    {
+     "trait": "champ:reserve",
+     "requetes": 2
     }
    ]
   },

@@ -113,8 +113,14 @@ pub enum FieldKind {
 #[derive(Debug, Clone)]
 pub struct FieldMapping {
     pub ty: FieldType,
-    /// L'analyzer d'un champ `text`. `None` = celui par defaut (`standard`).
+    /// L'analyzer d'un champ `text`, **a l'indexation**. `None` = celui par
+    /// defaut (`standard`).
     pub analyzer: Option<Analyzer>,
+    /// L'analyzer d'un champ `text` **a la requete**, quand il differe de celui
+    /// de l'indexation. C'est le compagnon oblige des n-grammes : on indexe en
+    /// grammes, on cherche le mot entier — sans lui, `elan` rend tout ce qui
+    /// commence par `e`.
+    pub search_analyzer: Option<Analyzer>,
     /// Les multi-fields : le meme contenu indexe autrement, sous
     /// `parent.sous_champ`. ES n'en autorise qu'un niveau.
     pub fields: BTreeMap<String, FieldMapping>,
@@ -124,6 +130,12 @@ pub struct FieldMapping {
     pub ignore_above: Option<usize>,
     /// Le `format` d'un champ `date`. `None` = celui d'ES par defaut.
     pub format: Option<DateFormat>,
+    /// `copy_to` : les champs dans lesquels la valeur **brute** de celui-ci est
+    /// recopiee a l'indexation. C'est ainsi qu'on se refait un `_all`.
+    pub copy_to: Vec<String>,
+    /// `store` : la valeur est conservee a part du `_source`, et c'est elle que
+    /// `stored_fields` rend.
+    pub store: bool,
 }
 
 impl FieldMapping {
@@ -131,9 +143,12 @@ impl FieldMapping {
         Self {
             ty,
             analyzer: None,
+            search_analyzer: None,
             fields: BTreeMap::new(),
             ignore_above: None,
             format: None,
+            copy_to: Vec::new(),
+            store: false,
         }
     }
 
@@ -142,22 +157,49 @@ impl FieldMapping {
         self.format.clone().unwrap_or_default()
     }
 
-    /// L'analyzer effectif d'un champ `text`.
+    /// L'analyzer effectif d'un champ `text`, a l'indexation.
     pub fn analyzer(&self) -> Analyzer {
         self.analyzer.unwrap_or_default()
+    }
+
+    /// L'analyzer effectif d'un champ `text`, a la requete : celui de
+    /// `search_analyzer` s'il est declare, sinon celui de l'indexation. C'est la
+    /// regle d'ES.
+    pub fn search_analyzer(&self) -> Analyzer {
+        self.search_analyzer.unwrap_or_else(|| self.analyzer())
     }
 
     fn to_json(&self, analysis: &Analysis) -> Value {
         let mut o = Map::new();
         o.insert("type".into(), json!(self.ty.name()));
-        if let Some(a) = self.analyzer {
-            o.insert("analyzer".into(), json!(a.name(analysis)));
+        // ES nomme l'analyzer d'indexation des qu'un `search_analyzer` est
+        // declare, meme quand il est reste celui par defaut — et il l'appelle
+        // alors `default` (mesure contre 8.15).
+        match (self.analyzer, self.search_analyzer) {
+            (Some(a), _) => {
+                o.insert("analyzer".into(), json!(a.name(analysis)));
+            }
+            (None, Some(_)) => {
+                o.insert("analyzer".into(), json!("default"));
+            }
+            (None, None) => {}
+        }
+        if let Some(a) = self.search_analyzer {
+            o.insert("search_analyzer".into(), json!(a.name(analysis)));
+        }
+        // `store: false` est le defaut : ES ne le rend pas, seulement `true`.
+        if self.store {
+            o.insert("store".into(), json!(true));
         }
         if let Some(n) = self.ignore_above {
             o.insert("ignore_above".into(), json!(n));
         }
         if let Some(f) = &self.format {
             o.insert("format".into(), json!(f.source));
+        }
+        // Toujours un tableau, meme pour une cible unique declaree en chaine.
+        if !self.copy_to.is_empty() {
+            o.insert("copy_to".into(), json!(self.copy_to));
         }
         if !self.fields.is_empty() {
             let mut subs = Map::new();
@@ -460,7 +502,7 @@ impl Mapping {
                  des [properties]",
             ));
         }
-        Ok(Self {
+        let mapping = Self {
             properties,
             nested,
             objets_vides: vides,
@@ -468,7 +510,73 @@ impl Mapping {
             analysis: declares.clone(),
             dynamic,
             ..Self::default()
-        })
+        };
+        mapping.verifier_copies()?;
+        Ok(mapping)
+    }
+
+    /// Les trois refus qu'ES oppose a une cible de `copy_to`, mesures contre
+    /// 8.15 et repris avec ses phrases.
+    ///
+    /// Ils ne peuvent pas se verifier a la lecture d'un champ : il faut le
+    /// mapping entier pour savoir ce qu'est la cible. Une cible **inconnue**,
+    /// elle, est licite — c'est le mapping dynamique qui la creera, au type de
+    /// la valeur copiee.
+    pub fn verifier_copies(&self) -> EsResult<()> {
+        for (source, fm) in &self.properties {
+            for cible in &fm.copy_to {
+                // Un multi-field ne peut etre ni la source ni la cible d'une
+                // copie ; la source est refusee des la lecture du champ.
+                if let Some((parent, _)) = cible.rsplit_once('.') {
+                    if self
+                        .properties
+                        .get(parent)
+                        .is_some_and(|p| p.fields.contains_key(&cible[parent.len() + 1..]))
+                    {
+                        return Err(EsError::illegal_argument(format!(
+                            "[copy_to] may not be used to copy to a multi-field: [{cible}]"
+                        )));
+                    }
+                }
+                if self.objets_vides.contains(cible)
+                    || self.nested.contains(cible)
+                    || self
+                        .properties
+                        .keys()
+                        .any(|c| est_sous_chemin(c, cible.as_str()))
+                {
+                    return Err(EsError::illegal_argument(format!(
+                        "Cannot copy to field [{cible}] since it is mapped as an object"
+                    )));
+                }
+                // Une copie ne descend pas dans un `nested` : chez ES elle ne
+                // peut aller que vers le document `nested` **courant** ou l'un
+                // de ses parents. Ecrire dans un autre element ferait entrer la
+                // valeur dans un document qu'elle n'a jamais habite.
+                if let Some(racine) = self.racine_nested(cible) {
+                    let depuis = self.racine_nested(source);
+                    if depuis.map(str::to_string).as_deref() != Some(racine) {
+                        return Err(EsError::illegal_argument(format!(
+                            "Illegal combination of [copy_to] and [nested] mappings: [copy_to] may \
+                             only copy data to the current nested document or any of its parents, \
+                             however one [copy_to] directive is trying to copy data from nested \
+                             object [{}] to [{racine}]",
+                            depuis.unwrap_or("null")
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// La racine `nested` dont ce chemin depend, s'il y en a une.
+    fn racine_nested(&self, chemin: &str) -> Option<&str> {
+        self.nested
+            .iter()
+            .rev()
+            .find(|r| est_sous_chemin(chemin, r))
+            .map(String::as_str)
     }
 }
 
@@ -689,6 +797,15 @@ fn niche(props: &mut Map<String, Value>, chemin: &str, feuille: Value) {
 /// Elasticsearch accepte les deux ecritures — le booleen et la chaine — et
 /// refuse tout le reste (`"no"`, `1`, `null`) par un `mapper_parsing_exception`
 /// « only [true] or [false] are allowed » (mesure contre 8.15.0).
+/// Une valeur telle qu'ES la recopie dans son message : une chaine y figure
+/// **sans** ses guillemets (`[oui]`, pas `["oui"]`).
+fn brut(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        autre => autre.to_string(),
+    }
+}
+
 fn index_demande(val: &Value) -> Option<bool> {
     match val {
         Value::Bool(b) => Some(*b),
@@ -714,7 +831,10 @@ fn parse_field_mapping(
     let mut fields = BTreeMap::new();
     let mut ignore_above = None;
     let mut analyzer = None;
+    let mut search_analyzer = None;
     let mut format = None;
+    let mut copy_to = Vec::new();
+    let mut store = false;
 
     for (key, val) in obj {
         match key.as_str() {
@@ -753,12 +873,53 @@ fn parse_field_mapping(
                     );
                 }
             }
+            // `default` n'est pas un analyzer, c'est le **nom** de celui de
+            // l'index : ES le rend tel quel dans `_mapping` des qu'un champ
+            // declare un `search_analyzer` sans analyzer d'indexation. Le lire
+            // comme « aucun analyzer declare » est ce qui rend le mapping
+            // stable a la relecture — sans quoi un redemarrage transformerait
+            // le `default` qu'ES ecrit en `standard`, que personne n'a demande.
             "analyzer" => {
                 let nom = val.as_str().ok_or_else(|| {
                     EsError::mapper_parsing(format!("[{name}.analyzer] doit etre une chaine"))
                 })?;
-                analyzer = Some(analysis::parse_declaration(nom, name, declares)?);
+                analyzer = match nom {
+                    "default" if declares.index_de(nom).is_none() => None,
+                    _ => Some(analysis::parse_declaration(nom, name, declares)?),
+                };
             }
+            "search_analyzer" => {
+                let nom = val.as_str().ok_or_else(|| {
+                    EsError::mapper_parsing(format!(
+                        "[{name}.search_analyzer] doit etre une chaine"
+                    ))
+                })?;
+                search_analyzer = Some(analysis::parse_declaration(nom, name, declares)?);
+            }
+            // Un multi-field ne peut pas etre la **source** d'une copie : ES le
+            // refuse avec cette phrase-la, et la mesure la lui prend mot pour
+            // mot (`[copy_to] may not be used to copy from a multi-field`).
+            "copy_to" => {
+                if sous_champ {
+                    return Err(EsError::illegal_argument(format!(
+                        "[copy_to] may not be used to copy from a multi-field: [{name}]"
+                    )));
+                }
+                copy_to = lire_copy_to(name, val)?;
+            }
+            // Comme `index: true`, `store: false` est le defaut d'ES : il ne
+            // demande rien, et ES ne le conserve meme pas dans le mapping qu'il
+            // rend. Une valeur qui n'est ni l'un ni l'autre est refusee avec sa
+            // phrase.
+            "store" => match index_demande(val) {
+                Some(b) => store = b,
+                None => {
+                    return Err(EsError::mapper_declaration(format!(
+                        "Failed to parse value [{}] as only [true] or [false] are allowed.",
+                        brut(val)
+                    )))
+                }
+            },
             "format" => {
                 let motif = val.as_str().ok_or_else(|| {
                     EsError::mapper_parsing(format!("[{name}.format] doit etre une chaine"))
@@ -804,7 +965,8 @@ fn parse_field_mapping(
             other => {
                 return Err(EsError::unsupported(format!(
                     "ferrite ne supporte pas le parametre de champ [{other}] (champ [{name}]) ; \
-                     parametres acceptes : type, analyzer, fields, ignore_above, format, index"
+                     parametres acceptes : type, analyzer, search_analyzer, fields, ignore_above, \
+                     format, index, copy_to, store"
                 )))
             }
         }
@@ -823,13 +985,50 @@ fn parse_field_mapping(
             "[{name}] : [analyzer] ne s'applique qu'a un champ [text]"
         )));
     }
+    // ES ne connait meme pas le parametre ailleurs que sur un `text` : sa
+    // phrase est celle d'un parametre inconnu, pas celle d'un mauvais type.
+    if search_analyzer.is_some() && ty.kind() != FieldKind::Text {
+        return Err(EsError::mapper_declaration(format!(
+            "unknown parameter [search_analyzer] on mapper [{name}] of type [{}]",
+            ty.name()
+        )));
+    }
     Ok(FieldMapping {
         ty,
         analyzer,
+        search_analyzer,
         fields,
         ignore_above,
         format,
+        copy_to,
+        store,
     })
+}
+
+/// Lit `copy_to` : une cible, ou une liste de cibles.
+///
+/// ES accepte un nombre comme un nom de champ (il le rend en chaine :
+/// `copy_to: 42` ressort `["42"]`), et une liste **vide** ne demande rien — il
+/// ne la conserve pas. Les deux sont repris tels quels : etre plus severe que
+/// lui ne protegerait rien.
+fn lire_copy_to(name: &str, val: &Value) -> EsResult<Vec<String>> {
+    let items: Vec<&Value> = match val {
+        Value::Array(a) => a.iter().collect(),
+        autre => vec![autre],
+    };
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        match item {
+            Value::String(s) => out.push(s.clone()),
+            Value::Number(n) => out.push(n.to_string()),
+            autre => {
+                return Err(EsError::mapper_parsing(format!(
+                    "[{name}.copy_to] : nom de champ attendu, recu {autre}"
+                )))
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Parcourt un document en profondeur et appelle `f` sur chaque **feuille**,
@@ -989,11 +1188,8 @@ pub fn infer(value: &Value) -> Option<FieldMapping> {
             fm.fields.insert(
                 "keyword".to_string(),
                 FieldMapping {
-                    ty: FieldType::Keyword,
-                    analyzer: None,
-                    fields: BTreeMap::new(),
                     ignore_above: Some(256),
-                    format: None,
+                    ..FieldMapping::new(FieldType::Keyword)
                 },
             );
             Some(fm)
@@ -1027,8 +1223,16 @@ pub struct MappedField {
     pub field: Field,
     pub ty: FieldType,
     pub ignore_above: Option<usize>,
-    /// L'analyzer a appliquer aux requetes sur ce champ.
+    /// L'analyzer applique **a l'indexation** — celui du schema tantivy, et
+    /// celui que `_analyze` sur un champ rejoue (mesure contre ES 8.15 :
+    /// `_analyze` avec `field` ignore le `search_analyzer`).
     pub analyzer: Analyzer,
+    /// L'analyzer applique **a la requete**. Egal au precedent tant qu'aucun
+    /// `search_analyzer` n'est declare.
+    pub search_analyzer: Analyzer,
+    /// `store: true` : la valeur est conservee a part, et `stored_fields` la
+    /// rend.
+    pub store: bool,
     /// Sous un `nested` : la colonne jumelle qui dit, pour chaque valeur
     /// indexee ici, de quel element du tableau elle vient. Meme arite, par
     /// construction — elle est alimentee dans la meme boucle.
@@ -1063,6 +1267,14 @@ pub struct Fields {
     /// Le `format` declare des champs `date`, par chemin. Il sert a la lecture
     /// (indexation, bornes d'un `range`) comme au rendu (`*_as_string`).
     pub formats: BTreeMap<String, DateFormat>,
+    /// `copy_to`, resolu : par propriete de premier niveau, les chemins ou sa
+    /// valeur brute part **en plus** a l'indexation.
+    pub copies: BTreeMap<String, Vec<String>>,
+    /// L'inverse : par chemin de cible, les chemins qui y copient, tries par
+    /// nom. C'est l'ordre dans lequel ES rend les valeurs copiees dans
+    /// `fields` — la valeur propre de la cible d'abord, puis les copies par
+    /// ordre de nom de source (mesure contre 8.15).
+    pub copiants: BTreeMap<String, Vec<String>>,
     /// Le champ `join` declare, et ses deux colonnes : le nom de la relation
     /// (interrogeable comme un `keyword`, sous le nom du champ) et
     /// l'identifiant du parent.
@@ -1124,9 +1336,17 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
     let mut targets: BTreeMap<String, Vec<MappedField>> = BTreeMap::new();
     let mut nelem = BTreeMap::new();
     let mut formats = BTreeMap::new();
+    let mut copies: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut copiants: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let (mut join_name, mut join_parent) = (None, None);
     if let Some(j) = &mapping.join {
-        let f = add_field(&mut b, &j.champ, FieldType::Keyword, Analyzer::default());
+        let f = add_field(
+            &mut b,
+            &j.champ,
+            FieldType::Keyword,
+            Analyzer::default(),
+            false,
+        );
         // Interrogeable comme un `keyword` sous son propre nom — c'est ce que
         // fait ES : `{"term": {"lien": "article"}}` filtre sur la relation.
         // Present dans `mapped` (donc dans les requetes) mais pas dans
@@ -1138,6 +1358,8 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
                 ty: FieldType::Keyword,
                 ignore_above: None,
                 analyzer: Analyzer::default(),
+                search_analyzer: Analyzer::default(),
+                store: false,
                 elem: None,
             },
         );
@@ -1147,6 +1369,7 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
             F_JOIN_PARENT,
             FieldType::Keyword,
             Analyzer::default(),
+            false,
         ));
     }
     for racine in &mapping.nested {
@@ -1157,17 +1380,34 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
     }
 
     for (name, fm) in &mapping.properties {
+        if !fm.copy_to.is_empty() {
+            copies.insert(name.clone(), fm.copy_to.clone());
+            for cible in &fm.copy_to {
+                copiants
+                    .entry(cible.clone())
+                    .or_default()
+                    .push(name.clone());
+            }
+        }
         let mut cibles = Vec::with_capacity(1 + fm.fields.len());
         for (chemin, decl) in std::iter::once((name.clone(), fm)).chain(
             fm.fields
                 .iter()
                 .map(|(sub, decl)| (format!("{name}.{sub}"), decl)),
         ) {
+            // Un champ stocke sous un `nested` ne rend rien chez ES : ses
+            // valeurs vivent dans les documents enfants, que `stored_fields` ne
+            // lit pas. Ne pas le stocker du tout evite d'avoir a s'en souvenir
+            // au moment de rendre.
+            let sous_nested = mapping.nested.iter().any(|r| est_sous_chemin(&chemin, r));
+            let store = decl.store && !sous_nested;
             let entry = MappedField {
-                field: add_field(&mut b, &chemin, decl.ty, decl.analyzer()),
+                field: add_field(&mut b, &chemin, decl.ty, decl.analyzer(), store),
                 ty: decl.ty,
                 ignore_above: decl.ignore_above,
                 analyzer: decl.analyzer(),
+                search_analyzer: decl.search_analyzer(),
+                store,
                 elem: mapping
                     .nested
                     .iter()
@@ -1197,6 +1437,8 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
             nested: mapping.nested.clone(),
             nelem,
             formats,
+            copies,
+            copiants,
             join: mapping.join.clone(),
             join_name,
             join_parent,
@@ -1204,14 +1446,23 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
     )
 }
 
-fn add_field(b: &mut SchemaBuilder, name: &str, ty: FieldType, analyzer: Analyzer) -> Field {
+fn add_field(
+    b: &mut SchemaBuilder,
+    name: &str,
+    ty: FieldType,
+    analyzer: Analyzer,
+    store: bool,
+) -> Field {
     match ty.kind() {
         FieldKind::Text => {
-            let opts = TextOptions::default().set_indexing_options(
+            let mut opts = TextOptions::default().set_indexing_options(
                 TextFieldIndexing::default()
                     .set_tokenizer(&analyzer.tokenizer())
                     .set_index_option(IndexRecordOption::WithFreqsAndPositions),
             );
+            if store {
+                opts = opts.set_stored();
+            }
             b.add_text_field(name, opts)
         }
         FieldKind::Keyword => {
@@ -1224,7 +1475,7 @@ fn add_field(b: &mut SchemaBuilder, name: &str, ty: FieldType, analyzer: Analyze
             // valeurs marquait moins qu'un champ a une seule — ES donne le meme
             // score aux deux, et le classement en dependait. Mesure par
             // `tests/compat/fuzz_vs_es.py`.
-            let opts = TextOptions::default()
+            let mut opts = TextOptions::default()
                 .set_indexing_options(
                     TextFieldIndexing::default()
                         .set_tokenizer(RAW_TOKENIZER)
@@ -1232,10 +1483,13 @@ fn add_field(b: &mut SchemaBuilder, name: &str, ty: FieldType, analyzer: Analyze
                         .set_fieldnorms(false),
                 )
                 .set_fast(Some(RAW_TOKENIZER));
+            if store {
+                opts = opts.set_stored();
+            }
             b.add_text_field(name, opts)
         }
-        FieldKind::I64 => b.add_i64_field(name, NumericOptions::from(INDEXED | FAST)),
-        FieldKind::F64 => b.add_f64_field(name, NumericOptions::from(INDEXED | FAST)),
+        FieldKind::I64 => b.add_i64_field(name, numerique(store)),
+        FieldKind::F64 => b.add_f64_field(name, numerique(store)),
         // Sans fieldnorm : chez Lucene un `boolean` est indexe `omitNorms`, donc
         // deux documents qui portent `true` marquent pareil, que le champ ait
         // une valeur ou trois. Avec les fieldnorms, ferrite les departageait —
@@ -1243,11 +1497,31 @@ fn add_field(b: &mut SchemaBuilder, name: &str, ty: FieldType, analyzer: Analyze
         // `FAST` puis `set_indexed()` plutot que `INDEXED | FAST` : c'est le
         // seul chemin qui laisse les fieldnorms a `false` (le drapeau `INDEXED`
         // les allume).
-        FieldKind::Bool => b.add_bool_field(name, NumericOptions::from(FAST).set_indexed()),
-        FieldKind::Date => b.add_date_field(
-            name,
-            DateOptions::from(INDEXED | FAST).set_precision(DateTimePrecision::Milliseconds),
-        ),
+        FieldKind::Bool => {
+            let mut opts = NumericOptions::from(FAST).set_indexed();
+            if store {
+                opts = opts.set_stored();
+            }
+            b.add_bool_field(name, opts)
+        }
+        FieldKind::Date => {
+            let mut opts =
+                DateOptions::from(INDEXED | FAST).set_precision(DateTimePrecision::Milliseconds);
+            if store {
+                opts = opts.set_stored();
+            }
+            b.add_date_field(name, opts)
+        }
+    }
+}
+
+/// Les options d'une colonne numerique, avec ou sans stockage a part.
+fn numerique(store: bool) -> NumericOptions {
+    let opts = NumericOptions::from(INDEXED | FAST);
+    if store {
+        opts.set_stored()
+    } else {
+        opts
     }
 }
 
@@ -1589,6 +1863,120 @@ mod tests {
         );
         assert!(coerce("a", FieldType::Integer, &json!(1e12)).is_err());
         assert!(coerce("a", FieldType::Integer, &json!("abc")).is_err());
+    }
+
+    #[test]
+    fn search_analyzer_et_analyzer_par_defaut() {
+        // Sans `search_analyzer`, la requete emprunte l'analyzer d'indexation.
+        let m = Mapping::parse(&json!({"properties": {
+            "a": {"type": "text", "analyzer": "english"},
+            "b": {"type": "text", "analyzer": "english", "search_analyzer": "standard"},
+            "c": {"type": "text", "search_analyzer": "keyword"},
+        }}))
+        .unwrap();
+        assert_eq!(m.get("a").unwrap().search_analyzer(), Analyzer::English);
+        assert_eq!(m.get("b").unwrap().analyzer(), Analyzer::English);
+        assert_eq!(m.get("b").unwrap().search_analyzer(), Analyzer::Standard);
+        assert_eq!(m.get("c").unwrap().analyzer(), Analyzer::Standard);
+        assert_eq!(m.get("c").unwrap().search_analyzer(), Analyzer::Keyword);
+
+        // Le mapping rendu nomme `default` l'analyzer d'indexation d'un champ
+        // qui n'en declare pas — comme ES — et **se relit tel quel** : sans
+        // ca, un redemarrage le transformerait en `standard`.
+        let rendu = m.to_json();
+        let c = &rendu["properties"]["c"];
+        assert_eq!(c["analyzer"], json!("default"));
+        assert_eq!(c["search_analyzer"], json!("keyword"));
+        let relu = Mapping::parse(&rendu).unwrap();
+        assert!(relu.get("c").unwrap().analyzer.is_none());
+        assert_eq!(relu.to_json(), rendu);
+
+        // Ailleurs que sur un `text`, c'est un parametre inconnu chez ES.
+        let e = Mapping::parse(&json!({"properties": {
+            "k": {"type": "keyword", "search_analyzer": "standard"}}}))
+        .unwrap_err();
+        assert_eq!(
+            e.reason,
+            "unknown parameter [search_analyzer] on mapper [k] of type [keyword]"
+        );
+    }
+
+    #[test]
+    fn copy_to_et_ses_trois_refus() {
+        let m = Mapping::parse(&json!({"properties": {
+            "t": {"type": "text", "copy_to": "tout"},
+            "k": {"type": "keyword", "copy_to": ["tout", "gens"]},
+            "tout": {"type": "text"},
+            "gens": {"type": "text"},
+        }}))
+        .unwrap();
+        // Rendu en tableau, meme declare en chaine.
+        assert_eq!(m.to_json()["properties"]["t"]["copy_to"], json!(["tout"]));
+        let (_, fields) = build_schema(&m);
+        assert_eq!(fields.copies["k"], vec!["tout", "gens"]);
+        // Et l'inverse, trie par nom de source : c'est l'ordre dans lequel ES
+        // rend les valeurs copiees dans `fields`.
+        assert_eq!(fields.copiants["tout"], vec!["k", "t"]);
+
+        let refus = |props: Value| {
+            Mapping::parse(&json!({ "properties": props }))
+                .unwrap_err()
+                .reason
+        };
+        assert!(refus(json!({
+            "t": {"type": "text", "fields": {"k": {"type": "keyword", "copy_to": "x"}}},
+            "x": {"type": "text"}}))
+        .contains("may not be used to copy from a multi-field: [t.k]"));
+        assert!(refus(json!({
+            "t": {"type": "text", "copy_to": "x.k"},
+            "x": {"type": "text", "fields": {"k": {"type": "keyword"}}}}))
+        .contains("may not be used to copy to a multi-field: [x.k]"));
+        assert!(refus(json!({
+            "t": {"type": "text", "copy_to": "o"},
+            "o": {"properties": {"a": {"type": "text"}}}}))
+        .contains("Cannot copy to field [o] since it is mapped as an object"));
+        assert!(refus(json!({
+            "t": {"type": "text", "copy_to": "l.a"},
+            "l": {"type": "nested", "properties": {"a": {"type": "text"}}}}))
+        .contains("Illegal combination of [copy_to] and [nested]"));
+        // Depuis un `nested` vers la racine, en revanche, ES l'autorise.
+        Mapping::parse(&json!({"properties": {
+            "l": {"type": "nested", "properties": {"a": {"type": "text", "copy_to": "tout"}}},
+            "tout": {"type": "text"}}}))
+        .unwrap();
+    }
+
+    #[test]
+    fn store_est_rendu_seulement_quand_il_demande_quelque_chose() {
+        let m = Mapping::parse(&json!({"properties": {
+            "a": {"type": "keyword", "store": true},
+            "b": {"type": "text", "store": "true"},
+            "c": {"type": "text", "store": false},
+            "l": {"type": "nested", "properties": {"x": {"type": "keyword", "store": true}}},
+        }}))
+        .unwrap();
+        let rendu = m.to_json();
+        assert_eq!(rendu["properties"]["a"]["store"], json!(true));
+        assert_eq!(rendu["properties"]["b"]["store"], json!(true));
+        // `store: false` est le defaut d'ES : il ne demande rien, et ES ne le
+        // conserve pas non plus.
+        assert_eq!(rendu["properties"]["c"], json!({"type": "text"}));
+
+        let (_, fields) = build_schema(&m);
+        assert!(fields.get("a").unwrap().store);
+        assert!(!fields.get("c").unwrap().store);
+        // Sous un `nested`, la valeur stockee vit chez ES dans le document
+        // enfant : `stored_fields` n'en rend rien, donc ferrite ne la stocke
+        // pas — rendre plus qu'ES serait le rendre en silence.
+        assert!(!fields.get("l.x").unwrap().store);
+
+        let e = Mapping::parse(&json!({"properties": {
+            "a": {"type": "text", "store": "oui"}}}))
+        .unwrap_err();
+        assert_eq!(
+            e.reason,
+            "Failed to parse value [oui] as only [true] or [false] are allowed."
+        );
     }
 
     #[test]

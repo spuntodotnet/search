@@ -246,13 +246,24 @@ def traits_requete(noeud):
     return vus
 
 
+# Les champs de **metadonnees** d'ES : les seuls noms qu'il reserve vraiment.
+# Ce n'est pas le prefixe `_` — `_score`, `_doc`, `_type`, `_size`, `_all`,
+# `_parent` et `_all_text` passent chez lui, mesure a l'appui, et ferrite les
+# sert depuis qu'une vraie application (Wagtail) a montre qu'elle les employait.
+# Compter le prefixe entier faisait passer pour refusee une requete que les deux
+# serveurs servent.
+METADONNEES = {"_id", "_index", "_source", "_routing", "_field_names", "_ignored",
+               "_seq_no", "_version", "_nested_path", "_feature",
+               "_data_stream_timestamp", "_tier"}
+
+
 def traits_parametres(nom, params):
     vus = set()
     if not isinstance(params, dict):
         return vus
     if nom in CLAUSES_A_CHAMP:
         for champ, valeur in params.items():
-            if champ.startswith("_") and champ not in ("_name", "_id", "_index"):
+            if champ in METADONNEES and champ not in ("_id", "_index"):
                 vus.add("champ:reserve")
             if champ in ("boost", "_name", "case_insensitive"):
                 vus.add(f"dsl:{nom}.{champ}")
@@ -316,8 +327,8 @@ def traits_aggs(noeud, sous_bucket=False):
             vus.add(f"agg:{nom}")
             if nom == "filter" and sous_bucket:
                 vus.add("agg:filter.sous_bucket")
-            if isinstance(params, dict) and str(params.get("field", "")).startswith("_") \
-                    and params.get("field") not in ("_index", "_id"):
+            if isinstance(params, dict) and \
+                    params.get("field") in METADONNEES - {"_index", "_id"}:
                 vus.add("champ:reserve")
             if isinstance(params, dict):
                 for p in params:
@@ -482,7 +493,8 @@ ANALYZERS_LANGUE = {
 }
 
 CHAMPS = {"fields": "type.multi_fields", "ignore_above": "type.ignore_above",
-          "analyzer": "type.analyzer", "search_analyzer": "type.analyzer",
+          "analyzer": "type.analyzer", "search_analyzer": "type.search_analyzer",
+          "copy_to": "type.copy_to", "store": "type.store",
           "index": "type.index"}
 CHAMPS_DEFAUT = "type.autres_parametres"
 

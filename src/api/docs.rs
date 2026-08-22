@@ -13,6 +13,8 @@ use super::search::source_filter;
 use super::{elapsed_ms, parse_body, shards_ok, Json, Params, SharedState};
 use crate::engine::{Catalog, WriteOptions, WriteOutcome};
 use crate::error::{EsError, EsResult};
+use crate::fetch::Stored;
+use crate::search::SourceFilter;
 use crate::selection::{index_d_ecriture, index_unique};
 use crate::util;
 
@@ -134,18 +136,27 @@ pub async fn get_doc(
 ) -> EsResult<Json> {
     let mut p = Params::parse(&uri);
     let filter = source_filter(&mut p)?;
+    // `?stored_fields=` : les memes champs stockes que sur une recherche, lus
+    // au meme endroit. Comme la, ils **retirent le `_source`** — sauf s'il est
+    // cite dans la liste, ou demande explicitement.
+    let stored = match p.list("stored_fields") {
+        Some(liste) => crate::fetch::stored_de_noms_doc(&liste),
+        None => Stored::Absent,
+    };
     // `get` est toujours temps reel chez ferrite : `realtime=false` ne peut pas
     // rendre une reponse plus fraiche que demandee.
     p.opt("realtime");
     p.opt("preference");
     p.done()?;
 
+    let noms = stored.noms().to_vec();
     let idx = index_unique(&st.catalog, &index)?;
     let index = idx.name.clone();
     let found = {
         let idx = idx.clone();
         let id = id.clone();
-        tokio::task::spawn_blocking(move || idx.get_doc(&id))
+        let noms = noms.clone();
+        tokio::task::spawn_blocking(move || idx.get_doc_avec(&id, &noms))
             .await
             .map_err(|e| EsError::internal(format!("get: {e}")))??
     };
@@ -163,6 +174,14 @@ pub async fn get_doc(
             o.insert("_seq_no".into(), json!(res.seq_no));
             o.insert("_primary_term".into(), json!(1));
             o.insert("found".into(), json!(true));
+            if let Some(bloc) = res.stockes {
+                o.insert("fields".into(), bloc);
+            }
+            let filter = if stored.retire_le_source() {
+                SourceFilter::None
+            } else {
+                filter
+            };
             if let Some(src) = filter.apply(res.source) {
                 o.insert("_source".into(), src);
             }
@@ -328,6 +347,13 @@ pub async fn mget(
 ) -> EsResult<Json> {
     let mut p = Params::parse(&uri);
     let filtre_global = source_filter(&mut p)?;
+    // `?stored_fields=` vaut pour tout le lot ; chaque descripteur peut le
+    // redefinir pour lui seul, et c'est **le sien** qui gagne (mesure contre
+    // ES 8.15, et cas de la suite d'Elastic « mget/20_stored_fields »).
+    let stored_global = match p.list("stored_fields") {
+        Some(liste) => crate::fetch::stored_de_noms_doc(&liste),
+        None => Stored::Absent,
+    };
     p.opt("realtime");
     p.opt("preference");
     p.done()?;
@@ -340,7 +366,7 @@ pub async fn mget(
 
     // Deux formes chez ES : une liste d'identifiants, ou une liste de
     // descripteurs pouvant viser des index differents.
-    let demandes: Vec<(String, String)> = match (obj.get("docs"), obj.get("ids")) {
+    let demandes: Vec<(String, String, Stored)> = match (obj.get("docs"), obj.get("ids")) {
         (Some(_), Some(_)) => {
             return Err(EsError::illegal_argument(
                 "[_mget] : [docs] et [ids] sont exclusifs",
@@ -352,7 +378,11 @@ pub async fn mget(
                 let o = d
                     .as_object()
                     .ok_or_else(|| EsError::parsing("[_mget.docs] : objets attendus"))?;
-                super::expect_only(o, &["_index", "_id", "_source"], "_mget.docs")?;
+                super::expect_only(
+                    o,
+                    &["_index", "_id", "_source", "stored_fields"],
+                    "_mget.docs",
+                )?;
                 let idx_nom = o
                     .get("_index")
                     .and_then(Value::as_str)
@@ -361,11 +391,38 @@ pub async fn mget(
                     .ok_or_else(|| {
                         EsError::illegal_argument("[_mget] : [_index] requis sans index dans l'URL")
                     })?;
-                let doc_id = o
-                    .get("_id")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| EsError::illegal_argument("[_mget] : [_id] est obligatoire"))?;
-                Ok((idx_nom, doc_id.to_string()))
+                // Un identifiant **numerique** est licite chez ES — un `_id`
+                // est une chaine, mais il lit le nombre et le convertit. Le
+                // refuser rendait 400 sur `{"_id": 1}`, que la suite d'Elastic
+                // ecrit ainsi.
+                let doc_id = match o.get("_id") {
+                    Some(Value::String(s)) => s.clone(),
+                    Some(Value::Number(n)) => n.to_string(),
+                    _ => return Err(EsError::illegal_argument("[_mget] : [_id] est obligatoire")),
+                };
+                let stored = match o.get("stored_fields") {
+                    Some(Value::Array(a)) => crate::fetch::stored_de_noms_doc(
+                        &a.iter()
+                            .map(|x| {
+                                x.as_str().map(str::to_string).ok_or_else(|| {
+                                    EsError::illegal_argument(
+                                        "[_mget.docs.stored_fields] : chaines attendues",
+                                    )
+                                })
+                            })
+                            .collect::<EsResult<Vec<_>>>()?,
+                    ),
+                    Some(Value::String(nom)) => {
+                        crate::fetch::stored_de_noms_doc(std::slice::from_ref(nom))
+                    }
+                    Some(autre) => {
+                        return Err(EsError::illegal_argument(format!(
+                            "[_mget.docs.stored_fields] : liste de chaines attendue, recu {autre}"
+                        )))
+                    }
+                    None => stored_global.clone(),
+                };
+                Ok((idx_nom, doc_id, stored))
             })
             .collect::<EsResult<_>>()?,
         (None, Some(Value::Array(ids))) => {
@@ -374,10 +431,16 @@ pub async fn mget(
             })?;
             ids.iter()
                 .map(|v| {
-                    let doc_id = v.as_str().ok_or_else(|| {
-                        EsError::illegal_argument("[_mget.ids] : chaines attendues")
-                    })?;
-                    Ok((idx_nom.clone(), doc_id.to_string()))
+                    let doc_id = match v {
+                        Value::String(x) => x.clone(),
+                        Value::Number(n) => n.to_string(),
+                        _ => {
+                            return Err(EsError::illegal_argument(
+                                "[_mget.ids] : chaines attendues",
+                            ))
+                        }
+                    };
+                    Ok((idx_nom.clone(), doc_id, stored_global.clone()))
                 })
                 .collect::<EsResult<_>>()?
         }
@@ -389,7 +452,7 @@ pub async fn mget(
     };
 
     let mut sortie = Vec::with_capacity(demandes.len());
-    for (idx_nom, doc_id) in demandes {
+    for (idx_nom, doc_id, stored) in demandes {
         let idx = match index_unique(&st.catalog, &idx_nom) {
             Ok(i) => i,
             Err(e) => {
@@ -406,7 +469,8 @@ pub async fn mget(
         let trouve = {
             let idx = idx.clone();
             let doc_id = doc_id.clone();
-            tokio::task::spawn_blocking(move || idx.get_doc(&doc_id))
+            let noms = stored.noms().to_vec();
+            tokio::task::spawn_blocking(move || idx.get_doc_avec(&doc_id, &noms))
                 .await
                 .map_err(|e| EsError::internal(format!("mget: {e}")))??
         };
@@ -420,7 +484,15 @@ pub async fn mget(
                 o.insert("_seq_no".into(), json!(res.seq_no));
                 o.insert("_primary_term".into(), json!(1));
                 o.insert("found".into(), json!(true));
-                if let Some(src) = filtre_global.apply(res.source) {
+                if let Some(bloc) = res.stockes {
+                    o.insert("fields".into(), bloc);
+                }
+                let filtre = if stored.retire_le_source() {
+                    SourceFilter::None
+                } else {
+                    filtre_global.clone()
+                };
+                if let Some(src) = filtre.apply(res.source) {
                     o.insert("_source".into(), src);
                 }
                 sortie.push(Value::Object(o));

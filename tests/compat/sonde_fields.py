@@ -21,8 +21,10 @@ Les questions que cette sonde separe, et qu'aucune lecture ne tranchait :
   dedoublonne** (`["a","b"]`), un numerique trie **avec** ses doublons
   (`[1,1,3]`), et un `float` avec la precision de son stockage 32 bits
   (`0.1` devient `0.10000000149011612`) ;
-- `stored_fields` ne rend aucun champ tant qu'aucun n'est `store: true` — mais
-  il retire `_source`, et `_none_` retire aussi `_id` ;
+- `stored_fields` lit les champs **stockes** : il garde l'ordre du document et
+  ses doublons comme `fields`, mais il ne lit pas le `_source` — un champ que
+  le mapping ne declare pas `store: true` n'a pas de cle, une valeur ecartee
+  par `ignore_above` non plus, et sous un `nested` il ne rend **rien** ;
 - un champ absent n'a **pas de cle** : ce n'est pas une valeur nulle ;
 - un motif `*` ne ramene pas les metadonnees, un nom explicite si.
 """
@@ -55,19 +57,28 @@ def http(base, method, path, body=None):
 
 
 MAPPING = {"mappings": {"properties": {
-    "titre": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
-    "tag": {"type": "keyword"},
-    "n": {"type": "integer"},
+    # `store: true` sur une partie des champs seulement : c'est ce qui separe
+    # « stocke » de « present dans le _source », et c'est la seule facon de voir
+    # que `stored_fields` ne reconstitue rien.
+    "titre": {"type": "text", "store": True,
+              "fields": {"keyword": {"type": "keyword", "store": True}}},
+    "tag": {"type": "keyword", "store": True, "copy_to": "tout"},
+    "n": {"type": "integer", "store": True},
     "l": {"type": "long"},
-    "f": {"type": "float"},
+    "f": {"type": "float", "store": True},
     "dbl": {"type": "double"},
-    "b": {"type": "boolean"},
-    "d": {"type": "date"},
-    "dfmt": {"type": "date", "format": "yyyy-MM-dd"},
-    "client": {"properties": {"ville": {"type": "keyword"},
+    "b": {"type": "boolean", "store": True},
+    "d": {"type": "date", "store": True},
+    "dfmt": {"type": "date", "format": "yyyy-MM-dd", "store": True},
+    # La cible d'un `copy_to` : elle n'existe pas dans le `_source`, et c'est
+    # pourtant `fields` qui doit la rendre.
+    "tout": {"type": "text", "store": True},
+    "client": {"properties": {"ville": {"type": "keyword", "copy_to": "tout"},
                               "cp": {"type": "integer"}}},
     "lignes": {"type": "nested", "properties": {
-        "ref": {"type": "keyword"},
+        # Stocke **sous un `nested`** : chez ES la valeur vit dans le document
+        # enfant, et `stored_fields` n'en rend rien depuis la racine.
+        "ref": {"type": "keyword", "store": True},
         "q": {"type": "integer"},
         # Un objet **dans** un `nested` : le chemin profond se rend avec sa
         # cle relative a la racine (`sous.z`). ferrite refuse un `nested` dans
@@ -78,8 +89,15 @@ MAPPING = {"mappings": {"properties": {
     # sort **pas** dans `fields` — ES la rend a part, dans
     # `ignored_field_values`. Sans ce champ, la sonde ne verrait pas la
     # difference entre « lire le _source » et « lire ce qui a ete indexe ».
-    "court": {"type": "keyword", "ignore_above": 5},
+    # Stocke **et** borne : une valeur qu'`ignore_above` ecarte n'est pas
+    # indexee, et elle n'est pas stockee non plus.
+    "court": {"type": "keyword", "ignore_above": 5, "store": True},
     "phrase": {"type": "text", "fields": {"kw": {"type": "keyword", "ignore_above": 5}}},
+    # Un nom de champ qui commence par `_`. ES ne reserve que ses **champs de
+    # metadonnees** ; celui-ci est un champ comme un autre, et `fields` doit le
+    # rendre. Ce sont les noms que Wagtail emploie (`_all_text`,
+    # `_edgengrams`), et le prefixe les rendait invisibles ici.
+    "_all_text": {"type": "keyword"},
     # Une cle de tri stable des deux cotes : `_id` ne se trie pas chez ES
     # (« Fielddata access on the _id field is disallowed »).
     "ord": {"type": "keyword"},
@@ -102,7 +120,7 @@ DOCS = {
     },
     # Le document creux : la moitie des champs manquent. C'est lui qui montre
     # qu'un champ absent n'a pas de cle du tout.
-    "2": {"ord": "2", "titre": "petit", "n": 7},
+    "2": {"ord": "2", "titre": "petit", "n": 7, "_all_text": "souligne"},
     # Les coercions : le `_source` ne porte pas le type du mapping.
     "3": {"ord": "3", "tag": 42, "n": "7", "b": "false", "d": 1600000000000,
           "lignes": {"ref": "seul"}},
@@ -273,6 +291,40 @@ def cas():
       f"/{INDEX}/_search?size=10&sort=ord&stored_fields=titre")
     q("sf, _none_ en query string", None,
       f"/{INDEX}/_search?size=10&sort=ord&stored_fields=_none_")
+    # Ce que `store` change vraiment : l'ordre du document et ses doublons,
+    # comme `fields` — mais lus ailleurs, donc un champ non stocke n'a pas de
+    # cle la ou `fields` en aurait une.
+    q("sf, stocke et non stocke", {"stored_fields": ["tag", "l", "dbl", "n"]})
+    q("sf, un multi-field stocke", {"stored_fields": ["titre.keyword"]})
+    q("sf, une date au format du champ", {"stored_fields": ["d", "dfmt"]})
+    q("sf, un float stocke", {"stored_fields": ["f"]})
+    q("sf, sous un nested", {"stored_fields": ["lignes.ref"]})
+    q("sf, ignore_above ecarte aussi le stockage", {"stored_fields": ["court"]})
+    q("sf, la cible d'un copy_to", {"stored_fields": ["tout"]})
+    q("sf, un champ inconnu", {"stored_fields": ["pasla"]})
+    # Un champ dont le **nom** commence par `_` : ES ne reserve que ses champs
+    # de metadonnees, et celui-ci n'en est pas un.
+    q("fields, un champ nomme _all_text",
+      {"_source": False, "fields": ["_all_text"]})
+    q("dv, un champ nomme _all_text",
+      {"_source": False, "docvalue_fields": ["_all_text"]})
+    # Le meme champ des deux cotes : c'est `fields` qui rend la valeur, donc le
+    # `format` qu'il demande — la valeur stockee ne l'ecrase pas.
+    q("fields l'emporte sur stored_fields",
+      {"_source": False, "fields": [{"field": "dfmt", "format": "epoch_millis"}],
+       "stored_fields": ["*"]})
+    # Les trois lectures sur le meme champ stocke : c'est la que les trois
+    # sources se separent (`_source`, colonne, champ stocke).
+    q("les trois sur un keyword stocke",
+      {"_source": False, "fields": ["tag"], "docvalue_fields": ["tag"],
+       "stored_fields": ["tag"]})
+
+    # --- copy_to : ce que `fields` rend d'une cible --------------------------
+    # La cible n'est nulle part dans le `_source` : ES la rend quand meme, en
+    # allant chercher les chemins qui y copient — la valeur propre d'abord,
+    # puis les sources par ordre de nom.
+    q("fields sur la cible d'un copy_to", {"_source": False, "fields": ["tout"]})
+    q("dv sur la cible d'un copy_to", {"_source": False, "docvalue_fields": ["tout"]})
 
     # --- les regles de precedence, et le moment de l'erreur ------------------
     # Le meme champ demande deux fois : la **derniere** specification gagne.
@@ -357,7 +409,47 @@ REFUS_ASSUMES = {
         "adressable — et rendre un tableau vide dirait « aucun champ ecarte » "
         "alors qu'on ne le sait pas. Les valeurs ecartees, elles, sortent bien "
         "dans `ignored_field_values`",
+    "les trois sur un keyword stocke":
+        "ES rend un **500** (`unsupported_operation_exception`) quand les "
+        "trois lectures nomment le meme champ stocke. Un 500 ne se reproduit "
+        "pas — c'est deja la raison pour laquelle `_seq_no` dans `fields` est "
+        "refuse ici. ferrite rend les valeurs, comme il le fait pour chacune "
+        "des trois prises separement",
 }
+
+# Les cas ou les deux serveurs rendent **les memes valeurs dans un autre
+# ordre**. Ce n'est pas un refus : c'est une propriete qu'ES n'a pas.
+#
+# L'ordre des valeurs qu'un `copy_to` depose dans sa cible est celui d'un
+# `HashSet<String>` de Java, sur l'ensemble {cible} ∪ {sources} — donc des
+# seaux de hachage, pas un ordre qu'on puisse citer. La mesure le montre :
+# trois sources `aa`/`mm`/`zz` ressortent triees, mais `tag` ressort **avant**
+# `client.ville`, ce qu'aucun tri ne donne. ferrite rend un ordre qu'on peut
+# ecrire : la valeur propre de la cible d'abord, puis les sources par nom.
+ORDRE_DES_COPIES = {
+    "fields, motif *",
+    "fields, nom + motif",
+    "fields, include_unmapped booleen",
+    "fields sur la cible d'un copy_to",
+}
+
+
+def meme_multiensemble(*rendus):
+    """Les rendus ne different-ils **que** par l'ordre des valeurs ?
+
+    Chaque bloc `fields` est compare cle par cle, valeurs triees. Un doublon
+    perdu ou une valeur en trop reste un ecart : c'est la difference entre
+    « ES n'ordonne pas » et « ferrite n'indexe pas la meme chose »."""
+    def trie(x):
+        if isinstance(x, list):
+            return sorted((json.dumps(trie(e), sort_keys=True) for e in x))
+        if isinstance(x, dict):
+            return {k: trie(v) for k, v in x.items()}
+        return x
+
+    formes = {json.dumps(trie(json.loads(r)), sort_keys=True)
+              for r in rendus if r.startswith(("[", "{"))}
+    return len(formes) == 1 and all(r.startswith(("[", "{")) for r in rendus)
 
 
 def normalise(hit):
@@ -422,17 +514,25 @@ def main():
         raise SystemExit(
             f"# {len(dispo)} serveur(s) sur 2 : une comparaison a besoin des "
             f"deux, sinon son verdict ne veut rien dire.")
-    ecarts = assumes = total = 0
+    ecarts = assumes = ordres = total = 0
     for libelle, chemin, corps in cas():
         reps = [(nom, *interroge(base, chemin, corps)) for nom, base in dispo]
         vals = {cle for _, cle, _ in reps}
         differe = len(vals) > 1
         assume = libelle in REFUS_ASSUMES
-        marque = "~" if assume and differe else ("*" if differe else " ")
+        # Un ordre de copies ne compte que s'il ne porte **que** sur l'ordre :
+        # le prédicat le mesure au lieu de tolérer le libellé en bloc.
+        ordre = (differe and not assume and libelle in ORDRE_DES_COPIES
+                 and meme_multiensemble(*[cle for _, cle, _ in reps]))
+        marque = "~" if differe and (assume or ordre) else ("*" if differe else " ")
         print(f"{marque} {libelle:48} " +
               "  |  ".join(f"{nom}={vu}" for nom, _, vu in reps))
         if assume and differe:
             print(f"      refus assume : {REFUS_ASSUMES[libelle]}")
+        elif ordre:
+            print("      ordre assume : les memes valeurs, dans un autre ordre — "
+                  "celui d'ES est l'iteration d'un `HashSet` de Java sur "
+                  "{cible} ∪ {sources} d'un `copy_to`")
         elif differe or detail:
             for nom, cle, _ in reps:
                 print(f"      {nom}: {cle}")
@@ -440,10 +540,13 @@ def main():
         if differe:
             if assume:
                 assumes += 1
+            elif ordre:
+                ordres += 1
             else:
                 ecarts += 1
-    print(f"\n{total - ecarts - assumes}/{total} identiques, "
-          f"{assumes} refus assume(s), {ecarts} ecart(s)")
+    print(f"\n{total - ecarts - assumes - ordres}/{total} identiques, "
+          f"{assumes} refus assume(s), {ordres} ordre(s) de copie assume(s), "
+          f"{ecarts} ecart(s)")
     return 1 if ecarts else 0
 
 

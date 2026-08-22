@@ -494,14 +494,32 @@ def parse_go(sortie):
 
 
 def parse_django(sortie):
-    """`manage.py test -v 2` : `nom (chemin) ... ok | FAIL | ERROR | skipped`."""
+    """`manage.py test -v 2` : `nom (chemin) ... ok | FAIL | ERROR | skipped`.
+
+    Le verdict ne suit pas toujours les `...` sur la **meme ligne**. Tout ce que
+    le test ecrit entre les deux s'intercale : la docstring de la methode, et
+    surtout un `warnings.warn` — Elasticsearch 8.15 rend un en-tete
+    `Warning: 299 … Deprecated field [mustNot] used`, que `elasticsearch-py`
+    transforme en `ElasticsearchWarning` imprime sur la sortie d'erreur, au
+    milieu de la ligne.
+
+    Un parseur qui exige `... ok` sur une ligne perd donc exactement les cas
+    ou ES **previent**. Et il les perd **du seul cote qui previent** : quatre
+    cas de Wagtail sortaient absents de la colonne ES et presents dans celle de
+    ferrite, ce qui se lit « ferrite fait mieux qu'ES ». C'est la forme la plus
+    flatteuse qu'un defaut d'outillage puisse prendre, donc celle qu'il faut
+    chercher en premier.
+    """
+    entetes = list(re.finditer(r"^(\w+) \(([\w.]+)\)", sortie, re.M))
+    verdicts = re.compile(r"(?:\.\.\. |^)(ok|FAIL|ERROR|skipped[^\n]*)\s*$", re.M)
     cas = {}
-    for m in re.finditer(
-        r"^(\w+) \(([\w.]+)\)(?:[^\n]*?)? \.\.\. (ok|FAIL|ERROR|skipped.*)$", sortie, re.M
-    ):
+    for i, m in enumerate(entetes):
+        fin = entetes[i + 1].start() if i + 1 < len(entetes) else len(sortie)
+        v = verdicts.search(sortie, m.end(), fin)
+        if not v:
+            continue
         nom = f"{m.group(2)}.{m.group(1)}"
-        verdict = {"ok": "PASS", "FAIL": "FAIL", "ERROR": "FAIL"}.get(m.group(3), "SKIP")
-        cas[nom] = verdict
+        cas[nom] = {"ok": "PASS", "FAIL": "FAIL", "ERROR": "FAIL"}.get(v.group(1), "SKIP")
     if not cas:
         for m in re.finditer(r"^(?:FAIL|ERROR): (\w+) \(([\w.]+)\)", sortie, re.M):
             cas[f"{m.group(2)}.{m.group(1)}"] = "FAIL"

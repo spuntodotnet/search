@@ -217,6 +217,9 @@ BRIQUES = {
     "champ.multi_fields": "type.multi_fields",
     "champ.ignore_above": "type.ignore_above",
     "champ.analyzer": "type.analyzer",
+    "champ.search_analyzer": "type.search_analyzer",
+    "champ.copy_to": "type.copy_to",
+    "champ.store": "type.store",
     "champ.tableaux": "type.tableaux",
     "champ.null": "type.null",
     "champ.devine": "index.mapping_dynamique",
@@ -430,7 +433,59 @@ class Generateur:
             m, ch = getattr(self, f"_champ_{forme}")(nom)
             props[nom] = m
             champs.extend(ch)
+        self._copie_declaree(props, champs)
+        self._stockage_declare(props, champs)
         return props, champs
+
+    def _copie_declaree(self, props, champs):
+        """`copy_to` : un ou deux champs qui se recopient ailleurs.
+
+        Deux formes, et elles n'exercent pas la meme chose : une cible
+        **declaree** (le `_all_text` d'un CMS, interrogeable ensuite) et une
+        cible **absente du mapping**, qui doit se creer toute seule au type de
+        la valeur copiee — c'est la moitie du sujet qu'un demi-support
+        oublierait. La seconde n'est tiree que depuis une source de chaines,
+        pour que le type devine soit le meme des deux cotes sans dependre de
+        l'ordre des documents."""
+        rng = self.rng
+        if not (rng.random() < 0.25 and self.brique("champ.copy_to")):
+            return
+        # Les sources possibles : une feuille de chaine, a la racine ou sous un
+        # `nested` (ES autorise une copie vers un parent, jamais vers un
+        # enfant).
+        sources = [c for c in champs
+                   if c.ty in ("text", "keyword") and c.mapping is not None
+                   and "." not in c.chemin]
+        sources += [c for c in feuilles_de_nested(champs) if c.ty == "keyword"]
+        if not sources:
+            return
+        rng.shuffle(sources)
+        if rng.random() < 0.6:
+            props["tout"] = {"type": "text"}
+            champs.append(Champ("tout", "text", props["tout"]))
+            for c in sources[:rng.randint(1, 2)]:
+                cibles = c.mapping.setdefault("copy_to", [])
+                cibles.append("tout")
+        else:
+            c = sources[0]
+            # Cible non declaree : le mapping rendu apres indexation dira si
+            # elle s'est creee au bon type — `route.mapping` le compare.
+            c.mapping.setdefault("copy_to", []).append("copie_" + c.nom)
+
+    def _stockage_declare(self, props, champs):
+        """`store: true` sur quelques feuilles.
+
+        La brique ne mesure rien toute seule : c'est `stored_fields` qui la
+        lit. Les deux se croisent d'autant plus souvent que les deux tirages
+        sont independants."""
+        rng = self.rng
+        if not (rng.random() < 0.25 and self.brique("champ.store")):
+            return
+        feuilles = [c for c in champs
+                    if c.mapping is not None and c.ty not in ("object", "nested")]
+        rng.shuffle(feuilles)
+        for c in feuilles[:rng.randint(1, 3)]:
+            c.mapping["store"] = rng.choice([True, "true"])
 
     def _analyse_declaree(self):
         """Une section `analysis` tiree au sort — deux analyzers a n-grammes.
@@ -484,6 +539,14 @@ class Generateur:
             if a in ANALYZERS:
                 self.brique(f"analyzer.{a}")
             m["analyzer"] = a
+            # Un analyzer different a la requete : c'est ce qu'un champ a
+            # n-grammes reclame, et c'est le seul endroit ou l'indexation et la
+            # recherche ne decoupent pas pareil.
+            if self.rng.random() < 0.4 and self.brique("champ.search_analyzer"):
+                s = self.rng.choice(ANALYZERS + self.analyzers_declares)
+                if s in ANALYZERS:
+                    self.brique(f"analyzer.{s}")
+                m["search_analyzer"] = s
         champs = [Champ(nom, "text", m)]
         if self.rng.random() < 0.5 and self.brique("champ.multi_fields"):
             sous = {"type": "keyword"}
@@ -1535,7 +1598,7 @@ def _exists_tous_nies(noeud, nie=False):
     return bool(trouves) and all(trouves)
 
 
-def _en_trop_a_gauche(e, ecarts):
+def _en_trop_a_gauche(e, ecarts, requete=None):
     """L'ecart est-il « ferrite en rend **plus** », et rien d'autre ?
 
     Le miroir de [`_corpus_ampute`], pour une divergence dont la negation a
@@ -1549,7 +1612,17 @@ def _en_trop_a_gauche(e, ecarts):
     if e["chemin"] in ("hits.max_score", "hits.ordre"):
         return True
     if e["chemin"] == "hits.hits":
-        return len(set(e["a"])) >= len(set(e["b"])) and set(e["b"]) <= set(e["a"])
+        if len(set(e["a"])) < len(set(e["b"])):
+            return False
+        # Sur une page **entiere**, ce que rend ES est un sous-ensemble de ce
+        # que rend ferrite : c'est la forme la plus stricte, et on la garde.
+        # Des que la requete tronque (`from` / `size`), la fenetre des deux
+        # serveurs ne porte plus sur les memes rangs — ferrite a un document de
+        # plus a paginer, donc il decale tout ce qui suit — et les deux pages
+        # peuvent etre **disjointes**. Le miroir de `_corpus_ampute`, qui pose
+        # deja la meme reserve dans l'autre sens (graine 7370169 : `from: 3,
+        # size: 2` sur un `must_not exists`, deux pages sans intersection).
+        return _tronque(requete, e["a"]) or set(e["b"]) <= set(e["a"])
     if e["chemin"].startswith("scroll"):
         return True
     # Un compte plus grand quelque part suffit a expliquer le reste de la
@@ -1557,6 +1630,19 @@ def _en_trop_a_gauche(e, ecarts):
     return any(x["chemin"].endswith(("hits.total.value", "doc_count"))
                and isinstance(x["a"], int) and isinstance(x["b"], int)
                and x["a"] > x["b"] for x in ecarts)
+
+
+def _tronque(requete, rendus):
+    """La reponse est-elle une **page**, et non tout ce qui correspond ?
+
+    C'est la condition qui rend deux fenetres incomparables document par
+    document : un `from` non nul, ou une page pleine."""
+    if not requete:
+        return False
+    if requete.get("from"):
+        return True
+    taille = requete.get("size")
+    return taille is not None and len(rendus) >= taille
 
 
 def _exists_sur_text(e, requete, ecarts):
@@ -1586,7 +1672,7 @@ def _exists_sur_text(e, requete, ecarts):
     if '"exists"' not in json.dumps(requete):
         return False
     if _exists_tous_nies(requete) and _exists_confirme.get("ampute"):
-        return _en_trop_a_gauche(e, ecarts)
+        return _en_trop_a_gauche(e, ecarts, requete)
     # Des qu'un ecart montre que ferrite a vu moins de documents, tout ce que la
     # meme reponse porte en decoule : un bucket de moins, une cle de bucket
     # differente, un ordre decale. Les compter separement ferait passer une seule
@@ -1642,6 +1728,78 @@ def _es_casse(e):
         "cannot be negative according to the SignStyle",
         "Cannot format stat",
     ))
+
+
+def _es_deux_lectures(e, requete=None):
+    """Le meme champ demande par `docvalue_fields` **et** `stored_fields`.
+
+    ES 8.15 y rend un **500** — `unsupported_operation_exception`, avec un
+    `reason` a `null` : il n'arrive pas a construire son propre hit. ferrite
+    rend les valeurs, comme il le fait pour chacune des deux lectures prises
+    separement, et c'est ce que chacune rend de son cote qui est mesure
+    ailleurs (`sonde_fields.py`).
+
+    Un 500 ne se reproduit pas : c'est deja la raison pour laquelle `_seq_no`
+    nomme dans `fields` est refuse plutot qu'imite. Le predicat est etroit — le
+    message d'ES **et** le recoupement des deux listes demandees, sinon
+    n'importe quel 500 passerait."""
+    if e.get("chemin") != "statut" or "unsupported_operation_exception" not in e["texte"]:
+        return False
+    if not requete:
+        return False
+    def noms(cle):
+        out = set()
+        for x in requete.get(cle) or []:
+            out.add(x["field"] if isinstance(x, dict) else x)
+        return out
+    stockes, colonnes = noms("stored_fields"), noms("docvalue_fields")
+    return bool(colonnes) and bool(stockes & colonnes or "*" in stockes)
+
+
+def _ordre_des_copies(e, _requete=None, ecarts=()):
+    """Les memes valeurs dans la cible d'un `copy_to`, dans un autre ordre.
+
+    Celui d'ES n'est pas un ordre : c'est l'iteration d'un `HashSet<String>` de
+    Java sur l'ensemble {cible} ∪ {sources}. La mesure suffit a l'etablir —
+    trois sources `aa`/`mm`/`zz` en ressortent triees, mais `tag` en ressort
+    **avant** `client.ville`, ce qu'aucun tri ne donne. Divergence assumee
+    n° 18 de `docs/compat.md`.
+
+    Le predicat ne tolere que l'**ordre**, et il le **mesure** : pour le hit et
+    le champ concernes, il exige que les valeurs des positions qui different
+    forment le meme multi-ensemble des deux cotes. Les positions identiques
+    s'annulant, c'est exactement dire que les deux tableaux sont permutes l'un
+    de l'autre. Une valeur en trop, un doublon perdu ou un tableau plus court
+    (qui produit son propre ecart, sans indice) restent des ecarts."""
+    prefixe = _prefixe_de_copie(e.get("chemin", ""))
+    if prefixe is None:
+        return False
+    freres = [x for x in ecarts
+              if x.get("chemin", "").startswith(prefixe)] or [e]
+    gauche, droite = [], []
+    for x in freres:
+        # Un ecart sans indice sur ce champ, c'est une difference de longueur
+        # ou de presence : il ne se rattrape pas par un ordre.
+        if _prefixe_de_copie(x["chemin"]) != prefixe:
+            return False
+        if not isinstance(x.get("a"), str) or not isinstance(x.get("b"), str):
+            return False
+        gauche.append(x["a"])
+        droite.append(x["b"])
+    return sorted(gauche) == sorted(droite)
+
+
+def _prefixe_de_copie(chemin):
+    """`hits[d004].fields.tout[2]` -> `hits[d004].fields.tout[`, sinon None.
+
+    Le nom `tout` est celui que le generateur donne a la cible declaree d'un
+    `copy_to` (voir `Generateur._copie_declaree`) : le predicat ne s'applique
+    qu'a elle."""
+    marque = ".fields.tout["
+    i = chemin.find(marque)
+    if i < 0 or not chemin.endswith("]"):
+        return None
+    return chemin[:i + len(marque)]
 
 
 def _ordre_par_pertinence(e, requete):
@@ -1731,6 +1889,8 @@ DIVERGENCES_ASSUMEES = [
     ("ordre par score sous un nested", _nested_et_score),
     ("exists sur un text sans terme", _exists_sur_text),
     ("ES 8.15 casse sur epoch_millis", _es_casse),
+    ("ES 8.15 casse sur deux lectures du meme champ", _es_deux_lectures),
+    ("ordre des valeurs copiees par copy_to", _ordre_des_copies),
     ("ordre par pertinence (BM25)", _ordre_par_pertinence),
 ]
 
@@ -1781,9 +1941,17 @@ def motif(r):
     if not isinstance(err, dict):
         return ""
     for echec in err.get("failed_shards") or []:
-        raison = (echec.get("reason") or {}).get("reason")
+        sous = echec.get("reason") or {}
+        raison = sous.get("reason")
         if raison:
             return raison
+        # Un shard peut echouer **sans phrase** : ES 8.15 rend un
+        # `unsupported_operation_exception` dont le `reason` vaut `null` quand
+        # le meme champ est demande par `docvalue_fields` et `stored_fields`.
+        # Sans son type, l'ecart se lit « all shards failed » et aucun predicat
+        # ne peut le distinguer d'un autre 500.
+        if sous.get("type"):
+            return sous["type"]
     return err.get("reason", "")
 
 

@@ -99,11 +99,11 @@ attendu, et c'est mesuré plutôt que supposé.
 
 | Sous-corpus | Requêtes | Servies entièrement |
 |---|---|---|
-| **`github` — du code d'application open source** | 338 | **93,2 %** |
+| **`github` — du code d'application open source** | 338 | **93,5 %** |
 | `clients` — tests et exemples des clients officiels | 143 | 81,1 % |
-| `doc` — la documentation de référence | 3 969 | 39,6 % |
-| `rally` — les tracks de benchmark d'Elastic | 861 | 27,2 % |
-| **tout le corpus** | 5 311 | 42,1 % |
+| `doc` — la documentation de référence | 3 969 | 39,8 % |
+| `rally` — les tracks de benchmark d'Elastic | 861 | 28,6 % |
+| **tout le corpus** | 5 311 | 42,5 % |
 
 Ces quatre nombres ne se contredisent pas, ils mesurent quatre choses
 différentes, et l'écart entre eux **est** le résultat :
@@ -113,12 +113,12 @@ différentes, et l'écart entre eux **est** le résultat :
   requêtes sur dix passent telles quelles** ;
 - la documentation de référence consacre **une page par fonctionnalité**, avec au
   moins un exemple chacune : elle sur-représente exactement ce qui est rare. Un
-  taux de 39,6 % s'y lit « ferrite couvre un peu plus d'un tiers de la surface
+  taux de 39,8 % s'y lit « ferrite couvre un peu plus d'un tiers de la surface
   d'API », ce qui est vrai et sans rapport avec la question précédente ;
 - les tracks Rally sont des **bancs d'essai analytiques** : `date_histogram`
   avec `calendar_interval`, `runtime_mappings`, `fields`, `percentiles`. Et le
   track `elastic/logs` rejoue les requêtes de **Kibana**, qui pose
-  systématiquement des `runtime_mappings` et des `fields`. 27,2 % — c'était
+  systématiquement des `runtime_mappings` et des `fields`. 28,6 % — c'était
   17,4 % avant que `fields`, `docvalue_fields` et `stored_fields` ne soient
   livrés — c'est le prix d'entrée pour servir un Kibana, pas celui d'une
   application.
@@ -207,6 +207,20 @@ débloque. Deux colonnes, parce qu'elles ne disent pas la même chose :
 >   donc « servie ». `ponderation.py` lit maintenant les deux, corps et query
 >   string : c'est la même règle que partout ailleurs, et elle rend le
 >   dénominateur un peu moins flatteur.
+>
+> La **32** — `search_analyzer`, `copy_to`, `store` — a fait passer le corpus
+> de **42,1 % à 42,5 %** (2 237 → 2 259), et le sous-corpus des applications
+> réelles de 93,2 % à **93,5 %**. Mais le détail compte plus que le total : les
+> trois paramètres de mapping n'en débloquent que **8**, et c'est attendu — un
+> corpus fait de **corps de requêtes** ne pèse presque rien sur des paramètres
+> de **mapping**, exactement comme pour l'`index: true` de Gitea. Les 14 autres
+> viennent de ce que la carte a trouvé **derrière** eux : le `missing` d'une
+> agrégation `terms`, et l'écriture `mustNot`.
+>
+> Ce que les trois paramètres débloquent vraiment ne se mesure pas ici : il se
+> mesure dans [`application.md`](application.md), où le compte est passé de 0 à
+> 83 sur les tests de backend de Wagtail. Deux dénominateurs, deux vérités, et
+> c'est pour ça qu'il en faut plus d'un.
 >
 > Les **125** de la ligne 2 supposaient les cinq faits, `runtime_mappings` et
 > `script_fields` compris : ils demandent Painless, et la mesure a servi à

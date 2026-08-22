@@ -170,27 +170,27 @@ développement, pas de CI).
 
 | Commande | La question à laquelle elle répond |
 |---|---|
-| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**107/107**, dont l'export par `helpers.scan`, le date math, la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats`, les templates, ce que la réponse transporte — `fields`, `docvalue_fields`, `stored_fields` — la modification par requête, `_delete_by_query` / `_update_by_query`, et les n-grammes de l'autocomplétion) |
+| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**110/110**, dont l'export par `helpers.scan`, le date math, la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats`, les templates, ce que la réponse transporte — `fields`, `docvalue_fields`, `stored_fields` — la modification par requête, `_delete_by_query` / `_update_by_query`, et les n-grammes de l'autocomplétion, `search_analyzer`, `copy_to` et `store`) |
 | `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (212/213, 0 écart réel) |
 | `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (45/46 ; le seul écart est `_cluster/health`, toujours vert par choix) |
 | `tests/compat/diff_aggs.py` | les mêmes agrégations ? (53/53, `filter` comprise, et ce qu'un bucket **vide** doit porter) |
-| `tests/compat/diff_analyzers.py` | les mêmes tokens, **aux mêmes positions et aux mêmes offsets** ? (38 batteries × 210 textes : 7 analyzers intégrés, 21 déclarations de n-grammes, les 5 analyzers de Wagtail, et les 5 classes de `token_chars` demandées caractère par caractère — toutes identiques) |
+| `tests/compat/diff_analyzers.py` | les mêmes tokens, **aux mêmes positions et aux mêmes offsets** ? (38 batteries × 217 textes : 7 analyzers intégrés, 21 déclarations de n-grammes, les 5 analyzers de Wagtail, et les 5 classes de `token_chars` demandées caractère par caractère — toutes identiques) |
 | `tests/compat/diff_datemath.py` | les mêmes documents sur une **borne de date** — `now`, `now-1d/d`, `2026-03-15\|\|+1M`, et l'arrondi selon le côté de la borne ? (276/276, messages d'erreur compris ; 45/276 avant le chantier) |
 | `tests/compat/diff_motifs.py` | les mêmes documents sur un **motif** — `regexp`, `wildcard`, `prefix`, `match_phrase_prefix` ? (101/101) |
 | `tests/compat/diff_multi_index.py` | `index=["a","b"]`, `logs-*`, les alias : **les mêmes index visés, fusionnés pareil** ? (87/87, 0 écart, plus aucune divergence assumée ; `--calibrer` : 87/87 contre deux ES) |
 | `tests/compat/sonde_msm.py` | les mêmes documents sur un **`minimum_should_match`** — entier, pourcentage, formes négatives, conditions `3<90%`, et sous un `nested` ? (53/53) |
 | `tests/compat/releve_mots_vides.py` | quelle est **vraiment** la liste de mots vides d'un analyzer d'ES ? |
-| `tests/compat/sonde_fields.py` | **ce que la réponse transporte** — `fields`, `docvalue_fields`, `stored_fields`. Compare le **hit entier** (bloc `fields` clé par clé, présence de `_source`, présence de `_id`) : 94/96 identiques, 2 refus assumés écrits, 0 écart. Refuse de tourner si elle ne trouve pas les deux serveurs |
+| `tests/compat/sonde_fields.py` | **ce que la réponse transporte** — `fields`, `docvalue_fields`, `stored_fields`. Compare le **hit entier** (bloc `fields` clé par clé, présence de `_source`, présence de `_id`) : 103/110 identiques, 3 refus assumés écrits, 4 différences d'ordre assumées, 0 écart. Refuse de tourner si elle ne trouve pas les deux serveurs |
 | `tests/compat/sonde_par_requete.py` | **modifier ou purger par requête** — `_delete_by_query`, `_update_by_query`. Compare les compteurs de la réponse **et l'état laissé derrière** (documents restants, `_version`, `_source`) : 62/74 identiques, 12 refus assumés écrits, 0 écart. Les conflits sont provoqués pour de vrai, par une écriture non rafraîchie. Refuse de tourner sans ses deux cibles |
 | `tests/compat/sonde_alias.py` | les mêmes alias sur une **expression de noms** — liste, joker, exclusion, `_all` — et le même 404 ? (21/21, corps et message compris) |
 | `tests/compat/sonde_vide.py` | sur un serveur **sans aucun index**, la même chose qu'ES — et rien accepté en silence ? (28/28 identiques, 0 refus muet ; les deux serveurs doivent être vides, c'est l'état mesuré) |
-| `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **3 950 cas, 174 207 requêtes, 0 divergence réelle**, sur quinze plages de graines dont **huit** n'ont jamais servi à corriger — celle sur laquelle on itère ne mesure plus rien. 21 défauts silencieux trouvés au premier passage, 6 de plus depuis, dont un `max_docs` qui ne supprimait pas les mêmes documents qu'ES et les deux moitiés du défaut des n-grammes (`match_phrase`, puis `operator: and`). S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (50 cas, 2 157 requêtes, 0) |
-| `tests/compat/sonde_fuzz.py` | les écarts trouvés par le fuzzing, **figés** hors d'une graine (46/46, plus 12 refus assumés) |
-| `tests/compat/appli_reelle.py` | **un logiciel écrit par d'autres démarre-t-il ?** Clone une vraie application à une révision figée, vérifie que rien n'y a bougé, lance sa **propre** suite d'intégration contre un vrai ES puis contre ferrite, et relève tout le trafic HTTP au passage. Gitea v1.27.2 : **34/34 des deux côtés**, arbre intact. Wagtail v7.1 : **0/81**, mais son index se crée maintenant — il reste trois paramètres de mapping. Voir [`docs/application.md`](docs/application.md) |
+| `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **2 000 cas, 88 367 requêtes, 1 divergence ouverte** (un ordre que BM25 sépare, déclaré), sur huit plages de graines dont **cinq** n'ont jamais servi à corriger — celle sur laquelle on itère ne mesure plus rien, et le générateur ayant changé, les plages du passage précédent ne mesurent plus les mêmes cas. 21 défauts silencieux trouvés au premier passage, 10 de plus depuis, dont un `max_docs` qui ne supprimait pas les mêmes documents qu'ES et un mot de plus de 255 caractères qui disparaissait de l'index. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (50 cas, 2 145 requêtes, 0) |
+| `tests/compat/sonde_fuzz.py` | les écarts trouvés par le fuzzing, **figés** hors d'une graine (65/65, plus 12 refus assumés) |
+| `tests/compat/appli_reelle.py` | **un logiciel écrit par d'autres démarre-t-il ?** Clone une vraie application à une révision figée, vérifie que rien n'y a bougé, lance sa **propre** suite d'intégration contre un vrai ES puis contre ferrite, et relève tout le trafic HTTP au passage. Gitea v1.27.2 : **34/34 des deux côtés**. Wagtail v7.1 : **83/83 des deux côtés**, et plus un seul refus que ferrite prononce là où ES répond. Voir [`docs/application.md`](docs/application.md) |
 | `tests/compat/genere_compat.py` | le périmètre déclaré et la doc disent-ils la **même chose** ? [`compat.yaml`](compat.yaml) est la source (une entrée par capacité : état, paramètres, motif du refus, poids d'usage) ; [`docs/compat.md`](docs/compat.md) et [`docs/compat.json`](docs/compat.json) en sont **générés**, et la CI échoue s'ils divergent |
 | `tests/compat/perimetre.py` | ce cas qui échoue, il porte sur quoi ? Il rattache un échec de conformance à une capacité déclarée : **régression** si elle est annoncée supportée, **coût de périmètre** si elle est annoncée refusée |
 | `tests/compat/recolte_usage.py` | à quoi ressemblent les requêtes que les gens envoient **vraiment** ? Constitue le corpus ([`tests/compat/usage/corpus.jsonl`](tests/compat/usage/corpus.jsonl), 5 311 requêtes) depuis quatre sources citables : doc de référence 8.15, tracks Rally, clients officiels, code open source. Chaque requête porte l'URL d'où elle vient |
-| `tests/compat/ponderation.py` | **quelle part de ces requêtes passe entièrement ?** (42,1 % du corpus, mais **93,2 % du code d'application** et 27,2 % des tracks Rally — l'écart *est* le résultat). Écrit les `poids` de `compat.yaml`, publie [`docs/usage.json`](docs/usage.json) et la table « ce qui manque, par fréquence d'usage ». `--rejoue` pose la même requête à ferrite et à un vrai ES 8.15 : les deux mesures s'accordent sur 99,3 % des cas |
+| `tests/compat/ponderation.py` | **quelle part de ces requêtes passe entièrement ?** (42,5 % du corpus, mais **93,5 % du code d'application** et 28,6 % des tracks Rally — l'écart *est* le résultat). Écrit les `poids` de `compat.yaml`, publie [`docs/usage.json`](docs/usage.json) et la table « ce qui manque, par fréquence d'usage ». `--rejoue` pose la même requête à ferrite et à un vrai ES 8.15 : les deux mesures s'accordent sur 99,3 % des cas |
 | `tests/compat/conformance_es.py` | que dit la suite de tests **d'Elastic** ? Ses **107 domaines**, sans liste blanche. Son rapport est un fichier, pas une phrase : [`docs/conformance.json`](docs/conformance.json) (totaux, deux taux, exclusions comptées, détail par cas), régénéré par `--json`, tenu par un cliquet en CI (`--diff`) |
 | `tests/compat/bench_vs_es.py` | mêmes résultats, **et à quel prix** ? (×3,6 en latence, ×6 en indexation) |
 | `tests/compat/probe_es7.py` | un **client** 7.x peut-il se brancher ? |
@@ -208,7 +208,7 @@ bouger**, pas après.
   de vérité de trois endroits. La source est maintenant
   [`compat.yaml`](compat.yaml) ; la doc et sa forme machine en sont générées, et
   le rapport de conformance **croise** chaque cas échoué avec elle. C'est ce qui
-  transforme « 356 échecs » en « 40 régressions et 316 coûts de périmètre »
+  transforme « 354 échecs » en « 36 régressions et 318 coûts de périmètre »
   (la mesure du jour, dans [`docs/conformance.json`](docs/conformance.json)) :
   la différence entre un chiffre qu'on subit et un chiffre qu'on pilote. Le
   garde-fou est le troisième verdict : un cas qu'aucune capacité ne réclame
@@ -317,6 +317,31 @@ bouger**, pas après.
   type du champ » est marquée à la source (`EsError::valeur_illisible`), et
   c'est exactement celle qu'ES avale — mesuré, y compris sur la phrase à
   préfixe posée sur un `keyword`.
+- **Trois paramètres de mapping, et aucun n'était une demande vide.**
+  `search_analyzer`, `copy_to` et `store` sont ce qui restait entre Wagtail et
+  ferrite. Ils ne se ressemblent pas, et chacun a une raison de ne **pas**
+  pouvoir être accepté en silence : `search_analyzer` fait chercher le mot
+  entier là où on a indexé des grammes (sans lui, `elan` rend tout ce qui
+  commence par `e` — chez ES aussi, mesuré), `copy_to` recopie la valeur brute
+  dans une cible que la recherche interroge, et `store` conserve la valeur que
+  `stored_fields` relit. Ce qui n'était pas devinable : la copie ne se **chaîne
+  pas**, sa cible se crée dynamiquement **au type de la valeur copiée**, `fields`
+  rend les valeurs copiées bien qu'elles ne soient nulle part dans le `_source`,
+  `store: false` n'est pas conservé dans le mapping (comme `index: true`), et un
+  champ stocké **sous un `nested`** ne rend rien du tout.
+- **`default` n'est pas un analyzer, c'est le nom de celui de l'index.** ES le
+  rend tel quel dans `_mapping` dès qu'un champ déclare un `search_analyzer`
+  sans analyzer d'indexation. ferrite le relit comme « aucun analyzer déclaré » —
+  sans quoi un redémarrage transformerait le `default` qu'ES écrit en
+  `standard`, que personne n'a demandé. Le mapping est persisté par son propre
+  rendu : tout ce qui n'y fait pas un aller-retour dérive au redémarrage.
+- **`missing` sur un `terms` est posé au type du champ.** tantivy sait le faire,
+  et c'est une agrégation déléguée de plus : ses bords ne sont pas ceux de son
+  homonyme, et les écarts sont **silencieux**. `missing: "2020-01-01"` sur une
+  date range les documents sous **1970-01-01** ; `missing: 0` sur un `keyword`
+  rend la clé `0` là où ES rend `"0"` ; sur un booléen il ne sait pas la poser.
+  ferrite convertit donc la valeur au type du champ avant de la passer, et
+  refuse explicitement les deux types que tantivy ne sait pas servir.
 - **`minimum_should_match` se calcule, il ne s'approxime pas**
   ([`src/msm.rs`](src/msm.rs)). Ses quatre notations (entier, pourcentage, les
   deux en négatif, et les conditions `3<90%`) tiennent en une trentaine de
@@ -511,31 +536,81 @@ bouger**, pas après.
   fonctionnalité se rencontrent, ce qui n'arrivait dans aucun test. Quand on
   livre une brique, il faut chercher ce qui la **traverse**, pas seulement ce
   qui l'appelle.
-- **Un refus de trop en cache un autre.** Wagtail butait sur `analysis.tokenizer`
-  ; une fois celui-là levé, deux refus sont apparus qu'aucune des mesures
-  précédentes n'avait pu voir — le préfixe `_` interdit sur tout nom de champ, et
-  le `PUT /_mapping` ci-dessus. Une liste de manques établie derrière un mur
-  n'est complète que jusqu'au mur. C'est la raison pour laquelle
-  `docs/application.md` publie **où l'application s'arrête** et pas seulement
-  combien de ses tests passent.
+- **Un refus de trop en cache un autre — trois fois de suite.** Wagtail butait
+  sur `analysis.tokenizer` ; une fois celui-là levé, deux refus sont apparus
+  qu'aucune des mesures précédentes n'avait pu voir — le préfixe `_` interdit sur
+  tout nom de champ, et le `PUT /_mapping` ci-dessus. Une fois les trois
+  paramètres de mapping livrés, un quatrième est sorti : `{"bool": {"mustNot":
+  …}}`, l'écriture camelCase qu'ES 8.15 **sert encore** (et la seule du DSL :
+  `minimumShouldMatch`, `adjustPureNegative`, `maxExpansions`,
+  `caseInsensitive`, `tieBreaker`, `scoreMode` sont tous refusés chez lui,
+  mesure à l'appui). Une liste de manques établie derrière un mur n'est complète
+  que jusqu'au mur. C'est la raison pour laquelle `docs/application.md` publie
+  **où l'application s'arrête** et pas seulement combien de ses tests passent.
+- **Le préfixe `_` avait été dé-réservé au mapping, pas à la lecture.** Un champ
+  utilisateur nommé `_all_text` était accepté à la déclaration, indexé,
+  interrogeable — et **invisible** à `fields`, à `docvalue_fields` et au motif
+  `*`, qui s'arrêtaient tous au préfixe. En 200, sans un mot, sur les noms
+  exacts qu'emploie Wagtail. Lever une règle trop large ne suffit pas : il faut
+  chercher tous les endroits qui la répétaient.
+- **Un résultat massivement vert n'est pas plus fiable qu'un rouge, et il
+  n'alarme personne.** Le premier rapport « Wagtail passe » comptait quatre cas
+  de moins du côté d'ES : ils y sortaient `ABSENT` là où ferrite passait, ce qui
+  se lit « ferrite fait mieux qu'un vrai Elasticsearch ». C'était le parseur —
+  ES rend un en-tête `Warning` de dépréciation sur `mustNot`, `elasticsearch-py`
+  l'imprime **au milieu** de la ligne `… ok`, et le verdict tombait à la ligne
+  suivante. Le défaut d'outillage ne se manifeste pas toujours par du rouge :
+  ici il flattait, et du seul côté qui prévient.
+- **`fields` l'emporte sur `stored_fields`, comme sur `docvalue_fields`.** Le
+  même champ demandé des deux côtés est rendu par `fields` — donc au `format`
+  qu'il demande. ferrite laissait la valeur stockée écraser la valeur formatée,
+  en 200. La règle existait déjà pour les colonnes ; livrer une troisième source
+  de valeurs, c'est devoir la reposer.
+- **`maxTokenLength` ne jette pas, il coupe.** Les tokenizers de Lucene
+  découpent un mot de plus de 255 caractères en morceaux de 255, chacun à la
+  position suivante — donc tout ce qui suit se décale aussi. ferrite jetait le
+  mot entier, et à 255 pile il jetait un mot que Lucene garde. Un texte de plus
+  de 255 caractères d'un seul tenant disparaissait donc de l'index, en 200. Ni
+  le corpus de `diff_analyzers.py` ni aucun test écrit n'avait un
+  mot si long ; il a fallu qu'un `copy_to` fasse entrer un `keyword` de 300
+  caractères dans un champ `text` pour qu'un tokenizer le voie. **Une brique
+  nouvelle ne mesure pas qu'elle-même** — deuxième fois de suite.
+- **`max_expansions` est un budget par position, pas par terme.**
+  `MultiPhrasePrefixQuery` remplit **un seul** ensemble en parcourant les termes
+  de la position, et s'arrête dès qu'il est plein. Tant qu'un analyzer posait un
+  terme par position, les deux lectures se confondaient ; un filtre à n-grammes
+  en pose vingt, et un budget par terme développe vingt fois plus de préfixes —
+  donc rend plus de documents qu'ES, en 200.
+- **Une clé de bucket entière sur un champ flottant.** `terms` sur un `double`
+  rendait la clé `2` là où ES rend `2.0` — un client qui type strictement son
+  JSON y lit un entier. Défaut antérieur, invisible parce qu'aucun corpus écrit
+  à la main ne met une valeur entière dans un champ flottant ; le fuzzer, lui,
+  tire `0.0` et `1024.0` exprès.
 
 ## Où va le projet
 
-**Une vraie application tourne dessus sans être modifiée** : Gitea v1.27.2 y
-indexe et cherche ses issues, et sa suite d'intégration passe ses 34 cas — les
-mêmes que contre un vrai ES 8.15. La seconde cible mesurée, Wagtail v7.1, ne
-passe toujours **aucun** de ses 81 tests de backend — mais son index **se crée**
-maintenant : les n-grammes qui le bloquaient sont livrés, et ce qui reste tient
-en trois paramètres de mapping (`search_analyzer`, `copy_to`, `store`), contre
-six lignes auparavant. Les deux résultats sont dans
-[`docs/application.md`](docs/application.md) — celui qui échoue est une feuille
-de route sourcée, pas un aveu.
+**Deux vraies applications tournent dessus sans être modifiées** : Gitea
+v1.27.2 y indexe et cherche ses issues (34 cas, les mêmes que contre un vrai
+ES 8.15), et **Wagtail v7.1 passe les 83 tests de sa suite de backend
+Elasticsearch** — il en passait zéro il y a trois cartes. Le mouchard ne relève
+plus un seul refus que ferrite prononce là où ES sait répondre. Le chemin est
+dans [`docs/application.md`](docs/application.md), et il vaut plus que le
+chiffre : le blocage est tombé d'un cran à chaque carte, et **à chaque fois le
+suivant était un refus de trop** plutôt qu'un manque.
 
-**L'autocomplétion « au fil de la frappe »** est là : `ngram` et `edge_ngram`,
-tokenizer et filtre, déclarés dans `settings.analysis` et bornés par
-`index.max_ngram_diff`. Ils travaillent à l'**indexation**, là où
-`match_phrase_prefix` travaille à la requête — un CMS qui propose des pages
-pendant qu'on tape n'a pas d'autre moyen.
+**L'autocomplétion « au fil de la frappe »** est complète : `ngram` et
+`edge_ngram` — tokenizer et filtre, déclarés dans `settings.analysis` et bornés
+par `index.max_ngram_diff` — travaillent à l'**indexation**, et
+`search_analyzer` fait chercher le **mot entier** par-dessus. Les deux moitiés
+comptent autant : sans la seconde, `elan` rend tout ce qui commence par `e`, et
+c'est ce que fait ES aussi tant qu'on ne le lui dit pas.
+
+**Se refaire un `_all`** est possible : `copy_to` recopie la valeur brute d'un
+champ dans une ou plusieurs cibles à l'indexation, la cible se crée toute seule
+si le mapping ne la déclare pas, et une facette peut ranger sous une clé les
+documents qui n'ont pas le champ (`missing` sur un `terms`). Et `store: true`
+donne enfin quelque chose à lire à `stored_fields`, qui ne rendait rien — c'est
+ainsi qu'une application relit une seule clé sans rapatrier tout le `_source`.
 
 Une migration depuis une instance 7.10.2 se reprend maintenant **entière** sur
 l'index d'exemple, et un projet qui découpe ses données en plusieurs index —
@@ -597,9 +672,9 @@ Ce qui reste, par ordre de gêne pour un projet réel : `rest_total_hits_as_int`
 `GET /_cat/aliases` et les colonnes `h` / `s` des `_cat`,
 `GET /{index}/_mapping/field/{champs}`, l'agrégation `filters` (la sœur
 plurielle de `filter`), `time_zone` sur un `range` (refusé explicitement), les
-alias **filtrés** (`filter`, refusé explicitement), les trois paramètres de
-mapping qui restent à Wagtail (`search_analyzer`, `copy_to`, `store`), et les
-analyzers des autres langues.
+alias **filtrés** (`filter`, refusé explicitement), `?stored_fields=` sur
+`GET /{index}/_doc/{id}` (le geste se fait par `_search`), et les analyzers des
+autres langues.
 
 Le seul échec silencieux connu du projet est **corrigé** : une recherche qui ne
 visait **aucun index** (cluster vide, ou motif sans correspondance) rendait 200
