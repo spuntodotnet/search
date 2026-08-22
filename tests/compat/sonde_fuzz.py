@@ -134,12 +134,94 @@ DOCS_GRAMMES = [("g1", {"g": "ecole normale"}), ("g2", {"g": "ecologie"}),
 TERMES = {"mappings": {"properties": {"k": {"type": "keyword"}}}}
 DOCS_TERMES = [(f"t{i:02d}", {"k": f"v{i:02d}"}) for i in range(20)]
 
+# Un champ flottant dont une valeur est **entiere** : c'est la seule forme qui
+# separe la cle `2` de la cle `2.0`, et aucun corpus ecrit a la main n'en
+# contient — le fuzzer, lui, tire `0.0` et `1024.0` expres.
+ENTIERS_FLOTTANTS = {"mappings": {"properties": {"f": {"type": "double"},
+                                                 "g": {"type": "float"}}}}
+DOCS_ENTIERS_FLOTTANTS = [("1", {"f": 2.0, "g": 2}), ("2", {"f": 3.5, "g": 3.5}),
+                          ("3", {})]
+
 # Le meme champ, mais avec des comptes inegaux : c'est ce qu'il faut pour que
 # `sum_other_doc_count` ait quelque chose a compter.
 INEGAUX = {"mappings": {"properties": {"k": {"type": "keyword"}}}}
 DOCS_INEGAUX = [(f"i{n:02d}", {"k": cle})
                 for n, cle in enumerate(["a"] * 5 + ["b"] * 3 + ["c"] * 2
                                         + ["d", "e", "f"])]
+
+
+# Un mot plus long que la limite des tokenizers, et un champ a n-grammes pour
+# le budget de `match_phrase_prefix`.
+LONGS = {
+    "settings": {"index": {"max_ngram_diff": 12}, "analysis": {
+        "filter": {"gr": {"type": "ngram", "min_gram": 1, "max_gram": 3,
+                          "preserve_original": True}},
+        "analyzer": {"ng": {"type": "custom", "tokenizer": "standard",
+                            "filter": ["lowercase", "gr"]}}}},
+    "mappings": {"properties": {
+        "t": {"type": "text"},
+        "g": {"type": "text", "analyzer": "ng"},
+        "u": {"type": "keyword"},
+    }},
+}
+DOCS_LONGS = [
+    ("1", {"t": "z" * 254, "g": "reduction", "u": "1"}),
+    ("2", {"t": "z" * 255, "g": "compact", "u": "2"}),
+    ("3", {"t": "z" * 300, "g": "hotel", "u": "3"}),
+    # Le mot long est **entre** deux mots courts : c'est lui qui montre que les
+    # positions de ce qui suit se decalent.
+    ("4", {"t": "avant " + "z" * 300 + " apres", "g": "reductio", "u": "4"}),
+    ("5", {"t": "avant apres", "g": "aluminium", "u": "5"}),
+]
+
+COPIES = {"mappings": {"properties": {
+    "titre": {"type": "text", "copy_to": "tout"},
+    "n": {"type": "long", "copy_to": "tout"},
+    "tout": {"type": "keyword"},
+    "a": {"type": "text", "copy_to": "b"},
+    "b": {"type": "text", "copy_to": "c"},
+    "c": {"type": "text"},
+    "u": {"type": "keyword"},
+}}}
+DOCS_COPIES = [
+    ("1", {"titre": "horla", "n": 7, "a": "zebre", "u": "1"}),
+    ("2", {"titre": "bel ami", "u": "2"}),
+    # Sans aucune source : c'est lui qui doit tomber dans le `missing`.
+    ("3", {"u": "3"}),
+]
+
+STOCKES = {"mappings": {"properties": {
+    "k": {"type": "keyword", "store": True},
+    "n": {"type": "integer", "store": True},
+    "f": {"type": "float", "store": True},
+    "d": {"type": "date", "format": "yyyy-MM-dd HH:mm:ss", "store": True},
+    "libre": {"type": "keyword"},
+    "l": {"type": "nested", "properties": {"x": {"type": "keyword", "store": True}}},
+    "u": {"type": "keyword"},
+}}}
+DOCS_STOCKES = [
+    ("1", {"k": ["b", "a", "b"], "n": [3, 1, 1], "f": 0.1, "libre": "dans le source",
+           "d": "2023-06-18 20:26:30", "l": [{"x": "e1"}, {"x": "e2"}], "u": "1"}),
+    ("2", {"libre": "seulement", "u": "2"}),
+]
+
+# Un champ indexe en grammes et cherche en mots entiers, et son jumeau sans
+# `search_analyzer` : les deux ensemble disent ce que le parametre change.
+RECHERCHE = {
+    "settings": {"index": {"max_ngram_diff": 12}, "analysis": {
+        "filter": {"eg": {"type": "edge_ngram", "min_gram": 1, "max_gram": 15}},
+        "analyzer": {"eg_a": {"type": "custom", "tokenizer": "standard",
+                              "filter": ["asciifolding", "lowercase", "eg"]}}}},
+    "mappings": {"properties": {
+        "t": {"type": "text", "analyzer": "eg_a", "search_analyzer": "standard"},
+        "s": {"type": "text", "analyzer": "eg_a"},
+        "u": {"type": "keyword"},
+    }},
+}
+DOCS_RECHERCHE = [
+    ("1", {"t": "Elan bleu", "s": "Elan bleu", "u": "1"}),
+    ("2", {"t": "Elephant", "s": "Elephant", "u": "2"}),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -434,6 +516,110 @@ CAS = [
      "meme cause, autre clause : chaque gramme y est developpe par son prefixe",
      {"query": {"match_phrase_prefix": {"g": "ecol"}}, "_source": False,
       "size": 10}, lambda r: sorted(h["_id"] for h in r["hits"]["hits"])),
+    # -- cles flottantes ---------------------------------------------------
+    # Trouve par la brique `store` / `copy_to`, et anterieur aux deux : une
+    # valeur entiere dans un champ flottant ressort avec le type JSON de
+    # l'entier chez tantivy. Un client qui type strictement sa reponse y lit un
+    # entier la ou ES lui donne un flottant.
+    (ENTIERS_FLOTTANTS, DOCS_ENTIERS_FLOTTANTS, "terms sur un double, cle entiere",
+     "ferrite rendait la cle `2` la ou ES rend `2.0`",
+     {"size": 0, "aggs": {"a": {"terms": {"field": "f"}}}}, agg("a")),
+    (ENTIERS_FLOTTANTS, DOCS_ENTIERS_FLOTTANTS, "terms sur un float, cle entiere",
+     "meme chose sur 32 bits",
+     {"size": 0, "aggs": {"a": {"terms": {"field": "g"}}}}, agg("a")),
+    (ENTIERS_FLOTTANTS, DOCS_ENTIERS_FLOTTANTS, "terms missing sur un double",
+     "la valeur de remplissage se pose **au type du champ** : `missing: 0` sur "
+     "un `double` doit rendre la cle `0.0`, pas `0`",
+     {"size": 0, "aggs": {"a": {"terms": {"field": "f", "missing": 0}}}}, agg("a")),
+    (ENTIERS_FLOTTANTS, DOCS_ENTIERS_FLOTTANTS, "range sur un double",
+     "les bornes d'un `range` sur un flottant portent la meme regle",
+     {"size": 0, "aggs": {"a": {"range": {"field": "f", "ranges": [
+         {"to": 3}, {"from": 3}]}}}}, agg("a")),
+
+    # -- copy_to -----------------------------------------------------------
+    (COPIES, DOCS_COPIES, "terms sur la cible d'un copy_to",
+     "la copie se fait a l'indexation, sur la valeur brute, et la cible la relit "
+     "avec **son** type : un `long` copie dans un `keyword` s'y indexe en `\"7\"`",
+     {"size": 0, "aggs": {"a": {"terms": {"field": "tout", "order": {"_key": "asc"}}}}},
+     agg("a")),
+    (COPIES, DOCS_COPIES, "terms missing sur une cible de copy_to",
+     "le document sans aucune source n'a pas de valeur dans la cible : c'est "
+     "lui qui doit tomber dans le bucket de remplissage",
+     {"size": 0, "aggs": {"a": {"terms": {"field": "tout", "missing": "vide",
+                                          "order": {"_key": "asc"}}}}}, agg("a")),
+    (COPIES, DOCS_COPIES, "la copie ne se chaine pas",
+     "la cible d'une cible ne recoit rien : `a -> b -> c` ne met rien de `a` "
+     "dans `c`",
+     {"size": 0, "aggs": {"a": {"terms": {"field": "c"}}}}, agg("a")),
+    (COPIES, DOCS_COPIES, "la copie n'entre pas dans le _source",
+     "elle est indexee, pas stockee : le document rendu est celui qu'on a ecrit",
+     {"size": 10, "sort": [{"u": {"order": "asc"}}]},
+     lambda r: [h.get("_source") for h in r.get("hits", {}).get("hits", [])]),
+
+    # -- store -------------------------------------------------------------
+    (STOCKES, DOCS_STOCKES, "stored_fields garde l'ordre du document",
+     "un champ stocke n'est pas une colonne : il garde l'ordre d'ecriture et "
+     "ses doublons, la ou `docvalue_fields` trie et dedoublonne",
+     {"size": 10, "sort": [{"u": {"order": "asc"}}], "stored_fields": ["k", "n"]},
+     lambda r: [h.get("fields") for h in r.get("hits", {}).get("hits", [])]),
+    (STOCKES, DOCS_STOCKES, "un champ non stocke n'a pas de cle",
+     "`stored_fields` ne reconstitue rien depuis le `_source`",
+     {"size": 10, "sort": [{"u": {"order": "asc"}}], "stored_fields": ["libre"]},
+     lambda r: [h.get("fields") for h in r.get("hits", {}).get("hits", [])]),
+    (STOCKES, DOCS_STOCKES, "un float stocke garde sa forme courte",
+     "Lucene le range sur 32 bits et le rend par le plus court texte qui s'y "
+     "relit : `0.1` reste `0.1`, la ou sa colonne rend `0.10000000149011612`",
+     {"size": 10, "sort": [{"u": {"order": "asc"}}], "stored_fields": ["f"]},
+     lambda r: [h.get("fields") for h in r.get("hits", {}).get("hits", [])]),
+    (STOCKES, DOCS_STOCKES, "fields l'emporte sur stored_fields",
+     "le meme champ des deux cotes : c'est `fields` qui rend la valeur, donc "
+     "le `format` qu'il demande. La valeur stockee ecrasait la valeur formatee, "
+     "en 200 (trouve par une plage de controle du fuzzer, graine 5150180)",
+     {"size": 10, "sort": [{"u": {"order": "asc"}}],
+      "fields": [{"field": "d", "format": "epoch_millis"}], "stored_fields": ["*"]},
+     lambda r: [h.get("fields") for h in r.get("hits", {}).get("hits", [])]),
+    (STOCKES, DOCS_STOCKES, "rien de stocke sous un nested",
+     "chez ES la valeur stockee vit dans le document enfant, invisible depuis "
+     "la racine : la rendre serait rendre **plus** qu'ES, en silence",
+     {"size": 10, "sort": [{"u": {"order": "asc"}}], "stored_fields": ["l.x"]},
+     lambda r: [h.get("fields") for h in r.get("hits", {}).get("hits", [])]),
+
+    # -- la limite des tokenizers -------------------------------------------
+    # Anterieurs aux trois parametres, et sortis par eux : `copy_to` a fait
+    # entrer un `keyword` de 300 caracteres dans un champ `text`, ce que rien
+    # n'avait jamais fait.
+    (LONGS, DOCS_LONGS, "un mot de plus de 255 caracteres est coupe, pas jete",
+     "Lucene coupe a `maxTokenLength` en morceaux de 255 caracteres ; ferrite "
+     "jetait le mot entier, donc le texte disparaissait de l'index en 200",
+     {"size": 10, "sort": [{"u": {"order": "asc"}}], "_source": False,
+      "query": {"prefix": {"t": {"value": "zzz"}}}}, hits),
+    (LONGS, DOCS_LONGS, "les morceaux prennent des positions successives",
+     "un mot coupe en deux consomme deux positions : tout ce qui suit se "
+     "decale, et une phrase posee dessus ne trouve plus rien",
+     {"size": 10, "sort": [{"u": {"order": "asc"}}], "_source": False,
+      "query": {"match_phrase": {"t": "avant apres"}}}, hits),
+    (LONGS, DOCS_LONGS, "un mot de 255 caracteres pile est garde",
+     "la limite est inclusive chez Lucene ; ferrite jetait deja a 255",
+     {"size": 10, "sort": [{"u": {"order": "asc"}}], "_source": False,
+      "query": {"term": {"t": "z" * 255}}}, hits),
+    (LONGS, DOCS_LONGS, "max_expansions est un budget par position",
+     "`MultiPhrasePrefixQuery` remplit un seul ensemble pour toute la position ; "
+     "un budget par terme developpait vingt fois plus de prefixes, et rendait "
+     "plus de documents qu'ES",
+     {"size": 10, "sort": [{"u": {"order": "asc"}}], "_source": False,
+      "query": {"match_phrase_prefix": {"g": {"query": "reductio"}}}}, hits),
+
+    # -- search_analyzer ---------------------------------------------------
+    (RECHERCHE, DOCS_RECHERCHE, "search_analyzer : la requete n'est pas decoupee",
+     "sans lui, la requete subit le meme decoupage que l'indexation et `elan` "
+     "rend tout ce qui commence par `e`",
+     {"size": 10, "sort": [{"u": {"order": "asc"}}], "_source": False,
+      "query": {"match": {"t": "elan"}}}, hits),
+    (RECHERCHE, DOCS_RECHERCHE, "sans search_analyzer, le meme champ ratisse large",
+     "le revers, mesure identique chez ES : ce n'est pas un defaut, c'est ce "
+     "que `search_analyzer` corrige",
+     {"size": 10, "sort": [{"u": {"order": "asc"}}], "_source": False,
+      "query": {"match": {"s": "elan"}}}, hits),
 ]
 
 # Ce que ferrite refuse **expres** plutot que de rendre un resultat faux. ES sait

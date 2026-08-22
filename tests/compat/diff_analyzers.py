@@ -56,6 +56,19 @@ TEXTES = [
     "naive noel coeur soeur",
     "naïve noël cœur sœur",
     "un tres tres tres long mot: anticonstitutionnellement",
+    # Un mot plus long que la limite des tokenizers de Lucene (255
+    # caracteres). Elle ne **jette** pas : elle **coupe**, et chaque morceau
+    # prend la position suivante — donc tout ce qui suit se decale. Aucun texte
+    # ecrit a la main n'a de mot si long ; ferrite jetait le mot entier, en
+    # silence, et un `copy_to` d'un `keyword` long vers un `text` l'a montre
+    # (fuzzer, graine 1717164).
+    "z" * 254,
+    "z" * 255,
+    "z" * 256,
+    "z" * 300,
+    "avant " + "z" * 300 + " apres",
+    "\u00e9" * 300,     # multi-octets : les offsets se comptent en UTF-16
+    "z" * 255 + " " + "z" * 256,
     "1885 1887 1880",
     "l'oeuvre d'une vie",
     "s'il te plait",

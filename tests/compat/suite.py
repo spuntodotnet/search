@@ -526,6 +526,19 @@ def noms_de_champ_reserves(es):
     assert ids(es.search(index="souligne",
                          query={"match": {"_all_text": "cheval"}})) == ["1"]
     assert ids(es.search(index="souligne", query={"term": {"_score": "abc"}})) == ["1"]
+    # Et ce que la réponse transporte les voit aussi : le préfixe `_` ne fait
+    # pas la métadonnée, c'est l'absence de champ qui la fait. Tant que la
+    # lecture s'arrêtait au préfixe, `_all_text` était invisible à `fields` —
+    # en 200 et sans un mot, sur les noms exacts que Wagtail emploie.
+    hit = es.search(index="souligne", source=False,
+                    fields=["_all_text", "_score"])["hits"]["hits"][0]
+    assert hit["fields"] == {"_all_text": ["le cheval du pre"],
+                             "_score": ["abc"]}, hit
+    hit = es.search(index="souligne", source=False, fields=["*"])["hits"]["hits"][0]
+    assert set(hit["fields"]) == {"_all_text", "_score"}, hit
+    hit = es.search(index="souligne", source=False,
+                    docvalue_fields=["_score"])["hits"]["hits"][0]
+    assert hit["fields"] == {"_score": ["abc"]}, hit
 
     # Un champ de métadonnées, lui, reste refusé — avec le message d'ES.
     for nom in ("_id", "_source", "_seq_no"):
@@ -907,8 +920,8 @@ def n_grammes(es):
     assert sorted(ids(es.search(index="auto", query={"match": {"titre": "ele"}}))) == ["1", "2"]
     # Et le revers, mesuré identique chez ES : faute de `search_analyzer`, la
     # requête est découpée en grammes elle aussi, donc `elan` rend les deux —
-    # `e` et `el` suffisent. C'est exactement ce que `search_analyzer` corrige,
-    # et il reste hors périmètre (voir docs/compat.md).
+    # `e` et `el` suffisent. C'est exactement ce que `search_analyzer` corrige
+    # (scénario `search_analyzer`).
     assert sorted(ids(es.search(index="auto", query={"match": {"titre": "elan"}}))) == ["1", "2"]
     assert ids(es.search(index="auto", query={"match": {"titre": "bleu"}})) == ["1"]
     # Le n-gramme cherche aussi **au milieu** d'un mot, ce qu'un préfixe ne fait pas.
@@ -946,6 +959,221 @@ def n_grammes(es):
         "analyzer": {"a": {"type": "custom", "tokenizer": "t"}}}}),
         contains="requires setting `custom_token_chars`")
     es.indices.delete(index="auto")
+
+
+@scenario
+def search_analyzer(es):
+    """Indexer en grammes, chercher le mot entier.
+
+    C'est le compagnon obligé des n-grammes, et c'est la déclaration que Wagtail
+    pose sur ses deux champs d'autocomplétion. Sans lui, `elan` rend tout ce qui
+    commence par `e` — mesuré identique chez ES, donc pas un défaut : ce que
+    `search_analyzer` corrige."""
+    es.options(ignore_status=404).indices.delete(index="sa")
+    es.indices.create(index="sa", settings={
+        "index": {"max_ngram_diff": 12},
+        "analysis": {
+            "filter": {"edgengram": {"type": "edge_ngram", "min_gram": 1, "max_gram": 15}},
+            "analyzer": {"edgengram_analyzer": {
+                "type": "custom", "tokenizer": "standard",
+                "filter": ["asciifolding", "lowercase", "edgengram"]}},
+        },
+    }, mappings={"properties": {
+        # La déclaration de Wagtail, mot pour mot.
+        "titre": {"type": "text", "analyzer": "edgengram_analyzer",
+                  "search_analyzer": "standard"},
+        "sans": {"type": "text", "analyzer": "edgengram_analyzer"},
+    }})
+    es.bulk(operations=[
+        {"index": {"_index": "sa", "_id": "1"}}, {"titre": "Élan bleu", "sans": "Élan bleu"},
+        {"index": {"_index": "sa", "_id": "2"}}, {"titre": "Éléphant", "sans": "Éléphant"},
+    ], refresh=True)
+    # Avec : la requête n'est pas découpée, `elan` ne trouve qu'Élan.
+    assert ids(es.search(index="sa", query={"match": {"titre": "elan"}})) == ["1"]
+    # Sans : elle l'est, et `e` suffit à tout ramener.
+    assert sorted(ids(es.search(index="sa", query={"match": {"sans": "elan"}}))) == ["1", "2"]
+    # L'indexation, elle, n'a pas changé : le préfixe se cherche toujours, et
+    # il ratisse d'autant plus large qu'il est court.
+    assert sorted(ids(es.search(index="sa", query={"match": {"titre": "ele"}}))) == ["2"]
+    assert sorted(ids(es.search(index="sa", query={"match": {"titre": "el"}}))) == ["1", "2"]
+
+    # `_analyze` sur un champ rejoue l'analyzer d'**indexation**, pas celui de
+    # recherche — c'est ce que fait ES (mesuré contre 8.15).
+    tokens = [t["token"] for t in
+              es.indices.analyze(index="sa", field="titre", text="elan")["tokens"]]
+    assert tokens == ["e", "el", "ela", "elan"], tokens
+
+    # Le mapping relu porte les deux analyzers ; un champ qui ne déclare que le
+    # second se voit nommer `default` comme index analyzer, comme chez ES.
+    props = es.indices.get_mapping(index="sa")["sa"]["mappings"]["properties"]
+    assert props["titre"] == {"type": "text", "analyzer": "edgengram_analyzer",
+                              "search_analyzer": "standard"}, props
+    es.indices.put_mapping(index="sa", properties={
+        "resume": {"type": "text", "search_analyzer": "keyword"}})
+    props = es.indices.get_mapping(index="sa")["sa"]["mappings"]["properties"]
+    assert props["resume"] == {"type": "text", "analyzer": "default",
+                               "search_analyzer": "keyword"}, props
+
+    # Ailleurs que sur un `text`, ES ne connaît pas le paramètre : sa phrase.
+    refused(lambda: es.indices.create(index="sa_ko", mappings={"properties": {
+        "k": {"type": "keyword", "search_analyzer": "standard"}}}),
+        contains="unknown parameter [search_analyzer] on mapper [k] of type [keyword]")
+    es.indices.delete(index="sa")
+
+
+@scenario
+def copy_to(es):
+    """Se refaire un `_all` : recopier plusieurs champs dans un seul.
+
+    C'est ainsi que Wagtail construit son `_all_text`. La copie se fait à
+    l'indexation, sur la valeur **brute** — la cible la relit avec son propre
+    type et son propre analyzer — et elle n'entre pas dans le `_source`."""
+    es.options(ignore_status=404).indices.delete(index="cp")
+    es.indices.create(index="cp", mappings={"properties": {
+        "titre": {"type": "text", "copy_to": "_all_text"},
+        "auteur": {"type": "keyword", "copy_to": ["_all_text", "gens"]},
+        "annee": {"type": "integer", "copy_to": "_all_text"},
+        "_all_text": {"type": "text"},
+        "gens": {"type": "text"},
+    }})
+    # Rendu en tableau, même déclaré en chaîne — comme ES.
+    props = es.indices.get_mapping(index="cp")["cp"]["mappings"]["properties"]
+    assert props["titre"]["copy_to"] == ["_all_text"], props
+    assert props["auteur"]["copy_to"] == ["_all_text", "gens"], props
+
+    es.index(index="cp", id="1", refresh=True,
+             document={"titre": "Le Horla", "auteur": "Maupassant", "annee": 1887})
+    # Un seul champ à interroger pour trois.
+    for terme in ("horla", "Maupassant", "1887"):
+        assert ids(es.search(index="cp", query={"match": {"_all_text": terme}})) == ["1"], terme
+    assert ids(es.search(index="cp", query={"match": {"gens": "Maupassant"}})) == ["1"]
+    # La copie n'est pas dans le `_source` : c'est un champ indexé, pas stocké.
+    assert es.get(index="cp", id="1")["_source"] == {
+        "titre": "Le Horla", "auteur": "Maupassant", "annee": 1887}
+    # `fields`, lui, la rend : la valeur propre de la cible d'abord, puis les
+    # sources par ordre de nom (mesuré contre ES 8.15).
+    hit = es.search(index="cp", fields=["_all_text"], query={"match_all": {}})["hits"]["hits"][0]
+    assert hit["fields"]["_all_text"] == ["1887", "Maupassant", "Le Horla"], hit["fields"]
+
+    # Une cible absente du mapping se crée toute seule, au type de la **valeur
+    # copiée** — un `integer` copié donne un `long`, pas un `text`.
+    es.options(ignore_status=404).indices.delete(index="cp2")
+    es.indices.create(index="cp2", mappings={"properties": {
+        "n": {"type": "integer", "copy_to": "tout"}}})
+    es.index(index="cp2", id="1", refresh=True, document={"n": 42})
+    props = es.indices.get_mapping(index="cp2")["cp2"]["mappings"]["properties"]
+    assert props["tout"] == {"type": "long"}, props
+    assert ids(es.search(index="cp2", query={"term": {"tout": 42}})) == ["1"]
+
+    # La copie ne se **chaîne** pas : la cible d'une cible ne reçoit rien.
+    es.options(ignore_status=404).indices.delete(index="cp3")
+    es.indices.create(index="cp3", mappings={"properties": {
+        "a": {"type": "text", "copy_to": "b"},
+        "b": {"type": "text", "copy_to": "c"},
+        "c": {"type": "text"}}})
+    es.index(index="cp3", id="1", refresh=True, document={"a": "zebre"})
+    assert ids(es.search(index="cp3", query={"match": {"b": "zebre"}})) == ["1"]
+    assert ids(es.search(index="cp3", query={"match": {"c": "zebre"}})) == []
+
+    # Les trois refus d'ES, avec ses phrases.
+    refused(lambda: es.indices.create(index="cp_ko", mappings={"properties": {
+        "t": {"type": "text", "fields": {"k": {"type": "keyword", "copy_to": "tout"}}},
+        "tout": {"type": "text"}}}),
+        contains="[copy_to] may not be used to copy from a multi-field: [t.k]")
+    refused(lambda: es.indices.create(index="cp_ko", mappings={"properties": {
+        "t": {"type": "text", "copy_to": "x.k"},
+        "x": {"type": "text", "fields": {"k": {"type": "keyword"}}}}}),
+        contains="[copy_to] may not be used to copy to a multi-field: [x.k]")
+    refused(lambda: es.indices.create(index="cp_ko", mappings={"properties": {
+        "t": {"type": "text", "copy_to": "o"},
+        "o": {"properties": {"a": {"type": "text"}}}}}),
+        contains="Cannot copy to field [o] since it is mapped as an object")
+    refused(lambda: es.indices.create(index="cp_ko", mappings={"properties": {
+        "t": {"type": "text", "copy_to": "l.a"},
+        "l": {"type": "nested", "properties": {"a": {"type": "text"}}}}}),
+        contains="Illegal combination of [copy_to] and [nested] mappings")
+    # Depuis un `nested` vers la racine, en revanche, ES l'autorise.
+    es.options(ignore_status=404).indices.delete(index="cp4")
+    es.indices.create(index="cp4", mappings={"properties": {
+        "l": {"type": "nested", "properties": {"a": {"type": "text", "copy_to": "tout"}}},
+        "tout": {"type": "text"}}})
+    es.index(index="cp4", id="1", refresh=True, document={"l": [{"a": "x"}, {"a": "y"}]})
+    assert ids(es.search(index="cp4", query={"match": {"tout": "y"}})) == ["1"]
+    for i in ("cp", "cp2", "cp3", "cp4"):
+        es.indices.delete(index=i)
+
+
+@scenario
+def store_et_stored_fields(es):
+    """`store: true`, et ce que `stored_fields` en fait.
+
+    C'est l'autre moitié du sujet de `stored_fields` : sans `store`, il n'y
+    avait rien à rendre. Wagtail relit son `pk` exactement comme ça, avec
+    `_source: false`."""
+    es.options(ignore_status=404).indices.delete(index="st")
+    es.indices.create(index="st", mappings={"properties": {
+        "pk": {"type": "keyword", "store": True},
+        "t": {"type": "text", "store": True},
+        "n": {"type": "long", "store": True},
+        "d": {"type": "date", "format": "yyyy/MM/dd", "store": True},
+        # Le défaut d'ES : accepté, et **non rendu** dans le mapping.
+        "sf": {"type": "text", "store": False},
+        "ns": {"type": "text"},
+    }})
+    props = es.indices.get_mapping(index="st")["st"]["mappings"]["properties"]
+    assert props["pk"] == {"type": "keyword", "store": True}, props
+    assert props["sf"] == {"type": "text"}, props
+
+    es.index(index="st", id="1", refresh=True, document={
+        "pk": "42", "t": ["bonjour monde", "chat"], "n": [3, 1, 1],
+        "d": "2026/03/15", "sf": "invisible", "ns": "invisible"})
+    hit = es.search(index="st", stored_fields=["pk", "t", "n", "d", "sf", "ns"],
+                    query={"match_all": {}})["hits"]["hits"][0]
+    # L'ordre du document, doublons compris — là où `docvalue_fields` trie et
+    # dédoublonne. Et un champ non stocké n'a **pas de clé**.
+    assert hit["fields"] == {"pk": ["42"], "t": ["bonjour monde", "chat"],
+                             "n": [3, 1, 1], "d": ["2026/03/15"]}, hit["fields"]
+    assert "_source" not in hit, hit
+    hit = es.search(index="st", docvalue_fields=["n"], query={"match_all": {}})["hits"]["hits"][0]
+    assert hit["fields"]["n"] == [1, 1, 3], hit["fields"]
+
+    # Le geste de Wagtail : relire une seule clé, sans le `_source`.
+    hit = es.search(index="st", stored_fields=["pk"], source=False,
+                    query={"match_all": {}})["hits"]["hits"][0]
+    assert hit["fields"]["pk"][0] == "42", hit
+
+    # `_doc` et `_mget` lisent les mêmes champs stockés, au même endroit :
+    # livrer `store` pour la seule route `_search` en aurait fait un paramètre
+    # qui marche « sauf là ».
+    doc = es.get(index="st", id="1", stored_fields=["pk", "n"])
+    assert doc["fields"] == {"pk": ["42"], "n": [3, 1, 1]}, doc
+    assert "_source" not in doc, doc
+    # `_source` cité dans la liste le ramène, ici comme sur une recherche.
+    doc = es.get(index="st", id="1", stored_fields=["pk", "_source"])
+    assert doc["_source"]["pk"] == "42", doc
+    lot = es.mget(index="st", body={"docs": [
+        {"_id": "1"},
+        {"_id": "1", "stored_fields": ["pk"]},
+    ]})["docs"]
+    assert "fields" not in lot[0] and lot[0]["_source"]["pk"] == "42", lot[0]
+    assert lot[1]["fields"] == {"pk": ["42"]} and "_source" not in lot[1], lot[1]
+
+    # Redéclarer le même champ à l'identique est licite — c'est ce que fait une
+    # application qui déclare le même champ pour deux de ses modèles. Le
+    # **changer** ne l'est pas, chez ES non plus.
+    es.indices.put_mapping(index="st", properties={"pk": {"type": "keyword", "store": True}})
+    refused(lambda: es.indices.put_mapping(index="st", properties={
+        "pk": {"type": "keyword", "store": False}}),
+        contains="Cannot update parameter [store] from [true] to [false]")
+
+    # Sur un objet, ES ne connaît pas le paramètre — refusé des deux côtés.
+    refused(lambda: es.indices.create(index="st_ko", mappings={"properties": {
+        "o": {"type": "object", "store": True, "properties": {"a": {"type": "text"}}}}}),
+        contains="store")
+    refused(lambda: es.indices.create(index="st_ko", mappings={"properties": {
+        "t": {"type": "text", "store": "oui"}}}),
+        contains="only [true] or [false] are allowed")
+    es.indices.delete(index="st")
 
 
 @scenario
@@ -3163,12 +3391,12 @@ def stored_fields_change_la_forme(es):
         body={"stored_fields": "_none_", "fields": ["titre"]}))
     assert err["type"] == "action_request_validation_exception", err
 
-    # `store` reste refuse au mapping : c'est ce refus-la qui rend l'absence de
-    # champ stocke exacte plutot qu'approximative.
-    refused(lambda: es.indices.create(
-        index="compat_store", mappings={"properties": {
-            "a": {"type": "keyword", "store": True}}}),
-        contains="[store]")
+    # Un champ que le mapping ne stocke pas ne rend rien — c'est ce qui rend
+    # l'absence de valeur exacte plutôt qu'approximative : `stored_fields` ne
+    # reconstitue pas depuis le `_source`. Ce que `store: true` change est
+    # mesuré par le scénario `store_et_stored_fields`.
+    h = es.search(index=INDEX, stored_fields=["titre", "*"])["hits"]["hits"][0]
+    assert "fields" not in h, h
 
     # Painless est hors perimetre : `script_fields` non vide est refuse, mais
     # l'objet **vide** ne definit aucun champ et passe, comme chez ES.
