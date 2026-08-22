@@ -371,12 +371,12 @@ fn field_match(
     let MappedField {
         field,
         ty,
-        analyzer,
+        search_analyzer,
         ..
     } = ctx.field(field_name, clause)?;
     Ok(match ty.kind() {
         FieldKind::Text => {
-            let tokens = ctx.analyze(&query_text(field_name, value, clause)?, analyzer)?;
+            let tokens = ctx.analyze(&query_text(field_name, value, clause)?, search_analyzer)?;
             // `operator: and` porte sur les **positions**, pas sur les termes.
             // Tant qu'un analyzer posait un terme par position les deux se
             // confondaient ; un filtre a n-grammes en pose dix au meme endroit,
@@ -671,13 +671,13 @@ fn field_phrase(
     let MappedField {
         field,
         ty,
-        analyzer,
+        search_analyzer,
         ..
     } = ctx.field(field_name, clause)?;
 
     let inner: Box<dyn Query> = match ty.kind() {
         FieldKind::Text => {
-            let tokens = ctx.analyze(&query_text(field_name, value, clause)?, analyzer)?;
+            let tokens = ctx.analyze(&query_text(field_name, value, clause)?, search_analyzer)?;
             // Une phrase n'est pas une suite de termes, c'est une suite de
             // **positions** — et un analyzer a n-grammes en pose plusieurs a
             // la meme.
@@ -795,29 +795,31 @@ fn field_phrase_prefix(
     let MappedField {
         field,
         ty,
-        analyzer,
+        search_analyzer,
         ..
     } = ctx.field(field_name, clause)?;
 
     let inner: Box<dyn Query> = match ty.kind() {
         FieldKind::Text => {
-            let tokens = ctx.analyze(&query_text(field_name, value, clause)?, analyzer)?;
+            let tokens = ctx.analyze(&query_text(field_name, value, clause)?, search_analyzer)?;
             // Plusieurs termes a la meme position : meme regle que dans
             // `field_phrase`. Une **seule** position, ce sont des
             // alternatives, et chacune se developpe par son prefixe ; a
             // plusieurs, il faudrait la `MultiPhraseQuery` que tantivy n'a pas.
             let une_seule_position = tokens.first().map(|t| t.0) == tokens.last().map(|t| t.0);
             if tokens.len() > 1 && une_seule_position {
-                let mut clauses: Vec<(Occur, Box<dyn Query>)> = Vec::new();
-                for (_, t) in &tokens {
-                    for dev in termes_avec_prefixe(ctx, field, t, max_expansions)? {
-                        let q: Box<dyn Query> = Box::new(TermQuery::new(
-                            tantivy::Term::from_field_text(field, &dev),
-                            IndexRecordOption::WithFreqs,
-                        ));
-                        clauses.push((Occur::Should, q));
-                    }
-                }
+                let prefixes: Vec<&str> = tokens.iter().map(|(_, t)| t.as_str()).collect();
+                let clauses: Vec<(Occur, Box<dyn Query>)> =
+                    termes_du_groupe(ctx, field, &prefixes, max_expansions)?
+                        .into_iter()
+                        .map(|dev| {
+                            let q: Box<dyn Query> = Box::new(TermQuery::new(
+                                tantivy::Term::from_field_text(field, &dev),
+                                IndexRecordOption::WithFreqs,
+                            ));
+                            (Occur::Should, q)
+                        })
+                        .collect();
                 return Ok(if clauses.is_empty() {
                     Box::new(EmptyQuery)
                 } else {
@@ -931,35 +933,60 @@ fn termes_avec_prefixe(
     prefixe: &str,
     max: u32,
 ) -> EsResult<Vec<String>> {
+    termes_du_groupe(ctx, field, std::slice::from_ref(&prefixe), max)
+}
+
+/// Le meme developpement pour **tous les termes d'une position**, avec un
+/// budget commun.
+///
+/// `max_expansions` est chez Lucene un budget **par position**, pas par terme :
+/// `MultiPhrasePrefixQuery` remplit un seul ensemble en parcourant les termes de
+/// la position dans l'ordre de l'analyzer, et s'arrete des qu'il est plein. La
+/// distinction ne se voyait pas tant qu'un analyzer posait un terme par
+/// position ; un filtre a n-grammes en pose vingt, et un budget par terme en
+/// developpe alors vingt fois plus. ferrite rendait **un document de plus**
+/// qu'ES sur un `match_phrase_prefix` d'un seul mot — en 200 (trouve par une
+/// plage de controle du fuzzer, graine 4242075).
+fn termes_du_groupe(
+    ctx: &QueryCtx,
+    field: tantivy::schema::Field,
+    prefixes: &[&str],
+    max: u32,
+) -> EsResult<Vec<String>> {
     let mut trouves = std::collections::BTreeSet::new();
-    for segment in ctx.searcher.segment_readers() {
-        let inverse = segment
-            .inverted_index(field)
-            .map_err(|e| EsError::internal(format!("index inverse illisible : {e}")))?;
-        let mut flux = inverse
-            .terms()
-            .range()
-            .ge(prefixe.as_bytes())
-            .into_stream()
-            .map_err(|e| EsError::internal(format!("dictionnaire de termes illisible : {e}")))?;
-        let mut pris = 0u32;
-        while flux.advance() {
-            let Ok(terme) = std::str::from_utf8(flux.key()) else {
-                continue;
-            };
-            if !terme.starts_with(prefixe) {
-                break;
-            }
-            trouves.insert(terme.to_string());
-            pris += 1;
-            // Chaque segment est trie : ses `max` premiers termes suffisent a
-            // contenir les `max` premiers de leur union.
-            if pris >= max {
-                break;
+    for prefixe in prefixes {
+        for segment in ctx.searcher.segment_readers() {
+            let inverse = segment
+                .inverted_index(field)
+                .map_err(|e| EsError::internal(format!("index inverse illisible : {e}")))?;
+            let mut flux = inverse
+                .terms()
+                .range()
+                .ge(prefixe.as_bytes())
+                .into_stream()
+                .map_err(|e| {
+                    EsError::internal(format!("dictionnaire de termes illisible : {e}"))
+                })?;
+            while flux.advance() {
+                // Le budget est commun : il se lit sur l'ensemble deja rempli,
+                // pas sur ce que ce prefixe-ci a pris.
+                if trouves.len() as u32 >= max {
+                    break;
+                }
+                let Ok(terme) = std::str::from_utf8(flux.key()) else {
+                    continue;
+                };
+                if !terme.starts_with(*prefixe) {
+                    break;
+                }
+                trouves.insert(terme.to_string());
             }
         }
+        if trouves.len() as u32 >= max {
+            break;
+        }
     }
-    Ok(trouves.into_iter().take(max as usize).collect())
+    Ok(trouves.into_iter().collect())
 }
 
 /// `exists` : les documents qui ont au moins une valeur pour ce champ.
@@ -1238,6 +1265,16 @@ fn range_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     boost(inner, spec.get("boost"))
 }
 
+/// L'ecriture camelCase que `bool` accepte **encore** chez Elasticsearch.
+///
+/// C'est le seul alias de ce genre que la 8.15 serve : `minimumShouldMatch`,
+/// `adjustPureNegative`, `maxExpansions`, `caseInsensitive`, `tieBreaker`,
+/// `scoreMode` sont tous refuses (mesure, un par un). Le refuser ici n'etait
+/// donc pas un manque de ferrite mais un refus de trop, du meme genre que
+/// l'`index: true` de Gitea — et il rendait Wagtail inutilisable, qui l'ecrit
+/// sur chacune de ses negations.
+const MUST_NOT_CAMEL: &str = "mustNot";
+
 fn bool_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     let obj = as_object(body, "bool")?;
     expect_only(
@@ -1247,11 +1284,17 @@ fn bool_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
             "should",
             "filter",
             "must_not",
+            MUST_NOT_CAMEL,
             "minimum_should_match",
             "boost",
         ],
         "bool",
     )?;
+    if obj.contains_key("must_not") && obj.contains_key(MUST_NOT_CAMEL) {
+        return Err(EsError::parsing(
+            "[bool] : [must_not] et [mustNot] sont deux ecritures du meme parametre",
+        ));
+    }
 
     let mut clauses: Vec<(Occur, Box<dyn Query>)> = Vec::new();
     let mut should_count = 0usize;
@@ -1262,6 +1305,7 @@ fn bool_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         ("filter", Occur::Must),
         ("should", Occur::Should),
         ("must_not", Occur::MustNot),
+        (MUST_NOT_CAMEL, Occur::MustNot),
     ] {
         let Some(v) = obj.get(key) else { continue };
         let list: Vec<&Value> = match v {
@@ -1928,11 +1972,17 @@ fn clause_nested(v: &Value, ctx: &QueryCtx, racine: &str) -> EsResult<Clause> {
                     "filter",
                     "should",
                     "must_not",
+                    MUST_NOT_CAMEL,
                     "minimum_should_match",
                     "boost",
                 ],
                 "nested.bool",
             )?;
+            if o.contains_key("must_not") && o.contains_key(MUST_NOT_CAMEL) {
+                return Err(EsError::parsing(
+                    "[bool] : [must_not] et [mustNot] sont deux ecritures du meme parametre",
+                ));
+            }
             let liste = |cle: &str| -> EsResult<Vec<Clause>> {
                 match o.get(cle) {
                     None => Ok(Vec::new()),
@@ -1946,7 +1996,8 @@ fn clause_nested(v: &Value, ctx: &QueryCtx, racine: &str) -> EsResult<Clause> {
             let mut et = liste("must")?;
             et.extend(liste("filter")?);
             let should = liste("should")?;
-            let must_not = liste("must_not")?;
+            let mut must_not = liste("must_not")?;
+            must_not.extend(liste(MUST_NOT_CAMEL)?);
             if !should.is_empty() {
                 // Meme regle que chez ES : `should` seul exige un match, `should`
                 // accompagne d'un `must` est facultatif sauf minimum explicite.
@@ -2059,7 +2110,10 @@ fn sans_negations(v: &Value) -> Value {
     match v {
         Value::Object(o) => Value::Object(
             o.iter()
-                .filter(|(k, _)| k.as_str() != "must_not")
+                // Les deux ecritures : oublier la seconde rendrait le
+                // pre-filtre **plus etroit** que la requete, et un document
+                // dont une autre ligne satisfait la clause disparaitrait.
+                .filter(|(k, _)| k.as_str() != "must_not" && k.as_str() != MUST_NOT_CAMEL)
                 .map(|(k, sous)| (k.clone(), sans_negations(sous)))
                 .collect(),
         ),
