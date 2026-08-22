@@ -10,8 +10,8 @@ use std::collections::BTreeMap;
 
 use serde_json::{json, Map, Value};
 use tantivy::tokenizer::{
-    AsciiFoldingFilter, Language, LowerCaser, RawTokenizer, RemoveLongFilter, StopWordFilter,
-    TextAnalyzer, TokenizerManager, WhitespaceTokenizer,
+    AsciiFoldingFilter, Language, LowerCaser, RawTokenizer, StopWordFilter, TextAnalyzer,
+    TokenizerManager, WhitespaceTokenizer,
 };
 
 use crate::error::{EsError, EsResult};
@@ -106,19 +106,21 @@ impl Analyzer {
             // Les analyzers sur mesure sont enregistres par `Analysis::register`.
             Self::Custom(_) => TextAnalyzer::builder(RawTokenizer::default()).build(),
             Self::Standard => TextAnalyzer::builder(StandardTokenizer)
-                .filter(RemoveLongFilter::limit(MAX_TOKEN_LEN))
+                .filter(DecoupeLong::limit(MAX_TOKEN_LEN))
                 .filter(LowerCaser)
                 .build(),
             Self::Simple => TextAnalyzer::builder(LetterTokenizer)
+                .filter(DecoupeLong::limit(MAX_TOKEN_LEN))
                 .filter(LowerCaser)
                 .build(),
             Self::Whitespace => TextAnalyzer::builder(WhitespaceTokenizer::default())
-                .filter(RemoveLongFilter::limit(MAX_TOKEN_LEN))
+                .filter(DecoupeLong::limit(MAX_TOKEN_LEN))
                 .build(),
             Self::Keyword => TextAnalyzer::builder(RawTokenizer::default()).build(),
             // ES batit `stop` sur le tokenizer « lettres » (les chiffres sont
             // donc des separateurs), pas sur `standard`.
             Self::Stop => TextAnalyzer::builder(LetterTokenizer)
+                .filter(DecoupeLong::limit(MAX_TOKEN_LEN))
                 .filter(LowerCaser)
                 .filter(StopWordFilter::new(Language::English).unwrap())
                 .build(),
@@ -126,7 +128,7 @@ impl Analyzer {
             // agit **avant** les minuscules (elle est insensible a la casse),
             // et le stemmer en dernier.
             Self::French => TextAnalyzer::builder(StandardTokenizer)
-                .filter(RemoveLongFilter::limit(MAX_TOKEN_LEN))
+                .filter(DecoupeLong::limit(MAX_TOKEN_LEN))
                 .filter(Reecrit(elision))
                 .filter(LowerCaser)
                 .filter(StopWordFilter::remove(
@@ -137,7 +139,7 @@ impl Analyzer {
             // `EnglishAnalyzer` : le possessif avant les minuscules, Porter en
             // dernier.
             Self::English => TextAnalyzer::builder(StandardTokenizer)
-                .filter(RemoveLongFilter::limit(MAX_TOKEN_LEN))
+                .filter(DecoupeLong::limit(MAX_TOKEN_LEN))
                 .filter(Reecrit(possessif))
                 .filter(LowerCaser)
                 .filter(StopWordFilter::remove(
@@ -736,7 +738,7 @@ impl CustomAnalyzer {
         // videerait un `keyword` + filtre `edge_ngram` pose sur un titre long,
         // en silence, la ou ES rend ses grammes.
         if self.tokenizer.limite_de_token() {
-            b = b.filter_dynamic(RemoveLongFilter::limit(MAX_TOKEN_LEN));
+            b = b.filter_dynamic(DecoupeLong::limit(MAX_TOKEN_LEN));
         }
         for f in &self.filtres {
             b = match f {
@@ -1054,6 +1056,131 @@ impl<T: tantivy::tokenizer::Tokenizer> tantivy::tokenizer::Tokenizer for Reecrit
             f: self.f,
         }
     }
+}
+
+/// Le decoupage a 255 caracteres que font les tokenizers de Lucene.
+///
+/// `maxTokenLength` n'est pas une limite qui **jette** : `CharTokenizer` (et
+/// `StandardTokenizer`) coupent le token en morceaux de 255 caracteres, chacun
+/// a la position suivante. ferrite jetait — donc un mot de plus de 255
+/// caracteres disparaissait de l'index, et **decalait les positions de tout ce
+/// qui suit**. En 200, sans un mot : c'est exactement le genre d'ecart que ce
+/// depot cherche a ne pas laisser passer, et il ne se voyait pas tant qu'aucun
+/// texte du corpus n'avait de mot si long. Trouve par une plage de controle du
+/// fuzzer (graine 1717164), ou un `keyword` de 300 caracteres recopie par
+/// `copy_to` dans un `text` ne se retrouvait plus.
+///
+/// Le compte est en **caracteres**, comme chez Lucene — pas en octets.
+#[derive(Clone)]
+pub struct DecoupeLong {
+    max: usize,
+}
+
+impl DecoupeLong {
+    pub fn limit(max: usize) -> Self {
+        Self { max }
+    }
+}
+
+impl tantivy::tokenizer::TokenFilter for DecoupeLong {
+    type Tokenizer<T: tantivy::tokenizer::Tokenizer> = DecoupeLongTokenizer<T>;
+
+    fn transform<T: tantivy::tokenizer::Tokenizer>(self, tokenizer: T) -> Self::Tokenizer<T> {
+        DecoupeLongTokenizer {
+            tokenizer,
+            max: self.max,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct DecoupeLongTokenizer<T> {
+    tokenizer: T,
+    max: usize,
+}
+
+impl<T: tantivy::tokenizer::Tokenizer> tantivy::tokenizer::Tokenizer for DecoupeLongTokenizer<T> {
+    type TokenStream<'a> = DecoupeLongStream<T::TokenStream<'a>>;
+
+    fn token_stream<'a>(&'a mut self, text: &'a str) -> Self::TokenStream<'a> {
+        DecoupeLongStream {
+            tail: self.tokenizer.token_stream(text),
+            max: self.max,
+            position: 0,
+            morceaux: Vec::new(),
+            token: tantivy::tokenizer::Token::default(),
+        }
+    }
+}
+
+pub struct DecoupeLongStream<T> {
+    tail: T,
+    max: usize,
+    /// La position **renumerotee** : un token coupe en trois en consomme trois,
+    /// et tout ce qui suit se decale d'autant. C'est ce que fait Lucene, ou le
+    /// decoupage a lieu dans le tokenizer lui-meme.
+    position: usize,
+    /// Les morceaux qui restent a rendre du token courant.
+    morceaux: Vec<(String, usize, usize)>,
+    token: tantivy::tokenizer::Token,
+}
+
+impl<T: tantivy::tokenizer::TokenStream> tantivy::tokenizer::TokenStream for DecoupeLongStream<T> {
+    fn advance(&mut self) -> bool {
+        if self.morceaux.is_empty() {
+            if !self.tail.advance() {
+                return false;
+            }
+            let t = self.tail.token();
+            self.morceaux = decouper(&t.text, t.offset_from, self.max);
+            self.morceaux.reverse();
+        }
+        let (texte, de, a) = self.morceaux.pop().expect("un morceau au moins");
+        self.token = tantivy::tokenizer::Token {
+            offset_from: de,
+            offset_to: a,
+            position: self.position,
+            text: texte,
+            position_length: 1,
+        };
+        self.position += 1;
+        true
+    }
+
+    fn token(&self) -> &tantivy::tokenizer::Token {
+        &self.token
+    }
+
+    fn token_mut(&mut self) -> &mut tantivy::tokenizer::Token {
+        &mut self.token
+    }
+}
+
+/// Les morceaux d'un token, avec leurs offsets **en octets** dans le texte
+/// d'origine. Un seul morceau quand il tient dans la limite.
+fn decouper(texte: &str, debut: usize, max: usize) -> Vec<(String, usize, usize)> {
+    if texte.chars().count() <= max {
+        return vec![(texte.to_string(), debut, debut + texte.len())];
+    }
+    let mut out = Vec::new();
+    let mut morceau = String::new();
+    let mut de = debut;
+    let mut n = 0usize;
+    for c in texte.chars() {
+        morceau.push(c);
+        n += 1;
+        if n == max {
+            let a = de + morceau.len();
+            out.push((std::mem::take(&mut morceau), de, a));
+            de = a;
+            n = 0;
+        }
+    }
+    if !morceau.is_empty() {
+        let a = de + morceau.len();
+        out.push((morceau, de, a));
+    }
+    out
 }
 
 pub struct ReecritStream<T> {
