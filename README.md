@@ -122,17 +122,26 @@ L'image finale est un `scratch` qui ne contient que le binaire statique.
 
 ## État
 
-**Une vraie application tourne dessus, sans être modifiée.** [Gitea](https://github.com/go-gitea/gitea)
-v1.27.2 — la forge Git — indexe ses issues dans Elasticsearch et les cherche
-avec `bool`, `multi_match`, `term`, `terms`, `range` et un tri. Sa propre suite
-d'intégration, lancée contre ferrite, passe ses **34 cas** : exactement les
-mêmes que contre un vrai Elasticsearch 8.15.0, l'arbre du dépôt vérifié intact.
-Ce qu'il a fallu corriger pour y arriver tient en un paramètre de mapping —
-`index: true`, le défaut d'ES, qu'ES lui-même ne conserve pas — et **ni le
-corpus de 5 311 requêtes ni la suite REST d'Elastic ne l'avaient vu** : une
-application ne commence pas par une recherche, elle commence par créer son
-index. La recette, le relevé de ce que l'application envoie et le second
-candidat mesuré sont dans [`docs/application.md`](docs/application.md).
+**Deux vraies applications tournent dessus, sans être modifiées.**
+[Gitea](https://github.com/go-gitea/gitea) v1.27.2 — la forge Git — indexe ses
+issues dans Elasticsearch et les cherche avec `bool`, `multi_match`, `term`,
+`terms`, `range` et un tri : sa propre suite d'intégration passe ses **34 cas**,
+exactement les mêmes que contre un vrai Elasticsearch 8.15.0.
+[Wagtail](https://github.com/wagtail/wagtail) v7.1 — un CMS Django, qui passe
+par le client officiel `elasticsearch-py` 8.x, pose ses propres analyzers à
+n-grammes et se refait un `_all` — passe les **83 tests** de sa suite de
+backend. Dans les deux cas l'arbre du dépôt est vérifié intact avant de
+conclure.
+
+Ce qu'il a fallu corriger pour y arriver n'était, la plupart du temps, **pas un
+manque de moteur** : `index: true`, le défaut d'ES qu'ES lui-même ne conserve
+pas ; tout nom de champ commençant par `_`, qu'ES n'interdit que pour ses
+propres métadonnées ; `{"bool": {"mustNot": …}}`, l'écriture dépréciée qu'ES
+sert encore. Aucun de ces refus de trop n'était visible depuis le corpus de
+5 311 requêtes ni depuis la suite REST d'Elastic : une application ne commence
+pas par une recherche, elle commence par créer son index. La recette et le
+relevé de ce que ces applications envoient sont dans
+[`docs/application.md`](docs/application.md).
 
 **Ce qui marche** : un client Elasticsearch officiel non modifié crée un index
 avec un mapping explicite, indexe des documents via `_bulk`, et les retrouve via
@@ -153,7 +162,7 @@ Les **agrégations** sont là aussi : métriques, `terms`, `range`, `histogram`,
 `date_histogram`, et sous-agrégations — de quoi construire des facettes.
 
 Les **analyzers** `standard`, `simple`, `whitespace`, `keyword`, `stop`,
-`english` et `french` sont vérifiés identiques à ceux d'ES sur 210 textes —
+`english` et `french` sont vérifiés identiques à ceux d'ES sur 217 textes —
 **positions et offsets compris** — et `_analyze` permet de le constater. Les
 autres langues restent **refusées** : leur stemmer n'est pas porté, et porter le
 nom d'ES en indexant autre chose changerait silencieusement les résultats.
@@ -163,7 +172,15 @@ analyzers `custom`, ses tokenizers et ses filtres. Les **n-grammes** (`ngram`,
 `edge_ngram`) en font partie, côté tokenizer comme côté filtre — c'est la brique
 de l'**autocomplétion « au fil de la frappe »**, celle qui travaille à
 l'indexation là où `match_phrase_prefix` travaille à la requête.
-`index.max_ngram_diff` est honoré, avec le message d'ES.
+`index.max_ngram_diff` est honoré, avec le message d'ES. Son compagnon obligé
+l'est aussi : `search_analyzer` fait chercher le **mot entier** là où on a
+indexé des grammes — sans lui, `elan` rend tout ce qui commence par `e`, chez ES
+comme ici.
+
+Le mapping sert aussi `copy_to` — recopier la valeur brute d'un champ dans une
+ou plusieurs cibles à l'indexation, la façon dont on se refait un `_all` — et
+`store`, qui conserve la valeur à part du `_source` pour que `stored_fields` la
+relise sans rapatrier tout le document.
 
 Côté API de documents : `_update` (fusion partielle, `upsert`), `_mget`,
 `_count`, l'action `update` du `_bulk`, le versionnage optimiste
@@ -202,11 +219,11 @@ de l'index comme à sa création explicite.
 `stored_fields`. Les trois ne lisent pas au même endroit, et c'est tout le
 sujet : `fields` lit le `_source` (il garde donc l'ordre du document et ses
 doublons), `docvalue_fields` lit les colonnes (donc trié, et dédoublonné sur un
-`keyword`), `stored_fields` lit les champs stockés — donc rien, puisque `store`
-est refusé au mapping, exactement ce que rend un Elasticsearch dont le mapping
-ne le porte pas. La **forme** est ce qui compte pour un client : chaque valeur
-est un tableau, même pour un champ mono-valué, et un champ absent n'a pas de
-clé.
+`keyword`), `stored_fields` lit les champs que le mapping déclare `store: true`
+— et rien pour les autres, exactement ce que rend un Elasticsearch dont le
+mapping ne le porte pas. La **forme** est ce qui compte pour un client : chaque
+valeur est un tableau, même pour un champ mono-valué, et un champ absent n'a pas
+de clé.
 
 **Modifier ou purger par requête** — ce qu'un script de maintenance fait tous
 les jours — passe désormais : `_delete_by_query` (purger les documents d'un
@@ -239,8 +256,8 @@ réelles** — la documentation de référence d'ES 8.15, les tracks Rally d'Ela
 les tests des clients officiels et le code de 184 dépôts open source — la
 question posée est « celle-ci passerait-elle **entièrement** ? », parce qu'une
 requête supportée à 90 % est une requête qui échoue. Réponse : **93,2 % des
-requêtes trouvées dans du code d'application**, 39,6 % des exemples de la
-documentation, 27,2 % des tracks de benchmark. L'écart entre ces trois nombres
+requêtes trouvées dans du code d'application**, 39,8 % des exemples de la
+documentation, 28,6 % des tracks de benchmark. L'écart entre ces trois nombres
 est le résultat ; la méthode, les sources et les biais sont dans
 [`docs/usage.md`](docs/usage.md), le corpus est publié avec.
 
@@ -257,8 +274,9 @@ Cet inventaire est aussi ce qui **borne un tirage au sort**. Un fuzzer
 différentiel ([`tests/compat/fuzz_vs_es.py`](tests/compat/fuzz_vs_es.py)) génère
 des mappings, des documents et des requêtes dans le périmètre que `compat.yaml`
 déclare, les pose à ferrite **et** à un vrai Elasticsearch 8.15, et compare les
-réponses champ par champ : **3 950 cas, 174 207 requêtes, 0 divergence réelle**
-sur quinze plages de graines, dont huit jamais utilisées pour corriger. Il
+réponses champ par champ : **2 000 cas, 88 367 requêtes, 1 divergence ouverte**
+(un ordre que BM25 sépare, déclarée) sur huit plages de graines, dont cinq
+jamais utilisées pour corriger. Il
 s'étalonne d'abord contre deux Elasticsearch — tant qu'il n'y est pas à zéro, ce
 qu'il dit de ferrite ne vaut rien. Son premier passage a trouvé vingt et un défauts
 que personne n'avait signalés, tous silencieux ; ils sont racontés dans

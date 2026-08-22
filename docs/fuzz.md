@@ -105,47 +105,44 @@ avec sa raison, et `--tout` les imprime.
 
 ## La mesure du jour
 
+Le générateur a changé — trois briques de plus (`search_analyzer`, `copy_to`,
+`store`) — donc **toutes les graines ont changé de sens** : la campagne
+précédente ne mesurait plus les mêmes cas, et ses chiffres ne sont pas
+reconduits. Ce tableau est celui de ce passage, refait en entier.
+
 ```
-graines 1–400          400 cas, 17 655 requêtes, 0 divergence réelle
-graines 5000–5299      300 cas, 13 241 requêtes, 0 divergence réelle
-graines 900000+        250 cas, 11 061 requêtes, 0 divergence réelle
-graines 4242000+       250 cas, 11 010 requêtes, 0 divergence réelle
-graines 31337000+      250 cas, 11 027 requêtes, 0 divergence réelle
-graines 7770000+       250 cas, 11 073 requêtes, 0 divergence réelle
-graines 6060000+       250 cas, 10 992 requêtes, 0 divergence réelle
-graines 8181000+       250 cas, 11 036 requêtes, 0 divergence réelle
-graines 9494000+       250 cas, 11 064 requêtes, 0 divergence réelle
-graines 5150000+       250 cas, 11 040 requêtes, 0 divergence réelle
-graines 2727000+       250 cas, 10 986 requêtes, 0 divergence réelle
-graines 1414000+       250 cas, 11 047 requêtes, 0 divergence réelle
-graines 3535000+       250 cas, 10 899 requêtes, 0 divergence réelle
-graines 6262000+       250 cas, 10 984 requêtes, 0 divergence réelle
-graines 8383000+       250 cas, 11 092 requêtes, 0 divergence réelle
+graines 5150000+       250 cas, 11 020 requêtes, 0 divergence réelle
+graines 6260000+       250 cas, 11 131 requêtes, 0 divergence réelle
+graines 7370000+       250 cas, 11 037 requêtes, 0 divergence réelle
+graines 3535000+       250 cas, 10 959 requêtes, 0 divergence réelle
+graines 9494000+       250 cas, 11 098 requêtes, 0 divergence réelle
+graines 4242000+       250 cas, 11 082 requêtes, 1 divergence ouverte
+graines 1717000+       250 cas, 11 000 requêtes, 0 divergence réelle
+graines 2626000+       250 cas, 11 040 requêtes, 0 divergence réelle
                      ------------------------------------------------
-                     3 950 cas, 174 207 requêtes, 0 divergence réelle
+                     2 000 cas, 88 367 requêtes, 1 divergence ouverte
 
-étalonnage ES vs ES     50 cas,  2 157 requêtes, 0 divergence
+étalonnage ES vs ES     50 cas,  2 145 requêtes, 0 divergence
 ```
 
-Sept de ces plages ont servi à corriger : 1–400, contre laquelle l'outil a été
-réglé, 4242000+, qui a sorti le `minimum_should_match` décrit plus bas,
-**8181000+**, qui a sorti les trois règles de précédence de `fields`,
-**9494000+**, qui a montré qu'un prédicat était trop étroit, **2727000+**, qui a
-sorti l'ordre de balayage de la commande par requête, **1414000+**, qui a montré
-qu'un prédicat ne connaissait qu'un **sens**, et les deux nouvelles —
-**3535000+** et **5150000+**, qui ont sorti les deux moitiés du défaut des
-n-grammes (la phrase, puis l'opérateur `and`). Les **huit** autres sont des
-plages **de contrôle**, jamais utilisées pour corriger ; le rapport machine
-publié est celui de la dernière d'entre elles, [`fuzz.json`](fuzz.json).
+Trois de ces plages ont servi à corriger : **5150000+**, qui a montré que la
+valeur stockée écrasait la valeur formatée de `fields` ; **4242000+**, qui a
+sorti le budget de `max_expansions` ; et **1717000+**, qui a sorti la limite des
+tokenizers de Lucene — une plage jamais regardée avant ce passage, comme
+**2626000+**. Les cinq autres sont des plages de contrôle de ce passage-ci :
+elles n'ont servi à rien corriger. Le rapport machine publié est celui de la
+dernière, [`fuzz.json`](fuzz.json).
 
-**La divergence ouverte du passage précédent n'a pas été rejouée.** Elle portait
-sur un ordre par pertinence que BM25 sépare (elle est toujours décrite plus
-bas) : ce n'est pas un défaut corrigé, c'est un tirage qui n'est pas revenu. Les
-graines ont toutes changé de sens — le générateur déclare maintenant, sur un cas
-sur trois, une section `analysis` à n-grammes, donc chaque cas de chaque plage
-est un tirage différent. C'est exactement pour ça que ce qui compte devient un
-cas écrit dans [`sonde_fuzz.py`](../tests/compat/sonde_fuzz.py) et pas une
-graine.
+Et la règle a rejoué exactement comme les fois précédentes : **les deux plages
+neuves en ont sorti une chacune**, et aucune n'était dans le sujet de la carte.
+Six passages, aucune plage neuve muette.
+
+**La divergence de 4242000+ est ouverte, pas corrigée.** C'est celle que ce
+document décrit plus bas : un ordre par `_score` que BM25 sépare et qu'ES rend
+ex æquo, sur un champ `text` **facultatif** — l'`avgdl` de Lucene se calcule sur
+les documents qui ont le champ, celui de tantivy sur tous. Le prédicat refuse de
+l'absorber, exprès ; élargir la ligne masquerait exactement ce qu'elle a été
+écrite pour attraper.
 
 ### Ce que la brique « n-grammes » a sorti, en un passage
 
@@ -213,6 +210,38 @@ divergences**, toutes ramenées à trois règles qu'aucune lecture ne donne.
 | le même champ demandé deux fois rendait le premier format | **la dernière spécification gagne** : `fields: [{"field": "d", "format": "yyyy-MM-dd"}, "d*"]` rend la date au format du mapping, l'ordre inverse au format demandé |
 | un champ demandé dans `fields` **et** dans `docvalue_fields` sortait trié | c'est `fields` qui rend la valeur, donc l'ordre du `_source` et ses doublons. Le refus que porte la colonne, lui, reste |
 | un `docvalue_fields` sur un `text` refusait même sans document ramené | ces refus sont ceux de la phase de **fetch** : `size: 0` ou zéro correspondance rendent **200** chez ES, qui ne va chercher les valeurs que des documents qu'il ramène |
+
+### Ce que les briques `search_analyzer`, `copy_to` et `store` ont sorti
+
+Trois paramètres de mapping livrés ensemble, trois briques posées le même jour :
+un champ `text` qui déclare un analyzer peut en déclarer un second pour la
+requête, un ou deux champs se recopient dans une cible (déclarée, ou absente du
+mapping pour exercer la création dynamique), et quelques feuilles passent en
+`store: true` — que `stored_fields`, déjà tiré au sort, va lire.
+
+Là encore, une brique nouvelle ne mesure pas qu'elle-même. Ce qu'elle a sorti ne
+portait sur aucun des trois :
+
+| Ce que le fuzzer a sorti | Ce que c'était |
+|---|---|
+| une clé de `terms` **entière** sur un champ `float` ou `double` : ferrite rendait `2`, ES rend `2.0` | un défaut **antérieur**, dans la mise en forme des buckets. Le corpus de `diff_aggs.py` n'a pas de valeur flottante entière ; le fuzzer, qui tire `0.0`, `1.0` et `1024.0` exprès, en produit. Un client qui type strictement son JSON y lit un entier là où ES lui donne un flottant. Corrigé |
+| un **500** d'ES quand le même champ est demandé par `docvalue_fields` **et** `stored_fields` | un bug d'ES 8.15 (`unsupported_operation_exception`, `reason: null`), pas un défaut de ferrite — qui rend les valeurs, comme il le fait pour chacune des deux lectures prises séparément. Un 500 ne se reproduit pas : c'est déjà la raison pour laquelle `_seq_no` nommé dans `fields` est refusé. Divergence assumée n° 19 |
+| l'ordre des valeurs qu'un `copy_to` dépose dans sa cible | ce n'est pas un ordre : c'est l'itération d'un `HashSet<String>` de Java sur {cible} ∪ {sources}. Divergence assumée n° 18, avec un prédicat qui **mesure** que l'écart ne porte que sur l'ordre |
+| un mot de plus de **255 caractères** disparaissait de l'index | `maxTokenLength` n'est pas une limite qui jette : les tokenizers de Lucene **coupent** le mot en morceaux de 255 caractères, chacun à la position suivante — donc tout ce qui suit se décale aussi. ferrite jetait le mot entier (et, à 255 pile, un mot que Lucene garde). Défaut **antérieur** : aucun texte du corpus de `diff_analyzers.py` n'avait de mot si long, et il a fallu qu'un `keyword` de 300 caractères soit recopié par `copy_to` dans un `text` pour qu'un tokenizer le voie. Corrigé, et les longueurs 254 / 255 / 256 / 300 / 512 sont entrées dans le corpus |
+| `match_phrase_prefix` d'un seul mot sur un champ à n-grammes rendait **un document de plus** qu'ES | `max_expansions` est chez Lucene un budget **par position**, pas par terme : `MultiPhrasePrefixQuery` remplit un seul ensemble en parcourant les termes de la position et s'arrête dès qu'il est plein. La distinction ne se voyait pas tant qu'un analyzer posait un terme par position ; un filtre à n-grammes en pose vingt, et un budget par terme en développe vingt fois plus. Défaut antérieur lui aussi. Corrigé |
+
+Les deux derniers sont la même leçon que celle des n-grammes, une carte plus
+tôt : **une brique nouvelle ne mesure pas qu'elle-même**. `copy_to` a fait
+entrer une valeur de `keyword` dans un champ `text` — un chemin que rien
+n'empruntait — et c'est le tokenizer, pas la copie, qui s'est révélé faux.
+
+Le bug du 500 a coûté un **huitième prédicat trop étroit**, et pour une raison qui
+mérite d'être notée : la fonction qui extrait le motif d'une erreur descendait
+jusqu'à `failed_shards[].reason.reason` — sauf qu'ici ES rend ce champ à `null`.
+L'écart se lisait donc « all shards failed », et aucun prédicat ne pouvait le
+distinguer d'un autre 500. Elle rend maintenant le **type** du shard en échec
+quand il n'y a pas de phrase. Un instrument qui résume trop finit par effacer ce
+qui distinguait deux cas.
 
 ### Les deux divergences du passage précédent : corrigées
 
@@ -285,7 +314,7 @@ causée par une **clé de tri** et non par le score. Le prix, c'est cette ligne
 rouge — et elle est le bon prix.
 
 > Elle **ne sort plus** du passage courant, et pour la même raison que la
-> précédente : le tirage a changé, aucune des quinze plages ne la repose. Ce
+> précédente : le tirage a changé, aucune des plages ne la repose. Ce
 > n'est pas une correction. La cause — l'`avgdl` calculé sur tous les documents
 > plutôt que sur ceux qui ont le champ — est toujours là, déclarée dans
 > [`compat.md`](compat.md), et un autre tirage la reposera.
@@ -293,7 +322,7 @@ rouge — et elle est le bon prix.
 Le détail machine est dans [`fuzz.json`](fuzz.json) : les divergences réelles y
 sont écrites entières, les assumées résumées par famille avec trois exemples.
 
-### Pourquoi quinze plages de graines, et pas une
+### Pourquoi plusieurs plages de graines, et pas une
 
 Parce que la première ne prouvait pas ce qu'elle avait l'air de prouver.
 
@@ -316,14 +345,20 @@ La preuve : chaque nouvelle plage jamais regardée en a retrouvé.
 | 5150000+ | la divergence ouverte ci-dessus — un ordre que BM25 sépare, que le prédicat refuse d'absorber |
 | 2727000+ | le défaut d'ordre de la commande par requête : `max_docs` ne supprimait pas les mêmes documents qu'ES, en 200 |
 | 1414000+ | un **cinquième** prédicat trop étroit : la divergence déclarée sur `exists` change de **signe** sous un `must_not` |
+| 3535000+ | le défaut des n-grammes : `match_phrase` rendait 3 documents là où ES en rend 12 |
+| 1717000+ | la limite des tokenizers de Lucene : un mot de plus de 255 caractères **coupé** chez ES, **jeté** chez ferrite |
+| 2626000+ | rien de neuf — la deuxième plage de contrôle qui n'ajoute rien |
 
 Et à chaque passage suivant, générateur changé, la règle a rejoué exactement
 pareil : la plage 1–400 — celle sur laquelle on avait itéré — a sorti le
-**troisième** prédicat trop étroit du tableau ci-dessous, deux plages de contrôle
-ont sorti les deux divergences réelles décrites plus haut, et les **deux plages
-neuves** de ce passage en ont sorti une chacune : un résultat faux rendu en 200
-sur une commande destructrice, et un cinquième prédicat trop étroit. Douze
-plages, cinq passages, et aucun n'a encore rendu une plage neuve muette.
+**troisième** prédicat trop étroit du tableau ci-dessous ; deux plages de
+contrôle ont sorti les deux divergences réelles décrites plus haut ; les deux
+plages neuves du passage suivant en ont sorti une chacune (un résultat faux
+rendu en 200 sur une commande destructrice, et un cinquième prédicat trop
+étroit) ; et **les deux plages neuves de ce passage-ci** en ont sorti une
+chacune de plus — la limite des tokenizers, et rien du tout pour la seconde,
+qui est la deuxième plage muette en dix-sept. Quinze plages, six passages, et
+deux seulement se sont tues.
 
 Les prédicats trop étroits, un par passage :
 
@@ -336,6 +371,8 @@ Les prédicats trop étroits, un par passage :
 | « le court-circuit d'ES » ne connaissait que deux déclencheurs **syntaxiques** (`match_none`, `must_not: match_all`) | le troisième ne se lit pas dans la requête : une clause qui ne correspond à **aucun document** vide le `bool` à la réécriture, et ES n'a alors jamais construit les clauses suivantes — donc jamais vu qu'une valeur y était illisible pour le type du champ. Le prédicat le **mesure** maintenant, comme celui d'`exists` : il repose la clause fautive **seule** à ES. Si ES la refuse seule, son 200 sur la requête complète prouve qu'il ne l'a pas construite ; s'il l'accepte seule, ferrite est plus strict qu'ES et l'écart reste réel |
 | « refus déclaré » ne demandait pas qu'ES **sache répondre** | c'est pourtant la moitié qui compte, et sa docstring le disait déjà. Le défaut est arrivé par un **progrès** : le texte d'un écart de statut porte désormais les messages des deux serveurs (« statuts 400 / 500 » tout court ne se diagnostique pas), et la phrase de ferrite s'y trouve donc même quand ES échoue de son côté. Un prédicat se relit quand ce qu'il lit change |
 | la divergence déclarée sur `exists` était reconnue à un manque **à gauche** | sous un `must_not`, le même défaut rend **plus** de documents à gauche. Un prédicat écrit sur un signe doit se demander ce qu'une négation en fait : il retourne maintenant le sens quand **tous** les `exists` de la requête sont niés, et seulement quand la sonde a confirmé, clause seule, que ferrite en voit moins |
+| le **miroir** de la divergence `exists` exigeait qu'ES rende un sous-ensemble de ferrite | vrai sur une page entière, faux dès que la requête tronque : avec `from: 3, size: 2` sur un `must_not exists`, ferrite a un document de plus à paginer, décale tout ce qui suit, et les deux fenêtres sont **disjointes**. Le prédicat d'origine posait déjà cette réserve dans l'autre sens ; son miroir l'avait perdue. Corrigé en la mesurant (`from` non nul, ou page pleine) plutôt qu'en l'assouplissant |
+| le motif d'une erreur descendait jusqu'à `failed_shards[].reason.reason` | ES 8.15 rend ce champ à **`null`** quand le même champ est demandé par `docvalue_fields` et `stored_fields` : l'écart se lisait « all shards failed », et aucun prédicat ne pouvait le distinguer d'un autre 500. Le motif rend maintenant le **type** du shard en échec quand il n'y a pas de phrase. Ce n'est pas le prédicat qui était trop étroit, c'est ce qu'il lisait qui était trop résumé |
 
 D'où la règle : **une plage de graines sur laquelle on a itéré ne mesure plus
 rien.** Il en faut une qu'on n'a jamais regardée, et la publier séparément.

@@ -13139,6 +13139,12 @@
     "ferrite": "SKIP"
    },
    {
+    "cas": "wagtail.search.tests.test_elasticsearch7_backend.TestElasticsearch7SearchBackend.test_filter_with_unsupported_lookup_type.test_filter_with_unsupported_lookup_type",
+    "es": "SKIP",
+    "etat": "identique",
+    "ferrite": "SKIP"
+   },
+   {
     "cas": "wagtail.search.tests.test_elasticsearch7_backend.TestElasticsearch7SearchBackend.test_incomplete_plain_text.test_incomplete_plain_text",
     "es": "SKIP",
     "etat": "identique",
@@ -13368,6 +13374,12 @@
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch7_backend.TestElasticsearch7SearchBackend.test_search_with_date_filter.test_search_with_date_filter",
+    "es": "SKIP",
+    "etat": "identique",
+    "ferrite": "SKIP"
+   },
+   {
+    "cas": "wagtail.search.tests.test_elasticsearch7_backend.TestElasticsearch7SearchBackend.test_search_with_hyphen.test_search_with_hyphen",
     "es": "SKIP",
     "etat": "identique",
     "ferrite": "SKIP"
@@ -13693,488 +13705,500 @@
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_and.test_and",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_and_operator_with_single_field.test_and_operator_with_single_field",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_annotate_score.test_annotate_score",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_annotate_score_with_slice.test_annotate_score_with_slice",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_ascii_folding.test_ascii_folding",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_autocomplete.test_autocomplete",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_autocomplete_not_affected_by_stemming.test_autocomplete_not_affected_by_stemming",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_autocomplete_uses_autocompletefield.test_autocomplete_uses_autocompletefield",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_autocomplete_with_fields_arg.test_autocomplete_with_fields_arg",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_boost.test_boost",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_cannot_filter_on_date_parts_other_than_year.test_cannot_filter_on_date_parts_other_than_year",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_child_partial_search.test_child_partial_search",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_delete.test_delete",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_disabled_partial_search.test_disabled_partial_search",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_disabled_partial_search_with_whole_term.test_disabled_partial_search_with_whole_term",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_facet.test_facet",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_facet_tags.test_facet_tags",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_facet_with_nonexistent_field.test_facet_with_nonexistent_field",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_filter_and_operator.test_filter_and_operator",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_filter_exact_value.test_filter_exact_value",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_filter_exact_value_on_parent_model_field.test_filter_exact_value_on_parent_model_field",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_filter_exact_values_list_subquery.test_filter_exact_values_list_subquery",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_filter_gt.test_filter_gt",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_filter_gte.test_filter_gte",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_filter_in_iterable.test_filter_in_iterable",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_filter_in_list.test_filter_in_list",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_filter_in_values_list_subquery.test_filter_in_values_list_subquery",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_filter_isnull_false.test_filter_isnull_false",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_filter_isnull_true.test_filter_isnull_true",
-    "es": "ABSENT",
-    "etat": "different",
-    "ferrite": "FAIL"
+    "es": "PASS",
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_filter_lt.test_filter_lt",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_filter_lte.test_filter_lte",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_filter_none.test_filter_none",
-    "es": "ABSENT",
-    "etat": "different",
-    "ferrite": "FAIL"
+    "es": "PASS",
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_filter_on_non_filterable_field.test_filter_on_non_filterable_field",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_filter_or_operator.test_filter_or_operator",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_filter_prefix.test_filter_prefix",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
+   },
+   {
+    "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_filter_with_unsupported_lookup_type.test_filter_with_unsupported_lookup_type",
+    "es": "PASS",
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_incomplete_plain_text.test_incomplete_plain_text",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_limit.test_limit",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_match_all.test_match_all",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_more_than_one_hundred_results.test_more_than_one_hundred_results",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_more_than_ten_results.test_more_than_ten_results",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_not.test_not",
-    "es": "ABSENT",
-    "etat": "different",
-    "ferrite": "FAIL"
+    "es": "PASS",
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_offset.test_offset",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_offset_and_limit.test_offset_and_limit",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_operators_combination.test_operators_combination",
-    "es": "ABSENT",
-    "etat": "different",
-    "ferrite": "FAIL"
+    "es": "PASS",
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_or.test_or",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_order_by_non_filterable_field.test_order_by_non_filterable_field",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_order_by_relevance.test_order_by_relevance",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_partial_search.test_partial_search",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_phrase.test_phrase",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_plain_text_invalid_operator.test_plain_text_invalid_operator",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_plain_text_multiple_words_and.test_plain_text_multiple_words_and",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_plain_text_multiple_words_or.test_plain_text_multiple_words_or",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_plain_text_operator_case.test_plain_text_operator_case",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_plain_text_single_word.test_plain_text_single_word",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_query_analyser.test_query_analyser",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_ranking.test_ranking",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_same_rank_pages.test_same_rank_pages",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_search_all.test_search_all",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_search_all_unindexed.test_search_all_unindexed",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_search_and_operator.test_search_and_operator",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_search_blank.test_search_blank",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_search_boosting_on_related_fields.test_search_boosting_on_related_fields",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_search_callable_field.test_search_callable_field",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_search_child_class_field_from_parent.test_search_child_class_field_from_parent",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_search_count.test_search_count",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_search_does_not_return_results_from_wrong_model.test_search_does_not_return_results_from_wrong_model",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_search_none.test_search_none",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_search_on_child_class.test_search_on_child_class",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_search_on_individual_field.test_search_on_individual_field",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_search_on_non_searchable_field.test_search_on_non_searchable_field",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_search_on_related_fields.test_search_on_related_fields",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_search_on_unknown_field.test_search_on_unknown_field",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_search_simple.test_search_simple",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_search_with_date_filter.test_search_with_date_filter",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
+   },
+   {
+    "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_search_with_hyphen.test_search_with_hyphen",
+    "es": "PASS",
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_search_with_numeric_term.test_search_with_numeric_term",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_search_with_spaces_only.test_search_with_spaces_only",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_single_result.test_single_result",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_slice_more_than_one_hundred_results.test_slice_more_than_one_hundred_results",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_slice_to_next_page.test_slice_to_next_page",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_update_index_command_schema_only.test_update_index_command_schema_only",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_elasticsearch8_backend.TestElasticsearch8SearchBackend.test_update_index_no_verbosity.test_update_index_no_verbosity",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_index_functions.TestGetIndexedInstance.test_blocks_not_in_indexed_objects.test_blocks_not_in_indexed_objects",
@@ -14298,6 +14322,12 @@
    },
    {
     "cas": "wagtail.search.tests.test_indexed_class.TestSearchFields.test_basic.test_basic",
+    "es": "PASS",
+    "etat": "identique",
+    "ferrite": "PASS"
+   },
+   {
+    "cas": "wagtail.search.tests.test_indexed_class.TestSearchFields.test_checking_core_page_fields_are_indexed.test_checking_core_page_fields_are_indexed",
     "es": "PASS",
     "etat": "identique",
     "ferrite": "PASS"
@@ -14779,26 +14809,26 @@
    {
     "cas": "wagtail.search.tests.test_page_search.TestElasticsearchBackend.test_order_by_last_published_at_with_drafts_first.test_order_by_last_published_at_with_drafts_first",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_page_search.TestElasticsearchBackend.test_order_by_title.test_order_by_title",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_page_search.TestElasticsearchBackend.test_search_specific_queryset.test_search_specific_queryset",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_page_search.TestElasticsearchBackend.test_search_specific_queryset_with_fields.test_search_specific_queryset_with_fields",
     "es": "PASS",
-    "etat": "ecart",
-    "ferrite": "FAIL"
+    "etat": "identique",
+    "ferrite": "PASS"
    },
    {
     "cas": "wagtail.search.tests.test_postgres_backend.TestPostgresLanguageTextSearch.test_search_language_phrase_text.test_search_language_phrase_text",
@@ -14838,6 +14868,12 @@
    },
    {
     "cas": "wagtail.search.tests.test_postgres_backend.TestPostgresSearchBackend.test_autocomplete_not_affected_by_stemming.test_autocomplete_not_affected_by_stemming",
+    "es": "SKIP",
+    "etat": "identique",
+    "ferrite": "SKIP"
+   },
+   {
+    "cas": "wagtail.search.tests.test_postgres_backend.TestPostgresSearchBackend.test_autocomplete_tsquery_chars.test_autocomplete_tsquery_chars",
     "es": "SKIP",
     "etat": "identique",
     "ferrite": "SKIP"
@@ -15186,6 +15222,12 @@
    },
    {
     "cas": "wagtail.search.tests.test_postgres_backend.TestPostgresSearchBackend.test_search_simple.test_search_simple",
+    "es": "SKIP",
+    "etat": "identique",
+    "ferrite": "SKIP"
+   },
+   {
+    "cas": "wagtail.search.tests.test_postgres_backend.TestPostgresSearchBackend.test_search_tsquery_chars.test_search_tsquery_chars",
     "es": "SKIP",
     "etat": "identique",
     "ferrite": "SKIP"
@@ -15825,26 +15867,25 @@
   "executions": {
    "es": {
     "echecs": 0,
-    "ignores": 290,
-    "passes": 273,
-    "queue": "t_filter (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_filter) ... ok\ntest_filter_and_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_filter_and_query) ... ok\ntest_filter_with_quotation_mark (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_filter_with_quotation_mark) ... ok\ntest_filter_with_quotation_mark_and_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_filter_with_quotation_mark_and_query) ... ok\ntest_filter_with_unclosed_quotation_mark_and_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_filter_with_unclosed_quotation_mark_and_query) ... ok\ntest_only_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_only_query) ... ok\ntest_return_list_of_multiple_instances_for_same_filter_key (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_return_list_of_multiple_instances_for_same_filter_key) ... ok\ntest_two_filters_and_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_two_filters_and_query) ... ok\ntest_two_filters_with_quotation_marks_and_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_two_filters_with_quotation_marks_and_query) ... ok\n\n----------------------------------------------------------------------\nRan 583 tests in 1019.201s\n\nOK (skipped=294, expected failures=9)\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\n",
-    "total": 563
+    "ignores": 294,
+    "passes": 280,
+    "queue": "t_filter (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_filter) ... ok\ntest_filter_and_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_filter_and_query) ... ok\ntest_filter_with_quotation_mark (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_filter_with_quotation_mark) ... ok\ntest_filter_with_quotation_mark_and_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_filter_with_quotation_mark_and_query) ... ok\ntest_filter_with_unclosed_quotation_mark_and_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_filter_with_unclosed_quotation_mark_and_query) ... ok\ntest_only_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_only_query) ... ok\ntest_return_list_of_multiple_instances_for_same_filter_key (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_return_list_of_multiple_instances_for_same_filter_key) ... ok\ntest_two_filters_and_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_two_filters_and_query) ... ok\ntest_two_filters_with_quotation_marks_and_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_two_filters_with_quotation_marks_and_query) ... ok\n\n----------------------------------------------------------------------\nRan 583 tests in 1096.881s\n\nOK (skipped=294, expected failures=9)\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\n",
+    "total": 574
    },
    "ferrite": {
-    "echecs": 85,
-    "ignores": 290,
-    "passes": 192,
-    "queue": "(index=self.name, **mapping.get_mapping())\n  File \"/usr/local/lib/python3.12/site-packages/elasticsearch/_sync/client/utils.py\", line 458, in wrapped\n    return api(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/elasticsearch/_sync/client/indices.py\", line 4137, in put_mapping\n    return self.perform_request(  # type: ignore[return-value]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/elasticsearch/_sync/client/_base.py\", line 422, in perform_request\n    return self._client.perform_request(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/elasticsearch/_sync/client/_base.py\", line 271, in perform_request\n    response = self._perform_request(\n               ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/elasticsearch/_sync/client/_base.py\", line 351, in _perform_request\n    raise HTTP_EXCEPTIONS.get(meta.status, ApiError)(\nelasticsearch.BadRequestError: BadRequestError(400, 'not_implemented_in_ferrite_exception', 'ferrite ne supporte pas le parametre de champ [store] (champ [pk]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index')\n\n----------------------------------------------------------------------\nRan 583 tests in 19.786s\n\nFAILED (errors=87, skipped=294, expected failures=9)\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\n",
-    "total": 567
+    "echecs": 0,
+    "ignores": 294,
+    "passes": 280,
+    "queue": "st_filter (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_filter) ... ok\ntest_filter_and_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_filter_and_query) ... ok\ntest_filter_with_quotation_mark (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_filter_with_quotation_mark) ... ok\ntest_filter_with_quotation_mark_and_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_filter_with_quotation_mark_and_query) ... ok\ntest_filter_with_unclosed_quotation_mark_and_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_filter_with_unclosed_quotation_mark_and_query) ... ok\ntest_only_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_only_query) ... ok\ntest_return_list_of_multiple_instances_for_same_filter_key (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_return_list_of_multiple_instances_for_same_filter_key) ... ok\ntest_two_filters_and_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_two_filters_and_query) ... ok\ntest_two_filters_with_quotation_marks_and_query (wagtail.search.tests.test_queries.TestSeparateFiltersFromQuery.test_two_filters_with_quotation_marks_and_query) ... ok\n\n----------------------------------------------------------------------\nRan 583 tests in 642.032s\n\nOK (skipped=294, expected failures=9)\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\n",
+    "total": 574
    }
   },
   "intact": true,
-  "refus": [
+  "refus": [],
+  "trafic": [
    {
     "api": "indices.put_mapping",
-    "capacite": "index.mapping_ecriture",
-    "combien": 87,
-    "erreur": "not_implemented_in_ferrite_exception: ferrite ne supporte pas le parametre de champ [store] (champ [pk]) ; parametres acceptes : type, analyzer, fields, ignore_above, format, index",
+    "echecs": 0,
     "exemple": {
      "properties": {
       "_all_text": {
@@ -15921,18 +15962,43 @@
       }
      }
     },
-    "genre": "refus",
-    "methode": "PUT",
-    "statut": 400,
-    "verdict": "regression"
-   }
-  ],
-  "trafic": [
+    "requetes": 8589,
+    "traits": [
+     "analyzer:edgengram_analyzer",
+     "analyzer:standard",
+     "champ:analyzer",
+     "champ:copy_to",
+     "champ:search_analyzer",
+     "champ:store",
+     "route:indices.put_mapping",
+     "type:boolean",
+     "type:date",
+     "type:integer",
+     "type:keyword",
+     "type:nested",
+     "type:text"
+    ],
+    "traits_indetermines": [
+     "analyzer:edgengram_analyzer"
+    ],
+    "traits_refuses": []
+   },
+   {
+    "api": "indices.refresh",
+    "echecs": 0,
+    "exemple": null,
+    "requetes": 1547,
+    "traits": [
+     "route:indices.refresh"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
    {
     "api": "indices.delete",
-    "echecs": 1,
+    "echecs": 18,
     "exemple": null,
-    "requetes": 87,
+    "requetes": 1534,
     "traits": [
      "route:indices.delete"
     ],
@@ -15997,7 +16063,7 @@
       }
      }
     },
-    "requetes": 87,
+    "requetes": 1534,
     "traits": [
      "analyse:analyzer",
      "analyse:filter",
@@ -16008,105 +16074,278 @@
     "traits_refuses": []
    },
    {
-    "api": "indices.put_mapping",
-    "echecs": 87,
+    "api": "bulk",
+    "echecs": 0,
+    "exemple": [
+     {
+      "index": {
+       "_id": "1"
+      }
+     },
+     {
+      "_edgengrams": [
+       "Root"
+      ],
+      "content_type": [
+       "wagtailcore.Page"
+      ],
+      "content_type_id_filter": 1,
+      "depth_filter": 1,
+      "first_published_at_filter": null,
+      "id_filter": 1,
+      "last_published_at_filter": null,
+      "latest_revision_created_at_filter": null,
+      "live_filter": true,
+      "locale_id_filter": 1,
+      "locked_filter": false,
+      "owner_id_filter": null,
+      "path_filter": "0001",
+      "pk": "1",
+      "show_in_menus_filter": false,
+      "title": "Root",
+      "title_edgengrams": "Root",
+      "title_filter": "Root",
+      "translation_key_filter": "ee2dc62e-b158-4fa0-9c6c-d8e21a2ec0e2"
+     },
+     {
+      "index": {
+       "_id": "2"
+      }
+     },
+     {
+      "_edgengrams": [
+       "Welcome to your new Wagtail site!"
+      ],
+      "content_type": [
+       "wagtailcore.Page"
+      ],
+      "content_type_id_filter": 1,
+      "depth_filter": 2,
+      "first_published_at_filter": null,
+      "id_filter": 2,
+      "last_published_at_filter": null,
+      "latest_revision_created_at_filter": null,
+      "live_filter": true,
+      "locale_id_filter": 1,
+      "locked_filter": false,
+      "owner_id_filter": null,
+      "path_filter": "00010001",
+      "pk": "2",
+      "show_in_menus_filter": false,
+      "title": "Welcome to your new Wagtail site!",
+      "title_edgengrams": "Welcome to your new Wagtail site!",
+      "title_filter": "Welcome to your new Wagtail site!",
+      "translation_key_filter": "fca6db07-d61a-4e40-9fbf-07c97d74b7d0"
+     }
+    ],
+    "requetes": 423,
+    "traits": [
+     "route:bulk"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "scroll",
+    "echecs": 0,
     "exemple": {
-     "properties": {
-      "_all_text": {
-       "type": "text"
-      },
-      "_all_text_boost_2_0": {
-       "type": "text"
-      },
-      "_edgengrams": {
-       "analyzer": "edgengram_analyzer",
-       "search_analyzer": "standard",
-       "type": "text"
-      },
-      "content_type": {
-       "type": "keyword"
-      },
-      "content_type_id_filter": {
-       "type": "integer"
-      },
-      "depth_filter": {
-       "type": "integer"
-      },
-      "first_published_at_filter": {
-       "type": "date"
-      },
-      "id_filter": {
-       "type": "integer"
-      },
-      "last_published_at_filter": {
-       "type": "date"
-      },
-      "latest_revision_created_at_filter": {
-       "type": "date"
-      },
-      "live_filter": {
-       "type": "boolean"
-      },
-      "locale_id_filter": {
-       "type": "integer"
-      },
-      "locked_filter": {
-       "type": "boolean"
-      },
-      "owner_id_filter": {
-       "type": "integer"
-      },
-      "path_filter": {
-       "type": "keyword"
-      },
-      "pk": {
-       "store": true,
-       "type": "keyword"
-      },
-      "show_in_menus_filter": {
-       "type": "boolean"
-      },
-      "title": {
-       "copy_to": [
-        "_all_text",
-        "_all_text_boost_2_0"
-       ],
-       "type": "text"
-      },
-      "title_edgengrams": {
-       "analyzer": "edgengram_analyzer",
-       "search_analyzer": "standard",
-       "type": "text"
-      },
-      "title_filter": {
-       "type": "keyword"
-      },
-      "translation_key_filter": {
-       "type": "keyword"
+     "scroll": "2m",
+     "scroll_id": "bwmmM0WfJ0KjWPbfogeffB"
+    },
+    "requetes": 164,
+    "traits": [
+     "expr:all",
+     "route:scroll"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "search",
+    "echecs": 0,
+    "exemple": {
+     "_source": false,
+     "query": {
+      "bool": {
+       "filter": {
+        "match": {
+         "content_type": "searchtests.Book"
+        }
+       },
+       "must": {
+        "dis_max": {
+         "queries": [
+          {
+           "bool": {
+            "must": [
+             {
+              "match": {
+               "_all_text": {
+                "operator": "and",
+                "query": "javascript"
+               }
+              }
+             },
+             {
+              "match": {
+               "_all_text": {
+                "operator": "and",
+                "query": "definitive"
+               }
+              }
+             }
+            ]
+           }
+          },
+          {
+           "bool": {
+            "must": [
+             {
+              "match": {
+               "_all_text_boost_2_0": {
+                "boost": 2.0,
+                "operator": "and",
+                "query": "javascript"
+               }
+              }
+             },
+             {
+              "match": {
+               "_all_text_boost_2_0": {
+                "boost": 2.0,
+                "operator": "and",
+                "query": "definitive"
+               }
+              }
+             }
+            ]
+           }
+          }
+         ]
+        }
+       }
+      }
+     },
+     "size": 100,
+     "stored_fields": "pk"
+    },
+    "requetes": 105,
+    "traits": [
+     "agg:terms",
+     "agg:terms.field",
+     "agg:terms.missing",
+     "corps:_source",
+     "corps:aggregations",
+     "corps:from",
+     "corps:query",
+     "corps:size",
+     "corps:sort",
+     "corps:stored_fields",
+     "dsl:bool",
+     "dsl:bool.mustNot",
+     "dsl:dis_max",
+     "dsl:exists",
+     "dsl:exists.field",
+     "dsl:match",
+     "dsl:match.boost",
+     "dsl:match.operator",
+     "dsl:match.query",
+     "dsl:match_all",
+     "dsl:multi_match",
+     "dsl:multi_match.fields",
+     "dsl:multi_match.operator",
+     "dsl:multi_match.query",
+     "dsl:multi_match.type",
+     "dsl:multi_match.type=phrase",
+     "dsl:prefix",
+     "dsl:range",
+     "dsl:range.gt",
+     "dsl:range.gte",
+     "dsl:range.lt",
+     "dsl:range.lte",
+     "dsl:term",
+     "dsl:terms",
+     "dsl:terms.number_of_pages_filter",
+     "route:search"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "index",
+    "echecs": 0,
+    "exemple": {
+     "_edgengrams": [
+      "Ĥéllø"
+     ],
+     "authors": [],
+     "authors_filter": [],
+     "content_type": [
+      "searchtests.Book"
+     ],
+     "number_of_pages_filter": 1,
+     "pk": "17",
+     "publication_date_filter": "2017-10-19",
+     "summary": "",
+     "tags": [],
+     "tags_filter": [],
+     "title": "Ĥéllø",
+     "title_edgengrams": "Ĥéllø",
+     "title_filter": "Ĥéllø"
+    },
+    "requetes": 105,
+    "traits": [
+     "route:index"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "delete",
+    "echecs": 0,
+    "exemple": null,
+    "requetes": 1,
+    "traits": [
+     "route:delete"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "count",
+    "echecs": 0,
+    "exemple": {
+     "query": {
+      "bool": {
+       "filter": {
+        "match": {
+         "content_type": "searchtests.Book"
+        }
+       },
+       "must": {
+        "multi_match": {
+         "fields": [
+          "_all_text",
+          "_all_text_boost_2_0^2.0"
+         ],
+         "query": "JavaScript"
+        }
+       }
       }
      }
     },
-    "requetes": 87,
+    "requetes": 1,
     "traits": [
-     "analyzer:edgengram_analyzer",
-     "analyzer:standard",
-     "champ:analyzer",
-     "champ:copy_to",
-     "champ:search_analyzer",
-     "champ:store",
-     "route:indices.put_mapping",
-     "type:boolean",
-     "type:date",
-     "type:integer",
-     "type:keyword",
-     "type:text"
+     "corps:query",
+     "dsl:bool",
+     "dsl:match",
+     "dsl:multi_match",
+     "dsl:multi_match.fields",
+     "dsl:multi_match.query",
+     "route:count"
     ],
     "traits_indetermines": [],
-    "traits_refuses": [
-     "analyzer:edgengram_analyzer",
-     "champ:copy_to",
-     "champ:store"
-    ]
+    "traits_refuses": []
    }
   ]
  }

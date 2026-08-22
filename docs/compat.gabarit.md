@@ -136,8 +136,11 @@ remplacées ne sont effacées que lorsque plus aucune recherche ne les tient.
 ### Analyzers
 
 Chaque analyzer intégré est comparé **token par token** à son homonyme d'ES sur
-**210 textes** français et anglais (`tests/compat/diff_analyzers.py`) : des
-phrases, et surtout un vocabulaire qui balaie les familles de suffixes.
+**217 textes** français et anglais (`tests/compat/diff_analyzers.py`) : des
+phrases, un vocabulaire qui balaie les familles de suffixes, et des mots plus
+longs que la limite de 255 caractères des tokenizers de Lucene — qui la
+**coupent** au lieu de jeter le mot, et décalent d'autant les positions de tout
+ce qui suit.
 
 <!-- table:analyzers -->
 
@@ -146,7 +149,7 @@ pour l'anglais, le stemmer léger de Savoy pour le français. Celui de tantivy
 (Snowball) n'est celui d'aucun des deux — c'est ce qui donnait, avant ce
 portage, **19 textes divergents sur 28 en `english` et 17 en `french`**.
 
-**Les deux sont désormais identiques à ES sur les 210 textes.** `english` :
+**Les deux sont désormais identiques à ES sur les 217 textes.** `english` :
 Porter (validé en plus sur les 66 exemples de l'article de Porter lui-même),
 filtre possessif (`Peter's` → `Peter`), mots vides et ordre des filtres de
 `EnglishAnalyzer`. `french` : stemmer léger de Savoy, élision (`l'ascension` →
@@ -221,6 +224,66 @@ différemment. ferrite applique désormais les frontières de mots d'Unicode
 ### Types de champ
 
 <!-- table:types_champ -->
+
+### `store`, `copy_to` et `search_analyzer`
+
+Trois paramètres de mapping, et c'est un vrai client qui a dit lesquels : ce
+sont exactement les trois qui restaient entre [Wagtail v7.1](application.md) et
+ferrite après la livraison des n-grammes. Aucun n'est une demande vide — les
+accepter en silence aurait rendu des résultats faux — et aucun n'a été deviné :
+tout ce qui suit vient d'une mesure contre un vrai Elasticsearch 8.15.
+
+**`search_analyzer`** est le compagnon obligé des n-grammes. Un champ
+d'autocomplétion s'indexe en grammes (`é`, `él`, `éla`, `élan`) ; si la requête
+subit le même découpage, chercher `elan` revient à chercher « `e` ou `el` ou
+`ela` ou `elan` », donc tout ce qui commence par `e`. C'est le comportement d'ES
+aussi, mesuré — pas un défaut, mais exactement ce que Wagtail corrige en posant
+`search_analyzer: "standard"`. Deux bords viennent de la mesure : sur autre
+chose qu'un `text`, ES ne connaît pas le paramètre du tout (sa phrase est
+`unknown parameter [search_analyzer] on mapper [k] of type [keyword]`, et
+ferrite la reprend) ; et `_analyze` avec `field` rejoue l'analyzer
+d'**indexation**, jamais celui de recherche. Enfin, un champ qui déclare un
+`search_analyzer` sans analyzer d'indexation se voit rendre `analyzer:
+"default"` par ES — `default` étant le **nom** de l'analyzer de l'index, pas un
+synonyme de `standard`, ferrite le relit comme tel : sans ça, un redémarrage
+transformerait le mapping en quelque chose que personne n'a demandé.
+
+**`copy_to`** recopie la valeur **brute** d'un champ dans une ou plusieurs
+cibles, à l'indexation. C'est ainsi qu'on se refait un `_all` — le `_all_text`
+de Wagtail — et la cible relit la valeur avec **son** type et son analyzer :
+un `integer` copié dans un `text` s'y indexe comme `"42"`. Quatre règles, toutes
+mesurées :
+
+- la copie **n'entre pas dans le `_source`** ; elle est indexée, pas stockée ;
+- elle ne se **chaîne pas** : `a → b → c` ne met rien de `a` dans `c` ;
+- une cible absente du mapping se crée **dynamiquement, au type de la valeur
+  copiée** — un `long` copié donne un `long`, pas un `text`. C'est la moitié du
+  sujet qu'un demi-support oublierait : la copie partirait dans le vide, et la
+  recherche sur `_all_text` ne rendrait rien, en silence ;
+- `fields` sur une cible rend quand même les valeurs copiées, alors qu'elles ne
+  sont nulle part dans le `_source` : la valeur propre de la cible d'abord, puis
+  les sources **par ordre de nom**.
+
+Les refus sont ceux d'ES, avec ses phrases : copier **depuis** ou **vers** un
+multi-field, copier vers un objet, copier vers un `nested` qui n'est pas celui
+de la source. La copie d'un sous-champ de `nested` vers la racine, elle, est
+autorisée — et c'est exactement ce que Wagtail demande sur ses `RelatedFields`.
+
+**`store`** conserve la valeur à part du `_source`, et c'est elle que
+`stored_fields` rend. `store: false` est le défaut d'ES : comme `index: true`,
+il ne demande rien, et ES ne le conserve même pas dans le mapping qu'il rend —
+il est donc accepté et non rendu. Sous un `nested`, ferrite ne stocke rien :
+chez ES la valeur stockée vit dans le document enfant, que `stored_fields` ne
+lit pas depuis la racine, et la stocker aurait fait rendre à ferrite **plus**
+qu'ES, en silence.
+
+Changer `store` sur un champ déjà déclaré est refusé, exactement comme chez ES
+(`Cannot update parameter [store] from [true] to [false]`), et pour la même
+raison qu'`analyzer` : la valeur des documents déjà écrits ne changerait pas.
+ferrite y ajoute `search_analyzer` et `copy_to`, qu'ES sait mettre à jour et lui
+non : les accepter sans rien changer serait pire que les refuser. Redéclarer un
+champ **à l'identique** reste licite — c'est ce que fait une application qui
+déclare le même champ pour deux de ses modèles.
 
 ## Ingestion
 
@@ -479,10 +542,10 @@ acceptés partout ; `pretty` est implémenté (indentation de la réponse).
 Trois façons de demander autre chose que le `_source` complet, et elles **ne
 lisent pas au même endroit**. C'est ce qui les sépare, et rien de ce qui suit
 n'était devinable — tout vient de
-[`sonde_fields.py`](../tests/compat/sonde_fields.py), qui pose 96 questions aux
+[`sonde_fields.py`](../tests/compat/sonde_fields.py), qui pose 107 questions aux
 deux serveurs et compare le **hit entier** : le bloc `fields` clé par clé, la
-présence de `_source`, la présence de `_id`. **94/96 identiques, 2 refus
-assumés écrits, 0 écart.**
+présence de `_source`, la présence de `_id`. **100/107 identiques, 3 refus
+assumés écrits, 4 différences d'ordre assumées (n° 18 ci-dessous), 0 écart.**
 
 **`fields` lit le `_source`**, puis type chaque valeur selon le mapping. C'est
 la façon que la 7.10+ met en avant, et celle qu'envoie Kibana. La **forme** est
@@ -510,17 +573,27 @@ précision de son stockage sur 32 bits — ES rend `0.10000000149011612` là où
 rendaient pas la même valeur. Un champ `text` n'a pas de colonne : ES fait
 échouer le shard, ferrite rend la même phrase.
 
-**`stored_fields` est accepté, et il ne rend aucun champ — comme ES.** ferrite
-refuse `store` au mapping : aucun champ n'est stocké individuellement, et un
-Elasticsearch dont le mapping ne porte pas `store: true` ne rend rien non plus.
-L'énoncé de la carte laissait le choix entre refuser et reconstituer les valeurs
-depuis `_source` ; la règle du dépôt tranche pour ni l'un ni l'autre.
-Reconstituer aurait rendu des valeurs **qu'ES ne rend pas** — le pire résultat
-possible ici. Ce qui s'implémente, c'est donc ce que `stored_fields` change
-vraiment à la réponse, et qui se voit : il **retire `_source`** (sauf `_source`
-explicite), `_none_` retire **aussi `_id`**, et `_none_` avec `fields` est un
-400. Deux bords sont venus de la suite de conformance d'Elastic plutôt que
-d'ici : `_source` **cité dans la liste** est un nom de champ stocké comme un
+**`stored_fields` lit les champs stockés**, ceux que le mapping déclare
+`store: true` (voir [ci-dessous](#store-copy_to-et-search_analyzer)). Il ne
+reconstitue rien depuis le `_source` : ce serait rendre des valeurs qu'ES ne
+rend pas, et c'était le seul choix disponible tant que `store` était refusé.
+Comme `fields`, il garde l'**ordre du document et ses doublons** — mais il les
+lit ailleurs, et ça se voit sur les bords : un champ que le mapping ne stocke
+pas n'a **pas de clé** là où `fields` en aurait une, une valeur écartée par
+`ignore_above` n'est ni indexée ni stockée, et sous un `nested` il ne rend
+**rien** (chez ES la valeur vit dans le document enfant, invisible depuis la
+racine). Un `float` stocké ressort `0.1` là où sa colonne rend
+`0.10000000149011612` : Lucene le range sur 32 bits et le rend par le plus court
+texte qui s'y relit.
+
+`stored_fields` change aussi la réponse elle-même : il **retire `_source`** (sauf
+`_source` explicite), `_none_` retire **aussi `_id`**, et `_none_` avec `fields`
+est un 400. Il n'est pas réservé à `_search` : `GET /{index}/_doc/{id}` et
+`_mget` lisent les mêmes champs stockés, au même endroit — le livrer pour la
+seule recherche en aurait fait un paramètre qui marche « sauf là ». Sur ces deux
+routes-là, en revanche, `_none_` mélangé à d'autres noms n'est **pas** une
+erreur : ES l'y ignore et rend les champs cités (mesuré). Deux bords sont venus de la suite de conformance d'Elastic plutôt
+que d'ici : `_source` **cité dans la liste** est un nom de champ stocké comme un
 autre, donc le citer ramène le `_source` ; et `_none_` mélangé à d'autres noms
 est une erreur (`cannot combine _none_ with other fields`), pas un `_none_` qui
 gagne.
@@ -929,6 +1002,27 @@ pas pour être découverts en production.
     qu'ES, en silence. Il les écarte donc explicitement. `fields`, lui, les rend
     des deux côtés, groupées par élément : c'est la lecture du `_source`, et le
     `_source` porte bien le tableau.
+
+18. **L'ordre des valeurs qu'un `copy_to` dépose dans sa cible.** Sur un
+    `fields` posé sur la cible, les deux serveurs rendent **les mêmes valeurs**,
+    dans un ordre différent dès qu'il y a plus d'une source. Celui d'ES n'est
+    pas un ordre : c'est l'itération d'un `HashSet<String>` de Java sur
+    l'ensemble {cible} ∪ {sources}, donc des seaux de hachage. La mesure suffit
+    à l'établir — trois sources `aa`, `mm`, `zz` en ressortent triées, mais
+    `tag` en ressort **avant** `client.ville`, ce qu'aucun tri ne donne. ferrite
+    rend un ordre qu'on peut écrire : la valeur propre de la cible d'abord, puis
+    les sources par ordre de nom. Le prédicat de
+    [`sonde_fields.py`](../tests/compat/sonde_fields.py) **mesure** que l'écart
+    ne porte que sur l'ordre — une valeur en trop ou un doublon perdu y reste un
+    écart.
+
+19. **Les trois lectures sur le même champ stocké rendent un `500` chez ES.**
+    `{"fields": ["tag"], "docvalue_fields": ["tag"], "stored_fields": ["tag"]}`
+    sur un `keyword` déclaré `store: true` fait rendre à ES 8.15 un
+    `unsupported_operation_exception`. Un 500 ne se reproduit pas — c'est déjà
+    la raison pour laquelle `_seq_no` nommé dans `fields` est refusé ici.
+    ferrite rend les valeurs, comme il le fait pour chacune des trois prises
+    séparément.
 
 ## Limites connues (perf, pas fonctionnalité)
 
