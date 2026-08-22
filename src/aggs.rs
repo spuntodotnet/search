@@ -23,7 +23,7 @@ use tantivy::Searcher;
 
 use crate::engine::Generation;
 use crate::error::{EsError, EsResult};
-use crate::mapping::{FieldKind, Fields, MappedField};
+use crate::mapping::{FieldKind, FieldType, Fields, MappedField, TypedValue};
 
 /// Ce qu'il faut savoir d'une agregation pour remettre son resultat au format
 /// d'Elasticsearch.
@@ -45,6 +45,12 @@ struct Info {
     shard_size: Option<usize>,
     /// Le champ agrege, quand il y en a un.
     champ: Option<String>,
+    /// Le champ agrege est-il un `float` ou un `double` ? Les cles d'un `terms`
+    /// s'y rendent **avec leur decimale** : ES ecrit `2.0`, tantivy `2`. Une
+    /// valeur entiere dans un champ flottant suffit a les separer, et un client
+    /// qui type strictement son JSON y lit un entier la ou ES lui donne un
+    /// flottant.
+    flottant: bool,
     /// Les intervalles demandes sur un `range`.
     ///
     /// tantivy **comble les trous** : il rend un bucket pour chaque intervalle
@@ -66,6 +72,7 @@ impl Info {
             ordre: Ordre::CountDesc,
             shard_size: None,
             champ: None,
+            flottant: false,
             ranges: Vec::new(),
         }
     }
@@ -99,7 +106,14 @@ const MEMORY_LIMIT: u64 = 500 * 1024 * 1024;
 fn allowed(agg: &str) -> Option<&'static [&'static str]> {
     Some(match agg {
         "min" | "max" | "sum" | "avg" | "value_count" | "stats" => &["field", "missing"],
-        "terms" => &["field", "size", "shard_size", "min_doc_count", "order"],
+        "terms" => &[
+            "field",
+            "size",
+            "shard_size",
+            "min_doc_count",
+            "order",
+            "missing",
+        ],
         "range" => &["field", "ranges", "keyed"],
         "histogram" => &[
             "field",
@@ -294,6 +308,10 @@ fn validate_une(
     if type_agg == "terms" {
         if let Some(order) = corps_agg.get("order") {
             lire_ordre(order, nom)?;
+        }
+        if let Some(v) = corps_agg.get("missing") {
+            let champ = corps_agg.get("field").and_then(Value::as_str).unwrap_or("");
+            verifier_missing(nom, champ, v, champs)?;
         }
         // `min_doc_count: 0` demande un bucket pour les valeurs que la
         // recherche n'a **pas** trouvees. tantivy ne le rend pas de facon
@@ -523,6 +541,72 @@ fn lire_ordre(order: &Value, nom: &str) -> EsResult<Ordre> {
 /// `champs` vaut `None` quand la recherche ne vise **aucun** index : le type du
 /// champ ne se prononce alors pas (ES non plus, qui rend 200), mais le reste de
 /// l'agregation — et surtout ses sous-agregations — continue d'etre lu.
+/// `missing` sur un `terms` : ranger les documents **sans valeur** sous une cle
+/// choisie. C'est ce qu'une facette affiche comme « non renseigne ».
+///
+/// tantivy sait le faire, et c'est une agregation deleguee de plus : ses bords
+/// ne sont pas ceux de son homonyme, et les ecarts mesures contre ES 8.15 sont
+/// **silencieux**, pas bruyants.
+///
+/// | Champ / valeur | ES | tantivy |
+/// |---|---|---|
+/// | `date`, `missing: "2020-01-01"` | le bucket de cette date | le bucket de **1970-01-01** |
+/// | `long`, `missing: "3"` | la cle `3` | la cle `"3"` |
+/// | `keyword`, `missing: 42` | la cle `"42"` | la cle `42` |
+/// | `double`, `missing: 0` | la cle `0.0` | la cle `0` |
+/// | `boolean` | le bucket `false` | une erreur de deserialisation |
+///
+/// La valeur est donc ramenee au type du champ avant d'etre passee (voir
+/// [`normaliser_missing`]), et les deux types que tantivy ne sait pas poser
+/// sont refuses. Un bucket de remplissage place au mauvais endroit se lit
+/// comme une donnee.
+fn verifier_missing(nom: &str, champ: &str, v: &Value, champs: Option<&Fields>) -> EsResult<()> {
+    let Some(champs) = champs else {
+        return Ok(());
+    };
+    let Some(MappedField { ty, .. }) = champs.get(champ) else {
+        return Ok(());
+    };
+    let refus = |raison: &str| {
+        Err(EsError::unsupported(format!(
+            "ferrite ne supporte pas [missing: {v}] sur le champ [{champ}] de type [{}] \
+             (agregation [{nom}]) ; {raison} (voir docs/compat.md)",
+            ty.name()
+        )))
+    };
+    match ty.kind() {
+        // Ceux-la se ramenent au type du champ (voir `normaliser_missing`).
+        FieldKind::Keyword | FieldKind::I64 | FieldKind::F64 => match normaliser_missing(ty, v) {
+            Some(_) => Ok(()),
+            None => refus(
+                "la valeur ne se lit pas au type du champ ; Elasticsearch echoue aussi sur cette \
+                 demande",
+            ),
+        },
+        FieldKind::Date => refus(
+            "tantivy ne lit pas la date et rangerait ces documents sous [1970-01-01], en 200 et \
+             sans un mot",
+        ),
+        FieldKind::Bool | FieldKind::Text => {
+            refus("tantivy ne sait pas poser de valeur de remplissage sur ce type de colonne")
+        }
+    }
+}
+
+/// La valeur de `missing` ramenee au type du champ, comme le fait ES.
+///
+/// `None` quand elle ne s'y lit pas — ES echoue alors aussi.
+fn normaliser_missing(ty: FieldType, v: &Value) -> Option<Value> {
+    match crate::mapping::coerce("missing", ty, v).ok()? {
+        TypedValue::Str(s) => Some(json!(s)),
+        TypedValue::I64(n) => Some(json!(n)),
+        // Toujours avec sa decimale : ES rend la cle `0.0` sur un `double`, et
+        // `json!(0.0_f64)` l'ecrit ainsi la ou `json!(0)` ecrirait `0`.
+        TypedValue::F64(n) => Some(json!(n)),
+        TypedValue::Bool(_) | TypedValue::Date(_) => None,
+    }
+}
+
 fn verifier_champ(nom: &str, type_agg: &str, champ: &str, champs: Option<&Fields>) -> EsResult<()> {
     let Some(champs) = champs else {
         return Ok(());
@@ -991,6 +1075,9 @@ fn preparer(
             let date = champ
                 .and_then(|c| gen.fields.get(c))
                 .is_some_and(|m| m.ty.kind() == FieldKind::Date);
+            let flottant = champ
+                .and_then(|c| gen.fields.get(c))
+                .is_some_and(|m| m.ty.kind() == FieldKind::F64);
             let format = champ.and_then(|c| gen.fields.format_de(c)).cloned();
             let ordre = valeur
                 .get("order")
@@ -1008,6 +1095,17 @@ fn preparer(
                 if let Some(o) = corps_agg.as_object_mut() {
                     let voulu = size.unwrap_or(10) as u64;
                     o.insert("size".into(), json!(voulu + MARGE_TERMS));
+                    // `missing` est pose **au type du champ**, comme le fait ES
+                    // : `missing: 0` sur un `keyword` y devient la cle `"0"`.
+                    // tantivy, lui, poserait la valeur telle quelle et rendrait
+                    // la cle `0` — un bucket qui n'a pas le type de sa colonne.
+                    if let Some(m) = o.get("missing").cloned() {
+                        if let Some(t) = champ.and_then(|c| gen.fields.get(c)) {
+                            if let Some(norme) = normaliser_missing(t.ty, &m) {
+                                o.insert("missing".into(), norme);
+                            }
+                        }
+                    }
                 }
             }
             // Les bornes d'un `range` : lues en millisecondes (elles ont deja
@@ -1057,6 +1155,7 @@ fn preparer(
                         .and_then(Value::as_u64)
                         .map(|n| n as usize),
                     champ: champ.map(str::to_string),
+                    flottant,
                     ranges,
                 },
             );
@@ -1407,6 +1506,13 @@ fn mise_en_forme_bucket(bucket: &Value, chemin: &str, info: &Info, forme: &Forme
                 if let Some(texte) = rend_date(millis, info) {
                     out.insert("key_as_string".into(), json!(texte));
                 }
+            }
+            // Une cle entiere sur un champ flottant : ES ecrit `2.0`, tantivy
+            // `2`. Elle se rend donc avec sa decimale — sinon deux serveurs qui
+            // ont indexe la meme valeur ne rendent pas le meme type JSON.
+            "key" if info.type_agg == "terms" && info.flottant => {
+                let x = v.as_f64().unwrap_or(0.0);
+                out.insert("key".into(), json!(x));
             }
             "key" if info.type_agg == "range" => {
                 out.insert("key".into(), json!(cle_de_range(bucket, info)));
