@@ -284,7 +284,7 @@ Le job `conformance` de la CI compile ferrite, le lance, rejoue la suite et
 compare la mesure fraîche au rapport commité :
 
 ```bash
-python3 tests/compat/conformance_es.py http://127.0.0.1:9200 \
+python3 tests/compat/conformance_es.py http://127.0.0.1:9200 --etat \
   --json conformance-mesure.json --diff docs/conformance.json
 ```
 
@@ -301,6 +301,130 @@ d'échec à réussi, et l'inverse — plus les autres mouvements (un cas qui pas
 Une PR qui fait bouger la mesure régénère `docs/conformance.json` dans la même
 PR : le cliquet, lui, laisse passer une amélioration sans exiger la mise à jour,
 sinon il deviendrait une cible.
+
+### Le cliquet a battu — août 2026
+
+**Ce qui s'est passé.** Pendant la carte 27, la CI de la PR #35 est passée rouge
+puis verte **sans qu'une ligne ne bouge** : `indices.stats/14_groups.yml ::
+Groups - star` tombait de `refus` à `echec`, 354 échecs devenaient 355, avec
+pour raison `[index] 404 : no such index [test1]` — un échec dans la *mise en
+place* du cas. Un cliquet qui bat ne vaut pas mieux qu'un dénominateur qu'on
+écrit soi-même : il ouvre la porte au geste qui tuerait le reste du dossier,
+relancer la CI jusqu'au vert.
+
+**Reproduit d'abord.** Une campagne coûte 12 s contre un ferrite compilé en
+`--release` : la boucle est donc le bon outil. Sur **cent campagnes
+consécutives, six ont basculé** — et jamais sur le même cas (`14_groups.yml ::
+Groups - star`, `11_metric.yml :: Metric - one`, `index/20_optype.yml ::
+Optype`), toujours avec le même 404 dans la mise en place.
+
+**L'hypothèse de départ était fausse.** La carte soupçonnait un alias survivant.
+C'est ce qu'a servi à trancher le mode `--etat` (ci-dessous) : entre chaque
+paire de cas, il vérifie qu'aucun index, alias, template, template d'index ni
+réglage de cluster n'est apparu, et il est resté **vert pendant une campagne qui
+a basculé**. `nettoie()` fait son travail ; la fuite n'était pas dans l'API.
+
+**Le 404 était un masque.** `get_or_create` répondait `no such index` dès que la
+création échouait, *quelle qu'en soit la raison* — un `Err(_) => self.get(name)`
+écrit pour le cas « un autre appel a gagné la course ». Une fois l'erreur
+réelle rendue, elle a nommé la cause en deux campagnes :
+
+```
+tantivy: Failed to acquire Lockfile: IoError(Os { code: 2, kind: NotFound })
+tantivy: Failed to open file for read: FileDoesNotExist(".../test1/index-1/….term")
+```
+
+**La cause, écrite.** `refresh_dirty` travaille sur un instantané du catalogue :
+entre le moment où elle prend la liste et celui où elle s'occupe d'un index, un
+`DELETE` peut avoir retiré celui-ci. L'`Arc` qu'elle tient reste vivant — et ses
+répertoires s'appellent `{index}/index-0`, `{index}/index-1`, **exactement ceux
+qu'un index du même nom recréé juste après vient de s'attribuer**. Le vieux
+balayage de générations efface alors la génération vivante du neuf, et le vieux
+commit publie son `meta.json` par-dessus ses fichiers. Or `nettoie()` supprime
+`test1` entre deux cas et le cas suivant le recrée aussitôt : la fenêtre est
+grande ouverte, une fois sur dix-sept.
+
+Ce n'était donc pas un défaut du runner mais **de ferrite**, et pas seulement
+sous la suite de conformance : `DELETE /idx` puis réécriture immédiate est un
+geste courant d'un script d'init. Deux corrections, dans
+[`src/engine.rs`](../src/engine.rs) :
+
+- un index retiré du catalogue est **marqué supprimé**, sous le verrou de
+  rafraîchissement — le rafraîchissement de fond et le balayage de générations
+  deviennent inertes sur lui ;
+- la suppression **libère le nom par un renommage** (atomique) sous
+  `.corbeille/` avant d'effacer. Plus aucun chemin n'est partagé entre un index
+  et son homonyme, et `remove_dir_all` ne tombe plus sur le « Directory not
+  empty » que tantivy provoque en poursuivant ses fusions après un commit. Ce
+  qui n'a pas pu être effacé l'est à l'ouverture suivante du catalogue.
+
+La course est figée hors d'une graine par
+`tests/concurrence.rs::un_index_supprime_ne_touche_plus_aux_fichiers_de_son_homonyme`,
+qui la joue **sans thread** : il suffit de garder l'`Arc`, comme le fait la
+boucle de fond, et le test échoue sans chacune des deux corrections.
+
+Elle ne l'est **pas** dans le harnais, et c'est mesuré plutôt que supposé : une
+boucle `DELETE` / recréation posée par le client officiel contre le binaire
+d'avant le correctif passe **400 tours sur 400**. La fenêtre est de quelques
+microsecondes par seconde — un cas de conformance sur vingt mille — donc un
+scénario qui la viserait par le haut serait vert quoi qu'il arrive. Un test qui
+ne peut pas échouer ne mesure rien : c'est au test unitaire, qui supprime le
+temps, de porter celui-là.
+
+**Le déterminisme, vérifié.** **79 campagnes consécutives** — 40 sans le mode
+`--etat`, 39 avec — rendent le même rapport **à l'octet près**, hors date et
+SHA. C'était la propriété que la carte 01 revendiquait ; elle n'était donc pas
+vraie. La mesure, elle, n'a pas bougé : 354 échecs, les mêmes cas, les mêmes
+raisons — `docs/conformance.json` est inchangé.
+
+### Vérifier l'état entre deux cas plutôt que le supposer
+
+`--etat` relève, **entre chaque paire de cas**, huit sortes d'état — index,
+alias, templates, templates d'index, templates de composants, réglages de
+cluster, pipelines, dépôts de snapshots — et arrête la campagne au premier écart
+plutôt que de laisser le cas suivant en hériter :
+
+```
+== etat verifie entre deux cas : index, alias, template, template d'index, reglage de cluster
+   non verifiable (la cible ne sert pas la route) : template de composants, pipeline, depot de snapshots
+```
+
+Les sondes que la cible ne sait pas servir sont **imprimées**, pas passées sous
+silence : un mode qui dirait « état propre » sans avoir posé la question serait
+exactement le défaut qu'il corrige — le même que la sonde différentielle qui ne
+trouvait qu'un serveur et annonçait « tout identique ».
+
+**La référence n'est pas le vide, et c'est l'étalonnage qui l'a dit.** Écrit
+contre l'idée qu'on se fait d'un serveur propre, le mode comparait à « rien ».
+Lancé contre le conteneur de référence — le geste 2, avant de conclure quoi que
+ce soit — il a crié dès le premier cas : un vrai Elasticsearch démarre avec ses
+propres templates (`ilm-history`, `.transform-notifications-*`, les templates de
+composants de x-pack) et il les **réinstalle** après que `nettoie()` les a
+supprimés. Contre le vide, la seule cible qui sert à étalonner l'instrument
+serait rouge de bout en bout.
+
+La référence est donc **l'état de départ de la cible**, relevé avant le premier
+nettoyage, et seules les **apparitions** par rapport à lui comptent. Une
+disparition ne se lit pas : la réinstallation asynchrone des templates de x-pack
+la rendrait aléatoire dans les deux sens.
+
+Une fois retourné, le mode passe la suite entière contre le conteneur de
+référence sans jamais crier, et la mesure y est celle du rapport commité —
+**992/1173, 3 échecs**, à l'identique de
+[`conformance-es7102.json`](conformance-es7102.json). Contre un vrai
+Elasticsearch les **huit** sondes répondent, donc la vérification y est
+complète ; contre ferrite, trois routes manquent (templates de composants,
+pipelines, dépôts) et le mode le dit plutôt que de compter huit vérifications
+là où il en fait cinq.
+
+Coût mesuré : **3,3 s sur 12 s** par campagne, soit +27 %. C'est la CI qui le
+paye, à chaque passage du cliquet — le job `conformance` passe `--etat`. En
+développement, il reste optionnel.
+
+Ce mode n'a pas trouvé la fuite d'août 2026 ; il a servi à **l'éliminer**, et
+c'est autant son rôle. Il attrape la famille que la carte 02 avait payée trois
+fois (template, dépôt, réglage de cluster survivants) — et celle-là ne se voit
+qu'entre deux cas.
 
 ## Ce que ça a trouvé
 

@@ -4,6 +4,7 @@
     python3 tests/compat/conformance_es.py [URL] [--suites search,get,...] [--verbeux]
     python3 tests/compat/conformance_es.py [URL] --json docs/conformance.json
     python3 tests/compat/conformance_es.py [URL] --diff docs/conformance.json
+    python3 tests/compat/conformance_es.py [URL] --etat
 
 Le harnais de ce repo compare ferrite a un vrai ES sur des cas qu'on a ecrits.
 Celui-ci change de nature : les cas viennent d'**Elastic**, pas de nous. C'est
@@ -74,6 +75,24 @@ et qu'aucun cas ne regresse de reussi a echec, 1 sinon. Sans `--diff`, il vaut
 Le runner lui-meme se verifie en le lancant contre un vrai Elasticsearch 7.10.2 :
 il doit y etre pratiquement tout vert. Un runner qui echoue partout contre ES ne
 prouve rien sur ferrite.
+
+# L'etat entre deux cas se verifie, il ne se suppose pas
+
+Un cas qui laisse derriere lui un index, un alias, un template ou un reglage de
+cluster fait echouer les suivants pour une raison qui ne leur appartient pas —
+et le rapport devient faux sans rien signaler. `--etat` releve huit sortes
+d'etat entre chaque paire de cas et **arrete la campagne** au premier ecart,
+plutot que de laisser le cas suivant en heriter.
+
+La reference n'est pas le vide : un vrai Elasticsearch demarre avec ses propres
+templates et les **reinstalle** apres que `nettoie` les a supprimes. C'est donc
+l'etat de depart de la cible, releve avant le premier nettoyage, et seules les
+**apparitions** par rapport a lui comptent (voir `etat_de_depart`).
+
+Les sondes que la cible ne sait pas servir sont imprimees au demarrage : un mode
+qui repondrait « etat propre » sans avoir pose la question serait exactement le
+defaut qu'il corrige. Cout mesure : 3,3 s sur 12 s, soit +27 % — c'est la CI qui
+le paye, a chaque passage du cliquet.
 """
 import datetime
 import json
@@ -127,6 +146,10 @@ SUITES = []
 # Un sous-ensemble de suites ne mesure pas la meme chose que la suite entiere :
 # le rapport le dit, et le cliquet refuse de trancher sur une mesure partielle.
 PARTIEL = False
+# Verifie entre deux cas que rien n'est apparu depuis l'etat de depart de la
+# cible, et s'arrete au premier ecart plutot que de laisser le cas suivant en
+# heriter.
+ETAT_VERIFIE = "--etat" in OPTIONS
 
 # Le type d'erreur par lequel ferrite dit « Elasticsearch sait faire, moi pas ».
 REFUS_FERRITE = "not_implemented_in_ferrite_exception"
@@ -620,6 +643,138 @@ def nettoie_les_index(serveur):
 
 
 # ---------------------------------------------------------------------------
+# L'etat entre deux cas, verifie plutot que suppose
+# ---------------------------------------------------------------------------
+
+def _noms_de_cat(reponse):
+    return {e["index"] for e in (reponse or []) if isinstance(e, dict) and e.get("index")}
+
+
+def _noms_d_alias(reponse):
+    return {a for v in (reponse or {}).values() if isinstance(v, dict)
+            for a in (v.get("aliases") or {})}
+
+
+def _noms_de_liste(cle):
+    return lambda reponse: {t["name"] for t in ((reponse or {}).get(cle) or [])
+                            if isinstance(t, dict) and t.get("name")}
+
+
+def _cles(reponse):
+    return set(reponse or {})
+
+
+def _cles_de_reglages(reponse):
+    """Les reglages poses, `portee.cle.pointee` par `portee.cle.pointee`."""
+    def plat(prefixe, valeur):
+        if isinstance(valeur, dict):
+            for k, v in valeur.items():
+                yield from plat(f"{prefixe}.{k}", v)
+        else:
+            yield prefixe
+    trouves = set()
+    for portee in ("persistent", "transient"):
+        trouves |= set(plat(portee, (reponse or {}).get(portee) or {}))
+    return trouves
+
+
+# Les sortes d'etat qu'un cas peut laisser derriere lui, et comment nommer ce
+# qu'on y trouve. La liste ne se devine pas : les cinq premieres lignes y sont
+# parce qu'un cas les a laissees au moins une fois, les trois dernieres parce
+# qu'elles survivent a la suppression des index chez Elasticsearch.
+SONDES_D_ETAT = (
+    ("index", "cat.indices", {"format": "json", "expand_wildcards": "all"},
+     _noms_de_cat),
+    ("alias", "indices.get_alias", {}, _noms_d_alias),
+    ("template", "indices.get_template", {}, _cles),
+    ("template d'index", "indices.get_index_template", {},
+     _noms_de_liste("index_templates")),
+    ("reglage de cluster", "cluster.get_settings", {}, _cles_de_reglages),
+    ("template de composants", "cluster.get_component_template", {},
+     _noms_de_liste("component_templates")),
+    ("pipeline", "ingest.get_pipeline", {}, _cles),
+    ("depot de snapshots", "snapshot.get_repository", {}, _cles),
+)
+
+
+class FuiteDEtat(Exception):
+    """Un cas a laisse derriere lui un etat que `nettoie` n'attrape pas.
+
+    Ce n'est pas un echec de cas : c'est un defaut du runner, et il rend faux
+    le verdict de **tous** les cas qui suivent. D'ou l'arret immediat.
+    """
+
+
+def _releve(serveur, sonde):
+    """Ce que porte la cible pour cette sonde : un ensemble de noms, ou None si
+    la sonde ne repond pas (route refusee, cible muette)."""
+    _, api, params, extrait = sonde
+    try:
+        _, reponse = serveur.appelle(api, dict(params))
+    except (KeyError, urllib.error.URLError, OSError):
+        return None
+    if isinstance(reponse, dict) and "error" in reponse:
+        return None
+    try:
+        return extrait(reponse)
+    except (AttributeError, TypeError):
+        return None
+
+
+def etat_de_depart(serveur):
+    """Ce que la cible porte **avant** qu'on ne joue quoi que ce soit.
+
+    La reference n'est pas « rien » : un vrai Elasticsearch demarre avec ses
+    propres templates (`ilm-history`, `.transform-notifications-*`, les
+    templates de composants de x-pack), et il les **reinstalle** apres que
+    `nettoie` les a supprimes. Mesurer contre le vide dirait « fuite » a chaque
+    cas contre la cible qui sert justement a etaler l'instrument.
+
+    La reference est donc l'etat de depart de la cible, releve avant le premier
+    nettoyage. Ce qui apparait par rapport a lui, et rien d'autre, est ce qu'un
+    cas a laisse derriere lui.
+
+    Rend `(reference, muettes)` : les sondes que la cible ne sait pas servir
+    sont ecartees **et nommees** — un mode qui repondrait « etat propre » sans
+    avoir pose la question serait exactement le defaut qu'il corrige.
+    """
+    reference, muettes = {}, []
+    for sonde in SONDES_D_ETAT:
+        nom = sonde[0]
+        releve = _releve(serveur, sonde)
+        if releve is None:
+            muettes.append(nom)
+            continue
+        reference[nom] = releve
+    return reference, muettes
+
+
+def verifie_l_etat(serveur, reference):
+    """Ce qui est apparu depuis l'etat de depart. Vide quand tout va bien.
+
+    Seules les **apparitions** comptent. Une disparition ne se lit pas : contre
+    un vrai Elasticsearch, `nettoie` supprime les templates de x-pack et ES les
+    reinstalle a son rythme — on lirait sa reinstallation comme une fuite et son
+    absence momentanee comme une autre.
+    """
+    fuites = []
+    for sonde in SONDES_D_ETAT:
+        nom = sonde[0]
+        if nom not in reference:
+            continue
+        releve = _releve(serveur, sonde)
+        if releve is None:
+            # Une sonde qui repondait au demarrage et se tait maintenant a
+            # change d'avis a cause de ce qu'un cas a laisse : c'est une fuite.
+            fuites.append(f"{nom} : la sonde ne repond plus")
+            continue
+        apparus = sorted(releve - reference[nom])
+        if apparus:
+            fuites.append(f"{nom} : {', '.join(apparus)[:300]}")
+    return fuites
+
+
+# ---------------------------------------------------------------------------
 # Le rapport machine
 # ---------------------------------------------------------------------------
 
@@ -897,10 +1052,11 @@ def compte_les_cas(chemin, yaml):
     return sum(len(d) for d in docs if "setup" not in d and "teardown" not in d)
 
 
-def joue_la_suite(serveur, yaml):
+def joue_la_suite(serveur, yaml, reference=None):
     """Rejoue toutes les suites retenues et rend un enregistrement par cas."""
     resultats = []
     with_types = {"fichiers": 0, "cas": 0}
+    precedent = "(demarrage)"
 
     def note(suite, fichier, nom, categorie, raison="", motif=None, trace=None):
         entree = {"suite": suite, "fichier": fichier, "cas": nom,
@@ -951,6 +1107,14 @@ def joue_la_suite(serveur, yaml):
             for nom, actions in cas:
                 pile = {}
                 nettoie(serveur)
+                if reference is not None:
+                    fuites = verifie_l_etat(serveur, reference)
+                    if fuites:
+                        raise FuiteDEtat(
+                            f"apres [{precedent}], avant "
+                            f"[{suite}/{fichier}::{nom}] :\n     "
+                            + "\n     ".join(fuites))
+                precedent = f"{suite}/{fichier}::{nom}"
                 trace = {"api": None, "phase": "mise en place"}
                 try:
                     joue(serveur, setup, pile, trace)
@@ -1061,7 +1225,28 @@ def main():
     print(f"== suite REST d'Elasticsearch {VERSION} (Apache 2.0), "
           f"{len(SUITES)} domaines\n")
 
-    resultats, with_types = joue_la_suite(serveur, yaml)
+    reference = None
+    if ETAT_VERIFIE:
+        # Releve **avant** le premier nettoyage : la reference est l'etat de
+        # depart de la cible, pas le vide (voir `etat_de_depart`).
+        reference, muettes = etat_de_depart(serveur)
+        print("== etat verifie entre deux cas : " + ", ".join(reference))
+        if muettes:
+            print("   non verifiable (la cible ne sert pas la route) : "
+                  + ", ".join(muettes))
+        porte = {n: sorted(v) for n, v in reference.items() if v}
+        if porte:
+            print(f"   etat de depart de la cible : {json.dumps(porte)[:300]}")
+        print()
+
+    try:
+        resultats, with_types = joue_la_suite(serveur, yaml, reference)
+    except FuiteDEtat as e:
+        print(f"\nFUITE D'ETAT — {e}\n\n"
+              "   Un cas a laisse derriere lui un etat que `nettoie` n'attrape\n"
+              "   pas : le verdict de tous les cas suivants en herite. La mesure\n"
+              "   s'arrete ici, et aucun rapport n'est ecrit.", file=sys.stderr)
+        return 2
     rapport = construis_rapport(resultats, info, with_types)
     affiche(rapport)
     nettoie(serveur)

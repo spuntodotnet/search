@@ -24,6 +24,14 @@ use crate::util;
 
 const META_FILE: &str = "ferrite.json";
 const INDEX_DIR_PREFIX: &str = "index-";
+
+/// Ou vont les repertoires des index supprimes, en attente d'effacement.
+///
+/// Un sous-repertoire plutot qu'un prefixe : ES accepte les noms d'index qui
+/// commencent par un point (`.kibana`), donc un prefixe serait un nom qu'un
+/// client peut prendre. Celui-ci ne porte pas de `ferrite.json` a sa racine,
+/// il n'est donc jamais lu comme un index.
+const CORBEILLE: &str = ".corbeille";
 const WRITER_HEAP: usize = 50_000_000;
 
 /// Les conditions d'une ecriture.
@@ -136,6 +144,20 @@ pub struct FerriteIndex {
     inertes: RwLock<BTreeMap<String, String>>,
     seq_counter: AtomicU64,
     dirty: AtomicBool,
+    /// Vrai des que `Catalog::delete` a retire cet index du catalogue.
+    ///
+    /// Un `Arc` survit a la suppression : la boucle de fond travaille sur un
+    /// instantane du catalogue (`refresh_dirty` appelle `list()` une fois),
+    /// donc elle peut s'occuper d'un index que le `DELETE` vient de retirer.
+    /// Ses repertoires s'appellent `{index}/index-0`, `{index}/index-1` —
+    /// exactement ceux qu'un index du **meme nom**, cree juste apres, vient de
+    /// s'attribuer. Le vieux balayage efface alors la generation vivante du
+    /// neuf, et le vieux commit publie son `meta.json` par-dessus le sien.
+    ///
+    /// Le drapeau rend inertes les deux gestes de fond. Il est pose sous le
+    /// verrou de rafraichissement, donc un rafraichissement deja en cours a
+    /// fini avant que le repertoire ne disparaisse.
+    supprime: AtomicBool,
     /// Serialise les rafraichissements entre eux.
     ///
     /// `refresh` est une garantie : au retour, ce qui etait ecrit avant l'appel
@@ -221,6 +243,11 @@ impl FerriteIndex {
         // Attendre un rafraichissement deja en cours plutot que de rendre la
         // main pendant qu'il commite encore.
         let _garde = self.refresh_lock.lock().expect("refresh lock");
+        // Un index supprime n'a plus de repertoire a lui : commiter ici, c'est
+        // ecrire dans celui de l'homonyme qui l'a remplace.
+        if self.est_supprime() {
+            return Ok(());
+        }
         if !self.dirty.swap(false, Ordering::AcqRel) {
             return Ok(());
         }
@@ -236,6 +263,13 @@ impl FerriteIndex {
     /// que son `Arc` vit, son repertoire doit vivre aussi.
     pub fn balayer_generations_retirees(&self) {
         let mut retirees = self.retirees.lock().expect("retirees lock");
+        if self.est_supprime() {
+            // Le repertoire de l'index est deja parti avec lui — et son chemin
+            // peut appartenir a un homonyme recree depuis. On lache les
+            // generations sans toucher au disque.
+            retirees.clear();
+            return;
+        }
         retirees.retain(|gen| {
             if Arc::strong_count(gen) == 1 {
                 let _ = fs::remove_dir_all(&gen.dir);
@@ -244,6 +278,20 @@ impl FerriteIndex {
                 true
             }
         });
+    }
+
+    /// Vrai quand cet index a ete supprime du catalogue.
+    pub fn est_supprime(&self) -> bool {
+        self.supprime.load(Ordering::Acquire)
+    }
+
+    /// Marque l'index supprime : plus rien de ce qu'il porte ne doit toucher au
+    /// disque. Pose sous le verrou de rafraichissement pour qu'un
+    /// rafraichissement en cours soit **fini** au retour, et non a moitie
+    /// commite dans un repertoire qu'on s'apprete a effacer.
+    fn marquer_supprime(&self) {
+        let _garde = self.refresh_lock.lock().expect("refresh lock");
+        self.supprime.store(true, Ordering::Release);
     }
 
     /// Ecrit (ou remplace) un document.
@@ -1011,6 +1059,10 @@ impl Catalog {
             templates: RwLock::new(crate::templates::charger(&root)),
         });
 
+        // Ce qu'une suppression precedente n'a pas pu finir d'effacer : plus
+        // personne ne l'ecrit maintenant, c'est le bon moment (voir `delete`).
+        let _ = fs::remove_dir_all(root.join(CORBEILLE));
+
         let entries = fs::read_dir(&root)
             .map_err(|e| EsError::internal(format!("impossible de lire {root:?}: {e}")))?;
         for entry in entries.flatten() {
@@ -1358,8 +1410,14 @@ impl Catalog {
                         }
                         Ok(idx)
                     }
-                    // Un autre appel a gagne la course : son index fait l'affaire.
-                    Err(_) => self.get(name),
+                    // Un autre appel a gagne la course : son index fait
+                    // l'affaire. Mais s'il n'y a toujours pas d'index, c'est
+                    // que la creation a echoue pour une autre raison — la
+                    // rendre en « no such index » la deguiserait en absence,
+                    // et un 404 sur une ecriture qui cree d'habitude est
+                    // exactement le genre de message qui envoie chercher au
+                    // mauvais endroit.
+                    Err(echec) => self.get(name).map_err(|_| echec),
                 }
             }
             Err(e) => Err(e),
@@ -1436,6 +1494,7 @@ impl Catalog {
             inertes: RwLock::new(inertes),
             seq_counter: AtomicU64::new(0),
             dirty: AtomicBool::new(false),
+            supprime: AtomicBool::new(false),
             refresh_lock: Mutex::new(()),
         });
         guard.insert(name.to_string(), idx.clone());
@@ -1443,18 +1502,40 @@ impl Catalog {
     }
 
     pub fn delete(&self, name: &str) -> EsResult<()> {
-        let dir = {
+        let idx = {
             let mut guard = self.indices.write().expect("catalog lock");
             let Some(idx) = guard.remove(name) else {
                 return Err(EsError::index_not_found(name));
             };
-            idx.dir.clone()
+            idx
         };
+        // Retire du catalogue ne veut pas dire mort : la boucle de fond en tient
+        // un `Arc`. Le marquage attend qu'un rafraichissement en cours ait fini,
+        // donc il se fait le verrou du catalogue relache — sinon toute requete
+        // attendrait la fin de ce commit.
+        idx.marquer_supprime();
+        let dir = idx.dir.clone();
+
         // Un alias qui ne designerait plus que des index disparus rendrait 404
         // a la premiere recherche : il part avec l'index.
         self.purger_alias(name);
-        fs::remove_dir_all(&dir)
+
+        // Liberer le nom d'abord, effacer ensuite — et le renommage est
+        // atomique. Effacer sur place ne suffisait pas : apres un commit,
+        // tantivy poursuit ses fusions et son ramassage dans le repertoire, et
+        // `remove_dir_all` y tombait sur « Directory not empty ». Pire, un
+        // index du **meme nom** recree juste apres reprenait ces chemins
+        // (`{index}/index-0`) pendant que l'ancien y travaillait encore. Sous
+        // la corbeille, plus aucun chemin n'est partage.
+        let corbeille = self.root.join(CORBEILLE);
+        fs::create_dir_all(&corbeille)
+            .map_err(|e| EsError::internal(format!("creation de {corbeille:?}: {e}")))?;
+        let tombe = corbeille.join(util::random_uuid());
+        fs::rename(&dir, &tombe)
             .map_err(|e| EsError::internal(format!("suppression de {dir:?}: {e}")))?;
+        // L'effacement, lui, a le droit d'echouer : le nom est deja rendu, et
+        // ce qui reste est balaye a la prochaine ouverture du catalogue.
+        let _ = fs::remove_dir_all(&tombe);
         Ok(())
     }
 
@@ -1714,6 +1795,7 @@ fn open_index(dir: &Path, name: &str) -> EsResult<FerriteIndex> {
         inertes: RwLock::new(inertes),
         seq_counter: AtomicU64::new(next_seq),
         dirty: AtomicBool::new(false),
+        supprime: AtomicBool::new(false),
         refresh_lock: Mutex::new(()),
     })
 }
