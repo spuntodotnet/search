@@ -209,7 +209,7 @@ développement, pas de CI).
 
 | Commande | La question à laquelle elle répond |
 |---|---|
-| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**110/110**, dont l'export par `helpers.scan`, le date math, la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats`, les templates, ce que la réponse transporte — `fields`, `docvalue_fields`, `stored_fields` — la modification par requête, `_delete_by_query` / `_update_by_query`, et les n-grammes de l'autocomplétion, `search_analyzer`, `copy_to` et `store`) |
+| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**111/111**, dont l'export par `helpers.scan`, le date math, la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats`, les templates, ce que la réponse transporte — `fields`, `docvalue_fields`, `stored_fields` — la modification par requête, `_delete_by_query` / `_update_by_query`, et les n-grammes de l'autocomplétion, `search_analyzer`, `copy_to` et `store`) |
 | `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (212/213, 0 écart réel) |
 | `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (45/46 ; le seul écart est `_cluster/health`, toujours vert par choix) |
 | `tests/compat/diff_aggs.py` | les mêmes agrégations ? (53/53, `filter` comprise, et ce qu'un bucket **vide** doit porter) |
@@ -230,7 +230,7 @@ développement, pas de CI).
 | `tests/compat/perimetre.py` | ce cas qui échoue, il porte sur quoi ? Il rattache un échec de conformance à une capacité déclarée : **régression** si elle est annoncée supportée, **coût de périmètre** si elle est annoncée refusée |
 | `tests/compat/recolte_usage.py` | à quoi ressemblent les requêtes que les gens envoient **vraiment** ? Constitue le corpus ([`tests/compat/usage/corpus.jsonl`](tests/compat/usage/corpus.jsonl), 5 311 requêtes) depuis quatre sources citables : doc de référence 8.15, tracks Rally, clients officiels, code open source. Chaque requête porte l'URL d'où elle vient |
 | `tests/compat/ponderation.py` | **quelle part de ces requêtes passe entièrement ?** (42,5 % du corpus, mais **93,5 % du code d'application** et 28,6 % des tracks Rally — l'écart *est* le résultat). Écrit les `poids` de `compat.yaml`, publie [`docs/usage.json`](docs/usage.json) et la table « ce qui manque, par fréquence d'usage ». `--rejoue` pose la même requête à ferrite et à un vrai ES 8.15 : les deux mesures s'accordent sur 99,3 % des cas |
-| `tests/compat/conformance_es.py` | que dit la suite de tests **d'Elastic** ? Ses **107 domaines**, sans liste blanche. Son rapport est un fichier, pas une phrase : [`docs/conformance.json`](docs/conformance.json) (totaux, deux taux, exclusions comptées, détail par cas), régénéré par `--json`, tenu par un cliquet en CI (`--diff`) |
+| `tests/compat/conformance_es.py` | que dit la suite de tests **d'Elastic** ? Ses **107 domaines**, sans liste blanche. Son rapport est un fichier, pas une phrase : [`docs/conformance.json`](docs/conformance.json) (totaux, deux taux, exclusions comptées, détail par cas), régénéré par `--json`, tenu par un cliquet en CI (`--diff`). `--etat` vérifie entre deux cas que le serveur est revenu à l'état vide et arrête la campagne au premier écart (+27 %, payés par la CI) : 40 campagnes consécutives rendent le même rapport à l'octet près |
 | `tests/compat/bench_vs_es.py` | mêmes résultats, **et à quel prix** ? Garde-fou de développement : 600 documents et 138 requêtes **écrites ici**, donc un dénominateur qu'on a choisi soi-même — ne sert plus à publier |
 | `tests/compat/bench_echelle.py` | et **à l'échelle**, sur un corpus que nous n'avons pas écrit ? La track Rally `geonames` d'Elastic (Apache-2.0, révision figée, corpus vérifié à l'octet près), 500 000 et 2 000 000 de documents, **ses** 31 requêtes. `term` ×1,7 et `match_phrase` ×2,6 pour ferrite a deux millions de documents (et l'avance **grandit** avec la taille), RSS ×8 en sa faveur — et le **tri jusqu'a ×290 contre lui**, l'indexation ×0,20, le `scroll` ×0,25. 13 requêtes jouables, 18 refusées, toutes rattachées à une capacité déclarée. Voir [`docs/bench.md`](docs/bench.md) |
 | `tests/compat/sonde_sous_aggs.py` | une **sous-agrégation** voit-elle tous les documents de son bucket ? (non, au-delà de ~2 048 par segment — défaut de tantivy 0.26.1, trouvé par le banc à l'échelle) |
@@ -645,6 +645,26 @@ bouger**, pas après.
   chaque tranche, donc au-dessus du seuil). C'est la pire forme du défaut :
   ce qui disparaît est la minorité. Mesure figée dans
   `tests/compat/sonde_sous_aggs.py`, chiffres dans `docs/bench.md`.
+- **Un cliquet qui bat, et une hypothèse qui coûtait la mesure.** La CI d'une PR
+  est passée rouge puis verte sans qu'une ligne ne bouge : un cas de
+  `indices.stats` tombait de `refus` à `echec` sur `[index] 404 : no such index
+  [test1]`, une fois sur dix-sept campagnes. Trois leçons, dans l'ordre où elles
+  se sont payées. **(1)** L'hypothèse écrite sur la carte — « un alias survit à
+  `nettoie()` » — était fausse, et c'est un mode qui *vérifie* l'état entre deux
+  cas (aucun index, alias, template, réglage de cluster) qui l'a éliminée : il
+  est resté vert pendant une campagne qui a basculé. **(2)** Le 404 était un
+  **masque** : `get_or_create` répondait « no such index » dès que la création
+  échouait, quelle qu'en soit la raison — un `Err(_) => self.get(name)` écrit
+  pour le seul cas « un autre appel a gagné la course ». Rendre l'erreur réelle
+  a nommé la cause en deux campagnes. **(3)** La cause n'était pas dans le
+  runner mais dans ferrite : `refresh_dirty` travaille sur un **instantané** du
+  catalogue, donc elle tient l'`Arc` d'un index que `DELETE` vient de retirer —
+  et ses répertoires (`{index}/index-0`) sont exactement ceux que l'index
+  homonyme recréé juste après s'attribue. Le vieux balayage efface la génération
+  vivante du neuf. Un index supprimé est donc **marqué**, et la suppression
+  libère le nom par un renommage atomique sous `.corbeille/` : plus aucun chemin
+  n'est partagé entre un index et son successeur. Retirer d'une table n'est pas
+  tuer — tant qu'un `Arc` vit, il faut lui retirer le droit d'écrire.
 - **Une clé de bucket entière sur un champ flottant.** `terms` sur un `double`
   rendait la clé `2` là où ES rend `2.0` — un client qui type strictement son
   JSON y lit un entier. Défaut antérieur, invisible parce qu'aucun corpus écrit

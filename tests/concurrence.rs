@@ -270,3 +270,85 @@ fn refresh_garantit_la_visibilite_malgre_le_rafraichissement_de_fond() {
     fond.join().unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Un index supprime survit dans la boucle de fond — et son homonyme recree
+/// porte **les memes chemins**.
+///
+/// `refresh_dirty` travaille sur un instantane du catalogue : entre le moment
+/// ou elle prend la liste et celui ou elle s'occupe d'un index, un `DELETE`
+/// peut avoir retire celui-ci. L'`Arc` qu'elle tient reste vivant, et ses
+/// repertoires s'appellent `{index}/index-0`, `{index}/index-1` — exactement
+/// ceux qu'un index du meme nom, cree juste apres, vient de s'attribuer. Le
+/// vieux commit ecrit alors dans les fichiers du neuf : tantivy y publie son
+/// propre `meta.json` et efface les fichiers qu'il ne reference pas. Et le
+/// vieux balayage efface le repertoire d'une generation du neuf.
+///
+/// C'est ce qui a fait battre le cliquet de conformance : `nettoie()` supprime
+/// `test1` entre deux cas, le cas suivant le recree aussitot, et une campagne
+/// sur treize voyait la boucle de fond passer entre les deux — en 500
+/// (« Failed to acquire Lockfile », « FileDoesNotExist(...index-1/....term) »).
+/// Rien ne fuyait dans l'API : l'etat verifie entre deux cas etait vide a
+/// chaque fois.
+#[test]
+fn un_index_supprime_ne_touche_plus_aux_fichiers_de_son_homonyme() {
+    let dir = tmp_dir("recreation");
+    let cat = catalog(&dir);
+
+    // Un premier `t` : `index-0` a la creation, puis `index-1` des qu'un champ
+    // inedit force une evolution — et `index-0` part aux generations retirees.
+    let ancien = cat.get_or_create("t").unwrap();
+    ancien
+        .index_doc("1", &json!({"bar": "bar"}), WriteOptions::default())
+        .unwrap();
+    // Pas de `refresh` : l'index reste « sale », donc la boucle de fond aura
+    // quelque chose a commiter apres coup — c'est tout le sujet.
+
+    // La boucle de fond tient cet `Arc` pendant qu'on supprime.
+    cat.delete("t").unwrap();
+
+    // Le meme nom, tout de suite apres : memes repertoires. Il repart de
+    // `index-0` — celui-la meme que l'ancien garde dans ses generations
+    // retirees.
+    let neuf = cat.get_or_create("t").unwrap();
+
+    // Ce que fait la boucle de fond sur un index qui n'existe plus.
+    let _ = ancien.refresh();
+    ancien.balayer_generations_retirees();
+
+    // Le nouvel index doit etre intact : ecrire, rafraichir, relire.
+    neuf.index_doc("2", &json!({"bar": "bar"}), WriteOptions::default())
+        .expect("ecrire dans le nouvel index");
+    neuf.index_doc("3", &json!({"bar": "encore"}), WriteOptions::default())
+        .expect("ecrire dans le nouvel index");
+    neuf.refresh().expect("rafraichir le nouvel index");
+    assert_eq!(
+        compte(&neuf),
+        2,
+        "les documents du nouvel index ne sont pas tous la"
+    );
+
+    // La suppression libere le nom par un renommage sous une corbeille, et ce
+    // qui n'a pas pu etre efface l'est a l'ouverture suivante : rouvrir le
+    // catalogue ne doit ressusciter ni l'index supprime ni sa corbeille.
+    drop(neuf);
+    drop(ancien);
+    drop(cat);
+    let rouvert = catalog(&dir);
+    let noms: Vec<String> = rouvert.list().iter().map(|i| i.name.clone()).collect();
+    assert_eq!(
+        noms,
+        vec!["t".to_string()],
+        "le catalogue rouvert : {noms:?}"
+    );
+    assert_eq!(compte(&rouvert.get("t").unwrap()), 2);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Les documents que la recherche voit vraiment, generation courante comprise.
+fn compte(idx: &Arc<ferrite::engine::FerriteIndex>) -> usize {
+    let gen = idx.current();
+    gen.searcher()
+        .search(&tantivy::query::AllQuery, &tantivy::collector::Count)
+        .unwrap()
+}
