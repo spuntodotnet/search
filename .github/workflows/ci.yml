@@ -147,11 +147,11 @@ jobs:
       # echoue si ce nombre augmente ou si un cas passe de reussi a echec.
       # `docs/conformance.json` est la reference, et il est commite.
       #
-      # `--etat` verifie entre deux cas que le serveur est bien revenu a l'etat
-      # vide (aucun index, aucun alias, aucun template, aucun reglage de
-      # cluster) et arrete la campagne au premier ecart. Un cliquet qui bat ne
-      # vaut pas mieux qu'un denominateur choisi : il coute 3,3 s sur 12 s,
-      # mesure, et c'est la CI qui doit le payer.
+      # `--etat` verifie entre deux cas qu'aucun index, alias, template ni
+      # reglage de cluster n'est apparu depuis l'etat de depart de la cible, et
+      # arrete la campagne au premier ecart. Un cliquet qui bat ne vaut pas
+      # mieux qu'un denominateur choisi : il coute 3,3 s sur 12 s, mesure, et
+      # c'est la CI qui doit le payer.
       - name: suite de conformance, compare au rapport commite
         run: |
           python3 tests/compat/conformance_es.py http://127.0.0.1:9200 --etat \

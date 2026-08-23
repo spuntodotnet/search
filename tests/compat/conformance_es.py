@@ -80,9 +80,14 @@ prouve rien sur ferrite.
 
 Un cas qui laisse derriere lui un index, un alias, un template ou un reglage de
 cluster fait echouer les suivants pour une raison qui ne leur appartient pas —
-et le rapport devient faux sans rien signaler. `--etat` verifie, entre chaque
-paire de cas, que le serveur est bien revenu a l'etat vide, et **arrete la
-campagne** au premier ecart plutot que de laisser le cas suivant en heriter.
+et le rapport devient faux sans rien signaler. `--etat` releve huit sortes
+d'etat entre chaque paire de cas et **arrete la campagne** au premier ecart,
+plutot que de laisser le cas suivant en heriter.
+
+La reference n'est pas le vide : un vrai Elasticsearch demarre avec ses propres
+templates et les **reinstalle** apres que `nettoie` les a supprimes. C'est donc
+l'etat de depart de la cible, releve avant le premier nettoyage, et seules les
+**apparitions** par rapport a lui comptent (voir `etat_de_depart`).
 
 Les sondes que la cible ne sait pas servir sont imprimees au demarrage : un mode
 qui repondrait « etat propre » sans avoir pose la question serait exactement le
@@ -141,8 +146,9 @@ SUITES = []
 # Un sous-ensemble de suites ne mesure pas la meme chose que la suite entiere :
 # le rapport le dit, et le cliquet refuse de trancher sur une mesure partielle.
 PARTIEL = False
-# Verifie entre deux cas que le serveur est bien revenu a l'etat vide, et
-# s'arrete au premier ecart plutot que de laisser le cas suivant en heriter.
+# Verifie entre deux cas que rien n'est apparu depuis l'etat de depart de la
+# cible, et s'arrete au premier ecart plutot que de laisser le cas suivant en
+# heriter.
 ETAT_VERIFIE = "--etat" in OPTIONS
 
 # Le type d'erreur par lequel ferrite dit « Elasticsearch sait faire, moi pas ».
