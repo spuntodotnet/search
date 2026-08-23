@@ -346,4 +346,7 @@ Ce qui est épinglé, et pourquoi :
   logiciels ne sont pas une preuve de généralité. La suivante en trouvera
   d'autres — c'est ce que les trois passages de Wagtail montrent le mieux.
 - **Ni la montée en charge ni la durée.** Le prix des mêmes résultats est
-  mesuré ailleurs (`bench_vs_es.py`) : ×3,6 en latence, ×6 en indexation.
+  mesuré ailleurs, et il ne se résume pas à un facteur : sur le corpus public
+  de la track Rally `geonames`, à deux millions de documents, ferrite est
+  devant sur un `term` (×1,8) et derrière d'un facteur 200 sur un tri. Voir
+  [`bench.md`](bench.md).

@@ -370,7 +370,7 @@ pub async fn nodes(State(st): State<SharedState>, uri: Uri) -> EsResult<Json> {
                 "http": {
                     "bound_address": ["0.0.0.0:9200"],
                     "publish_address": "127.0.0.1:9200",
-                    "max_content_length_in_bytes": 104_857_600i64,
+                    "max_content_length_in_bytes": super::MAX_CONTENT_LENGTH as i64,
                 },
             }
         }

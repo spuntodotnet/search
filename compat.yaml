@@ -1890,6 +1890,14 @@ tables:
             - {texte: "une valeur numérique"}
           refuses:
             - {nom: "false", note: "il n'y a rien à économiser sur un total déjà exact"}
+        conformance:
+          # Sans ce motif, le refus est rattache a `recherche.route` — declaree
+          # supportee — donc compte comme une **regression** alors qu'il est le
+          # cout d'un parametre declare refuse juste au-dessus. Trouve par
+          # `bench_echelle.py`, sur les deux operations de la track Rally
+          # `geonames` qui posent `track_total_hits: false`.
+          erreurs:
+            - "ne supporte pas \\[track_total_hits: false\\]"
 
       - id: recherche.scoring
         nom: "Scoring"

@@ -774,6 +774,36 @@ def bulk_statut_par_item(es):
 
 
 @scenario
+def bulk_gros_lot(es):
+    """Un lot plus gros que le defaut de la bibliotheque HTTP.
+
+    `helpers.bulk` du client officiel decoupe a `max_chunk_bytes`, dont le
+    defaut est 100 Mo — la valeur qu'ES annonce dans `GET /_nodes` sous
+    `http.max_content_length_in_bytes`. Tant que la couche HTTP de ferrite
+    gardait le defaut d'axum (2 Mo), il annoncait donc cinquante fois ce qu'il
+    acceptait, et un `_bulk` de 5 000 documents — la taille de lot par defaut
+    des tracks Rally — repartait en `413 text/plain`, hors format d'erreur d'ES.
+
+    Le scenario mesure les deux moities : ce qu'annonce `_nodes`, et ce qui
+    passe vraiment. Un chiffre annonce que rien n'exerce n'est qu'une phrase.
+    """
+    annonce = next(iter(es.nodes.info()["nodes"].values()))["http"][
+        "max_content_length_in_bytes"]
+    assert annonce == 104_857_600, annonce
+
+    # ~6 Mo de corps utile : trois fois le defaut d'axum, en un seul appel.
+    remplissage = "vergogne " * 600
+    operations = []
+    for i in range(1000):
+        operations.append({"index": {"_index": "gros_lot", "_id": str(i)}})
+        operations.append({"titre": f"document {i}", "corps": remplissage})
+    resp = es.bulk(operations=operations, refresh=True)
+    assert resp["errors"] is False, resp["items"][0]
+    assert es.count(index="gros_lot")["count"] == 1000
+    es.options(ignore_status=404).indices.delete(index="gros_lot")
+
+
+@scenario
 def index_cree_a_l_ecriture(es):
     """Indexer dans un index absent le cree, comme chez ES — mais lire ou
     supprimer dans un index absent reste un 404."""

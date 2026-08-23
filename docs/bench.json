@@ -1,0 +1,1038 @@
+{
+  "geonames-2000000": {
+    "debit_req_s": {
+      "elasticsearch": 53.02000840540573,
+      "ferrite": 2.7243108819153705
+    },
+    "disque_octets": {
+      "elasticsearch": 585746957,
+      "elasticsearch_apres_forcemerge": 422361646,
+      "ferrite": 495670548
+    },
+    "documents": 2000000,
+    "ecarts_track": [
+      {
+        "cote": "les deux",
+        "pourquoi": "`geo_point` est hors du perimetre declare de ferrite (capacite `type.autres`). La valeur reste dans le `_source` des deux cotes : les documents envoyes sont identiques a l'octet pres, seul l'indexation du champ disparait.",
+        "quoi": "champ `location` (`geo_point`) retire du mapping"
+      },
+      {
+        "cote": "les deux",
+        "pourquoi": "consequence de la ligne precedente : en `strict`, un document portant `location` serait rejete. En `false`, il entre dans le `_source` sans etre indexe — ce que fait ferrite comme Elasticsearch.",
+        "quoi": "`dynamic: strict` remplace par `dynamic: false`"
+      },
+      {
+        "cote": "les deux",
+        "pourquoi": "ferrite refuse explicitement ce parametre de champ (capacite `mapping.autres_params`). Il ne sert dans la track qu'a rendre agregeable un champ `text` ; les requetes du banc passent toutes par `country_code.raw`.",
+        "quoi": "`fielddata: true` retire de `country_code`"
+      },
+      {
+        "cote": "les deux",
+        "pourquoi": "ferrite est mono-shard par construction. Comparer 1 shard a 5 comparerait des nombres de shards, pas des moteurs.",
+        "quoi": "`index.number_of_shards` : 5 -> 1"
+      },
+      {
+        "cote": "Elasticsearch seul",
+        "pourquoi": "c'est la track qui coupe le cache de requetes, pour mesurer le moteur et pas son cache. ferrite refuse le reglage — il n'a pas de cache de requetes du tout, donc l'appliquer d'un seul cote rapproche les deux serveurs au lieu de les eloigner.",
+        "quoi": "`index.requests.cache.enable: false`"
+      },
+      {
+        "cote": "les deux",
+        "pourquoi": "la track force-merge avant de mesurer ; ferrite n'a pas la route (cycle de vie d'index, hors perimetre). Les deux serveurs sont donc mesures **tels qu'indexes**. La taille sur disque d'Elasticsearch est en plus relevee apres un `_forcemerge`, parce que c'est un gain que ferrite ne sait pas aller chercher.",
+        "quoi": "pas de `_forcemerge` apres l'indexation"
+      }
+    ],
+    "hors_mesure": [
+      {
+        "capacite": {
+          "capacite": "dsl.non_supportees",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": "search_phase_execution_exception: all shards failed",
+        "operation": "expression",
+        "refus": "parsing_exception: unknown query [function_score] : ferrite supporte [match_all, match_none, match, multi_match, match_phrase, match_phrase_prefix, exists, ids, prefix, wildcard, regexp, fuzzy, term, terms, range, bool,"
+      },
+      {
+        "capacite": {
+          "capacite": "dsl.non_supportees",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": "search_phase_execution_exception: all shards failed",
+        "operation": "painless_static",
+        "refus": "parsing_exception: unknown query [function_score] : ferrite supporte [match_all, match_none, match, multi_match, match_phrase, match_phrase_prefix, exists, ids, prefix, wildcard, regexp, fuzzy, term, terms, range, bool,"
+      },
+      {
+        "capacite": {
+          "capacite": "dsl.non_supportees",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": "search_phase_execution_exception: all shards failed",
+        "operation": "painless_dynamic",
+        "refus": "parsing_exception: unknown query [function_score] : ferrite supporte [match_all, match_none, match, multi_match, match_phrase, match_phrase_prefix, exists, ids, prefix, wildcard, regexp, fuzzy, term, terms, range, bool,"
+      },
+      {
+        "capacite": {
+          "capacite": "dsl.non_supportees",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": "search_phase_execution_exception: all shards failed",
+        "operation": "decay_geo_gauss_function_score",
+        "refus": "parsing_exception: unknown query [function_score] : ferrite supporte [match_all, match_none, match, multi_match, match_phrase, match_phrase_prefix, exists, ids, prefix, wildcard, regexp, fuzzy, term, terms, range, bool,"
+      },
+      {
+        "capacite": {
+          "capacite": "dsl.non_supportees",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": "search_phase_execution_exception: all shards failed",
+        "operation": "decay_geo_gauss_script_score",
+        "refus": "parsing_exception: unknown query [script_score] : ferrite supporte [match_all, match_none, match, multi_match, match_phrase, match_phrase_prefix, exists, ids, prefix, wildcard, regexp, fuzzy, term, terms, range, bool, c"
+      },
+      {
+        "capacite": {
+          "capacite": "dsl.non_supportees",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": null,
+        "operation": "field_value_function_score",
+        "refus": "parsing_exception: unknown query [function_score] : ferrite supporte [match_all, match_none, match, multi_match, match_phrase, match_phrase_prefix, exists, ids, prefix, wildcard, regexp, fuzzy, term, terms, range, bool,"
+      },
+      {
+        "capacite": {
+          "capacite": "dsl.non_supportees",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": null,
+        "operation": "field_value_script_score",
+        "refus": "parsing_exception: unknown query [script_score] : ferrite supporte [match_all, match_none, match, multi_match, match_phrase, match_phrase_prefix, exists, ids, prefix, wildcard, regexp, fuzzy, term, terms, range, bool, c"
+      },
+      {
+        "capacite": {
+          "capacite": "recherche.track_total_hits",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": null,
+        "operation": "desc_sort_population_can_match_shortcut",
+        "refus": "not_implemented_in_ferrite_exception: ferrite ne supporte pas [track_total_hits: false] : le total est toujours exact"
+      },
+      {
+        "capacite": {
+          "capacite": "recherche.reglages_de_shards",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": null,
+        "operation": "desc_sort_population_no_can_match_shortcut",
+        "refus": "illegal_argument_exception: request [/geonames/_search] contains unrecognized parameter: [pre_filter_shard_size]"
+      },
+      {
+        "capacite": {
+          "capacite": "recherche.non_supportes",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": null,
+        "operation": "asc_sort_with_after_population",
+        "refus": "not_implemented_in_ferrite_exception: ferrite ne supporte pas [search_after] dans [_search] ; cles acceptees : [\"query\", \"from\", \"size\", \"sort\", \"_source\", \"track_total_hits\", \"aggs\", \"aggregations\", \"fields\", \"docvalue_fields\", \"stored_f"
+      },
+      {
+        "capacite": {
+          "capacite": "recherche.non_supportes",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": null,
+        "operation": "desc_sort_with_after_geonameid",
+        "refus": "not_implemented_in_ferrite_exception: ferrite ne supporte pas [search_after] dans [_search] ; cles acceptees : [\"query\", \"from\", \"size\", \"sort\", \"_source\", \"track_total_hits\", \"aggs\", \"aggregations\", \"fields\", \"docvalue_fields\", \"stored_f"
+      },
+      {
+        "capacite": {
+          "capacite": "recherche.non_supportes",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": null,
+        "operation": "asc_sort_with_after_geonameid",
+        "refus": "not_implemented_in_ferrite_exception: ferrite ne supporte pas [search_after] dans [_search] ; cles acceptees : [\"query\", \"from\", \"size\", \"sort\", \"_source\", \"track_total_hits\", \"aggs\", \"aggregations\", \"fields\", \"docvalue_fields\", \"stored_f"
+      },
+      {
+        "capacite": {
+          "capacite": "recherche.track_total_hits",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": null,
+        "operation": "sort_country_code_can_match_shortcut",
+        "refus": "not_implemented_in_ferrite_exception: ferrite ne supporte pas [track_total_hits: false] : le total est toujours exact"
+      },
+      {
+        "capacite": {
+          "capacite": "recherche.reglages_de_shards",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": null,
+        "operation": "sort_country_code_no_can_match_shortcut",
+        "refus": "illegal_argument_exception: request [/geonames/_search] contains unrecognized parameter: [pre_filter_shard_size]"
+      },
+      {
+        "capacite": {
+          "capacite": "agg.non_supportees",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": null,
+        "operation": "significant_text_selective",
+        "refus": "not_implemented_in_ferrite_exception: ferrite ne supporte pas l'agregation [significant_text] (dans [aggs.sig]) ; agregations supportees : min, max, sum, avg, value_count, stats, terms, range, histogram, date_histogram"
+      },
+      {
+        "capacite": {
+          "capacite": "agg.non_supportees",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": null,
+        "operation": "significant_text_sampled_selective",
+        "refus": "not_implemented_in_ferrite_exception: ferrite ne supporte pas l'agregation [sampler] (dans [aggs.s]) ; agregations supportees : min, max, sum, avg, value_count, stats, terms, range, histogram, date_histogram"
+      },
+      {
+        "capacite": {
+          "capacite": "agg.non_supportees",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": null,
+        "operation": "significant_text_unselective",
+        "refus": "not_implemented_in_ferrite_exception: ferrite ne supporte pas l'agregation [significant_text] (dans [aggs.sig]) ; agregations supportees : min, max, sum, avg, value_count, stats, terms, range, histogram, date_histogram"
+      },
+      {
+        "capacite": {
+          "capacite": "agg.non_supportees",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": null,
+        "operation": "significant_text_sampled_unselective",
+        "refus": "not_implemented_in_ferrite_exception: ferrite ne supporte pas l'agregation [sampler] (dans [aggs.s]) ; agregations supportees : min, max, sum, avg, value_count, stats, terms, range, histogram, date_histogram"
+      }
+    ],
+    "indexation_s": {
+      "elasticsearch": 38.84733305207919,
+      "ferrite": 196.1141887929989
+    },
+    "latence": {
+      "asc_sort_geonameid": {
+        "es": {
+          "max_ms": 5.224631051532924,
+          "mediane_ms": 4.000479530077428,
+          "n": 100,
+          "p95_ms": 4.269907018169761,
+          "p99_ms": 4.506757948547602
+        },
+        "ferrite": {
+          "max_ms": 1221.6345679480582,
+          "mediane_ms": 1177.5754219852388,
+          "n": 51,
+          "p95_ms": 1206.8890089867637,
+          "p99_ms": null
+        }
+      },
+      "asc_sort_population": {
+        "es": {
+          "max_ms": 3.574096946977079,
+          "mediane_ms": 2.883721492253244,
+          "n": 100,
+          "p95_ms": 3.1601369846612215,
+          "p99_ms": 3.550315974280238
+        },
+        "ferrite": {
+          "max_ms": 746.9528940273449,
+          "mediane_ms": 721.7774390010163,
+          "n": 84,
+          "p95_ms": 738.0105990450829,
+          "p99_ms": null
+        }
+      },
+      "country_agg_cached": {
+        "es": {
+          "max_ms": 73.21004592813551,
+          "mediane_ms": 66.52490253327414,
+          "n": 100,
+          "p95_ms": 69.68324701301754,
+          "p99_ms": 71.9355900073424
+        },
+        "ferrite": {
+          "max_ms": 72.38785305526108,
+          "mediane_ms": 52.15498752659187,
+          "n": 100,
+          "p95_ms": 61.917484970763326,
+          "p99_ms": 65.45535591430962
+        }
+      },
+      "country_agg_uncached": {
+        "es": {
+          "max_ms": 87.97376102302223,
+          "mediane_ms": 66.88451149966568,
+          "n": 100,
+          "p95_ms": 73.38342000730336,
+          "p99_ms": 79.03063693083823
+        },
+        "ferrite": {
+          "max_ms": 72.50952301546931,
+          "mediane_ms": 51.771865983027965,
+          "n": 100,
+          "p95_ms": 55.70830299984664,
+          "p99_ms": 72.15299492236227
+        }
+      },
+      "default": {
+        "es": {
+          "max_ms": 4.184374934993684,
+          "mediane_ms": 3.3402720582671463,
+          "n": 100,
+          "p95_ms": 3.8404689403250813,
+          "p99_ms": 4.055912955664098
+        },
+        "ferrite": {
+          "max_ms": 8.204162935726345,
+          "mediane_ms": 4.99719352228567,
+          "n": 100,
+          "p95_ms": 7.960360962897539,
+          "p99_ms": 8.112718001939356
+        }
+      },
+      "desc_sort_geonameid": {
+        "es": {
+          "max_ms": 12.641557026654482,
+          "mediane_ms": 11.693754466250539,
+          "n": 100,
+          "p95_ms": 12.322713038884103,
+          "p99_ms": 12.473050970584154
+        },
+        "ferrite": {
+          "max_ms": 1304.849983076565,
+          "mediane_ms": 1264.0324389794841,
+          "n": 48,
+          "p95_ms": 1292.1802669297904,
+          "p99_ms": null
+        }
+      },
+      "desc_sort_population": {
+        "es": {
+          "max_ms": 6.669396068900824,
+          "mediane_ms": 4.926421504933387,
+          "n": 100,
+          "p95_ms": 5.661470000632107,
+          "p99_ms": 6.17778196465224
+        },
+        "ferrite": {
+          "max_ms": 755.9058209881186,
+          "mediane_ms": 727.2520019905642,
+          "n": 83,
+          "p95_ms": 740.6245979946107,
+          "p99_ms": null
+        }
+      },
+      "large_filtered_terms": {
+        "es": {
+          "max_ms": 158.25394296552986,
+          "mediane_ms": 144.88054753746837,
+          "n": 100,
+          "p95_ms": 152.23186009097844,
+          "p99_ms": 157.82082895748317
+        },
+        "ferrite": {
+          "max_ms": 1076.8027789890766,
+          "mediane_ms": 1029.8749369103462,
+          "n": 59,
+          "p95_ms": 1058.2039899891242,
+          "p99_ms": null
+        }
+      },
+      "large_prohibited_terms": {
+        "es": {
+          "max_ms": 154.52497906517237,
+          "mediane_ms": 145.74092405382544,
+          "n": 100,
+          "p95_ms": 153.0133590567857,
+          "p99_ms": 154.46836804039776
+        },
+        "ferrite": {
+          "max_ms": 1158.071856945753,
+          "mediane_ms": 1111.4950804621913,
+          "n": 54,
+          "p95_ms": 1131.804566946812,
+          "p99_ms": null
+        }
+      },
+      "large_terms": {
+        "es": {
+          "max_ms": 140.3640960343182,
+          "mediane_ms": 125.85298146586865,
+          "n": 100,
+          "p95_ms": 137.03976606484503,
+          "p99_ms": 139.70222091302276
+        },
+        "ferrite": {
+          "max_ms": 1070.0903359102085,
+          "mediane_ms": 1022.7899849414825,
+          "n": 59,
+          "p95_ms": 1063.8855509459972,
+          "p99_ms": null
+        }
+      },
+      "phrase": {
+        "es": {
+          "max_ms": 6.556355976499617,
+          "mediane_ms": 3.1322594732046127,
+          "n": 100,
+          "p95_ms": 3.9207939989864826,
+          "p99_ms": 6.384909036569297
+        },
+        "ferrite": {
+          "max_ms": 1.6408960800617933,
+          "mediane_ms": 1.1984845623373985,
+          "n": 100,
+          "p95_ms": 1.4305890072137117,
+          "p99_ms": 1.505972002632916
+        }
+      },
+      "scroll": {
+        "es": {
+          "max_ms": 469.6601489558816,
+          "mediane_ms": 432.6827515033074,
+          "n": 100,
+          "p95_ms": 458.17789796274155,
+          "p99_ms": 462.77508395724
+        },
+        "ferrite": {
+          "max_ms": 1784.239023923874,
+          "mediane_ms": 1737.0608859928325,
+          "n": 35,
+          "p95_ms": 1773.025501985103,
+          "p99_ms": null
+        }
+      },
+      "term": {
+        "es": {
+          "max_ms": 6.831523962318897,
+          "mediane_ms": 2.578293497208506,
+          "n": 100,
+          "p95_ms": 3.2479400979354978,
+          "p99_ms": 3.8627529283985496
+        },
+        "ferrite": {
+          "max_ms": 1.9742849981412292,
+          "mediane_ms": 1.5459805144928396,
+          "n": 100,
+          "p95_ms": 1.9061550265178084,
+          "p99_ms": 1.9288170151412487
+        }
+      }
+    },
+    "reglages": {
+      "budget_s": 60.0,
+      "chauffe": 5,
+      "clients_indexation": 8,
+      "debit_secondes": 20.0,
+      "en_vol": 8,
+      "taille_lot": 5000,
+      "tours": 100
+    },
+    "resultats": [
+      {
+        "accord": true,
+        "note": "ES s'arrete a 10000 (relation gte), ferrite compte 2000000",
+        "operation": "default"
+      },
+      {
+        "accord": true,
+        "note": "ES s'arrete a 10000 (relation gte), ferrite compte 46502",
+        "operation": "term"
+      },
+      {
+        "accord": true,
+        "note": null,
+        "operation": "phrase"
+      },
+      {
+        "accord": false,
+        "note": "agregations differentes",
+        "operation": "country_agg_uncached"
+      },
+      {
+        "accord": false,
+        "note": "agregations differentes",
+        "operation": "country_agg_cached"
+      },
+      {
+        "accord": true,
+        "note": null,
+        "operation": "scroll"
+      },
+      {
+        "accord": true,
+        "note": "ES s'arrete a 10000 (relation gte), ferrite compte 98809",
+        "operation": "large_terms"
+      },
+      {
+        "accord": true,
+        "note": null,
+        "operation": "large_filtered_terms"
+      },
+      {
+        "accord": true,
+        "note": "ES s'arrete a 10000 (relation gte), ferrite compte 41264",
+        "operation": "large_prohibited_terms"
+      },
+      {
+        "accord": true,
+        "note": "ES s'arrete a 10000 (relation gte), ferrite compte 2000000",
+        "operation": "desc_sort_population"
+      },
+      {
+        "accord": true,
+        "note": "ES s'arrete a 10000 (relation gte), ferrite compte 2000000",
+        "operation": "asc_sort_population"
+      },
+      {
+        "accord": true,
+        "note": "ES s'arrete a 10000 (relation gte), ferrite compte 2000000",
+        "operation": "desc_sort_geonameid"
+      },
+      {
+        "accord": true,
+        "note": "ES s'arrete a 10000 (relation gte), ferrite compte 2000000",
+        "operation": "asc_sort_geonameid"
+      }
+    ],
+    "rss_octets": {
+      "elasticsearch": 3651612672,
+      "ferrite": 445628416
+    },
+    "serveurs": {
+      "elasticsearch": "8.15.0",
+      "ferrite": "8.15.0"
+    },
+    "track": {
+      "base_url": "https://rally-tracks.elastic.co/geonames",
+      "chemin": null,
+      "commit": "b1cc31cd1afd68dbc0a0bebfef3a17ebd3747d79",
+      "depot": "https://github.com/elastic/rally-tracks",
+      "documents": 11396503,
+      "fichier": "documents-2.json.bz2",
+      "licence": "Apache-2.0",
+      "nom": "geonames",
+      "octets_compresses": 265208777,
+      "octets_decompresses": 3547613828
+    }
+  },
+  "geonames-500000": {
+    "debit_req_s": {
+      "elasticsearch": 39.69419215204453,
+      "ferrite": 5.679002911885608
+    },
+    "disque_octets": {
+      "elasticsearch": 136824931,
+      "elasticsearch_apres_forcemerge": 121543334,
+      "ferrite": 146718831
+    },
+    "documents": 500000,
+    "ecarts_track": [
+      {
+        "cote": "les deux",
+        "pourquoi": "`geo_point` est hors du perimetre declare de ferrite (capacite `type.autres`). La valeur reste dans le `_source` des deux cotes : les documents envoyes sont identiques a l'octet pres, seul l'indexation du champ disparait.",
+        "quoi": "champ `location` (`geo_point`) retire du mapping"
+      },
+      {
+        "cote": "les deux",
+        "pourquoi": "consequence de la ligne precedente : en `strict`, un document portant `location` serait rejete. En `false`, il entre dans le `_source` sans etre indexe — ce que fait ferrite comme Elasticsearch.",
+        "quoi": "`dynamic: strict` remplace par `dynamic: false`"
+      },
+      {
+        "cote": "les deux",
+        "pourquoi": "ferrite refuse explicitement ce parametre de champ (capacite `mapping.autres_params`). Il ne sert dans la track qu'a rendre agregeable un champ `text` ; les requetes du banc passent toutes par `country_code.raw`.",
+        "quoi": "`fielddata: true` retire de `country_code`"
+      },
+      {
+        "cote": "les deux",
+        "pourquoi": "ferrite est mono-shard par construction. Comparer 1 shard a 5 comparerait des nombres de shards, pas des moteurs.",
+        "quoi": "`index.number_of_shards` : 5 -> 1"
+      },
+      {
+        "cote": "Elasticsearch seul",
+        "pourquoi": "c'est la track qui coupe le cache de requetes, pour mesurer le moteur et pas son cache. ferrite refuse le reglage — il n'a pas de cache de requetes du tout, donc l'appliquer d'un seul cote rapproche les deux serveurs au lieu de les eloigner.",
+        "quoi": "`index.requests.cache.enable: false`"
+      },
+      {
+        "cote": "les deux",
+        "pourquoi": "la track force-merge avant de mesurer ; ferrite n'a pas la route (cycle de vie d'index, hors perimetre). Les deux serveurs sont donc mesures **tels qu'indexes**. La taille sur disque d'Elasticsearch est en plus relevee apres un `_forcemerge`, parce que c'est un gain que ferrite ne sait pas aller chercher.",
+        "quoi": "pas de `_forcemerge` apres l'indexation"
+      }
+    ],
+    "hors_mesure": [
+      {
+        "capacite": {
+          "capacite": "dsl.non_supportees",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": "search_phase_execution_exception: all shards failed",
+        "operation": "expression",
+        "refus": "parsing_exception: unknown query [function_score] : ferrite supporte [match_all, match_none, match, multi_match, match_phrase, match_phrase_prefix, exists, ids, prefix, wildcard, regexp, fuzzy, term, terms, range, bool,"
+      },
+      {
+        "capacite": {
+          "capacite": "dsl.non_supportees",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": "search_phase_execution_exception: all shards failed",
+        "operation": "painless_static",
+        "refus": "parsing_exception: unknown query [function_score] : ferrite supporte [match_all, match_none, match, multi_match, match_phrase, match_phrase_prefix, exists, ids, prefix, wildcard, regexp, fuzzy, term, terms, range, bool,"
+      },
+      {
+        "capacite": {
+          "capacite": "dsl.non_supportees",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": "search_phase_execution_exception: all shards failed",
+        "operation": "painless_dynamic",
+        "refus": "parsing_exception: unknown query [function_score] : ferrite supporte [match_all, match_none, match, multi_match, match_phrase, match_phrase_prefix, exists, ids, prefix, wildcard, regexp, fuzzy, term, terms, range, bool,"
+      },
+      {
+        "capacite": {
+          "capacite": "dsl.non_supportees",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": "search_phase_execution_exception: all shards failed",
+        "operation": "decay_geo_gauss_function_score",
+        "refus": "parsing_exception: unknown query [function_score] : ferrite supporte [match_all, match_none, match, multi_match, match_phrase, match_phrase_prefix, exists, ids, prefix, wildcard, regexp, fuzzy, term, terms, range, bool,"
+      },
+      {
+        "capacite": {
+          "capacite": "dsl.non_supportees",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": "search_phase_execution_exception: all shards failed",
+        "operation": "decay_geo_gauss_script_score",
+        "refus": "parsing_exception: unknown query [script_score] : ferrite supporte [match_all, match_none, match, multi_match, match_phrase, match_phrase_prefix, exists, ids, prefix, wildcard, regexp, fuzzy, term, terms, range, bool, c"
+      },
+      {
+        "capacite": {
+          "capacite": "dsl.non_supportees",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": null,
+        "operation": "field_value_function_score",
+        "refus": "parsing_exception: unknown query [function_score] : ferrite supporte [match_all, match_none, match, multi_match, match_phrase, match_phrase_prefix, exists, ids, prefix, wildcard, regexp, fuzzy, term, terms, range, bool,"
+      },
+      {
+        "capacite": {
+          "capacite": "dsl.non_supportees",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": null,
+        "operation": "field_value_script_score",
+        "refus": "parsing_exception: unknown query [script_score] : ferrite supporte [match_all, match_none, match, multi_match, match_phrase, match_phrase_prefix, exists, ids, prefix, wildcard, regexp, fuzzy, term, terms, range, bool, c"
+      },
+      {
+        "capacite": {
+          "capacite": "recherche.track_total_hits",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": null,
+        "operation": "desc_sort_population_can_match_shortcut",
+        "refus": "not_implemented_in_ferrite_exception: ferrite ne supporte pas [track_total_hits: false] : le total est toujours exact"
+      },
+      {
+        "capacite": {
+          "capacite": "recherche.reglages_de_shards",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": null,
+        "operation": "desc_sort_population_no_can_match_shortcut",
+        "refus": "illegal_argument_exception: request [/geonames/_search] contains unrecognized parameter: [pre_filter_shard_size]"
+      },
+      {
+        "capacite": {
+          "capacite": "recherche.non_supportes",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": null,
+        "operation": "asc_sort_with_after_population",
+        "refus": "not_implemented_in_ferrite_exception: ferrite ne supporte pas [search_after] dans [_search] ; cles acceptees : [\"query\", \"from\", \"size\", \"sort\", \"_source\", \"track_total_hits\", \"aggs\", \"aggregations\", \"fields\", \"docvalue_fields\", \"stored_f"
+      },
+      {
+        "capacite": {
+          "capacite": "recherche.non_supportes",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": null,
+        "operation": "desc_sort_with_after_geonameid",
+        "refus": "not_implemented_in_ferrite_exception: ferrite ne supporte pas [search_after] dans [_search] ; cles acceptees : [\"query\", \"from\", \"size\", \"sort\", \"_source\", \"track_total_hits\", \"aggs\", \"aggregations\", \"fields\", \"docvalue_fields\", \"stored_f"
+      },
+      {
+        "capacite": {
+          "capacite": "recherche.non_supportes",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": null,
+        "operation": "asc_sort_with_after_geonameid",
+        "refus": "not_implemented_in_ferrite_exception: ferrite ne supporte pas [search_after] dans [_search] ; cles acceptees : [\"query\", \"from\", \"size\", \"sort\", \"_source\", \"track_total_hits\", \"aggs\", \"aggregations\", \"fields\", \"docvalue_fields\", \"stored_f"
+      },
+      {
+        "capacite": {
+          "capacite": "recherche.track_total_hits",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": null,
+        "operation": "sort_country_code_can_match_shortcut",
+        "refus": "not_implemented_in_ferrite_exception: ferrite ne supporte pas [track_total_hits: false] : le total est toujours exact"
+      },
+      {
+        "capacite": {
+          "capacite": "recherche.reglages_de_shards",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": null,
+        "operation": "sort_country_code_no_can_match_shortcut",
+        "refus": "illegal_argument_exception: request [/geonames/_search] contains unrecognized parameter: [pre_filter_shard_size]"
+      },
+      {
+        "capacite": {
+          "capacite": "agg.non_supportees",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": null,
+        "operation": "significant_text_selective",
+        "refus": "not_implemented_in_ferrite_exception: ferrite ne supporte pas l'agregation [significant_text] (dans [aggs.sig]) ; agregations supportees : min, max, sum, avg, value_count, stats, terms, range, histogram, date_histogram"
+      },
+      {
+        "capacite": {
+          "capacite": "agg.non_supportees",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": null,
+        "operation": "significant_text_sampled_selective",
+        "refus": "not_implemented_in_ferrite_exception: ferrite ne supporte pas l'agregation [sampler] (dans [aggs.s]) ; agregations supportees : min, max, sum, avg, value_count, stats, terms, range, histogram, date_histogram"
+      },
+      {
+        "capacite": {
+          "capacite": "agg.non_supportees",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": null,
+        "operation": "significant_text_unselective",
+        "refus": "not_implemented_in_ferrite_exception: ferrite ne supporte pas l'agregation [significant_text] (dans [aggs.sig]) ; agregations supportees : min, max, sum, avg, value_count, stats, terms, range, histogram, date_histogram"
+      },
+      {
+        "capacite": {
+          "capacite": "agg.non_supportees",
+          "verdict": "cout_perimetre"
+        },
+        "es_refuse_aussi": null,
+        "operation": "significant_text_sampled_unselective",
+        "refus": "not_implemented_in_ferrite_exception: ferrite ne supporte pas l'agregation [sampler] (dans [aggs.s]) ; agregations supportees : min, max, sum, avg, value_count, stats, terms, range, histogram, date_histogram"
+      }
+    ],
+    "indexation_s": {
+      "elasticsearch": 8.51267278206069,
+      "ferrite": 44.25383315200452
+    },
+    "latence": {
+      "asc_sort_geonameid": {
+        "es": {
+          "max_ms": 4.058099933899939,
+          "mediane_ms": 3.451913013122976,
+          "n": 100,
+          "p95_ms": 3.920060000382364,
+          "p99_ms": 3.9959599962458014
+        },
+        "ferrite": {
+          "max_ms": 281.18413500487804,
+          "mediane_ms": 254.887534014415,
+          "n": 100,
+          "p95_ms": 265.53823391441256,
+          "p99_ms": 273.947891080752
+        }
+      },
+      "asc_sort_population": {
+        "es": {
+          "max_ms": 3.610198968090117,
+          "mediane_ms": 2.944731037132442,
+          "n": 100,
+          "p95_ms": 3.3821569522842765,
+          "p99_ms": 3.501372062601149
+        },
+        "ferrite": {
+          "max_ms": 175.57225993368775,
+          "mediane_ms": 169.1732404869981,
+          "n": 100,
+          "p95_ms": 173.76523395068944,
+          "p99_ms": 174.76140102371573
+        }
+      },
+      "country_agg_cached": {
+        "es": {
+          "max_ms": 19.85327003058046,
+          "mediane_ms": 14.170214999467134,
+          "n": 100,
+          "p95_ms": 18.801321974024177,
+          "p99_ms": 19.808818004094064
+        },
+        "ferrite": {
+          "max_ms": 23.078550002537668,
+          "mediane_ms": 22.049918537959456,
+          "n": 100,
+          "p95_ms": 22.60927902534604,
+          "p99_ms": 22.856445983052254
+        }
+      },
+      "country_agg_uncached": {
+        "es": {
+          "max_ms": 22.262404090724885,
+          "mediane_ms": 17.581553023774177,
+          "n": 100,
+          "p95_ms": 19.608773989602923,
+          "p99_ms": 20.84009302780032
+        },
+        "ferrite": {
+          "max_ms": 23.672288982197642,
+          "mediane_ms": 22.101759968791157,
+          "n": 100,
+          "p95_ms": 22.869270062074065,
+          "p99_ms": 23.220367962494493
+        }
+      },
+      "default": {
+        "es": {
+          "max_ms": 3.1265229918062687,
+          "mediane_ms": 2.1355589851737022,
+          "n": 100,
+          "p95_ms": 2.981349010951817,
+          "p99_ms": 3.1175470212474465
+        },
+        "ferrite": {
+          "max_ms": 3.4248410956934094,
+          "mediane_ms": 2.107565524056554,
+          "n": 100,
+          "p95_ms": 3.055030945688486,
+          "p99_ms": 3.140709945000708
+        }
+      },
+      "desc_sort_geonameid": {
+        "es": {
+          "max_ms": 7.451379904523492,
+          "mediane_ms": 4.497809452004731,
+          "n": 100,
+          "p95_ms": 6.302119931206107,
+          "p99_ms": 7.002168917097151
+        },
+        "ferrite": {
+          "max_ms": 288.25611097272485,
+          "mediane_ms": 273.730514512863,
+          "n": 100,
+          "p95_ms": 282.5712179765105,
+          "p99_ms": 288.0682290997356
+        }
+      },
+      "desc_sort_population": {
+        "es": {
+          "max_ms": 4.625851986929774,
+          "mediane_ms": 3.8371150149032474,
+          "n": 100,
+          "p95_ms": 4.345613997429609,
+          "p99_ms": 4.594531957991421
+        },
+        "ferrite": {
+          "max_ms": 180.39694300387055,
+          "mediane_ms": 170.44059850741178,
+          "n": 100,
+          "p95_ms": 174.61920098867267,
+          "p99_ms": 175.96029501874
+        }
+      },
+      "large_filtered_terms": {
+        "es": {
+          "max_ms": 125.12348790187389,
+          "mediane_ms": 114.11685997154564,
+          "n": 100,
+          "p95_ms": 122.06480093300343,
+          "p99_ms": 123.53102001361549
+        },
+        "ferrite": {
+          "max_ms": 1005.3292670054361,
+          "mediane_ms": 959.1145539889112,
+          "n": 63,
+          "p95_ms": 970.0372320367023,
+          "p99_ms": null
+        }
+      },
+      "large_prohibited_terms": {
+        "es": {
+          "max_ms": 119.79878903366625,
+          "mediane_ms": 108.40713599463925,
+          "n": 100,
+          "p95_ms": 115.98990706261247,
+          "p99_ms": 118.74422698747367
+        },
+        "ferrite": {
+          "max_ms": 1004.9731909530237,
+          "mediane_ms": 958.6890659993514,
+          "n": 63,
+          "p95_ms": 970.6698349909857,
+          "p99_ms": null
+        }
+      },
+      "large_terms": {
+        "es": {
+          "max_ms": 131.69219507835805,
+          "mediane_ms": 120.66200899425894,
+          "n": 100,
+          "p95_ms": 129.59336198400706,
+          "p99_ms": 131.68700295500457
+        },
+        "ferrite": {
+          "max_ms": 996.4005800429732,
+          "mediane_ms": 957.057517953217,
+          "n": 63,
+          "p95_ms": 976.3434970518574,
+          "p99_ms": null
+        }
+      },
+      "phrase": {
+        "es": {
+          "max_ms": 3.7708089221268892,
+          "mediane_ms": 2.3319575120694935,
+          "n": 100,
+          "p95_ms": 2.9151529306545854,
+          "p99_ms": 3.2012569718062878
+        },
+        "ferrite": {
+          "max_ms": 1.65841996204108,
+          "mediane_ms": 1.4038924709893763,
+          "n": 100,
+          "p95_ms": 1.5757170040160418,
+          "p99_ms": 1.6569530125707388
+        }
+      },
+      "scroll": {
+        "es": {
+          "max_ms": 544.1097199218348,
+          "mediane_ms": 515.2166819898412,
+          "n": 100,
+          "p95_ms": 536.5801719017327,
+          "p99_ms": 541.3871669443324
+        },
+        "ferrite": {
+          "max_ms": 1525.3814690513536,
+          "mediane_ms": 1498.7173810368404,
+          "n": 41,
+          "p95_ms": 1511.267116991803,
+          "p99_ms": null
+        }
+      },
+      "term": {
+        "es": {
+          "max_ms": 3.704300965182483,
+          "mediane_ms": 2.073616487905383,
+          "n": 100,
+          "p95_ms": 3.032460925169289,
+          "p99_ms": 3.174260025843978
+        },
+        "ferrite": {
+          "max_ms": 1.827733009122312,
+          "mediane_ms": 1.3805159833282232,
+          "n": 100,
+          "p95_ms": 1.653946004807949,
+          "p99_ms": 1.7541319830343127
+        }
+      }
+    },
+    "reglages": {
+      "budget_s": 60.0,
+      "chauffe": 5,
+      "clients_indexation": 8,
+      "debit_secondes": 20.0,
+      "en_vol": 8,
+      "taille_lot": 5000,
+      "tours": 100
+    },
+    "resultats": [
+      {
+        "accord": true,
+        "note": "ES s'arrete a 10000 (relation gte), ferrite compte 500000",
+        "operation": "default"
+      },
+      {
+        "accord": true,
+        "note": "ES s'arrete a 10000 (relation gte), ferrite compte 46502",
+        "operation": "term"
+      },
+      {
+        "accord": true,
+        "note": null,
+        "operation": "phrase"
+      },
+      {
+        "accord": false,
+        "note": "agregations differentes",
+        "operation": "country_agg_uncached"
+      },
+      {
+        "accord": false,
+        "note": "agregations differentes",
+        "operation": "country_agg_cached"
+      },
+      {
+        "accord": true,
+        "note": null,
+        "operation": "scroll"
+      },
+      {
+        "accord": true,
+        "note": "ES s'arrete a 10000 (relation gte), ferrite compte 15762",
+        "operation": "large_terms"
+      },
+      {
+        "accord": true,
+        "note": null,
+        "operation": "large_filtered_terms"
+      },
+      {
+        "accord": true,
+        "note": null,
+        "operation": "large_prohibited_terms"
+      },
+      {
+        "accord": true,
+        "note": "ES s'arrete a 10000 (relation gte), ferrite compte 500000",
+        "operation": "desc_sort_population"
+      },
+      {
+        "accord": true,
+        "note": "ES s'arrete a 10000 (relation gte), ferrite compte 500000",
+        "operation": "asc_sort_population"
+      },
+      {
+        "accord": true,
+        "note": "ES s'arrete a 10000 (relation gte), ferrite compte 500000",
+        "operation": "desc_sort_geonameid"
+      },
+      {
+        "accord": true,
+        "note": "ES s'arrete a 10000 (relation gte), ferrite compte 500000",
+        "operation": "asc_sort_geonameid"
+      }
+    ],
+    "rss_octets": {
+      "elasticsearch": 3460198400,
+      "ferrite": 113500160
+    },
+    "serveurs": {
+      "elasticsearch": "8.15.0",
+      "ferrite": "8.15.0"
+    },
+    "track": {
+      "base_url": "https://rally-tracks.elastic.co/geonames",
+      "chemin": null,
+      "commit": "b1cc31cd1afd68dbc0a0bebfef3a17ebd3747d79",
+      "depot": "https://github.com/elastic/rally-tracks",
+      "documents": 11396503,
+      "fichier": "documents-2.json.bz2",
+      "licence": "Apache-2.0",
+      "nom": "geonames",
+      "octets_compresses": 265208777,
+      "octets_decompresses": 3547613828
+    }
+  }
+}
