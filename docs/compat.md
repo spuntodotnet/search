@@ -1271,19 +1271,61 @@ pas pour être découverts en production.
 
 ## Limites connues (perf, pas fonctionnalité)
 
+Ces limites ne sont plus seulement décrites : elles sont **mesurées**, sur un
+corpus public et à deux échelles, par
+[`bench_echelle.py`](../tests/compat/bench_echelle.py). Les chiffres et le
+protocole sont dans [`bench.md`](bench.md) ; ce qui suit en donne la lecture.
+
+**Jusqu'où ferrite est le bon choix.** Jusqu'à quelques millions de documents,
+pour une charge faite de recherches filtrées qui ramènent peu : à deux millions
+de documents de la track Rally `geonames`, un `term` y coûte 1,55 ms contre
+2,58 ms à Elasticsearch, une `match_phrase` 1,20 ms contre 3,13 ms, et le
+serveur tient dans 425 Mo de RSS contre 3,40 Go. **Le mauvais choix** dès que la
+charge trie de gros résultats (jusqu'à ×290 plus lent, voir juste en dessous),
+exporte en masse (`scroll` ×0,25), ou réindexe souvent (indexation ×0,20 aux
+deux échelles). Rien n'a été mesuré au-delà de deux millions de documents, et
+rien n'est extrapolé ici.
+
+- **Une sous-agrégation sous un `terms` ou un `range` perd les documents de ses
+  buckets rares.** C'est la limite la plus grave de cette liste, et la seule
+  qui rende des **valeurs fausses en 200** — les `doc_count` des buckets sont
+  exacts, seules les valeurs des sous-agrégations manquent, donc rien ne
+  prévient. Mesuré : sur deux millions de documents de la track `geonames`, un
+  `range` dont le bucket compte **28 518 documents** rend un `value_count` de
+  **1 692** — 94 % de perdus, en 200, avec le bon `doc_count` juste à côté. La cause est dans tantivy 0.26.1 (dernière version publiée) —
+  `aggregation/cached_sub_aggs.rs`, `LowCardSubAggCache::flush_local` : passé
+  2 048 documents en cache, il ne recopie que les buckets au-dessus d'un seuil
+  puis efface le cache entier. Le défaut n'apparaît donc **pas** en dessous de
+  ~2 048 documents par segment, ce qui explique qu'aucune des mesures
+  existantes ne l'ait vu ; un `histogram`, et un `terms` imbriqué sous un autre
+  bucket, empruntent l'autre cache et sont corrects (mesuré). La mesure qui le
+  montre :
+  [`sonde_sous_aggs.py`](../tests/compat/sonde_sous_aggs.py).
 - **Le tri charge tous les hits en mémoire.** Le collecteur de tri ramasse tous
   les documents correspondants avec leurs clés avant de les ordonner. C'est
   correct pour toutes les combinaisons de clés (y compris `keyword` et
   multi-clés, où un tri par ordinal de terme serait faux entre segments), mais
-  l'occupation mémoire est proportionnelle au nombre de résultats. À revoir
-  quand le tri deviendra un chemin chaud. La recherche **sans** tri utilise un
-  top-K classique et n'a pas cette limite.
+  l'occupation mémoire — et le temps — sont proportionnels au nombre de
+  documents **correspondants**, pas à `size`. La mesure donne l'ordre de
+  grandeur : un `match_all` trié sur un entier coûte 170 ms sur 500 000
+  documents et 727 ms sur 2 000 000, quand Elasticsearch reste entre 2,9 et
+  12 ms aux deux échelles. C'est le pire résultat du banc, jusqu'à ×290. La
+  recherche
+  **sans** tri utilise un top-K classique et n'a pas cette limite.
+- **Un `terms` à des dizaines de milliers de valeurs coûte dix fois plus cher
+  qu'à Lucene** : les 45 587 termes des trois requêtes `large_terms` de la
+  track prennent 1 023 ms sur 2 000 000 de documents, contre 126 ms à
+  Elasticsearch.
+- **L'indexation est cinq fois plus lente**, aux deux échelles : 11 298 doc/s
+  contre 58 736 à 500 000 documents, 10 198 contre 51 484 à 2 000 000.
 - **Un contexte de `scroll` tient toute la liste des correspondances en
   mémoire** (une adresse et ses clés de tri par document), plus l'instantané de
   l'index. C'est le prix de « chaque document une fois, et une seule, en un seul
   balayage » ; l'alternative — rejouer la requête à chaque page — coûterait N
   recherches pour N pages et ne figerait rien. Les contextes expirés sont purgés
-  toutes les 30 s, et 500 au plus peuvent être ouverts.
+  toutes les 30 s, et 500 au plus peuvent être ouverts. Le prix mesuré : 25
+  pages de 1 000 documents coûtent 1 737 ms sur 2 000 000 de documents, contre
+  433 ms à Elasticsearch — la première page paie pour les vingt-cinq.
 - **`GET /{index}/_doc/{id}` déclenche un commit** si des écritures sont en
   attente, pour rester temps réel comme ES. Sous forte charge d'écriture, un
   `get` peut donc coûter cher.

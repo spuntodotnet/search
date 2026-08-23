@@ -31,9 +31,9 @@ d'Elasticsearch. Rendre des résultats faux parce qu'on a ignoré un
 `minimum_should_match` est le pire résultat possible de ce projet — pire que de
 ne pas supporter la clause du tout.
 
-## La méthode, en sept gestes
+## La méthode, en neuf gestes
 
-Ces sept gestes ont chacun trouvé quelque chose qu'un raisonnement n'aurait pas
+Ces neuf gestes ont chacun trouvé quelque chose qu'un raisonnement n'aurait pas
 trouvé. Ils ne sont pas décoratifs.
 
 ### 1. Mesurer contre un vrai Elasticsearch, jamais contre son idée d'Elasticsearch
@@ -144,9 +144,48 @@ support de `nested`. Elles ne sont pas documentées comme des garanties : le
 spike les verrouille, et cassera bruyamment à la montée de version plutôt que le
 jour où on s'appuiera dessus.
 
-### 8. Brancher un logiciel que personne ici n'a écrit
+### 8. Mesurer la vitesse à la taille où elle compte, et sur le corpus d'un autre
 
-Les sept gestes précédents mesurent des **surfaces d'API**, avec trois
+Les chiffres de performance du README étaient mesurés — sur **600 documents et
+138 requêtes écrites ici**. Deux défauts, et le second est le vrai : à cette
+taille on mesure surtout un aller-retour HTTP, et le corpus comme les requêtes
+sont les nôtres, donc le dénominateur aussi. C'est exactement ce que les gestes
+2 et 4 interdisent partout ailleurs.
+
+`tests/compat/bench_echelle.py` prend la track Rally `geonames` d'Elastic — son
+corpus (11,4 M de documents, taille compressée vérifiée à l'octet près), son
+mapping (**lu** dans son `index.json`, pas retapé), ses 31 requêtes — et la pose
+aux deux serveurs à 500 000 puis 2 000 000 de documents. Ce que ça change :
+
+- **le résultat n'est plus une victoire.** ferrite gagne sur un `term` (×1,7) et
+  sur la mémoire (×8), et perd sur le tri (**jusqu'à ×290**), l'indexation
+  (×0,20), le `scroll` (×0,25) et le disque (×0,85). Publier les deux moitiés
+  est ce qui rend le reste lisible ;
+- **le protocole se mesure aussi, et il a fallu trois campagnes.** Deux défauts
+  trouvés après coup, tous les deux flattant ferrite : le `_forcemerge` d'ES
+  tournait **avant** ses propres chronomètres (ses fusions le ralentissaient
+  pendant sa mesure de latence), et la décompression du corpus était consommée
+  **pendant** l'indexation (une constante commune aux deux serveurs, qui
+  écrasait l'écart — ES est passé de 38 116 à 58 736 doc/s une fois sortie du
+  chronomètre). Deux échelles mesurées avec deux protocoles ne se comparent
+  pas : la campagne a été relancée en entier à chaque fois. C'est le geste 2
+  appliqué à soi-même ;
+- **une explication qui vient à l'esprit n'est pas une mesure.** `match_all`
+  change de camp entre les deux échelles ; l'explication évidente — ferrite rend
+  toujours un total exact quand ES s'arrête à 10 000 — a été testée et elle est
+  **fausse** (`track_total_hits: true` coûte 2,55 ms à ES contre 2,30 ms) ;
+- **une brique nouvelle ne mesure pas qu'elle-même**, troisième fois. Le banc a
+  trouvé deux défauts qui n'avaient rien à voir avec la vitesse : un `_bulk` de
+  plus de 2 Mo refusé en `413 text/plain` alors que `_nodes` annonçait 100 Mo
+  (donc la taille de lot par défaut de `helpers.bulk` **et** des tracks Rally),
+  et surtout une **sous-agrégation qui perd les documents de ses buckets
+  rares** au-delà de 2 048 documents par segment — des valeurs fausses en 200,
+  invisibles en dessous de cette taille, donc invisibles à toutes les mesures
+  précédentes.
+
+### 9. Brancher un logiciel que personne ici n'a écrit
+
+Les gestes précédents mesurent des **surfaces d'API** et un prix, avec quatre
 dénominateurs différents. Aucun ne répondait à la question dont dépend le
 produit : *un logiciel écrit par quelqu'un d'autre démarre-t-il ?*
 `tests/compat/appli_reelle.py` clone une vraie application à une révision figée,
@@ -192,7 +231,9 @@ développement, pas de CI).
 | `tests/compat/recolte_usage.py` | à quoi ressemblent les requêtes que les gens envoient **vraiment** ? Constitue le corpus ([`tests/compat/usage/corpus.jsonl`](tests/compat/usage/corpus.jsonl), 5 311 requêtes) depuis quatre sources citables : doc de référence 8.15, tracks Rally, clients officiels, code open source. Chaque requête porte l'URL d'où elle vient |
 | `tests/compat/ponderation.py` | **quelle part de ces requêtes passe entièrement ?** (42,5 % du corpus, mais **93,5 % du code d'application** et 28,6 % des tracks Rally — l'écart *est* le résultat). Écrit les `poids` de `compat.yaml`, publie [`docs/usage.json`](docs/usage.json) et la table « ce qui manque, par fréquence d'usage ». `--rejoue` pose la même requête à ferrite et à un vrai ES 8.15 : les deux mesures s'accordent sur 99,3 % des cas |
 | `tests/compat/conformance_es.py` | que dit la suite de tests **d'Elastic** ? Ses **107 domaines**, sans liste blanche. Son rapport est un fichier, pas une phrase : [`docs/conformance.json`](docs/conformance.json) (totaux, deux taux, exclusions comptées, détail par cas), régénéré par `--json`, tenu par un cliquet en CI (`--diff`) |
-| `tests/compat/bench_vs_es.py` | mêmes résultats, **et à quel prix** ? (×3,6 en latence, ×6 en indexation) |
+| `tests/compat/bench_vs_es.py` | mêmes résultats, **et à quel prix** ? Garde-fou de développement : 600 documents et 138 requêtes **écrites ici**, donc un dénominateur qu'on a choisi soi-même — ne sert plus à publier |
+| `tests/compat/bench_echelle.py` | et **à l'échelle**, sur un corpus que nous n'avons pas écrit ? La track Rally `geonames` d'Elastic (Apache-2.0, révision figée, corpus vérifié à l'octet près), 500 000 et 2 000 000 de documents, **ses** 31 requêtes. `term` ×1,7 et `match_phrase` ×2,6 pour ferrite a deux millions de documents (et l'avance **grandit** avec la taille), RSS ×8 en sa faveur — et le **tri jusqu'a ×290 contre lui**, l'indexation ×0,20, le `scroll` ×0,25. 13 requêtes jouables, 18 refusées, toutes rattachées à une capacité déclarée. Voir [`docs/bench.md`](docs/bench.md) |
+| `tests/compat/sonde_sous_aggs.py` | une **sous-agrégation** voit-elle tous les documents de son bucket ? (non, au-delà de ~2 048 par segment — défaut de tantivy 0.26.1, trouvé par le banc à l'échelle) |
 | `tests/compat/probe_es7.py` | un **client** 7.x peut-il se brancher ? |
 | `tests/compat/diff_es7.py` | une **instance** 7.x peut-elle être reprise ? `--inventaire` liste ses types de champ |
 
@@ -581,6 +622,29 @@ bouger**, pas après.
   terme par position, les deux lectures se confondaient ; un filtre à n-grammes
   en pose vingt, et un budget par terme développe vingt fois plus de préfixes —
   donc rend plus de documents qu'ES, en 200.
+- **Un chiffre annoncé que rien n'exerce n'est qu'une phrase.** `GET /_nodes`
+  publiait `http.max_content_length_in_bytes: 104857600` — la valeur que les
+  clients officiels lisent pour dimensionner leurs lots — pendant que la couche
+  HTTP gardait le défaut d'axum, 2 Mo. ferrite annonçait donc cinquante fois ce
+  qu'il acceptait, et refusait en `413 text/plain` (hors format d'erreur d'ES)
+  un `_bulk` de 5 000 documents : la taille de lot par défaut des tracks Rally,
+  et l'ordre de grandeur de `helpers.bulk`. Ni Gitea ni Wagtail ne l'avaient vu,
+  parce qu'ils écrivent par petits lots. La constante est maintenant posée à un
+  seul endroit et lue par les deux moitiés — et un scénario du harnais envoie
+  6 Mo en un appel, parce qu'une constante partagée ne prouve toujours rien
+  toute seule.
+- **Une agrégation déléguée perd des documents, et seulement dans les buckets
+  rares.** Sous un `terms` ou un `range` de premier niveau, la
+  **sous-agrégation** de tantivy 0.26.1 ne voit pas tous les documents de son
+  bucket : au-delà de 2 048 documents en cache, `LowCardSubAggCache::flush_local`
+  ne recopie que les buckets au-dessus d'un seuil puis efface le cache entier.
+  Les `doc_count` restent justes — donc la réponse a l'air bonne, en 200. Deux
+  raisons pour lesquelles c'est resté invisible : il faut plus de 2 048
+  documents **par segment** (les 600 de `diff_aggs.py` n'y arrivent pas), et il
+  faut un bucket **rare** (un corpus régulier donne à chaque bucket sa part de
+  chaque tranche, donc au-dessus du seuil). C'est la pire forme du défaut :
+  ce qui disparaît est la minorité. Mesure figée dans
+  `tests/compat/sonde_sous_aggs.py`, chiffres dans `docs/bench.md`.
 - **Une clé de bucket entière sur un champ flottant.** `terms` sur un `double`
   rendait la clé `2` là où ES rend `2.0` — un client qui type strictement son
   JSON y lit un entier. Défaut antérieur, invisible parce qu'aucun corpus écrit

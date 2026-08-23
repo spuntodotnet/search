@@ -18,14 +18,35 @@ répondre à des requêtes `bool` + `terms` + un tri.
 | RSS au repos | > 1 Go | **3,6 Mo** |
 | Démarrage | 30-60 s | **225 ms** (`docker run` → premier `GET /` servi) |
 | Runtime | JVM + tuning heap | un binaire statique |
-| Latence de recherche (médiane / p95) | 4,90 / 7,00 ms | **1,41 / 1,98 ms** |
-| Débit (8 requêtes en vol) | 779 req/s | **1 172 req/s** |
 
-Ces chiffres sont mesurés, pas visés — voir [Le conteneur](#le-conteneur) pour
-l'enveloppe, et `tests/compat/bench_vs_es.py` pour les deux dernières lignes :
-mêmes 600 documents et mêmes 138 requêtes des deux côtés, dont **137 rendent
-exactement les mêmes documents dans le même ordre** (la 138ᵉ permute deux
-ex æquo). Le banc se lance contre n'importe quel Elasticsearch, 7.x ou 8.x.
+Ces chiffres sont mesurés, pas visés — voir [Le conteneur](#le-conteneur).
+
+### Et une fois qu'il y a des documents dedans ?
+
+Un banc sur quelques centaines de documents ne mesure qu'un aller-retour HTTP.
+Celui-ci tourne sur le corpus public de la track Rally
+[`geonames`](https://github.com/elastic/rally-tracks/tree/b1cc31cd1afd68dbc0a0bebfef3a17ebd3747d79/geonames)
+d'Elastic, avec **ses** requêtes, à **2 000 000 de documents**, les deux
+serveurs en conteneur sur la même machine :
+
+| | Elasticsearch 8.15 | ferrite |
+|---|---|---|
+| `match_phrase` (latence médiane / p95) | 3,13 / 3,92 ms | **1,20 / 1,43 ms** |
+| `term` | 2,58 / 3,25 ms | **1,55 / 1,91 ms** |
+| Agrégation `terms` + `sum` | 66,88 ms | **51,77 ms** |
+| RSS | 3,40 Go | **425 Mo** |
+| Tri sur `match_all` | **4,00 ms** | 1 178 ms |
+| `scroll`, 25 pages × 1 000 | **433 ms** | 1 737 ms |
+| Indexation | **51 484 doc/s** | 10 198 doc/s |
+| Taille sur disque (ES fusionné) | **403 Mo** | 473 Mo |
+
+Les quatre dernières lignes sont là exprès : **ferrite perd sur le tri, sur
+l'export, sur l'indexation et sur le disque**, et le tri est le pire résultat du
+banc — jusqu'à ×290. Un banc qui ne montre que des victoires n'est pas lu comme
+un banc. Le protocole, la seconde échelle (500 000 documents), les 18 requêtes
+de la track que ferrite refuse, **une réserve sérieuse sur les
+sous-agrégations** et **la taille au-delà de laquelle il n'est plus le bon
+choix** sont dans [`docs/bench.md`](docs/bench.md).
 
 L'argument n'est pas « on refait Elasticsearch en mieux ». C'est : **le code
 client existant ne change pas** (mêmes bibliothèques officielles, mêmes
@@ -159,7 +180,11 @@ supportés : on peut rejouer le mapping d'un Elasticsearch existant, ou indexer
 sans rien déclarer.
 
 Les **agrégations** sont là aussi : métriques, `terms`, `range`, `histogram`,
-`date_histogram`, et sous-agrégations — de quoi construire des facettes.
+`date_histogram`, et sous-agrégations — de quoi construire des facettes. Avec
+une réserve mesurée, et sérieuse : au-delà de ~2 048 documents par segment, une
+**sous-agrégation** sous un `terms` ou un `range` perd les documents de ses
+buckets rares (défaut de tantivy 0.26.1, détail et mesure dans
+[`docs/bench.md`](docs/bench.md)).
 
 Les **analyzers** `standard`, `simple`, `whitespace`, `keyword`, `stop`,
 `english` et `french` sont vérifiés identiques à ceux d'ES sur 217 textes —

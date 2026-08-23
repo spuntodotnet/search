@@ -39,6 +39,19 @@ pub struct AppState {
 
 pub type SharedState = Arc<AppState>;
 
+/// La taille maximale d'un corps de requete — le `http.max_content_length` d'ES,
+/// dont le defaut est 100 Mo.
+///
+/// C'est une valeur **annoncee** : `GET /_nodes` la publie, et les clients
+/// officiels s'en servent pour dimensionner leurs lots (`helpers.bulk` de
+/// `elasticsearch-py` decoupe a 100 Mo par defaut). Tant que la couche HTTP
+/// gardait le defaut d'axum — 2 Mo — ferrite annoncait donc cinquante fois ce
+/// qu'il acceptait, et refusait en `413 text/plain` un `_bulk` de 5 000
+/// documents, la taille de lot par defaut des tracks Rally. La constante est
+/// posee ici et lue par [`cluster::nodes`] : les deux chiffres ne peuvent plus
+/// diverger.
+pub const MAX_CONTENT_LENGTH: usize = 104_857_600;
+
 /// Un corps de reponse JSON au format ES.
 pub struct Json(pub StatusCode, pub Value);
 
@@ -68,6 +81,7 @@ impl IntoResponse for Json {
 pub fn router(state: SharedState) -> Router {
     Router::new()
         .fallback_service(routes(state))
+        .layer(axum::extract::DefaultBodyLimit::max(MAX_CONTENT_LENGTH))
         .layer(axum::middleware::from_fn(elastic_headers))
 }
 
