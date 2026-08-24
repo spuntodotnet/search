@@ -612,19 +612,19 @@ fn dans(table: &[(u32, u32)], c: char) -> bool {
         .is_ok()
 }
 
-fn est_lettre(c: char) -> bool {
+pub(crate) fn est_lettre(c: char) -> bool {
     dans(LETTRE, c)
 }
 
-fn est_chiffre(c: char) -> bool {
+pub(crate) fn est_chiffre(c: char) -> bool {
     dans(CHIFFRE, c)
 }
 
-fn est_ponctuation(c: char) -> bool {
+pub(crate) fn est_ponctuation(c: char) -> bool {
     dans(PONCTUATION, c)
 }
 
-fn est_symbole(c: char) -> bool {
+pub(crate) fn est_symbole(c: char) -> bool {
     dans(SYMBOLE, c)
 }
 

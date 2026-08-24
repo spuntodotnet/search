@@ -392,6 +392,8 @@ pub struct Cible {
     /// mapping** : deux index ne rendent pas les memes champs pour le meme
     /// motif.
     pub plan: Arc<crate::fetch::Plan>,
+    /// Ce que le hit surligne, resolu **sur ce mapping et sur cette requete**.
+    pub hl: Arc<crate::highlight::Plan>,
     pub query: Box<dyn Query>,
     /// Les cles de tri resolues dans **cette** generation.
     pub sort: Vec<SortSpec>,
@@ -453,6 +455,7 @@ pub struct CibleFigee {
     pub gen: Arc<Generation>,
     pub searcher: Searcher,
     pub plan: Arc<crate::fetch::Plan>,
+    pub hl: Arc<crate::highlight::Plan>,
 }
 
 /// Tous les documents qui correspondent, dans l'ordre final.
@@ -537,6 +540,7 @@ pub fn balayer(cibles: Vec<Cible>, req: &SearchRequest) -> EsResult<Balayage> {
             gen: c.gen,
             searcher: s,
             plan: c.plan,
+            hl: c.hl,
         })
         .collect();
 
@@ -569,6 +573,7 @@ pub fn rendre_page(
             &cible.nom,
             &cible.gen,
             &cible.plan,
+            &cible.hl,
             &cible.searcher,
             DocAddress::new(hit.seg, hit.doc),
             avec_score.then_some(hit.score),
@@ -704,6 +709,7 @@ pub fn execute(cibles: &[Cible], req: &SearchRequest) -> EsResult<SearchOutcome>
             &cible.nom,
             &cible.gen,
             &cible.plan,
+            &cible.hl,
             &searchers[hit.cible],
             addr,
             score,
@@ -761,6 +767,7 @@ fn build_hit(
     index_name: &str,
     gen: &Generation,
     plan: &crate::fetch::Plan,
+    hl: &crate::highlight::Plan,
     searcher: &tantivy::Searcher,
     addr: DocAddress,
     score: Option<f32>,
@@ -811,6 +818,10 @@ fn build_hit(
             version,
         },
     )?;
+    // Le surlignage lit le `_source` **complet** lui aussi, et pour la meme
+    // raison : ES rend les fragments d'un champ que le filtre `_source` a
+    // retire. Il se calcule donc avant que le filtre ne consomme la valeur.
+    let fragments = crate::highlight::rendre(hl, gen, &source)?;
     if let Some(filtered) = rendu.source.apply(source) {
         hit.insert("_source".into(), filtered);
     }
@@ -819,6 +830,9 @@ fn build_hit(
     }
     if let Some(b) = blocs.ignores {
         hit.insert("ignored_field_values".into(), b);
+    }
+    if let Some(b) = fragments {
+        hit.insert("highlight".into(), b);
     }
     if let Some(sv) = sort_values {
         hit.insert("sort".into(), Value::Array(sv));

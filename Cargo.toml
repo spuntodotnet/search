@@ -13,15 +13,16 @@ tantivy = "0.26"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 unicode-segmentation = "1"
+# L'automate que tantivy compile derriere `RegexQuery`. Le surlignage doit dire
+# « ce terme-la, la clause l'a trouve » : le confronter au **meme** automate est
+# la seule facon de ne pas repondre a cote (`src/highlight.rs`). Deja dans
+# l'arbre via tantivy — l'y nommer ne coute pas un octet de plus.
+tantivy-fst = "0.5"
 time = { version = "0.3", features = ["formatting", "parsing", "macros", "large-dates"] }
 
 [dev-dependencies]
 # Les tests de concurrence pilotent le moteur directement.
 tantivy = "0.26"
-# L'automate que tantivy compile derriere `RegexQuery` : les tests de traduction
-# des motifs Lucene s'en servent pour verifier ce que le motif traduit accepte
-# vraiment, plutot que sa forme.
-tantivy-fst = "0.5"
 
 # tantivy 0.26.1 perd les documents des buckets rares d'une sous-agregation des
 # qu'un segment depasse 2 048 documents (mesure : 2 047 juste, 2 048 faux ; un

@@ -110,6 +110,7 @@ pub async fn search(
             "stored_fields",
             "script_fields",
             "runtime_mappings",
+            "highlight",
         ],
         "_search",
     )?;
@@ -119,6 +120,13 @@ pub async fn search(
     }
 
     let demande = lire_demande(&body_obj, param_docvalue, param_stored)?;
+    // Le bloc `highlight` se lit **avant** la boucle sur les index : sa forme
+    // ne depend d'aucun mapping, et un `type: fvh` doit etre refuse meme quand
+    // la recherche ne vise aucun index (voir [`valider_sans_index`]).
+    let surlignage = match body_obj.get("highlight") {
+        Some(v) => Some(crate::highlight::lire(v)?),
+        None => None,
+    };
 
     let from = match param_from {
         Some(v) => v,
@@ -268,6 +276,12 @@ pub async fn search(
             plan.poser_erreur(tous_les_shards_ont_echoue(&[echec]));
         }
         let plan = std::sync::Arc::new(plan);
+        // Le surlignage se resout sur ce mapping **et** sur cette requete :
+        // deux index ne posent pas les memes termes sur le meme champ.
+        let hl = std::sync::Arc::new(match &surlignage {
+            Some(d) => crate::highlight::resoudre(d, body_obj.get("query"), &gen)?,
+            None => crate::highlight::Plan::default(),
+        });
         if sort_asc.is_empty() {
             sort_asc = sort.iter().map(|s| s.asc).collect();
         }
@@ -275,6 +289,7 @@ pub async fn search(
             nom,
             gen,
             plan,
+            hl,
             query,
             sort,
             agrege,
