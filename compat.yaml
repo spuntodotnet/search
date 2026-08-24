@@ -2277,7 +2277,13 @@ tables:
           bucket **vide** porte les siennes, comme chez ES : tantivy comble les
           trous d'un `histogram` sans exécuter ce qu'il y a dessous, et ferrite
           y remet la forme « zéro document » — mesurée sur une recherche qui ne
-          ramène rien, pas écrite à la main
+          ramène rien, pas écrite à la main. Un bucket **rare** porte les
+          siennes aussi, ce qui n'a pas toujours été vrai : tantivy 0.26.1
+          perdait ses documents au-delà de 2 048 par segment, en 200 et avec le
+          bon `doc_count` à côté. Le correctif d'amont est épinglé (voir
+          [`tantivy-patch.md`](tantivy-patch.md)), et 46 combinaisons parent ×
+          sous-agrégation le tiennent contre un vrai ES
+          ([`sonde_sous_aggs.py`](../tests/compat/sonde_sous_aggs.py))
 
       - id: agg.multivalue
         nom: "`histogram`, `date_histogram`, `range` sur un champ **multivalué**"

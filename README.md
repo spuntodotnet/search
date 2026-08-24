@@ -44,9 +44,11 @@ Les quatre dernières lignes sont là exprès : **ferrite perd sur le tri, sur
 l'export, sur l'indexation et sur le disque**, et le tri est le pire résultat du
 banc — jusqu'à ×290. Un banc qui ne montre que des victoires n'est pas lu comme
 un banc. Le protocole, la seconde échelle (500 000 documents), les 18 requêtes
-de la track que ferrite refuse, **une réserve sérieuse sur les
-sous-agrégations** et **la taille au-delà de laquelle il n'est plus le bon
-choix** sont dans [`docs/bench.md`](docs/bench.md).
+de la track que ferrite refuse, **le défaut de sous-agrégation que ce banc a
+trouvé** — des valeurs fausses en 200 dans les buckets rares, corrigé depuis
+(voir [`docs/tantivy-patch.md`](docs/tantivy-patch.md)) — et **la taille au-delà
+de laquelle il n'est plus le bon choix** sont dans
+[`docs/bench.md`](docs/bench.md).
 
 L'argument n'est pas « on refait Elasticsearch en mieux ». C'est : **le code
 client existant ne change pas** (mêmes bibliothèques officielles, mêmes
@@ -180,11 +182,12 @@ supportés : on peut rejouer le mapping d'un Elasticsearch existant, ou indexer
 sans rien déclarer.
 
 Les **agrégations** sont là aussi : métriques, `terms`, `range`, `histogram`,
-`date_histogram`, et sous-agrégations — de quoi construire des facettes. Avec
-une réserve mesurée, et sérieuse : au-delà de ~2 048 documents par segment, une
-**sous-agrégation** sous un `terms` ou un `range` perd les documents de ses
-buckets rares (défaut de tantivy 0.26.1, détail et mesure dans
-[`docs/bench.md`](docs/bench.md)).
+`date_histogram`, et sous-agrégations — de quoi construire des facettes. Y
+compris sur les buckets **rares**, ce qui n'a pas toujours été vrai : au-delà de
+2 048 documents par segment, une sous-agrégation sous un `terms` ou un `range`
+perdait leurs documents, en 200 et avec le bon `doc_count` à côté. ferrite
+épingle le correctif d'amont de tantivy pour ça — ce qu'il contient et comment
+en sortir : [`docs/tantivy-patch.md`](docs/tantivy-patch.md).
 
 Les **analyzers** `standard`, `simple`, `whitespace`, `keyword`, `stop`,
 `english` et `french` sont vérifiés identiques à ceux d'ES sur 217 textes —

@@ -1041,21 +1041,26 @@ exporte en masse (`scroll` ×0,25), ou réindexe souvent (indexation ×0,20 aux
 deux échelles). Rien n'a été mesuré au-delà de deux millions de documents, et
 rien n'est extrapolé ici.
 
-- **Une sous-agrégation sous un `terms` ou un `range` perd les documents de ses
-  buckets rares.** C'est la limite la plus grave de cette liste, et la seule
-  qui rende des **valeurs fausses en 200** — les `doc_count` des buckets sont
-  exacts, seules les valeurs des sous-agrégations manquent, donc rien ne
-  prévient. Mesuré : sur deux millions de documents de la track `geonames`, un
-  `range` dont le bucket compte **28 518 documents** rend un `value_count` de
-  **1 692** — 94 % de perdus, en 200, avec le bon `doc_count` juste à côté. La cause est dans tantivy 0.26.1 (dernière version publiée) —
-  `aggregation/cached_sub_aggs.rs`, `LowCardSubAggCache::flush_local` : passé
-  2 048 documents en cache, il ne recopie que les buckets au-dessus d'un seuil
-  puis efface le cache entier. Le défaut n'apparaît donc **pas** en dessous de
-  ~2 048 documents par segment, ce qui explique qu'aucune des mesures
-  existantes ne l'ait vu ; un `histogram`, et un `terms` imbriqué sous un autre
-  bucket, empruntent l'autre cache et sont corrects (mesuré). La mesure qui le
-  montre :
-  [`sonde_sous_aggs.py`](../tests/compat/sonde_sous_aggs.py).
+- ~~**Une sous-agrégation sous un `terms` ou un `range` perd les documents de
+  ses buckets rares.**~~ **Corrigé.** C'était la seule limite de cette liste à
+  rendre des **valeurs fausses en 200** : les `doc_count` des buckets étaient
+  exacts, seules les valeurs des sous-agrégations manquaient, donc rien ne
+  prévenait. Sur deux millions de documents de la track `geonames`, un `range`
+  dont le bucket compte 28 518 documents rendait un `value_count` de 1 692 —
+  94 % de perdus. La cause était dans tantivy 0.26.1
+  (`aggregation/cached_sub_aggs.rs`, `LowCardSubAggCache::flush_local`), et la
+  décision est prise sur des bornes **mesurées, pas lues dans son code** :
+  2 047 documents dans un segment sont justes et **2 048** ne le sont plus ; un
+  bucket est perdu s'il a au plus `2048 / (2 × nombre de buckets)` documents
+  dans la fenêtre qui se vide (204 perdus, 205 gardés sur 5 buckets) ; et
+  **toutes** les métriques étaient touchées, pas seulement `value_count` — un
+  `avg` rendait 21,5 là où ES rend 21,428…, un nombre faux *plausible*. ferrite
+  **épingle** le correctif d'amont ([tantivy#2992](https://github.com/quickwit-oss/tantivy/issues/2992),
+  non publié : 0.26.1 reste la dernière version) ; ce que l'épingle contient et
+  comment en sortir sont dans [`tantivy-patch.md`](tantivy-patch.md). La mesure
+  qui le tient : [`sonde_sous_aggs.py`](../tests/compat/sonde_sous_aggs.py),
+  46 combinaisons parent × sous-agrégation sur 50 000 documents — **46/46
+  identiques à ES avec l'épingle, 32/46 sans**.
 - **Le tri charge tous les hits en mémoire.** Le collecteur de tri ramasse tous
   les documents correspondants avec leurs clés avant de les ordonner. C'est
   correct pour toutes les combinaisons de clés (y compris `keyword` et

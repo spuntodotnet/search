@@ -181,7 +181,9 @@ aux deux serveurs à 500 000 puis 2 000 000 de documents. Ce que ça change :
   et surtout une **sous-agrégation qui perd les documents de ses buckets
   rares** au-delà de 2 048 documents par segment — des valeurs fausses en 200,
   invisibles en dessous de cette taille, donc invisibles à toutes les mesures
-  précédentes.
+  précédentes. Ce dernier a demandé une carte à lui seul, et sa correction est
+  la seule fois où ce projet a **épinglé un fork de sa dépendance**
+  ([`docs/tantivy-patch.md`](docs/tantivy-patch.md)).
 
 ### 9. Brancher un logiciel que personne ici n'a écrit
 
@@ -233,7 +235,8 @@ développement, pas de CI).
 | `tests/compat/conformance_es.py` | que dit la suite de tests **d'Elastic** ? Ses **107 domaines**, sans liste blanche. Son rapport est un fichier, pas une phrase : [`docs/conformance.json`](docs/conformance.json) (totaux, deux taux, exclusions comptées, détail par cas), régénéré par `--json`, tenu par un cliquet en CI (`--diff`). `--etat` vérifie entre deux cas que rien n'est **apparu** depuis l'état de départ de la cible — index, alias, templates, réglages de cluster — et arrête la campagne au premier écart (+27 %, payés par la CI) : 79 campagnes consécutives rendent le même rapport à l'octet près |
 | `tests/compat/bench_vs_es.py` | mêmes résultats, **et à quel prix** ? Garde-fou de développement : 600 documents et 138 requêtes **écrites ici**, donc un dénominateur qu'on a choisi soi-même — ne sert plus à publier |
 | `tests/compat/bench_echelle.py` | et **à l'échelle**, sur un corpus que nous n'avons pas écrit ? La track Rally `geonames` d'Elastic (Apache-2.0, révision figée, corpus vérifié à l'octet près), 500 000 et 2 000 000 de documents, **ses** 31 requêtes. `term` ×1,7 et `match_phrase` ×2,6 pour ferrite a deux millions de documents (et l'avance **grandit** avec la taille), RSS ×8 en sa faveur — et le **tri jusqu'a ×290 contre lui**, l'indexation ×0,20, le `scroll` ×0,25. 13 requêtes jouables, 18 refusées, toutes rattachées à une capacité déclarée. Voir [`docs/bench.md`](docs/bench.md) |
-| `tests/compat/sonde_sous_aggs.py` | une **sous-agrégation** voit-elle tous les documents de son bucket ? (non, au-delà de ~2 048 par segment — défaut de tantivy 0.26.1, trouvé par le banc à l'échelle) |
+| `tests/compat/sonde_sous_aggs.py` | une **sous-agrégation** voit-elle tous les documents de son bucket ? (46 combinaisons parent × sous-agrégation, 50 000 documents déséquilibrés : **46/46** avec l'épingle de tantivy, **32/46** sans ; `--seuil` rejoue les deux bornes du défaut, 2 047 juste / 2 048 faux) |
+| `tests/compat/verifie_tantivy.py` | **qu'est-ce que l'épingle de `Cargo.toml` contient ?** Télécharge les 9 crates publiées que le `[patch.crates-io]` remplace et les compare fichier par fichier à l'arbre du fork : 0.26.1 à l'octet près, plus exactement un fichier. Tourne en CI. Voir [`docs/tantivy-patch.md`](docs/tantivy-patch.md) |
 | `tests/compat/probe_es7.py` | un **client** 7.x peut-il se brancher ? |
 | `tests/compat/diff_es7.py` | une **instance** 7.x peut-elle être reprise ? `--inventaire` liste ses types de champ |
 
@@ -635,16 +638,33 @@ bouger**, pas après.
   toute seule.
 - **Une agrégation déléguée perd des documents, et seulement dans les buckets
   rares.** Sous un `terms` ou un `range` de premier niveau, la
-  **sous-agrégation** de tantivy 0.26.1 ne voit pas tous les documents de son
+  **sous-agrégation** de tantivy 0.26.1 ne voyait pas tous les documents de son
   bucket : au-delà de 2 048 documents en cache, `LowCardSubAggCache::flush_local`
-  ne recopie que les buckets au-dessus d'un seuil puis efface le cache entier.
-  Les `doc_count` restent justes — donc la réponse a l'air bonne, en 200. Deux
-  raisons pour lesquelles c'est resté invisible : il faut plus de 2 048
-  documents **par segment** (les 600 de `diff_aggs.py` n'y arrivent pas), et il
-  faut un bucket **rare** (un corpus régulier donne à chaque bucket sa part de
-  chaque tranche, donc au-dessus du seuil). C'est la pire forme du défaut :
-  ce qui disparaît est la minorité. Mesure figée dans
-  `tests/compat/sonde_sous_aggs.py`, chiffres dans `docs/bench.md`.
+  ne recopiait que les buckets au-dessus d'un seuil puis effaçait le cache
+  entier. Les `doc_count` restaient justes — donc la réponse avait l'air bonne,
+  en 200. Deux raisons pour lesquelles c'est resté invisible : il faut plus de
+  2 048 documents **par segment** (les 600 de `diff_aggs.py` n'y arrivent pas,
+  ni les 25 du fuzzer), et il faut un bucket **rare** (un corpus régulier donne
+  à chaque bucket sa part de chaque tranche, donc au-dessus du seuil). C'est la
+  pire forme du défaut : ce qui disparaît est la minorité. Corrigé en épinglant
+  le correctif d'amont — et trois choses de cette correction méritent d'être
+  retenues, parce qu'aucune ne se lisait dans le code de la dépendance :
+  - **la borne d'un défaut se reproduit, elle ne s'estime pas.** « ~2 048 » est
+    devenu « 2 047 juste, 2 048 faux », et « les buckets rares » est devenu
+    « au plus `2048 / (2 × nombre de buckets)` documents dans la fenêtre » —
+    204 perdus, 205 gardés. La formule, pas un ordre de grandeur ;
+  - **une liste de symptômes établie sur un symptôme est incomplète.** Ce qui
+    était publié disait « un `value_count` de 1 692 ». La matrice complète
+    (5 parents × 9 sous-agrégations) a montré que **toutes** les métriques
+    étaient touchées et les sous-agrégations de buckets aussi : 14 formes
+    fausses sur 46. La pire n'était pas la plus visible — `avg` rendait 21,5 au
+    lieu de 21,428…, un nombre faux *plausible* ;
+  - **une épingle sur un fork est une dette qu'il faut rendre mesurable.**
+    `[patch.crates-io]` remplace **neuf** paquets d'un coup. D'où
+    `verifie_tantivy.py`, qui télécharge les crates publiées et prouve que le
+    fork en est l'égal à un fichier près, et `tests/spike_sous_aggs.rs`, qui
+    casse dans `cargo test` si l'épingle saute. Le chemin de sortie est écrit
+    d'avance : [`docs/tantivy-patch.md`](docs/tantivy-patch.md).
 - **Un cliquet qui bat, et une hypothèse qui coûtait la mesure.** La CI d'une PR
   est passée rouge puis verte sans qu'une ligne ne bouge : un cas de
   `indices.stats` tombait de `refus` à `echec` sur `[index] 404 : no such index

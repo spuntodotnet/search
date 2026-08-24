@@ -54,6 +54,25 @@ n'est pas posé sur l'index mais dans un **template**, et l'index naît de
 l'écriture. La comparaison de mapping qui suit mesure alors ce qu'un template
 applique vraiment, sur un mapping que personne n'a choisi.
 
+### Ce qu'une brique exercée ne garantit pas : l'échelle
+
+`agg.sous_agregations` est exercée depuis longtemps — une agrégation de buckets
+sur deux porte des sous-agrégations tirées au sort. Ça n'a pas empêché le
+défaut le plus grave qu'ait connu ce projet de vivre sous le fuzzer sans être
+vu : une sous-agrégation perdait les documents de ses buckets rares au-delà de
+**2 048 documents par segment**, et un cas du fuzzer en indexe **25**.
+
+Aucune probabilité, aucune graine, aucune brique de plus n'y changerait quoi que
+ce soit : le fuzzer mesure des **formes**, pas des tailles. Publier une brique
+comme couverte, c'est donc dire « cette forme est comparée », pas « cette
+capacité est mesurée partout où elle vit ». La taille est le quatrième angle
+mort structurel de ce harnais, après celui des applications réelles (elles
+commencent par créer leur index), celui de la taille des corps HTTP, et celui
+des tailles de corpus — et c'est le banc à l'échelle qui le couvre, pas ce
+fichier. La mesure de celui-là vit dans
+[`sonde_sous_aggs.py`](../tests/compat/sonde_sous_aggs.py) et son histoire dans
+[`tantivy-patch.md`](tantivy-patch.md).
+
 ## L'étalonnage vient avant la mesure
 
 `--calibrer` fait tourner exactement la même batterie contre **deux**
