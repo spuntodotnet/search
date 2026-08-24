@@ -74,6 +74,27 @@ jobs:
       - name: les briques du fuzzer citent des capacites qui existent
         run: python3 tests/compat/fuzz_vs_es.py --couverture
 
+  tantivy:
+    name: l'epingle de tantivy contient ce qu'elle declare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # `Cargo.toml` ne prend pas tantivy sur crates.io mais sur un fork : le
+      # tag 0.26.1 plus le correctif d'amont des sous-agregations, non publie
+      # (voir docs/tantivy-patch.md). Une epingle comme celle-la remplace neuf
+      # paquets d'un coup, et « c'est juste le correctif d'amont » est
+      # exactement le genre de phrase que ce depot n'accepte pas sans mesure.
+      # Cette etape telecharge les crates publiees et compare fichier par
+      # fichier : elle echoue si un fichier de plus differe, si un fichier
+      # publie manque du fork, ou si l'ecart declare disparait.
+      - name: le fork epingle est 0.26.1 plus un seul fichier
+        run: python3 tests/compat/verifie_tantivy.py
+
   compat:
     name: harnais de compatibilite (client officiel)
     runs-on: ubuntu-latest

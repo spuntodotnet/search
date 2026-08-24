@@ -857,7 +857,7 @@ Comparées champ par champ à un vrai ES 8.15 sur 53 requêtes
 | `range` | 🟡 | `ranges` avec `from` / `to` / `key`, `keyed`. Sur un champ `date`, les bornes s'écrivent **en dates** (au `format` du champ) et les buckets rendent `from_as_string` / `to_as_string`. Les intervalles que le client n'a pas demandés sont écartés : tantivy comble les trous entre deux bornes, Elasticsearch non. Refusé : un **trou** entre deux intervalles, sur un champ `date` (tantivy comble les trous et ferrite écarte ensuite le bucket de remplissage ; sur une date, où les bornes passent en nanosecondes, ce remplissage avale l'intervalle demandé. Sur un champ numérique, les deux buckets sortent et le filtrage suffit), des intervalles qui se **chevauchent** (ES compte alors un document dans chaque bucket qui le contient ; l'agrégation de tantivy partitionne les valeurs et ne sait pas le faire), un champ **multivalué** (voir la ligne suivante) |
 | `histogram` | 🟡 | `interval`, `offset`, `min_doc_count`, `hard_bounds`, `extended_bounds`, `keyed`. Refusé : un champ **multivalué** (voir la ligne suivante) |
 | `date_histogram` | 🟡 | Supporté : `field`, `fixed_interval`, `offset`, `min_doc_count`, `hard_bounds`, `extended_bounds`, `keyed` (comme `histogram`). Refusé : `calendar_interval` (mois et années civils n'ont pas d'équivalent dans tantivy), `time_zone`, `format`, `order` |
-| Sous-agrégations | ✅ | sur tous les types de buckets, vérifiées jusqu'à trois niveaux. Un bucket **vide** porte les siennes, comme chez ES : tantivy comble les trous d'un `histogram` sans exécuter ce qu'il y a dessous, et ferrite y remet la forme « zéro document » — mesurée sur une recherche qui ne ramène rien, pas écrite à la main |
+| Sous-agrégations | ✅ | sur tous les types de buckets, vérifiées jusqu'à trois niveaux. Un bucket **vide** porte les siennes, comme chez ES : tantivy comble les trous d'un `histogram` sans exécuter ce qu'il y a dessous, et ferrite y remet la forme « zéro document » — mesurée sur une recherche qui ne ramène rien, pas écrite à la main. Un bucket **rare** porte les siennes aussi, ce qui n'a pas toujours été vrai : tantivy 0.26.1 perdait ses documents au-delà de 2 048 par segment, en 200 et avec le bon `doc_count` à côté. Le correctif d'amont est épinglé (voir [`tantivy-patch.md`](tantivy-patch.md)), et 46 combinaisons parent × sous-agrégation le tiennent contre un vrai ES ([`sonde_sous_aggs.py`](../tests/compat/sonde_sous_aggs.py)) |
 | `histogram`, `date_histogram`, `range` sur un champ **multivalué** | ❌ | **divergence de moteur** — l'agrégation de tantivy compte les **valeurs**, Elasticsearch compte les **documents** : un document dont le champ vaut `[1, 2, 3]` tombe trois fois dans le bucket qui les contient (mesuré : `doc_count` de 4 là où ES en compte 2). Le refus n'est prononcé que si la colonne est réellement multivaluée — un champ à une valeur par document, le cas courant, reste servi et exact. `terms`, `value_count` et `stats` ne sont pas concernés : leurs comptes coïncident avec ceux d'ES |
 | `cardinality` | ❌ | **divergence de moteur** — l'estimation de tantivy diffère de celle d'ES (mesuré : 582 valeurs distinctes annoncées là où ES en compte 598), y compris sous le seuil où ES est exact — un compte approché sous le nom d'ES serait faux sans le dire |
 | `filter` | 🟡 | n'importe quelle requête du Query DSL, avec ses sous-agrégations. **Exécutée par ferrite**, pas par tantivy : compter les documents qui correspondent à la recherche *et* au filtre, c'est exécuter l'intersection des deux requêtes (voir les divergences). Refusé : sous une agrégation de buckets (il faudrait rejouer sa requête bucket par bucket) |
@@ -1286,21 +1286,26 @@ exporte en masse (`scroll` ×0,25), ou réindexe souvent (indexation ×0,20 aux
 deux échelles). Rien n'a été mesuré au-delà de deux millions de documents, et
 rien n'est extrapolé ici.
 
-- **Une sous-agrégation sous un `terms` ou un `range` perd les documents de ses
-  buckets rares.** C'est la limite la plus grave de cette liste, et la seule
-  qui rende des **valeurs fausses en 200** — les `doc_count` des buckets sont
-  exacts, seules les valeurs des sous-agrégations manquent, donc rien ne
-  prévient. Mesuré : sur deux millions de documents de la track `geonames`, un
-  `range` dont le bucket compte **28 518 documents** rend un `value_count` de
-  **1 692** — 94 % de perdus, en 200, avec le bon `doc_count` juste à côté. La cause est dans tantivy 0.26.1 (dernière version publiée) —
-  `aggregation/cached_sub_aggs.rs`, `LowCardSubAggCache::flush_local` : passé
-  2 048 documents en cache, il ne recopie que les buckets au-dessus d'un seuil
-  puis efface le cache entier. Le défaut n'apparaît donc **pas** en dessous de
-  ~2 048 documents par segment, ce qui explique qu'aucune des mesures
-  existantes ne l'ait vu ; un `histogram`, et un `terms` imbriqué sous un autre
-  bucket, empruntent l'autre cache et sont corrects (mesuré). La mesure qui le
-  montre :
-  [`sonde_sous_aggs.py`](../tests/compat/sonde_sous_aggs.py).
+- ~~**Une sous-agrégation sous un `terms` ou un `range` perd les documents de
+  ses buckets rares.**~~ **Corrigé.** C'était la seule limite de cette liste à
+  rendre des **valeurs fausses en 200** : les `doc_count` des buckets étaient
+  exacts, seules les valeurs des sous-agrégations manquaient, donc rien ne
+  prévenait. Sur deux millions de documents de la track `geonames`, un `range`
+  dont le bucket compte 28 518 documents rendait un `value_count` de 1 692 —
+  94 % de perdus. La cause était dans tantivy 0.26.1
+  (`aggregation/cached_sub_aggs.rs`, `LowCardSubAggCache::flush_local`), et la
+  décision est prise sur des bornes **mesurées, pas lues dans son code** :
+  2 047 documents dans un segment sont justes et **2 048** ne le sont plus ; un
+  bucket est perdu s'il a au plus `2048 / (2 × nombre de buckets)` documents
+  dans la fenêtre qui se vide (204 perdus, 205 gardés sur 5 buckets) ; et
+  **toutes** les métriques étaient touchées, pas seulement `value_count` — un
+  `avg` rendait 21,5 là où ES rend 21,428…, un nombre faux *plausible*. ferrite
+  **épingle** le correctif d'amont ([tantivy#2992](https://github.com/quickwit-oss/tantivy/issues/2992),
+  non publié : 0.26.1 reste la dernière version) ; ce que l'épingle contient et
+  comment en sortir sont dans [`tantivy-patch.md`](tantivy-patch.md). La mesure
+  qui le tient : [`sonde_sous_aggs.py`](../tests/compat/sonde_sous_aggs.py),
+  46 combinaisons parent × sous-agrégation sur 50 000 documents — **46/46
+  identiques à ES avec l'épingle, 32/46 sans**.
 - **Le tri charge tous les hits en mémoire.** Le collecteur de tri ramasse tous
   les documents correspondants avec leurs clés avant de les ordonner. C'est
   correct pour toutes les combinaisons de clés (y compris `keyword` et

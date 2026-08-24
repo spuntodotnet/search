@@ -170,9 +170,10 @@ mesures est le maximum déguisé en centile.
   documents là où celle d'Elasticsearch est d'abord un tas fixé à l'avance — ici
   `-Xmx2g`, et il ne le rend jamais.
 - **L'agrégation `terms` avec sous-agrégation** change de camp entre les deux
-  échelles : ×0,80 à cinq cent mille, **×1,29** à deux millions. Voir la
-  réserve plus bas — à cette taille, ferrite rend des **valeurs fausses** dans
-  cette agrégation-là, ce qui rend la ligne peu réjouissante.
+  échelles : ×0,80 à cinq cent mille, **×1,29** à deux millions. Ces deux
+  chiffres sont à jeter : ils ont été mesurés sur un moteur qui, à cette taille,
+  rendait des **valeurs fausses** dans cette agrégation-là. Le défaut est
+  corrigé depuis (voir la réserve plus bas), la campagne pas relancée.
 
 ## Ce que ferrite perd, et de combien
 
@@ -209,43 +210,92 @@ mesures est le maximum déguisé en centile.
   fusionné — et ferrite n'a pas de `_forcemerge` pour aller chercher le même
   gain.
 
-## La réserve qui compte plus que les chiffres
+## La réserve qui comptait plus que les chiffres — et ce qu'elle est devenue
 
-**Deux des treize requêtes ne rendent pas la même chose des deux côtés**, aux
+**Deux des treize requêtes ne rendaient pas la même chose des deux côtés**, aux
 deux échelles : `country_agg_uncached` et `country_agg_cached`. Les `doc_count`
-de chaque bucket sont exacts ; ce sont les **sous-agrégations** qui sont
-fausses. Sur 500 000 documents, `sum_population` du bucket `AE` vaut 9 672 881
+de chaque bucket étaient exacts ; c'étaient les **sous-agrégations** qui étaient
+fausses. Sur 500 000 documents, `sum_population` du bucket `AE` valait 9 672 881
 chez ferrite et 12 008 586 chez Elasticsearch — 19 % de la valeur manquante.
 
-L'exemple le plus net est ailleurs, sur l'index de deux millions de documents,
-et il tient en une ligne : un `range` sur `population` dont le bucket
-`100.0-*` compte **28 518 documents** rend un `value_count` de **1 692**. Le
-`doc_count` est juste, la sous-agrégation en a perdu 94 %.
+L'exemple le plus net était ailleurs, sur l'index de deux millions de documents,
+et il tenait en une ligne : un `range` sur `population` dont le bucket
+`100.0-*` compte **28 518 documents** rendait un `value_count` de **1 692**. Le
+`doc_count` était juste, la sous-agrégation en avait perdu 94 %.
 
 Le banc à l'échelle est ce qui l'a trouvé, et c'est sa vraie découverte. Le
-défaut n'apparaît qu'au-delà de ~2 048 documents dans un même segment **et**
+défaut n'apparaissait qu'au-delà de 2 048 documents dans un même segment **et**
 seulement dans les buckets **rares** — donc ni les 600 documents de
 `bench_vs_es.py`, ni les 53 requêtes de
-[`diff_aggs.py`](../tests/compat/diff_aggs.py), ni le fuzzer ne pouvaient le
-voir. Il est **silencieux** : la réponse est un 200 bien formé, avec des
-`doc_count` justes.
+[`diff_aggs.py`](../tests/compat/diff_aggs.py), ni le fuzzer (25 documents par
+cas) ne pouvaient le voir. Il était **silencieux** : la réponse est un 200 bien
+formé, avec des `doc_count` justes.
 
-La cause est dans tantivy 0.26.1 (`aggregation/cached_sub_aggs.rs`,
+### C'est corrigé, et voici ce qu'il a fallu mesurer pour le corriger
+
+La cause était dans tantivy 0.26.1 (`aggregation/cached_sub_aggs.rs`,
 `LowCardSubAggCache::flush_local`) : passé 2 048 documents en cache, il ne
-recopie que les buckets au-dessus d'un seuil, puis **efface le cache entier** —
-les documents des buckets non recopiés sont perdus. Le chemin fautif est celui
-d'un `terms` de premier niveau sur un champ à moins de 100 valeurs distinctes,
-et celui de tout `range` ; un `histogram`, et un `terms` imbriqué sous un autre
-bucket, empruntent l'autre cache et sont corrects (mesuré). 0.26.1 est la
-dernière version publiée.
+recopiait que les buckets au-dessus d'un seuil, puis **effaçait le cache
+entier** — les documents des buckets non recopiés étaient perdus.
 
-Corriger ce défaut n'est pas du ressort de cette carte — les chemins possibles
-(forker tantivy, ou exécuter les sous-agrégations bucket par bucket) sont des
-décisions d'architecture. Il est donc **publié** : dans la section « Limites
-connues » de [`compat.md`](compat.md), dans le README, et surtout dans une
-mesure qui le rejoue sans corpus de 500 000 documents,
-[`tests/compat/sonde_sous_aggs.py`](../tests/compat/sonde_sous_aggs.py) — parce
-qu'une limite que rien n'exerce n'est qu'une phrase.
+Lire ça dans le code de la dépendance ne suffisait pas à décider. Les bornes ont
+donc été **reproduites** contre un vrai Elasticsearch
+([`sonde_sous_aggs.py --seuil`](../tests/compat/sonde_sous_aggs.py)), et deux
+d'entre elles ont changé la gravité de ce qui était publié ici :
+
+| | Ce qui était écrit | Ce que la mesure dit |
+|---|---|---|
+| Documents par segment | « au-delà de ~2 048 » | **2 047 juste, 2 048 faux** — le seuil est exact |
+| Documents par bucket | « les buckets rares » | perdu si le bucket a **au plus `2048 / (2 × nombre de buckets)`** documents dans la fenêtre : 204 perdus, 205 gardés sur 5 buckets |
+| Sous-agrégations touchées | `value_count`, un `sum` | **toutes** les métriques, **et** les sous-agrégations de buckets (`terms`, `range`, `histogram`) — 14 formes fausses sur 46 |
+| La pire d'entre elles | — | `avg` rendait **21,5** au lieu de **21,428…** : un nombre faux *plausible*, celui qu'un tableau de bord affiche sans que personne ne sourcille |
+| Parents épargnés | `histogram`, `terms` imbriqué | plus un `terms` à ≥ 100 valeurs et le `filter` qu'exécute ferrite — confirmé, ce n'est pas « les sous-agrégations sont approximatives », c'est un chemin précis |
+
+Le défaut avait été signalé en amont pendant ce temps
+([tantivy#2992](https://github.com/quickwit-oss/tantivy/issues/2992)) et corrigé
+par le mainteneur, mais **non publié** : 0.26.1 reste la dernière version.
+ferrite épingle donc ce correctif — le tag 0.26.1 plus ce seul commit, trois
+lignes ajoutées et vingt-neuf retirées, dans un fork dont
+[`verifie_tantivy.py`](../tests/compat/verifie_tantivy.py) montre qu'il est
+identique aux neuf crates publiées à un fichier près. Ce que l'épingle contient
+et comment en sortir : [`tantivy-patch.md`](tantivy-patch.md).
+
+La mesure qui le tient ne demande plus 500 000 documents de `geonames` :
+`sonde_sous_aggs.py` pose 46 combinaisons parent × sous-agrégation sur 50 000
+documents déséquilibrés et les compare champ par champ à un vrai ES. **46/46
+avec l'épingle, 32/46 sans** — c'est le second chiffre qui prouve que le premier
+mesure quelque chose.
+
+Le chiffre publié plus haut a quand même été rejoué sur le vrai corpus, parce
+qu'une correction validée sur le cas réduit et jamais reposée sur le cas
+d'origine reste une inférence. Deux millions de documents de la track,
+réindexés dans les deux serveurs, la même agrégation posée aux deux :
+
+```
+   bucket *-100.0    doc_count=1971482   value_count ferrite=1971482   ES=1971482   ok
+   bucket 100.0-*    doc_count=28518     value_count ferrite=28518     ES=28518     ok
+   JSON identique : True
+```
+
+**28 518 documents, `value_count` de 28 518.** C'était 1 692.
+
+### Ce que la correction coûte, et ce que les deux lignes du tableau valent encore
+
+Les deux lignes `country_agg_*` des tableaux de latence ci-dessus ont été
+mesurées par la campagne qui a trouvé le défaut, donc **sur un moteur qui ne
+comptait pas tous les documents**. Elles disent le prix d'un calcul faux : à ce
+titre le ×0,80 et le ×1,29 ne sont plus comparables à quoi que ce soit, et la
+campagne n'a pas été relancée dans cette carte — deux échelles mesurées avec
+deux moteurs ne se comparent pas plus que deux protocoles.
+
+Le prix de la correction n'a pas pu être mesuré ici, et il vaut mieux le dire
+que publier un chiffre qu'on ne tient pas : sur 500 000 documents, huit
+agrégations, quatre tours alternés entre les deux binaires, les cas que le
+correctif **ne touche pas** bougent de −11 % à +3 % d'un tour à l'autre — donc
+plus que ceux qu'il touche. Le banc contrôlé du mainteneur de tantivy donne
++7,8 % à +11,6 % sur les agrégations concernées et des kilo-octets de mémoire.
+C'est de toute façon la mauvaise question : la version rapide rendait un
+`value_count` de 1 692 sur 28 518 documents.
 
 ## Jusqu'où ferrite est le bon choix
 
@@ -273,10 +323,12 @@ sans que la recherche coûte plus cher.
    et le débit d'indexation de ferrite ne monte pas avec la machine comme le
    sien.
 
-Et un avertissement de plus, sans rapport avec la vitesse : tant que le défaut
-de sous-agrégation ci-dessus n'est pas corrigé, **une facette calculée sur plus
-de quelques milliers de documents rend des valeurs fausses dans ses buckets
-rares**. C'est la limite la plus dure de cette page.
+L'avertissement qui figurait ici — « une facette calculée sur plus de quelques
+milliers de documents rend des valeurs fausses dans ses buckets rares » — est
+levé : c'était la limite la plus dure de cette page, elle est corrigée, et la
+mesure qui l'a établie est aussi celle qui la tient
+([`sonde_sous_aggs.py`](../tests/compat/sonde_sous_aggs.py), 46/46 contre un
+vrai Elasticsearch, 32/46 sans le correctif).
 
 ## Refaire la mesure
 

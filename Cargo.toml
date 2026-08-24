@@ -23,6 +23,22 @@ tantivy = "0.26"
 # vraiment, plutot que sa forme.
 tantivy-fst = "0.5"
 
+# tantivy 0.26.1 perd les documents des buckets rares d'une sous-agregation des
+# qu'un segment depasse 2 048 documents (mesure : 2 047 juste, 2 048 faux ; un
+# bucket est perdu s'il a au plus 2048 / (2 * nombre de buckets) documents dans
+# la fenetre qui se vide). Les `doc_count` restent exacts, donc la reponse est
+# un 200 bien forme avec des valeurs fausses : le pire resultat possible ici.
+#
+# Le correctif est celui d'amont (tantivy issue #2992, commit 61693134), porte
+# tel quel sur le tag 0.26.1 dans notre fork — 3 lignes ajoutees, 29 retirees,
+# aucun autre changement. Il n'est pas encore publie : 0.26.1 reste la derniere
+# version sur crates.io. L'epingle disparait le jour ou elle l'est.
+#
+# Ce qui la tient : `tests/spike_sous_aggs.rs`, qui echoue si elle saute.
+# Pourquoi elle existe et comment en sortir : `docs/tantivy-patch.md`.
+[patch.crates-io]
+tantivy = { git = "https://github.com/spuntodotnet/tantivy", rev = "a8ffd13238c279aa1b529d1b94fb58d1b840fecd" }
+
 [profile.release]
 opt-level = 3
 lto = "fat"
