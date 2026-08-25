@@ -211,6 +211,34 @@ tenir la ligne « même définition des deux côtés » :
 ./tests/compat/measure_container.sh --tailles docker.elastic.co/elasticsearch/elasticsearch:8.15.0
 ```
 
+### Le premier passage en CI a rendu un chiffre faux, en vert
+
+`docker save` ne rend les blobs **compressés** que depuis le magasin d'images de
+containerd. Les runners de la CI sont encore en Docker 28, où il écrit bien un
+layout OCI — mais avec des **couches nues**, et un manifeste qui déclare leur
+taille décompressée. Le script a donc imprimé « compressée (registre) :
+9 520 806 octets », c'est-à-dire la taille décompressée sous le nom de l'autre,
+sans un mot et dans un job vert. Le défaut que cette page corrige, reproduit
+par sa propre correction.
+
+La question se pose maintenant **aux octets de chaque couche** : si l'une d'elles
+n'est pas compressée, la taille qu'un registre servirait n'est pas déductible, et
+le script la refuse (`NON MESURABLE`, code de retour non nul) plutôt que de la
+remplacer par un nombre plausible. Recompresser pour combler le trou mesurerait
+notre `gzip`, pas celui du registre.
+
+La CI produit donc l'artefact OCI directement — c'est exactement ce qu'un
+`docker push` enverrait, et il sort du cache du build :
+
+```bash
+docker buildx build --output type=oci,dest=/tmp/ferrite-oci.tar .
+IMAGE_TAR=/tmp/ferrite-oci.tar ./tests/compat/measure_container.sh ferrite:ci
+```
+
+Les deux chemins — `docker save` depuis containerd, et l'artefact de buildx —
+rendent **le même nombre à l'octet près** (4 007 597). C'est ce qui permet de
+croire celui que la CI publie.
+
 ## État
 
 **Deux vraies applications tournent dessus, sans être modifiées.**

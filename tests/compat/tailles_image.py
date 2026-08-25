@@ -49,27 +49,32 @@ class Compteur(io.RawIOBase):
         return len(morceau)
 
 
-def flux_decompresse(brut, media_type: str):
-    """Rend un flux lisible sur la couche decompressee.
+def compression(brut, media_type: str) -> str:
+    """Rend ``"gzip"``, ``"zstd"`` ou ``""``, lu **aux octets**.
 
-    La compression est reconnue aux octets, pas au ``mediaType`` : celui d'une
-    couche gzip s'ecrit ``…tar+gzip`` en OCI et ``…tar.gzip`` en schema 2 de
-    Docker, et se fier au premier fait passer les images poussees par Docker
-    pour deja decompressees — 669 Mo au lieu de 1,28 Go sur Elasticsearch 8.15,
-    sans un mot.
+    Pas au ``mediaType`` : celui d'une couche gzip s'ecrit ``…tar+gzip`` en OCI
+    et ``…tar.gzip`` en schema 2 de Docker, et se fier au premier fait passer
+    les images poussees par Docker pour deja decompressees — 669 Mo au lieu de
+    1,27 Go sur Elasticsearch 8.15, sans un mot.
     """
     entete = brut.read(4)
     brut.seek(0)
     if entete[:2] == b"\x1f\x8b":
-        media_type = "+gzip"
-    elif entete == b"\x28\xb5\x2f\xfd":
-        media_type = "+zstd"
-    elif media_type.endswith(("+gzip", ".gzip", "+zstd", ".zstd")):
+        return "gzip"
+    if entete == b"\x28\xb5\x2f\xfd":
+        return "zstd"
+    if media_type.endswith(("+gzip", ".gzip", "+zstd", ".zstd")):
         raise SystemExit(
             f"couche annoncee {media_type} mais dont les octets ne le sont pas"
         )
-    else:
-        media_type = ""
+    return ""
+
+
+def flux_decompresse(brut, media_type: str):
+    """Rend un flux lisible sur la couche decompressee."""
+    media_type = {"gzip": "+gzip", "zstd": "+zstd", "": ""}[
+        compression(brut, media_type)
+    ]
 
     if media_type.endswith("+gzip"):
         import gzip
@@ -196,8 +201,22 @@ def main() -> int:
         manifeste = trouve["manifeste"]
         descripteur = trouve["descripteur"]
 
-        compressee = descripteur["size"] + manifeste["config"]["size"]
-        compressee += sum(c["size"] for c in manifeste["layers"])
+        # Un layout OCI ne garantit PAS des couches compressees : Docker 28 avec
+        # le magasin classique ecrit bien un `index.json`, mais avec des couches
+        # nues, et un manifeste qui declare leur taille decompressee. Sommer ces
+        # tailles rendrait donc la taille decompressee SOUS LE NOM de compressee
+        # — 9 520 806 octets au lieu de 4 007 597 sur ferrite, en vert, dans la
+        # CI. C'est exactement le defaut que cet outil existe pour reparer, donc
+        # la question se pose aux octets de chaque couche.
+        nues = []
+        for couche in manifeste["layers"]:
+            with blob(tar, couche["digest"]) as brut:
+                if not compression(brut, couche["mediaType"]):
+                    nues.append(couche["digest"])
+        compressee = None
+        if not nues:
+            compressee = descripteur["size"] + manifeste["config"]["size"]
+            compressee += sum(c["size"] for c in manifeste["layers"])
 
         entrypoint = None
         with blob(tar, manifeste["config"]["digest"]) as f:
@@ -250,6 +269,9 @@ def main() -> int:
         )
     largeur = max(len(nom) for nom, _, _ in lignes)
     for nom, valeur, quoi in lignes:
+        if valeur is None:
+            print(f"{nom.ljust(largeur)} : NON MESURABLE sur cette archive")
+            continue
         print(f"{nom.ljust(largeur)} : {espace(valeur).rjust(13)} octets  {mo(valeur).rjust(9)}   <- {quoi}")
     if entrypoint is not None and taille_entrypoint is None:
         # Ne rien imprimer se lirait « pas de binaire », donc « image vide ».
@@ -257,6 +279,22 @@ def main() -> int:
             f"{'binaire /' + entrypoint:{largeur}} : non mesure — aucune couche ne porte ce"
             " chemin en fichier ordinaire (lien symbolique, ou chemin traversant un lien)"
         )
+    if compressee is None:
+        sys.stdout.flush()
+        # Recompresser ici pour combler le trou mesurerait NOTRE gzip et pas
+        # celui du registre : une valeur par defaut plausible est le meilleur
+        # deguisement d'un chiffre absent.
+        print(
+            f"\n{len(nues)} couche(s) de cette archive ne sont pas compressees "
+            "(magasin d'images classique).\nLa taille qu'un registre servirait "
+            "n'en est donc pas deductible — et la sommer\nrendrait la taille "
+            "DECOMPRESSEE sous le nom de compressee.\n"
+            "L'artefact que `docker push` enverrait se produit directement :\n"
+            "    docker buildx build --output type=oci,dest=image.tar .\n"
+            "    IMAGE_TAR=image.tar ./tests/compat/measure_container.sh <tag>",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 

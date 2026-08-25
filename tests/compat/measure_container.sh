@@ -53,11 +53,27 @@ version_docker() {
 }
 
 # Les trois tailles d'une image, comptees sur les octets que Docker en rend.
+#
+# `docker save` ne rend les blobs COMPRESSES que depuis le magasin d'images
+# containerd. Avec le magasin classique il ecrit bien un layout OCI, mais avec
+# des couches nues : la taille qu'un registre servirait n'en est pas deductible,
+# et tailles_image.py refuse alors de la rendre. D'ou $IMAGE_TAR, qui laisse
+# passer l'artefact OCI directement :
+#
+#   docker buildx build --output type=oci,dest=/tmp/ferrite-oci.tar .
+#   IMAGE_TAR=/tmp/ferrite-oci.tar ./tests/compat/measure_container.sh ferrite:ci
+#
+# C'est ce que fait la CI, dont les runners sont encore en Docker 28.
+INCOMPLET=0
 tailles() {
   local image="$1"
+  if [ -n "${IMAGE_TAR:-}" ]; then
+    python3 "$(dirname "$0")/tailles_image.py" "$image" || INCOMPLET=1
+    return 0
+  fi
   TMP="$(mktemp -d)"
   docker save "$image" -o "$TMP/image.tar"
-  IMAGE_TAR="$TMP/image.tar" python3 "$(dirname "$0")/tailles_image.py" "$image"
+  IMAGE_TAR="$TMP/image.tar" python3 "$(dirname "$0")/tailles_image.py" "$image" || INCOMPLET=1
   rm -rf "$TMP"; TMP=""
 }
 
@@ -69,7 +85,7 @@ if [ "${1:-}" = "--tailles" ]; then
     echo
     tailles "$image"
   done
-  exit 0
+  exit "$INCOMPLET"
 fi
 
 TAG="${1:-ferrite:0.7.0}"
@@ -114,3 +130,7 @@ echo "== la poignee de main servie par le conteneur"
 curl -s "http://127.0.0.1:$PORT/" | head -c 400
 echo
 curl -s -I "http://127.0.0.1:$PORT/" | grep -i x-elastic-product
+
+# Un chiffre publie qui n'a pas pu etre mesure doit faire echouer ce qui le
+# lance, pas se perdre au milieu d'une sortie verte.
+exit "$INCOMPLET"

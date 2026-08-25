@@ -712,6 +712,19 @@ bouger**, pas après.
   format OCI) et compte les octets, en imprimant quand même la version de Docker
   puisqu'elle change ce que les *autres* outils répondent.
 
+  Et la correction a repayé le défaut qu'elle corrigeait, au premier passage en
+  CI. `docker save` ne rend les blobs **compressés** que depuis le magasin de
+  containerd ; les runners sont en Docker 28, où il écrit bien un layout OCI mais
+  avec des **couches nues** et un manifeste qui déclare leur taille décompressée.
+  Le script a donc publié 9 520 806 octets en « compressée (registre) » — la
+  taille décompressée sous le nom de l'autre, dans un job **vert**. Un format
+  reconnu n'est pas une garantie sur ce qu'il contient : la question se pose aux
+  octets de chaque couche, et une couche nue rend la taille du registre **non
+  déductible**, donc refusée (code de retour non nul) plutôt que remplacée par un
+  nombre plausible. Le chiffre publié se mesure maintenant sur l'artefact OCI de
+  buildx — ce qu'un `docker push` enverrait — et les deux chemins rendent le même
+  nombre à l'octet près, ce qui est la seule raison de croire le second.
+
 ## Où va le projet
 
 **Deux vraies applications tournent dessus sans être modifiées** : Gitea

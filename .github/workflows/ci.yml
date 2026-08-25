@@ -195,7 +195,14 @@ jobs:
       - name: docker build
         run: docker build -t ferrite:ci .
 
-      # Les trois chiffres qui portent le projet sont mesures a chaque CI, pas
-      # une fois pour toutes dans un README.
+      # `docker save` ne rend les blobs compresses que depuis le magasin d'images
+      # containerd ; les runners sont encore en Docker 28, ou il ecrit des couches
+      # nues. L'artefact OCI, lui, est exactement ce qu'un `docker push`
+      # enverrait — et il sort du cache du build ci-dessus.
+      - name: artefact OCI (ce qu'un registre servirait)
+        run: docker buildx build --output type=oci,dest=/tmp/ferrite-oci.tar .
+
+      # Les chiffres qui portent le projet sont mesures a chaque CI, pas une fois
+      # pour toutes dans un README.
       - name: taille d'image, RSS au repos, temps de demarrage
-        run: ./tests/compat/measure_container.sh ferrite:ci
+        run: IMAGE_TAR=/tmp/ferrite-oci.tar ./tests/compat/measure_container.sh ferrite:ci
