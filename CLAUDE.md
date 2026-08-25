@@ -15,7 +15,9 @@ fichier-ci dit **comment penser** dans ce dépôt.
 
 Un moteur de recherche compatible avec l'API Elasticsearch, écrit en Rust
 au-dessus de [tantivy](https://github.com/quickwit-oss/tantivy), tenant dans une
-image de 8,2 Mo. Le produit, c'est **« le code client existant ne change pas »**.
+image de 4,0 Mo compressés — la taille qu'un registre sert, la seule qu'on
+publie, et la définition compte : voir [Le conteneur](README.md#le-conteneur).
+Le produit, c'est **« le code client existant ne change pas »**.
 L'index inversé n'est pas réécrit : le travail réel est la couche de
 compatibilité au-dessus. API annoncée : Elasticsearch **8.15.0**.
 
@@ -690,6 +692,25 @@ bouger**, pas après.
   JSON y lit un entier. Défaut antérieur, invisible parce qu'aucun corpus écrit
   à la main ne met une valeur entière dans un champ flottant ; le fuzzer, lui,
   tire `0.0` et `1024.0` exprès.
+- **Le chiffre le plus facile à vérifier est celui qui dérive le plus vite.**
+  La taille d'image est le premier argument du projet, et la seule mesure qui ne
+  passait par aucun des neuf gestes : elle lisait un champ d'un outil
+  (`docker image inspect --format '{{.Size}}'`) au lieu de compter des octets.
+  Ce champ a **changé de définition** avec le magasin d'images — somme des
+  couches décompressées avec le magasin classique, somme des blobs compressés
+  avec celui de containerd, le défaut depuis Docker 29 : le même script est
+  passé de 8,2 à 3,8 sans qu'une ligne bouge, pendant que `docker images`
+  affichait 13,5 pour la même image — sa colonne `DISK USAGE` additionnant
+  encore autre chose. Et la ligne publiée comparait 638 Mo à 8,2 Mo, c'est-à-dire
+  la taille **compressée** d'Elasticsearch à la taille **décompressée** de
+  ferrite, toutes deux en Mio sous le nom de Mo. Trois leçons, et aucune ne
+  porte sur Docker : un chiffre publié doit dire **de quoi il est la mesure** ;
+  une comparaison n'a de sens que si les deux côtés portent la même définition
+  (et sont mesurés par le **même outil**, ce qui est la seule façon de s'en
+  assurer) ; et un outil de mesure ne doit pas lire un champ dont il ne contrôle
+  pas le sens — `measure_container.sh` demande maintenant l'image (`docker save`,
+  format OCI) et compte les octets, en imprimant quand même la version de Docker
+  puisqu'elle change ce que les *autres* outils répondent.
 
 ## Où va le projet
 
