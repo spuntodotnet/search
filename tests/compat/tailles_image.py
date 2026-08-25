@@ -175,6 +175,22 @@ def main() -> int:
     os_, arch = plateforme_locale()
 
     with tarfile.open(chemin) as tar:
+        if "index.json" not in tar.getnames():
+            # `docker save` a produit une archive « docker-archive » : le magasin
+            # d'images classique n'y met que les couches DECOMPRESSEES. La taille
+            # compressee — celle qu'un registre sert, donc le chiffre publie —
+            # n'y est pas, et l'inventer en recompressant ici mesurerait notre
+            # gzip, pas celui que le registre servirait. Donc on refuse.
+            raise SystemExit(
+                "archive au format docker-archive : elle ne porte pas les blobs "
+                "compresses, donc la taille compressee n'est pas mesurable.\n"
+                "Deux facons de l'obtenir :\n"
+                "  - activer le magasin d'images containerd (defaut depuis Docker 29) ;\n"
+                "  - produire l'artefact OCI directement, ce qui est exactement ce "
+                "qu'un `docker push` enverrait :\n"
+                "      docker buildx build --output type=oci,dest=image.tar .\n"
+                "      IMAGE_TAR=image.tar python3 tests/compat/tailles_image.py ferrite"
+            )
         index = json.load(tar.extractfile("index.json"))
         trouve = descend(tar, index["manifests"][0], os_, arch)
         manifeste = trouve["manifeste"]
