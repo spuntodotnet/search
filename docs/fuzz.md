@@ -184,16 +184,25 @@ forme du code :
 | la cible d'un `copy_to` ne rendait aucun fragment | sa valeur n'est **nulle part** dans son propre `_source` : elle est dans celui de la source. Là encore, la règle existait déjà pour `fields` ; livrer une troisième lecture, c'est devoir la reposer |
 | `<em>optique</em><em> verre</em>` là où ES rend `<em>optique verre</em>` | deux marques qui se chevauchent se trient **début croissant, fin décroissante** (`Passage.sort()` de Lucene) : le formateur avance sur la fin de la précédente, donc la plus longue doit passer d'abord |
 | `no_match_size` ne rendait rien quand la première valeur d'un champ multivalué était vide | ES concatène les valeurs avec un séparateur et **saute les séparateurs de tête** : la première valeur au sens de `no_match_size` est la première **non vide** |
+| un `must: {exists: b}` qui échoue laissait ses voisins marquer | `exists` ne marque rien, mais il se **tranche** sur le `_source`, et un `bool` qu'il fait tomber doit se taire entièrement. Le laisser opaque revenait à supposer qu'il tenait |
+| `"  abc def  "` sortait rogné à `number_of_fragments: 0` | le rognage vit dans le **découpeur borné** ; à `nof: 0` ES ne l'emploie pas et rend le fragment tel quel. Et le rognage lui-même n'est pas « les blancs » : c'est le `String.trim()` de Java, qui s'arrête à U+0020 — l'espace insécable, l'espace fine et le séparateur de ligne restent |
+| ES rendait `cible\u2009` là où ferrite rendait `cible\t` | le **score** d'un fragment se calcule sur sa longueur **avant** rognage. Noter le fragment rogné faisait gagner celui dont la tabulation partait, à égalité de tout le reste |
 
-Les cinq derniers ont un point commun avec ce que les cartes précédentes ont
+Les huit derniers ont un point commun avec ce que les cartes précédentes ont
 appris : ils ne portent pas sur le découpage, qui était le sujet, mais sur ce
-que le champ **contient** et sur la façon dont il est lu. Le découpage, lui,
-était juste dès le premier passage — parce qu'il avait été mesuré caractère par
-caractère avant d'être écrit.
+que le champ **contient**, sur la façon dont il est lu, et sur les **bords**.
+Le découpage, lui, était juste dès le premier passage — parce qu'il avait été
+mesuré caractère par caractère avant d'être écrit.
 
 Deux d'entre eux viennent d'une **plage de contrôle** (900001+), c'est-à-dire
 d'une plage jamais utilisée pour corriger. Septième passage, septième plage
 neuve qui trouve quelque chose.
+
+Et une leçon d'outillage, la même que la section 2 de `CLAUDE.md` : le premier
+lancement de la campagne a signalé un écart de `mapping` et de `field_caps`
+**dès la première graine**. Rejoué seul, le cas était vert — c'étaient trois
+index laissés par des sondes précédentes sur le conteneur de référence. Un
+résultat rouge au démarrage est presque toujours un défaut d'instrument.
 
 ### Ce que la brique « n-grammes » a sorti, en un passage
 
@@ -276,7 +285,7 @@ portait sur aucun des trois :
 | Ce que le fuzzer a sorti | Ce que c'était |
 |---|---|
 | une clé de `terms` **entière** sur un champ `float` ou `double` : ferrite rendait `2`, ES rend `2.0` | un défaut **antérieur**, dans la mise en forme des buckets. Le corpus de `diff_aggs.py` n'a pas de valeur flottante entière ; le fuzzer, qui tire `0.0`, `1.0` et `1024.0` exprès, en produit. Un client qui type strictement son JSON y lit un entier là où ES lui donne un flottant. Corrigé |
-| un **500** d'ES quand le même champ est demandé par `docvalue_fields` **et** `stored_fields` | un bug d'ES 8.15 (`unsupported_operation_exception`, `reason: null`), pas un défaut de ferrite — qui rend les valeurs, comme il le fait pour chacune des deux lectures prises séparément. Un 500 ne se reproduit pas : c'est déjà la raison pour laquelle `_seq_no` nommé dans `fields` est refusé. Divergence assumée n° 19 |
+| un **500** d'ES quand le même champ est demandé par `docvalue_fields` **et** `stored_fields` | un bug d'ES 8.15 (`unsupported_operation_exception`, `reason: null`), pas un défaut de ferrite — qui rend les valeurs, comme il le fait pour chacune des deux lectures prises séparément. Un 500 ne se reproduit pas : c'est déjà la raison pour laquelle `_seq_no` nommé dans `fields` est refusé. Divergence assumée n° 22 |
 | l'ordre des valeurs qu'un `copy_to` dépose dans sa cible | ce n'est pas un ordre : c'est l'itération d'un `HashSet<String>` de Java sur {cible} ∪ {sources}. Divergence assumée n° 18, avec un prédicat qui **mesure** que l'écart ne porte que sur l'ordre |
 | un mot de plus de **255 caractères** disparaissait de l'index | `maxTokenLength` n'est pas une limite qui jette : les tokenizers de Lucene **coupent** le mot en morceaux de 255 caractères, chacun à la position suivante — donc tout ce qui suit se décale aussi. ferrite jetait le mot entier (et, à 255 pile, un mot que Lucene garde). Défaut **antérieur** : aucun texte du corpus de `diff_analyzers.py` n'avait de mot si long, et il a fallu qu'un `keyword` de 300 caractères soit recopié par `copy_to` dans un `text` pour qu'un tokenizer le voie. Corrigé, et les longueurs 254 / 255 / 256 / 300 / 512 sont entrées dans le corpus |
 | `match_phrase_prefix` d'un seul mot sur un champ à n-grammes rendait **un document de plus** qu'ES | `max_expansions` est chez Lucene un budget **par position**, pas par terme : `MultiPhrasePrefixQuery` remplit un seul ensemble en parcourant les termes de la position et s'arrête dès qu'il est plein. La distinction ne se voyait pas tant qu'un analyzer posait un terme par position ; un filtre à n-grammes en pose vingt, et un budget par terme en développe vingt fois plus. Défaut antérieur lui aussi. Corrigé |

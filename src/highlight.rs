@@ -28,6 +28,7 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value};
 
 use crate::analysis::Analyzer;
+use crate::dateformat::DateFormat;
 use crate::engine::Generation;
 use crate::error::{EsError, EsResult};
 use crate::mapping::{self, FieldKind, FieldType};
@@ -364,6 +365,17 @@ enum Noeud {
     /// `match_all` : vrai partout. Sous un `must_not`, c'est lui qui rend le
     /// `bool` sterile — et ferrite marquait quand meme ses `should`.
     Toujours,
+    /// `term` / `terms` sur un champ qui n'est pas surlignable (un nombre, une
+    /// date, un booleen) : il ne marque rien, mais il se tranche sur le
+    /// `_source`, et un `filter` qui tombe fait taire tout le `bool` — la
+    /// meme histoire qu'[`Noeud::Existe`] (trouve par le fuzzer, graine
+    /// 6260200).
+    Valeurs {
+        champ: String,
+        ty: FieldType,
+        format: Option<DateFormat>,
+        attendues: Vec<mapping::TypedValue>,
+    },
     /// `exists` : il ne marque rien, mais il se **tranche** sur le `_source`,
     /// et c'est ce qui compte. Un `must: {exists: b}` qui echoue fait taire
     /// tout le `bool` — le laisser opaque marquait ses voisins (trouve par le
@@ -602,7 +614,12 @@ fn extraire(v: &Value, gen: &Generation) -> EsResult<Noeud> {
         "match_none" => Noeud::Jamais,
         "match_all" => Noeud::Toujours,
         "exists" => match corps.as_object().and_then(|o| o.get("field")) {
-            Some(Value::String(champ)) => Noeud::Existe(champ.clone()),
+            // Le chemin du `_source`, pas celui du champ : un multi-field
+            // (`e.keyword`) n'existe pas dans le document, sa valeur est celle
+            // de son parent. Lire `e.keyword` y trouvait toujours vide, donc
+            // faisait tomber le `bool` qui le portait en `filter` (trouve par
+            // le fuzzer, graine 4242005).
+            Some(Value::String(champ)) => Noeud::Existe(chemin_source(champ, gen)),
             _ => Noeud::Opaque,
         },
         "bool" => {
@@ -714,24 +731,16 @@ fn extraire(v: &Value, gen: &Generation) -> EsResult<Noeud> {
             let Some((champ, spec)) = premiere_cle(corps) else {
                 return Ok(Noeud::Opaque);
             };
-            let valeur = valeur_de(spec);
-            pose(gen, champ, |mf| {
-                Ok(chaine(champ, mf.ty, valeur)
-                    .map(|s| vec![Motif::Simple(Predicat::Terme(s))])
-                    .unwrap_or_default())
-            })?
+            match valeur_de(spec) {
+                Some(v) => valeurs_posees(gen, champ, std::slice::from_ref(v))?,
+                None => Noeud::Opaque,
+            }
         }
         "terms" => {
             let Some((champ, Value::Array(vals))) = premiere_cle(corps) else {
                 return Ok(Noeud::Opaque);
             };
-            pose(gen, champ, |mf| {
-                Ok(vals
-                    .iter()
-                    .filter_map(|v| chaine(champ, mf.ty, Some(v)))
-                    .map(|s| Motif::Simple(Predicat::Terme(s)))
-                    .collect())
-            })?
+            valeurs_posees(gen, champ, vals)?
         }
         "prefix" | "wildcard" | "regexp" => {
             let Some((champ, spec)) = premiere_cle(corps) else {
@@ -835,6 +844,49 @@ fn extraire(v: &Value, gen: &Generation) -> EsResult<Noeud> {
         // `match_all`, `exists`, `ids`, `parent_id` : rien a surligner, chez ES
         // non plus — et rien a trancher sur ce `_source`.
         _ => Noeud::Opaque,
+    })
+}
+
+/// `term` et `terms` : une feuille de marques si le champ est surlignable, une
+/// feuille de **valeurs** sinon — elle ne marque rien mais elle se tranche, et
+/// c'est ce qui fait taire un `bool` dont le `filter` porte sur une date.
+fn valeurs_posees(gen: &Generation, champ: &str, vals: &[Value]) -> EsResult<Noeud> {
+    let Some(mf) = gen.fields.get(champ) else {
+        return Ok(Noeud::Opaque);
+    };
+    let format = gen.fields.format_de(champ).cloned();
+    if matches!(mf.ty.kind(), FieldKind::Text | FieldKind::Keyword) {
+        let mut termes: Vec<String> = vals
+            .iter()
+            .filter_map(|v| chaine(champ, mf.ty, Some(v)))
+            .collect();
+        // Un `terms` qui cite deux fois la meme valeur ne cherche qu'un terme.
+        termes.dedup();
+        let motifs: Vec<Motif> = termes
+            .into_iter()
+            .map(|s| Motif::Simple(Predicat::Terme(s)))
+            .collect();
+        if motifs.is_empty() {
+            return Ok(Noeud::Opaque);
+        }
+        return Ok(Noeud::Feuille {
+            champ: champ.to_string(),
+            motifs,
+        });
+    }
+    let mut attendues: Vec<mapping::TypedValue> = vals
+        .iter()
+        .filter_map(|v| mapping::coerce_avec(champ, mf.ty, v, format.as_ref()).ok())
+        .collect();
+    attendues.dedup();
+    if attendues.is_empty() {
+        return Ok(Noeud::Opaque);
+    }
+    Ok(Noeud::Valeurs {
+        champ: chemin_source(champ, gen),
+        ty: mf.ty,
+        format,
+        attendues,
     })
 }
 
@@ -1103,7 +1155,11 @@ impl Noeud {
                 enfants.iter().for_each(|e| e.champs_cites(out));
             }
             Self::Non(e) => e.champs_cites(out),
-            Self::Opaque | Self::Jamais | Self::Toujours | Self::Existe(_) => {}
+            Self::Opaque
+            | Self::Jamais
+            | Self::Toujours
+            | Self::Existe(_)
+            | Self::Valeurs { .. } => {}
         }
     }
 }
@@ -1143,6 +1199,19 @@ fn verdict_de(
             let mut vus = Vec::new();
             descendre(source, champ, &mut vus);
             Some(!vus.is_empty())
+        }
+        Noeud::Valeurs {
+            champ,
+            ty,
+            format,
+            attendues,
+        } => {
+            let mut vus = Vec::new();
+            descendre(source, champ, &mut vus);
+            Some(vus.iter().any(|v| {
+                mapping::coerce_avec(champ, *ty, v, format.as_ref())
+                    .is_ok_and(|t| attendues.contains(&t))
+            }))
         }
         Noeud::Feuille { champ, motifs } => Some(
             vues.get(champ.as_str())
@@ -1201,7 +1270,12 @@ fn collecte<'a>(
             }
         }
         // Une clause niee ne marque rien, chez ES non plus.
-        Noeud::Non(_) | Noeud::Opaque | Noeud::Jamais | Noeud::Toujours | Noeud::Existe(_) => {}
+        Noeud::Non(_)
+        | Noeud::Opaque
+        | Noeud::Jamais
+        | Noeud::Toujours
+        | Noeud::Existe(_)
+        | Noeud::Valeurs { .. } => {}
     }
 }
 
@@ -1217,7 +1291,11 @@ fn sterile(n: &Noeud) -> bool {
         Noeud::Non(e) => matches!(**e, Noeud::Toujours),
         Noeud::Et(enfants) => enfants.iter().any(sterile),
         Noeud::Ou { enfants, minimum } => *minimum > 0 && enfants.iter().all(sterile),
-        Noeud::Feuille { .. } | Noeud::Opaque | Noeud::Toujours | Noeud::Existe(_) => false,
+        Noeud::Feuille { .. }
+        | Noeud::Opaque
+        | Noeud::Toujours
+        | Noeud::Existe(_)
+        | Noeud::Valeurs { .. } => false,
     }
 }
 
@@ -1297,11 +1375,26 @@ fn fragments_du_champ(champ: &Champ, motifs: &[Motif], valeurs: &[Valeur]) -> Ve
     // bout, separateur compris : elle entre dans le score des fragments.
     let longueur: usize =
         valeurs.iter().map(|v| v.chars.len()).sum::<usize>() + valeurs.len().saturating_sub(1);
+    // Un champ **sans un caractere** ne rend rien du tout, pas meme une balise
+    // vide : ES y coupe avant le surligneur. Une valeur vide **parmi
+    // d'autres**, elle, rend bien `<em></em>` — c'est la longueur du champ
+    // entier, separateurs compris, qui decide (fuzzer, graine 7370215).
+    if longueur == 0 {
+        return Vec::new();
+    }
 
     let mut candidats: Vec<Fragment> = Vec::new();
     let mut base = 0usize;
     for valeur in valeurs {
-        let m = marques(motifs, valeur);
+        // Une marque posee **a la fin** du champ n'ouvre pas de fragment : ES
+        // s'arrete des que la correspondance commence au-dela du dernier
+        // caractere. Ca ne se voit que sur une valeur vide en derniere
+        // position — au milieu, la meme valeur rend bien `<em></em>`
+        // (fuzzer, graines 7370215 et 8080107).
+        let m: Vec<Marque> = marques(motifs, valeur)
+            .into_iter()
+            .filter(|m| base + m.debut < longueur)
+            .collect();
         if !m.is_empty() {
             for f in decouper(champ, &valeur.chars, &m, base, longueur) {
                 candidats.push(f);
@@ -1359,43 +1452,59 @@ fn sans_correspondance(champ: &Champ, valeurs: &[Valeur]) -> Vec<String> {
 
 /// Les correspondances d'un texte, en indices de `char`, triees et sans
 /// doublon.
-fn marques(motifs: &[Motif], valeur: &Valeur) -> Vec<(usize, usize)> {
+fn marques(motifs: &[Motif], valeur: &Valeur) -> Vec<Marque> {
     if motifs.is_empty() {
         return Vec::new();
     }
     let jetons = &valeur.jetons;
-    let mut out: Vec<(usize, usize)> = Vec::new();
-    for motif in motifs {
+    let mut out: Vec<Marque> = Vec::new();
+    for (rang, motif) in motifs.iter().enumerate() {
+        let mut pousse = |debut: usize, fin: usize| out.push(Marque { debut, fin, rang });
         match motif {
             Motif::Simple(p) => {
                 for j in jetons {
                     if p.matche(&j.texte) {
-                        out.push((j.debut, j.fin));
+                        pousse(j.debut, j.fin);
                     }
                 }
             }
             Motif::Phrase { positions, eclatee } => {
                 for suite in suites(jetons, positions) {
                     if *eclatee {
-                        out.extend(suite);
+                        for (d, f) in suite {
+                            pousse(d, f);
+                        }
                     } else {
                         let debut = suite.first().map_or(0, |s| s.0);
                         let fin = suite.iter().map(|s| s.1).max().unwrap_or(0);
-                        out.push((debut, fin));
+                        pousse(debut, fin);
                     }
                 }
             }
         }
     }
-    // Debut croissant, **fin decroissante** : c'est le tri de `Passage.sort()`
-    // chez Lucene, et il decide de ce que deux marques qui se chevauchent
-    // rendent. Le formateur avance sur la fin de la precedente : la plus longue
-    // d'abord donne `<em>optique verre</em>`, la plus courte d'abord donnerait
-    // `<em>optique</em><em> verre</em>` (trouve par une plage de controle du
-    // fuzzer, graine 900138).
-    out.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+    // Debut croissant puis **fin croissante** : c'est cet ordre-la qui decide
+    // quel fragment s'ouvre quand deux marques commencent au meme endroit —
+    // la plus **courte** l'emporte, et la plus longue se fait rogner par le
+    // fragment qu'elle a ouvert (mesure, fuzzer graine 5500233). Les marques
+    // ne sont pas fondues ici : elles le sont une fois rognees au fragment.
+    out.sort_unstable_by_key(|m| (m.debut, m.fin, m.rang));
     out.dedup();
     out
+}
+
+/// Une correspondance dans une valeur : ses bornes, et **quel** motif l'a
+/// trouvee.
+///
+/// Le motif compte autant que les bornes : le `PassageScorer` de Lucene note un
+/// fragment terme par terme, et « le terme » y est une clause, pas un mot
+/// trouve. Un `regexp` qui attrape « aluminium » deux fois pese comme un mot vu
+/// deux fois, pas comme deux mots (mesure, fuzzer graine 9494099).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct Marque {
+    debut: usize,
+    fin: usize,
+    rang: usize,
 }
 
 struct Jeton {
@@ -1522,17 +1631,22 @@ impl Decoupeur<'_> {
                         .0
                         .max(crate::segments::precedente(self.mots, offset - max));
                 }
-                // A droite : ce que la borne laisse encore.
+                // A droite : ce que la borne laisse encore — et, quand il ne
+                // reste rien, la frontiere de mot qui suit la **fin** de la
+                // correspondance. C'est ce qui fait qu'un `match_phrase` de
+                // trois mots sort entier au lieu d'etre coupe apres le
+                // deuxieme (mesure sur `sur le tapis`, fragment_size 25).
                 let restant = max as i64 - (offset as i64 - self.interne.0 as i64);
-                let cible = if restant > 1 {
-                    offset + restant as usize
+                self.interne.1 = self.interne.1.min(if restant > 1 {
+                    crate::segments::suivante(self.mots, offset + restant as usize)
                 } else {
-                    offset
-                };
-                self.interne.1 = self
-                    .interne
-                    .1
-                    .min(crate::segments::suivante(self.mots, cible));
+                    // Plus de place : le fragment s'arrete **a la fin de la
+                    // correspondance**, pas a la frontiere de mot suivante.
+                    // C'est ce qui separe `<em>l'ascension</em>` de
+                    // `<em>l'ascension </em>` a une unite de `fragment_size`
+                    // pres (mesure, fuzzer graine 5500233).
+                    arrivee
+                });
             }
         }
         // Un fragment contient toujours la correspondance entiere, meme quand
@@ -1589,7 +1703,7 @@ fn rogner(chars: &[char], mut debut: usize, mut fin: usize) -> (usize, usize) {
 fn decouper(
     champ: &Champ,
     chars: &[char],
-    marques: &[(usize, usize)],
+    marques: &[Marque],
     base: usize,
     longueur: usize,
 ) -> Vec<Fragment> {
@@ -1611,12 +1725,21 @@ fn decouper(
     let entier = champ.reglages.nb_fragments == 0;
 
     /// Un fragment en cours : ses bornes, et les marques qu'il porte.
-    type Groupe = (usize, usize, Vec<(usize, usize)>);
+    type Groupe = (usize, usize, Vec<Marque>);
     let mut groupes: Vec<Groupe> = Vec::new();
-    for &(deb, fin) in marques {
+    for &Marque {
+        debut: deb,
+        fin,
+        rang,
+    } in marques
+    {
         let ouvrir = match groupes.last() {
             None => true,
-            Some((_, f, _)) => deb >= *f,
+            // Un fragment **vide** (une valeur de `keyword` vide) n'en ouvre
+            // qu'un : deux clauses qui y posent la meme marque de longueur
+            // nulle ne rendent pas deux `<em></em>` (fuzzer, graines 5500001
+            // et 2626208).
+            Some((d0, f, _)) => deb >= *f && !(deb == *f && d0 == f),
         };
         if ouvrir {
             let bornes = if entier {
@@ -1627,8 +1750,15 @@ fn decouper(
             groupes.push((bornes.0, bornes.1, Vec::new()));
         }
         let g = groupes.last_mut().expect("un groupe vient d'etre ouvert");
-        if deb < g.1 {
-            g.2.push((deb.max(g.0), fin.min(g.1)));
+        // `deb == g.1` n'est retenu que sur un fragment **vide** : une valeur
+        // de `keyword` vide porte un terme vide, et ES la rend bien
+        // `<em></em>` (fuzzer, graine 6260221).
+        if deb < g.1 || g.0 == g.1 {
+            g.2.push(Marque {
+                debut: deb.max(g.0),
+                fin: fin.min(g.1),
+                rang,
+            });
         }
     }
 
@@ -1636,22 +1766,31 @@ fn decouper(
         .into_iter()
         .filter(|(_, _, m)| !m.is_empty())
         .map(|(deb, fin, m)| {
+            let intervalles = fondre(&m);
             // Le score et le rang se calculent sur le fragment **avant**
             // rognage : c'est le `Passage` de Lucene qui est note, et le
             // rognage n'a lieu qu'a la mise en forme. Noter le fragment rogne
             // faisait gagner « cible\t » (5 caracteres une fois rogne) contre
             // « cible\u2009 » (6, que Java ne rogne pas), donc rendait un
             // autre fragment qu'ES.
-            let score = note(&m, chars, deb, fin, base, longueur);
-            let (deb_rendu, fin_rendu) = if entier {
+            let score = note(&m, deb, fin, base, longueur);
+            let (mut deb_rendu, mut fin_rendu) = if entier {
                 (deb, fin)
             } else {
                 rogner(chars, deb, fin)
             };
+            // Le rognage ne mord jamais sur une marque : un `keyword` dont la
+            // valeur est «   espaces   multiples   » sort chez ES avec ses
+            // blancs **dans** le `<em>`, puisque le terme les porte (fuzzer,
+            // graines 7370151 et 7370219).
+            if let (Some(premiere), Some(derniere)) = (intervalles.first(), intervalles.last()) {
+                deb_rendu = deb_rendu.min(premiere.0);
+                fin_rendu = fin_rendu.max(derniere.1);
+            }
             Fragment {
                 depart: base + deb,
                 score,
-                texte: formater(champ, chars, deb_rendu, fin_rendu, &m),
+                texte: formater(champ, chars, deb_rendu, fin_rendu, &intervalles),
             }
         })
         .collect()
@@ -1659,20 +1798,15 @@ fn decouper(
 
 /// Le `PassageScorer` de Lucene : un BM25 dont le « document » est le fragment
 /// et le « corpus » le champ, pivote sur 87 caracteres.
-fn note(
-    dans: &[(usize, usize)],
-    chars: &[char],
-    debut: usize,
-    fin: usize,
-    base: usize,
-    longueur: usize,
-) -> f64 {
+fn note(dans: &[Marque], debut: usize, fin: usize, base: usize, longueur: usize) -> f64 {
     let taille = (fin - debut) as f64;
-    // Une marque compte par le **terme** qu'elle porte : deux occurrences du
-    // meme mot dans un fragment pesent moins que deux mots differents.
-    let mut par_terme: BTreeMap<String, usize> = BTreeMap::new();
-    for (d, f) in dans {
-        *par_terme.entry(chars[*d..*f].iter().collect()).or_default() += 1;
+    // Une marque compte par la **clause** qui l'a posee, pas par le mot
+    // trouve : c'est un `OffsetsEnum` par clause chez Lucene. Deux
+    // occurrences du meme mot pesent donc comme deux occurrences d'une clause,
+    // et un `regexp` qui attrape deux mots differents aussi.
+    let mut par_terme: BTreeMap<usize, usize> = BTreeMap::new();
+    for m in dans {
+        *par_terme.entry(m.rang).or_default() += 1;
     }
     // Le nombre d'occurrences du terme dans le champ **vaut 1** : c'est ce que
     // rend `OffsetsEnum.freq()` quand le surligneur travaille sur les
@@ -1692,8 +1826,29 @@ fn note(
     score * (1.0 + 1.0 / ((PIVOT + (base + debut) as f64).ln()))
 }
 
+/// Deux marques qui se touchent ou se chevauchent n'en font qu'une.
+///
+/// Ca ne se voit pas sur des mots separes — « chat » et « noir » restent deux
+/// marques, l'espace les separe — mais un analyzer a n-grammes pose des jetons
+/// **jointifs** : ES y rend `<em>elevee etendue</em>`, une seule marque, la ou
+/// les rendre une par une donnait `<em>elev</em><em>e</em><em>e</em>…`
+/// (fuzzer, graine 3535187).
+fn fondre(marques: &[Marque]) -> Vec<(usize, usize)> {
+    let mut out: Vec<(usize, usize)> = Vec::with_capacity(marques.len());
+    for &Marque { debut, fin, .. } in marques {
+        match out.last_mut() {
+            Some(precedente) if debut <= precedente.1 && fin > precedente.1 => {
+                precedente.1 = fin;
+            }
+            Some(precedente) if debut <= precedente.1 => {}
+            _ => out.push((debut, fin)),
+        }
+    }
+    out
+}
+
 /// Le formateur de Lucene : le texte du fragment, chaque correspondance
-/// encadree. Deux marques qui se chevauchent n'en font qu'une.
+/// encadree.
 fn formater(
     champ: &Champ,
     chars: &[char],
@@ -1706,6 +1861,13 @@ fn formater(
     for &(d, f) in marques {
         if d > pos {
             out.extend(&chars[pos..d.min(fin)]);
+        }
+        // Une marque de longueur nulle porte quand meme sa paire de balises :
+        // c'est ce qu'ES rend d'une valeur de `keyword` vide, `<em></em>`.
+        if f == d && d == pos && debut == fin {
+            out.push_str(&champ.reglages.pre);
+            out.push_str(&champ.reglages.post);
+            continue;
         }
         if f > pos {
             out.push_str(&champ.reglages.pre);
@@ -1811,6 +1973,8 @@ mod tests {
             ouvert: false,
         };
         assert_eq!(d.autour(4, 9), (0, 11));
+        // Plus de place a droite : le fragment s'arrete a la fin de la
+        // correspondance, pas a la frontiere de mot suivante.
         assert_eq!(d.autour(20, 25), (11, 25));
         assert_eq!(d.autour(26, 31), (25, 32));
     }
@@ -1918,8 +2082,9 @@ mod tests {
         assert_eq!(out.len(), 1);
     }
 
-    /// Deux marques qui se chevauchent : la plus longue passe d'abord, sinon le
-    /// formateur rend `<em>le</em><em> chat</em>` (fuzzer, graine 900138).
+    /// Deux marques qui se chevauchent n'en font qu'une : sans la fusion, le
+    /// formateur rendrait `<em>le</em><em> chat</em>` (fuzzer, graines 900138
+    /// et 3535187).
     #[test]
     fn marques_qui_se_chevauchent() {
         let vues = vues_du_texte();
@@ -1931,7 +2096,21 @@ mod tests {
                 eclatee: false,
             },
         ];
-        assert_eq!(marques(&motifs, valeur), vec![(0, 7), (0, 2)]);
+        // La plus **courte** d'abord : c'est elle qui ouvrira le fragment.
+        let bornes: Vec<(usize, usize)> = marques(&motifs, valeur)
+            .iter()
+            .map(|m| (m.debut, m.fin))
+            .collect();
+        assert_eq!(bornes, vec![(0, 2), (0, 7)]);
+        // Puis elles n'en font qu'une, une fois rognees au fragment.
+        assert_eq!(fondre(&marques(&motifs, valeur)), vec![(0, 7)]);
+
+        // Deux mots separes par une espace restent deux marques.
+        let separes = vec![
+            Motif::Simple(Predicat::Terme("le".into())),
+            Motif::Simple(Predicat::Terme("chat".into())),
+        ];
+        assert_eq!(fondre(&marques(&separes, valeur)), vec![(0, 2), (3, 7)]);
     }
 
     /// La borne gauche : la sonde qui a fixe `offset - maxLen + 1`.

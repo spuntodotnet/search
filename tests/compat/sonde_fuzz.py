@@ -113,6 +113,14 @@ DOCS_SURLIGNE = [
     # de Java **ne** rogne pas — il s'arrete a U+0020.
     ("d", {"t": ["  cible et du texte autour  ", "cible\u2009", "cible\t"],
            "u": "d"}),
+    # Une valeur de `keyword` vide **au milieu** puis **a la fin** : la
+    # premiere rend `<em></em>`, la seconde rien du tout.
+    ("e", {"t": "compact hotel l'ascension silencieux ecran",
+           "k": ["alpha", "", "beta"], "u": "e"}),
+    ("f", {"t": "aa bb cible cc dd cible ee ff", "k": ["alpha", ""], "u": "f"}),
+    # Un `keyword` dont la valeur porte ses propres blancs : le terme les
+    # contient, donc le surlignage aussi.
+    ("g", {"t": "rien", "k": "  espaces   multiples  ", "u": "g"}),
 ]
 
 TROUS = {"mappings": {"properties": {"n": {"type": "integer"},
@@ -394,6 +402,33 @@ CAS = [
      "— et la longueur qui note le fragment est celle d'**avant** rognage",
      {"query": {"match": {"t": "cible"}}, "size": 10, "sort": ["u"],
       "highlight": {"fields": {"t": {}}, "number_of_fragments": 2}}, surligne),
+
+    (SURLIGNE, DOCS_SURLIGNE, "une valeur de keyword vide se surligne",
+     "vide **au milieu** d'autres valeurs, elle rend `<em></em>` ; vide **en "
+     "derniere position**, elle ne rend rien — ES s'arrete des que la "
+     "correspondance commence au-dela du dernier caractere du champ",
+     {"query": {"terms": {"k": ["", ""]}}, "size": 10, "sort": ["u"],
+      "highlight": {"fields": {"k": {}}}}, surligne),
+    (SURLIGNE, DOCS_SURLIGNE, "un keyword porte ses propres blancs",
+     "le terme est la valeur entiere : le rognage ne mord pas dessus",
+     {"query": {"term": {"k": "  espaces   multiples  "}}, "size": 10,
+      "sort": ["u"], "highlight": {"fields": {"k": {}}}}, surligne),
+    (SURLIGNE, DOCS_SURLIGNE, "la borne droite s'arrete a la correspondance",
+     "quand `fragment_size` ne laisse plus de place, le fragment finit **a la "
+     "fin de la marque**, pas a la frontiere de mot suivante — un caractere "
+     "d'ecart, et une phrase entiere de difference sur la marque",
+     {"query": {"dis_max": {"queries": [
+         {"match_phrase": {"t": "l'ascension silencieux ecran"}},
+         {"match_phrase": {"t": "l'ascension"}}]}},
+      "size": 10, "sort": ["u"],
+      "highlight": {"fields": {"t": {}}, "fragment_size": 20}}, surligne),
+    (SURLIGNE, DOCS_SURLIGNE, "un regexp compte pour un terme, pas pour un mot",
+     "le `PassageScorer` note un fragment clause par clause : deux mots "
+     "differents trouves par le **meme** `regexp` pesent comme un mot vu deux "
+     "fois, et ca change quel fragment survit a `number_of_fragments`",
+     {"query": {"regexp": {"t": "[a-z].*"}}, "size": 10, "sort": ["u"],
+      "highlight": {"fields": {"t": {"fragment_size": 15,
+                                     "number_of_fragments": 2}}}}, surligne),
 
     # -- agregation range --------------------------------------------------
     (TROUS, DOCS_TROUS, "range agg avec un trou",
