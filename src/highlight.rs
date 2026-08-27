@@ -364,6 +364,11 @@ enum Noeud {
     /// `match_all` : vrai partout. Sous un `must_not`, c'est lui qui rend le
     /// `bool` sterile — et ferrite marquait quand meme ses `should`.
     Toujours,
+    /// `exists` : il ne marque rien, mais il se **tranche** sur le `_source`,
+    /// et c'est ce qui compte. Un `must: {exists: b}` qui echoue fait taire
+    /// tout le `bool` — le laisser opaque marquait ses voisins (trouve par le
+    /// fuzzer, graine 5150006).
+    Existe(String),
 }
 
 impl Noeud {
@@ -596,6 +601,10 @@ fn extraire(v: &Value, gen: &Generation) -> EsResult<Noeud> {
     Ok(match nom {
         "match_none" => Noeud::Jamais,
         "match_all" => Noeud::Toujours,
+        "exists" => match corps.as_object().and_then(|o| o.get("field")) {
+            Some(Value::String(champ)) => Noeud::Existe(champ.clone()),
+            _ => Noeud::Opaque,
+        },
         "bool" => {
             let Some(o) = corps.as_object() else {
                 return Ok(Noeud::Opaque);
@@ -1008,7 +1017,7 @@ pub fn rendre(plan: &Plan, gen: &Generation, source: &Value) -> EsResult<Option<
     let mut tous: Vec<Motif> = Vec::new();
     if let Some(arbre) = &plan.arbre {
         let mut actives = Vec::new();
-        collecte(arbre, &vues, true, &mut actives);
+        collecte(arbre, &vues, source, true, &mut actives);
         for (champ, motifs) in actives {
             par_champ
                 .entry(champ)
@@ -1022,7 +1031,7 @@ pub fn rendre(plan: &Plan, gen: &Generation, source: &Value) -> EsResult<Option<
         // muet (mesure, plage de controle du fuzzer, graine 900186).
         if plan.champs.iter().any(|c| !c.reglages.champ_exige) {
             let mut sans_tri = Vec::new();
-            collecte(arbre, &vues, false, &mut sans_tri);
+            collecte(arbre, &vues, source, false, &mut sans_tri);
             tous = sans_tri
                 .into_iter()
                 .flat_map(|(_, motifs)| motifs.iter().cloned())
@@ -1093,15 +1102,20 @@ impl Noeud {
                 enfants.iter().for_each(|e| e.champs_cites(out));
             }
             Self::Non(e) => e.champs_cites(out),
-            Self::Opaque | Self::Jamais | Self::Toujours => {}
+            Self::Opaque | Self::Jamais | Self::Toujours | Self::Existe(_) => {}
         }
     }
 }
 
 /// Le verdict d'un noeud sur un document. `None` = « on ne sait pas », et dans
 /// le doute on laisse passer : mieux vaut marquer de trop que se taire.
-fn evalue(n: &Noeud, vues: &BTreeMap<&str, Vec<Valeur>>) -> Option<bool> {
+fn evalue(n: &Noeud, vues: &BTreeMap<&str, Vec<Valeur>>, source: &Value) -> Option<bool> {
     match n {
+        Noeud::Existe(champ) => {
+            let mut vus = Vec::new();
+            descendre(source, champ, &mut vus);
+            Some(!vus.is_empty())
+        }
         Noeud::Feuille { champ, motifs } => Some(
             vues.get(champ.as_str())
                 .is_some_and(|vs| vs.iter().any(|v| !marques(motifs, v).is_empty())),
@@ -1110,7 +1124,7 @@ fn evalue(n: &Noeud, vues: &BTreeMap<&str, Vec<Valeur>>) -> Option<bool> {
         Noeud::Jamais => Some(false),
         Noeud::Toujours => Some(true),
         Noeud::Et(enfants) => {
-            let verdicts: Vec<_> = enfants.iter().map(|e| evalue(e, vues)).collect();
+            let verdicts: Vec<_> = enfants.iter().map(|e| evalue(e, vues, source)).collect();
             if verdicts.contains(&Some(false)) {
                 Some(false)
             } else if verdicts.iter().all(|v| *v == Some(true)) {
@@ -1120,7 +1134,7 @@ fn evalue(n: &Noeud, vues: &BTreeMap<&str, Vec<Valeur>>) -> Option<bool> {
             }
         }
         Noeud::Ou { enfants, minimum } => {
-            let verdicts: Vec<_> = enfants.iter().map(|e| evalue(e, vues)).collect();
+            let verdicts: Vec<_> = enfants.iter().map(|e| evalue(e, vues, source)).collect();
             let surs = verdicts.iter().filter(|v| **v == Some(true)).count();
             if surs >= *minimum {
                 Some(true)
@@ -1132,7 +1146,7 @@ fn evalue(n: &Noeud, vues: &BTreeMap<&str, Vec<Valeur>>) -> Option<bool> {
         }
         // Un `must_not` sur une clause qu'on ne sait pas trancher est suppose
         // **non** satisfait : c'est le sens qui laisse le reste marquer.
-        Noeud::Non(e) => Some(!evalue(e, vues).unwrap_or(false)),
+        Noeud::Non(e) => Some(!evalue(e, vues, source).unwrap_or(false)),
     }
 }
 
@@ -1147,13 +1161,14 @@ fn evalue(n: &Noeud, vues: &BTreeMap<&str, Vec<Valeur>>) -> Option<bool> {
 fn collecte<'a>(
     n: &'a Noeud,
     vues: &BTreeMap<&str, Vec<Valeur>>,
+    source: &Value,
     par_document: bool,
     out: &mut Vec<(&'a str, &'a [Motif])>,
 ) {
     match n {
         Noeud::Feuille { champ, motifs } => out.push((champ.as_str(), motifs)),
         Noeud::Et(_) | Noeud::Ou { .. } => {
-            if sterile(n) || (par_document && evalue(n, vues) == Some(false)) {
+            if sterile(n) || (par_document && evalue(n, vues, source) == Some(false)) {
                 return;
             }
             let enfants = match n {
@@ -1163,10 +1178,10 @@ fn collecte<'a>(
             };
             enfants
                 .iter()
-                .for_each(|e| collecte(e, vues, par_document, out));
+                .for_each(|e| collecte(e, vues, source, par_document, out));
         }
         // Une clause niee ne marque rien, chez ES non plus.
-        Noeud::Non(_) | Noeud::Opaque | Noeud::Jamais | Noeud::Toujours => {}
+        Noeud::Non(_) | Noeud::Opaque | Noeud::Jamais | Noeud::Toujours | Noeud::Existe(_) => {}
     }
 }
 
@@ -1182,7 +1197,7 @@ fn sterile(n: &Noeud) -> bool {
         Noeud::Non(e) => matches!(**e, Noeud::Toujours),
         Noeud::Et(enfants) => enfants.iter().any(sterile),
         Noeud::Ou { enfants, minimum } => *minimum > 0 && enfants.iter().all(sterile),
-        Noeud::Feuille { .. } | Noeud::Opaque | Noeud::Toujours => false,
+        Noeud::Feuille { .. } | Noeud::Opaque | Noeud::Toujours | Noeud::Existe(_) => false,
     }
 }
 
@@ -1311,11 +1326,14 @@ fn sans_correspondance(champ: &Champ, valeurs: &[Valeur]) -> Vec<String> {
     } else {
         chars.len()
     };
-    let (debut, fin) = rogner(chars, 0, fin);
-    if debut >= fin {
+    // Pas de rognage ici, contrairement a un fragment qui porte une marque :
+    // ES rend la tranche telle quelle, espace de fin compris — la frontiere de
+    // mot tombe apres l'espace qui suit le dernier mot (mesure, fuzzer graine
+    // 5150174).
+    if fin == 0 {
         return Vec::new();
     }
-    vec![chars[debut..fin].iter().collect()]
+    vec![chars[..fin].iter().collect()]
 }
 
 /// Les correspondances d'un texte, en indices de `char`, triees et sans
@@ -1753,6 +1771,115 @@ mod tests {
         assert_eq!(d.autour(4, 9), (0, 11));
         assert_eq!(d.autour(20, 25), (11, 25));
         assert_eq!(d.autour(26, 31), (25, 32));
+    }
+
+    fn jeton(texte: &str, debut: usize, position: usize) -> Jeton {
+        Jeton {
+            texte: texte.into(),
+            debut,
+            fin: debut + texte.chars().count(),
+            position,
+        }
+    }
+
+    fn feuille(champ: &str, terme: &str) -> Noeud {
+        Noeud::Feuille {
+            champ: champ.into(),
+            motifs: vec![Motif::Simple(Predicat::Terme(terme.into()))],
+        }
+    }
+
+    /// « le chat dort », un terme par position.
+    fn vues_du_texte() -> BTreeMap<&'static str, Vec<Valeur>> {
+        let mut m = BTreeMap::new();
+        m.insert(
+            "t",
+            vec![Valeur {
+                chars: "le chat dort".chars().collect(),
+                jetons: vec![jeton("le", 0, 0), jeton("chat", 3, 1), jeton("dort", 8, 2)],
+            }],
+        );
+        m
+    }
+
+    /// Ce que la requete pose n'est pas ce qui a fait correspondre le document :
+    /// un `should` sous un `filter` qui echoue ne marque rien. Mesure contre
+    /// ES 8.15 (fuzzer, graine 106).
+    #[test]
+    fn un_should_sous_un_filter_qui_echoue_ne_marque_rien() {
+        let vues = vues_du_texte();
+        let arbre = Noeud::Et(vec![
+            feuille("t", "introuvable"),
+            Noeud::Ou {
+                enfants: vec![feuille("t", "chat")],
+                minimum: 1,
+            },
+        ]);
+        let mut out = Vec::new();
+        collecte(&arbre, &vues, &Value::Null, true, &mut out);
+        assert!(out.is_empty(), "{out:?}");
+
+        // Le meme arbre dont le filtre tient : le `should` marque.
+        let arbre = Noeud::Et(vec![
+            feuille("t", "le"),
+            Noeud::Ou {
+                enfants: vec![feuille("t", "chat")],
+                minimum: 1,
+            },
+        ]);
+        let mut out = Vec::new();
+        collecte(&arbre, &vues, &Value::Null, true, &mut out);
+        assert_eq!(out.len(), 2);
+    }
+
+    /// `must_not: {match_all}` rend le `bool` sterile — Lucene le reecrit en
+    /// `MatchNoDocsQuery`, et ses termes disparaissent meme sans tri par
+    /// document (fuzzer, graines 6 et 900186).
+    #[test]
+    fn un_must_not_match_all_rend_le_bool_sterile() {
+        let vues = vues_du_texte();
+        let arbre = Noeud::Et(vec![
+            Noeud::Non(Box::new(Noeud::Toujours)),
+            Noeud::Ou {
+                enfants: vec![feuille("t", "chat")],
+                minimum: 1,
+            },
+        ]);
+        for par_document in [true, false] {
+            let mut out = Vec::new();
+            collecte(&arbre, &vues, &Value::Null, par_document, &mut out);
+            assert!(out.is_empty(), "par_document={par_document} : {out:?}");
+        }
+    }
+
+    /// Sans tri par document (`require_field_match: false`), une clause qui n'a
+    /// rien trouve dans **son** champ marque quand meme ailleurs (graine 8).
+    #[test]
+    fn sans_tri_par_document_une_clause_muette_marque_ailleurs() {
+        let vues = vues_du_texte();
+        let arbre = Noeud::Ou {
+            enfants: vec![Noeud::Opaque, feuille("autre", "chat")],
+            minimum: 1,
+        };
+        let mut out = Vec::new();
+        collecte(&arbre, &vues, &Value::Null, false, &mut out);
+        assert_eq!(out.len(), 1);
+    }
+
+    /// Deux marques qui se chevauchent : la plus longue passe d'abord, sinon le
+    /// formateur rend `<em>le</em><em> chat</em>` (fuzzer, graine 900138).
+    #[test]
+    fn marques_qui_se_chevauchent() {
+        let vues = vues_du_texte();
+        let valeur = &vues["t"][0];
+        let motifs = vec![
+            Motif::Simple(Predicat::Terme("le".into())),
+            Motif::Phrase {
+                positions: vec![Predicat::Terme("le".into()), Predicat::Terme("chat".into())],
+                eclatee: false,
+            },
+        ];
+        assert_eq!(marques(&motifs, valeur), vec![(0, 7), (0, 2)]);
     }
 
     /// La borne gauche : la sonde qui a fixe `offset - maxLen + 1`.

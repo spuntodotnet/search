@@ -27,7 +27,7 @@ python3 tests/compat/fuzz_vs_es.py --couverture          # ce qu'il fuzze, et pa
 
 ## Le périmètre est lu, pas réécrit
 
-[`compat.yaml`](../compat.yaml) déclare 193 capacités avec leur état. Le
+[`compat.yaml`](../compat.yaml) déclare 197 capacités avec leur état. Le
 générateur ne redit pas cette liste : chaque **brique** (une clause du DSL, un
 type de champ, une agrégation, un paramètre du corps) cite l'identifiant de la
 capacité qu'elle exerce, et au démarrage le fuzzer
@@ -162,6 +162,38 @@ ex æquo, sur un champ `text` **facultatif** — l'`avgdl` de Lucene se calcule 
 les documents qui ont le champ, celui de tantivy sur tous. Le prédicat refuse de
 l'absorber, exprès ; élargir la ligne masquerait exactement ce qu'elle a été
 écrite pour attraper.
+
+### Ce que la brique « surlignage » a sorti
+
+La brique pose un bloc `highlight` sur un quart des recherches : un ou deux
+champs (nommés, en motif, ou `*`), des tailles **petites exprès** — c'est sous
+`fragment_size` que deux lectures du découpeur divergent, au-dessus le fragment
+est la phrase entière et n'importe quelle implémentation tombe juste — et, une
+fois sur cinq, une surcharge champ par champ.
+
+Elle a sorti **six** défauts en trois passages, et aucun n'était visible aux
+192 questions écrites à la main la veille. Le premier a coûté un changement de
+forme du code :
+
+| Ce que le fuzzer a sorti | Ce que c'était |
+|---|---|
+| un `should` placé dans un `bool` dont le `filter` échoue était quand même marqué | **« les termes de la requête » n'est pas « ce qui a fait correspondre ce document ».** ES surligne depuis les `Matches` de Lucene, qui sont calculées **par document** : un `bool` qui ne tient pas ne rend aucune marque, et un `must_not: {match_all}` le réécrit en `MatchNoDocsQuery`. Le surlignage garde donc la forme booléenne de la requête et l'évalue document par document. La règle a une seconde moitié qui la retourne : sous `require_field_match: false`, ES abandonne les `Matches` et repart d'une extraction statique — le tri par document disparaît avec, et une phrase y est marquée terme par terme |
+| `no_match_size: 5` rendait « tiret- » là où ES rend « tiret-bas » | **un `BreakIterator` de Java n'est pas UAX#29.** `abcde-fghij` et `abcde"fghij` sont **un** mot chez Java, `abcde:fghij` et `abcde’fghij` en font deux — l'inverse de la norme pour les deux premiers. Ça ne se lit nulle part : il a fallu poser `no_match_size: 1` sur seize mots construits exprès et regarder où tombait la coupure |
+| un `match` sur un `keyword` ne surlignait plus rien dès que la valeur portait un tiret | **un `keyword` n'est pas analysé par la clause** : elle y cherche la valeur entière. Le mapping ne déclare pas d'analyzer sur un `keyword`, donc l'analyzer « par défaut » d'un champ y est `standard` — et l'appliquer coupait « tiret-bas » en deux termes qui n'existent pas dans l'index |
+| une valeur écartée par `ignore_above` était surlignée | **lire le `_source` n'est pas lire ce qui a été indexé** — la même leçon que pour `fields`, un an plus tôt, au même endroit. Une valeur trop longue n'est ni marquée, ni rendue par `no_match_size` |
+| la cible d'un `copy_to` ne rendait aucun fragment | sa valeur n'est **nulle part** dans son propre `_source` : elle est dans celui de la source. Là encore, la règle existait déjà pour `fields` ; livrer une troisième lecture, c'est devoir la reposer |
+| `<em>optique</em><em> verre</em>` là où ES rend `<em>optique verre</em>` | deux marques qui se chevauchent se trient **début croissant, fin décroissante** (`Passage.sort()` de Lucene) : le formateur avance sur la fin de la précédente, donc la plus longue doit passer d'abord |
+| `no_match_size` ne rendait rien quand la première valeur d'un champ multivalué était vide | ES concatène les valeurs avec un séparateur et **saute les séparateurs de tête** : la première valeur au sens de `no_match_size` est la première **non vide** |
+
+Les cinq derniers ont un point commun avec ce que les cartes précédentes ont
+appris : ils ne portent pas sur le découpage, qui était le sujet, mais sur ce
+que le champ **contient** et sur la façon dont il est lu. Le découpage, lui,
+était juste dès le premier passage — parce qu'il avait été mesuré caractère par
+caractère avant d'être écrit.
+
+Deux d'entre eux viennent d'une **plage de contrôle** (900001+), c'est-à-dire
+d'une plage jamais utilisée pour corriger. Septième passage, septième plage
+neuve qui trouve quelque chose.
 
 ### Ce que la brique « n-grammes » a sorti, en un passage
 

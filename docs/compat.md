@@ -1351,7 +1351,17 @@ pas pour être découverts en production.
     JSON rend un arbre, pas un flux de jetons — et inventer une position serait
     pire que ne pas en donner.
 
-21. **Les trois lectures sur le même champ stocké rendent un `500` chez ES.**
+21. **`require_field_match: false` applique l'automate d'un `range` aux autres
+    champs.** `{"range": {"drapeau": {"lt": true}}}` fait marquer « AlphA »
+    dans un `keyword` voisin chez ES, parce que `"AlphA" < "T"` en ordre
+    lexicographique — la clause a quitté son champ **et** son type. C'est le
+    prix de `require_field_match: false`, que la documentation d'ES décrit
+    elle-même comme approximatif ; ferrite ne le reproduit pas : ses bornes de
+    `range` ne quittent pas le type du champ, donc il marque **moins**. Le
+    prédicat du fuzzer n'absorbe que ce sens-là (une marque en trop reste un
+    écart).
+
+22. **Les trois lectures sur le même champ stocké rendent un `500` chez ES.**
     `{"fields": ["tag"], "docvalue_fields": ["tag"], "stored_fields": ["tag"]}`
     sur un `keyword` déclaré `store: true` fait rendre à ES 8.15 un
     `unsupported_operation_exception`. Un 500 ne se reproduit pas — c'est déjà
