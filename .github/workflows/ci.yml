@@ -197,10 +197,18 @@ jobs:
 
       # `docker save` ne rend les blobs compresses que depuis le magasin d'images
       # containerd ; les runners sont encore en Docker 28, ou il ecrit des couches
-      # nues. L'artefact OCI, lui, est exactement ce qu'un `docker push`
-      # enverrait — et il sort du cache du build ci-dessus.
+      # nues — donc une taille decompressee sous le nom de compressee, ce que
+      # tailles_image.py refuse desormais. L'artefact OCI, lui, est exactement ce
+      # qu'un `docker push` enverrait.
+      #
+      # Il demande un second build : le driver buildx par defaut (`docker`) ne
+      # sait pas exporter en OCI, seul un builder `docker-container` le peut, et
+      # il ne partage pas le cache du daemon. Deux minutes, pour le seul chiffre
+      # que ce depot publie.
       - name: artefact OCI (ce qu'un registre servirait)
-        run: docker buildx build --output type=oci,dest=/tmp/ferrite-oci.tar .
+        run: |
+          docker buildx create --name ferrite-oci --driver docker-container --use
+          docker buildx build --output type=oci,dest=/tmp/ferrite-oci.tar .
 
       # Les chiffres qui portent le projet sont mesures a chaque CI, pas une fois
       # pour toutes dans un README.

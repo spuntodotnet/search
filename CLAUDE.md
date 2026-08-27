@@ -722,8 +722,12 @@ bouger**, pas après.
   octets de chaque couche, et une couche nue rend la taille du registre **non
   déductible**, donc refusée (code de retour non nul) plutôt que remplacée par un
   nombre plausible. Le chiffre publié se mesure maintenant sur l'artefact OCI de
-  buildx — ce qu'un `docker push` enverrait — et les deux chemins rendent le même
-  nombre à l'octet près, ce qui est la seule raison de croire le second.
+  buildx — ce qu'un `docker push` enverrait — étalonné contre le premier chemin :
+  le **blob de la couche est identique à l'octet** (4 005 821), et les totaux ne
+  diffèrent que de 6 octets, tous dans le JSON de configuration, parce que deux
+  builds distincts n'y écrivent pas un horodatage de la même longueur. C'est
+  cette mesure-là, et pas la ressemblance des deux commandes, qui autorise à
+  croire le second.
 
 ## Où va le projet
 

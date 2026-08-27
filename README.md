@@ -235,9 +235,14 @@ docker buildx build --output type=oci,dest=/tmp/ferrite-oci.tar .
 IMAGE_TAR=/tmp/ferrite-oci.tar ./tests/compat/measure_container.sh ferrite:ci
 ```
 
-Les deux chemins — `docker save` depuis containerd, et l'artefact de buildx —
-rendent **le même nombre à l'octet près** (4 007 597). C'est ce qui permet de
-croire celui que la CI publie.
+Les deux chemins ont été étalonnés l'un contre l'autre, et c'est ce qui permet
+de croire celui que la CI publie. Le **blob de la couche est identique à
+l'octet** — 4 005 821 des deux côtés, soit tout ce qu'un `docker pull`
+télécharge vraiment. Les totaux diffèrent de **6 octets**, entièrement dans le
+JSON de configuration de l'image (1 295 contre 1 289) : ce sont deux builds
+distincts, et l'horodatage qu'ils y écrivent n'a pas la même longueur. D'où le
+chiffre publié en Mo et non à l'octet : les six octets sont une propriété du
+build, pas de l'image.
 
 ## État
 
