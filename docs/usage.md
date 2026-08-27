@@ -99,11 +99,11 @@ attendu, et c'est mesuré plutôt que supposé.
 
 | Sous-corpus | Requêtes | Servies entièrement |
 |---|---|---|
-| **`github` — du code d'application open source** | 338 | **93,5 %** |
+| **`github` — du code d'application open source** | 338 | **93,8 %** |
 | `clients` — tests et exemples des clients officiels | 143 | 81,1 % |
-| `doc` — la documentation de référence | 3 969 | 39,8 % |
+| `doc` — la documentation de référence | 3 969 | 40,1 % |
 | `rally` — les tracks de benchmark d'Elastic | 861 | 28,6 % |
-| **tout le corpus** | 5 311 | 42,5 % |
+| **tout le corpus** | 5 311 | 42,8 % |
 
 Ces quatre nombres ne se contredisent pas, ils mesurent quatre choses
 différentes, et l'écart entre eux **est** le résultat :
@@ -113,7 +113,7 @@ différentes, et l'écart entre eux **est** le résultat :
   requêtes sur dix passent telles quelles** ;
 - la documentation de référence consacre **une page par fonctionnalité**, avec au
   moins un exemple chacune : elle sur-représente exactement ce qui est rare. Un
-  taux de 39,8 % s'y lit « ferrite couvre un peu plus d'un tiers de la surface
+  taux de 40,1 % s'y lit « ferrite couvre un peu plus d'un tiers de la surface
   d'API », ce qui est vrai et sans rapport avec la question précédente ;
 - les tracks Rally sont des **bancs d'essai analytiques** : `date_histogram`
   avec `calendar_interval`, `runtime_mappings`, `fields`, `percentiles`. Et le
@@ -138,7 +138,7 @@ source » compte autant que le total :
 | Capacité refusée | Tout le corpus | doc | rally | applications |
 |---|---|---|---|---|
 | `hors.xpack` — sécurité, ML, ILM, watcher, transform, EQL/SQL… | 18,9 % | 25,2 % | 0,2 % | — |
-| `recherche.non_supportes` — `highlight`, `fields`, `runtime_mappings`… | 12,0 % | 3,8 % | 52,1 % | 5,0 % |
+| `recherche.non_supportes` — `search_after`, `pit`, `collapse`… | 4,8 % | 2,0 % | 16,6 % | 3,6 % |
 | `dsl.non_supportees` — `query_string`, `function_score`… | 6,5 % | 4,4 % | 18,9 % | 0,6 % |
 | `agg.non_supportees` — `percentiles`, `top_hits`, `filters`… | 6,1 % | 3,0 % | 23,2 % | 0,6 % |
 | `agg.date_histogram` — `calendar_interval`, `time_zone`, `format` | 4,9 % | 0,9 % | 25,8 % | 0,6 % |
@@ -222,6 +222,18 @@ débloque. Deux colonnes, parce qu'elles ne disent pas la même chose :
 > 83 sur les tests de backend de Wagtail. Deux dénominateurs, deux vérités, et
 > c'est pour ça qu'il en faut plus d'un.
 >
+> La **05** — `highlight` — a fait passer le corpus de **42,5 % à 42,8 %**
+> (2 259 → 2 272), et la prévision de la ligne 4 disait **18**. Elle en
+> débloque **13**, et l'écart vient de la mesure elle-même : la ligne comptait
+> le trait `corps:highlight` en bloc, comme si la clef entière était servie ou
+> refusée. `ponderation.py` lit maintenant **chaque réglage** du bloc
+> (`corps:highlight.type`, `corps:highlight.order`…), et 11 des 102 requêtes
+> qui citent `highlight` demandent un réglage refusé — `order` (8), `type` (6),
+> `matched_fields` (3), `fragmenter` (2), `highlight_query` (1). Sans cette
+> lecture, un `type: fvh` aurait compté « servi », et le dénominateur aurait
+> été plus flatteur que la vérité. C'est le même geste que pour la ligne 3, un
+> cran plus bas.
+>
 > Les **125** de la ligne 2 supposaient les cinq faits, `runtime_mappings` et
 > `script_fields` compris : ils demandent Painless, et la mesure a servi à
 > décider de ne pas les faire (voir plus bas). Les autres lignes n'ont pas été
@@ -232,7 +244,7 @@ débloque. Deux colonnes, parce qu'elles ne disent pas la même chose :
 | 1 | **20** — `_validate`, `field_caps`, `_stats`, templates, `PUT _settings` — **faite** | 262 | **239** | 0 |
 | 2 | **18** — `fields`, `docvalue_fields`, `stored_fields` — **faite** (+ `runtime_mappings`, `script_fields`, mesurés puis écartés) | 504 | **125** | 4 |
 | 3 | **19** — `_delete_by_query`, `_update_by_query` | 77 | **75** | **10** |
-| 4 | **05** — `highlight` | 102 | 18 | 1 |
+| 4 | **05** — `highlight` — **faite** | 102 | **13** | 0 |
 | 5 | **09** — `sort` : `missing`, `mode`, `unmapped_type` | 94 | 15 | 1 |
 | 6 | **12** — `terms` : `include`, `exclude`, ordre par sous-agrégation | 103 | 14 | 0 |
 | 7 | **21** — les analyzers de langue | 22 | 14 | 0 |
@@ -252,7 +264,7 @@ comptés sur `tests/compat/usage/verdicts.jsonl` (`manques[].trait`).
 
 | Carte | Traits comptés |
 |---|---|
-| 05 | `corps:highlight` |
+| 05 | `corps:highlight`, `corps:highlight.*` |
 | 06 | `dsl:query_string`, `dsl:simple_query_string` |
 | 07 | `dsl:match.{fuzziness, minimum_should_match, analyzer, zero_terms_query, prefix_length, auto_generate_synonyms_phrase_query, fuzzy_transpositions, max_expansions}` |
 | 08 | `corps:search_after`, `corps:pit` |

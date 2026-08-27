@@ -60,10 +60,10 @@
  },
  "totaux": {
   "requetes": 5311,
-  "servies": 2259,
-  "refusees": 3035,
+  "servies": 2272,
+  "refusees": 3022,
   "indeterminees": 17,
-  "taux_servies": 42.5
+  "taux_servies": 42.8
  },
  "par_source": {
   "clients": {
@@ -73,17 +73,17 @@
    "taux_servies": 81.1
   },
   "doc": {
-   "servie": 1581,
+   "servie": 1593,
    "total": 3969,
-   "refusee": 2373,
+   "refusee": 2361,
    "indeterminee": 15,
-   "taux_servies": 39.8
+   "taux_servies": 40.1
   },
   "github": {
-   "refusee": 22,
+   "refusee": 21,
    "total": 338,
-   "servie": 316,
-   "taux_servies": 93.5
+   "servie": 317,
+   "taux_servies": 93.8
   },
   "rally": {
    "refusee": 613,
@@ -172,9 +172,9 @@
  ],
  "par_api": {
   "search": {
-   "refusee": 1050,
+   "refusee": 1037,
    "total": 1801,
-   "servie": 750,
+   "servie": 763,
    "indeterminee": 1
   },
   "indices.create": {
@@ -2272,6 +2272,11 @@
     "part": 1.9
    },
    {
+    "trait": "corps:highlight.fields",
+    "requetes": 102,
+    "part": 1.9
+   },
+   {
     "trait": "agg:date_histogram.extended_bounds",
     "requetes": 99,
     "part": 1.9
@@ -2307,6 +2312,11 @@
     "part": 1.5
    },
    {
+    "trait": "corps:highlight.fragment_size",
+    "requetes": 81,
+    "part": 1.5
+   },
+   {
     "trait": "dsl:query_string",
     "requetes": 81,
     "part": 1.5
@@ -2329,6 +2339,16 @@
    {
     "trait": "tri:unmapped_type",
     "requetes": 79,
+    "part": 1.5
+   },
+   {
+    "trait": "corps:highlight.post_tags",
+    "requetes": 78,
+    "part": 1.5
+   },
+   {
+    "trait": "corps:highlight.pre_tags",
+    "requetes": 78,
     "part": 1.5
    },
    {
@@ -3412,6 +3432,16 @@
     "part": 0.2
    },
    {
+    "trait": "corps:highlight.number_of_fragments",
+    "requetes": 8,
+    "part": 0.2
+   },
+   {
+    "trait": "corps:highlight.order",
+    "requetes": 8,
+    "part": 0.2
+   },
+   {
     "trait": "dsl:match.operator",
     "requetes": 8,
     "part": 0.2
@@ -3643,6 +3673,11 @@
    },
    {
     "trait": "champ:term_vector",
+    "requetes": 6,
+    "part": 0.1
+   },
+   {
+    "trait": "corps:highlight.type",
     "requetes": 6,
     "part": 0.1
    },
@@ -4107,6 +4142,11 @@
     "part": 0.1
    },
    {
+    "trait": "corps:highlight.require_field_match",
+    "requetes": 4,
+    "part": 0.1
+   },
+   {
     "trait": "corps:terminate_after",
     "requetes": 4,
     "part": 0.1
@@ -4448,6 +4488,11 @@
    },
    {
     "trait": "champ:value",
+    "requetes": 3,
+    "part": 0.1
+   },
+   {
+    "trait": "corps:highlight.matched_fields",
     "requetes": 3,
     "part": 0.1
    },
@@ -5073,6 +5118,11 @@
    },
    {
     "trait": "champ:subobjects",
+    "requetes": 2,
+    "part": 0.0
+   },
+   {
+    "trait": "corps:highlight.fragmenter",
     "requetes": 2,
     "part": 0.0
    },
@@ -6338,6 +6388,21 @@
    },
    {
     "trait": "champ:search_quote_analyzer",
+    "requetes": 1,
+    "part": 0.0
+   },
+   {
+    "trait": "corps:highlight.highlight_query",
+    "requetes": 1,
+    "part": 0.0
+   },
+   {
+    "trait": "corps:highlight.no_match_size",
+    "requetes": 1,
+    "part": 0.0
+   },
+   {
+    "trait": "corps:highlight.tags_schema",
     "requetes": 1,
     "part": 0.0
    },
@@ -8165,8 +8230,9 @@
   "recherche.fields": 2.4,
   "recherche.format_reponse": null,
   "recherche.from_size": 16.3,
+  "recherche.highlight": 1.9,
   "recherche.msearch": 0.1,
-  "recherche.non_supportes": 5.6,
+  "recherche.non_supportes": 4.8,
   "recherche.preference": null,
   "recherche.query": 25.3,
   "recherche.reglages_de_shards": null,
@@ -10817,35 +10883,71 @@
    ]
   },
   {
+   "capacite": "agg.date_histogram",
+   "nom": "date_histogram",
+   "etat": "partiel",
+   "motif": null,
+   "requetes": 259,
+   "part": 4.9,
+   "par_source": {
+    "doc": {
+     "requetes": 35,
+     "part": 0.9
+    },
+    "github": {
+     "requetes": 2,
+     "part": 0.6
+    },
+    "rally": {
+     "requetes": 222,
+     "part": 25.8
+    }
+   },
+   "traits": [
+    {
+     "trait": "agg:date_histogram.time_zone",
+     "requetes": 206
+    },
+    {
+     "trait": "agg:date_histogram.calendar_interval",
+     "requetes": 58
+    },
+    {
+     "trait": "agg:date_histogram.format",
+     "requetes": 1
+    },
+    {
+     "trait": "agg:date_histogram.order",
+     "requetes": 1
+    }
+   ]
+  },
+  {
    "capacite": "recherche.non_supportes",
-   "nom": "highlight, search_after, pit, collapse, knn, explain, seq_no_primary_term, post_filter, min_score, suggest, rescore, track_scores, q, timeout, terminate_after, version, indices_boost, profile, slice, stats, ext, retriever",
+   "nom": "search_after, pit, collapse, knn, explain, seq_no_primary_term, post_filter, min_score, suggest, rescore, track_scores, q, timeout, terminate_after, version, indices_boost, profile, slice, stats, ext, retriever",
    "etat": "refuse",
    "motif": "pas_encore",
-   "requetes": 300,
-   "part": 5.6,
+   "requetes": 254,
+   "part": 4.8,
    "par_source": {
     "clients": {
      "requetes": 18,
      "part": 12.6
     },
     "doc": {
-     "requetes": 106,
-     "part": 2.7
+     "requetes": 81,
+     "part": 2.0
     },
     "github": {
-     "requetes": 13,
-     "part": 3.8
+     "requetes": 12,
+     "part": 3.6
     },
     "rally": {
-     "requetes": 163,
-     "part": 18.9
+     "requetes": 143,
+     "part": 16.6
     }
    },
    "traits": [
-    {
-     "trait": "corps:highlight",
-     "requetes": 102
-    },
     {
      "trait": "corps:timeout",
      "requetes": 94
@@ -10912,46 +11014,6 @@
     },
     {
      "trait": "corps:track_scores",
-     "requetes": 1
-    }
-   ]
-  },
-  {
-   "capacite": "agg.date_histogram",
-   "nom": "date_histogram",
-   "etat": "partiel",
-   "motif": null,
-   "requetes": 259,
-   "part": 4.9,
-   "par_source": {
-    "doc": {
-     "requetes": 35,
-     "part": 0.9
-    },
-    "github": {
-     "requetes": 2,
-     "part": 0.6
-    },
-    "rally": {
-     "requetes": 222,
-     "part": 25.8
-    }
-   },
-   "traits": [
-    {
-     "trait": "agg:date_histogram.time_zone",
-     "requetes": 206
-    },
-    {
-     "trait": "agg:date_histogram.calendar_interval",
-     "requetes": 58
-    },
-    {
-     "trait": "agg:date_histogram.format",
-     "requetes": 1
-    },
-    {
-     "trait": "agg:date_histogram.order",
      "requetes": 1
     }
    ]
@@ -12141,6 +12203,42 @@
     {
      "trait": "corps:track_total_hits=false",
      "requetes": 13
+    }
+   ]
+  },
+  {
+   "capacite": "recherche.highlight",
+   "nom": "highlight",
+   "etat": "partiel",
+   "motif": null,
+   "requetes": 11,
+   "part": 0.2,
+   "par_source": {
+    "doc": {
+     "requetes": 11,
+     "part": 0.3
+    }
+   },
+   "traits": [
+    {
+     "trait": "corps:highlight.order",
+     "requetes": 8
+    },
+    {
+     "trait": "corps:highlight.type",
+     "requetes": 6
+    },
+    {
+     "trait": "corps:highlight.matched_fields",
+     "requetes": 3
+    },
+    {
+     "trait": "corps:highlight.fragmenter",
+     "requetes": 2
+    },
+    {
+     "trait": "corps:highlight.highlight_query",
+     "requetes": 1
     }
    ]
   },

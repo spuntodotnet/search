@@ -203,6 +203,11 @@ def traits_corps(corps):
             vus |= traits_aggs(valeur)
         elif clef == "sort":
             vus |= traits_tri(valeur)
+        elif clef == "highlight" and isinstance(valeur, dict):
+            # Le bloc `highlight` se lit comme une clause : chacun de ses
+            # reglages est un trait a part. Sans ca, un `type: fvh` — que
+            # ferrite refuse — compterait comme un surlignage servi.
+            vus |= traits_highlight(valeur)
         elif clef == "track_total_hits" and valeur is False:
             vus.add("corps:track_total_hits=false")
         elif clef in ("script_fields", "runtime_mappings") and valeur == {}:
@@ -220,6 +225,24 @@ def traits_corps(corps):
             # de `script_fields` serait le mensonge inverse. Ils ne comptent ni
             # pour ni contre : la capacite reste ❌ dans la table.
             vus.discard(f"corps:{clef}")
+    return vus
+
+
+def traits_highlight(bloc):
+    """Les reglages d'un bloc `highlight`, globaux et champ par champ."""
+    vus = set()
+    for clef, valeur in bloc.items():
+        if clef == "fields":
+            champs = valeur if isinstance(valeur, list) else [valeur]
+            for entree in champs:
+                if not isinstance(entree, dict):
+                    continue
+                for spec in entree.values():
+                    if isinstance(spec, dict):
+                        vus |= {f"corps:highlight.{k}" for k in spec}
+            vus.add("corps:highlight.fields")
+        else:
+            vus.add(f"corps:highlight.{clef}")
     return vus
 
 
@@ -442,6 +465,7 @@ CORPS = {
     "track_total_hits": "recherche.track_total_hits", "aggs": "recherche.aggs",
     "aggregations": "recherche.aggs",
     "fields": "recherche.fields", "docvalue_fields": "recherche.docvalue_fields",
+    "highlight": "recherche.highlight",
     "stored_fields": "recherche.stored_fields",
     "script_fields": "recherche.script_fields",
     "runtime_mappings": "recherche.script_fields",
@@ -595,6 +619,11 @@ class Croisement:
             return AGGS.get(nom, AGGS_DEFAUT), (param or None)
         if famille == "corps":
             clef, _, valeur = reste.partition("=")
+            # `corps:highlight.type` : un reglage du bloc de surlignage. Le
+            # verdict se lit sur les parametres declares de la capacite, comme
+            # pour un parametre de clause.
+            if clef.startswith("highlight."):
+                return "recherche.highlight", clef.split(".", 1)[1]
             if clef in CORPS:
                 return CORPS[clef], (valeur or None)
             if clef in self.noms_cites(CORPS_NON_SUPPORTES):

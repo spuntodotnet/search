@@ -217,6 +217,7 @@ développement, pas de CI).
 | `tests/compat/diff_aggs.py` | les mêmes agrégations ? (53/53, `filter` comprise, et ce qu'un bucket **vide** doit porter) |
 | `tests/compat/diff_analyzers.py` | les mêmes tokens, **aux mêmes positions et aux mêmes offsets** ? (38 batteries × 217 textes : 7 analyzers intégrés, 21 déclarations de n-grammes, les 5 analyzers de Wagtail, et les 5 classes de `token_chars` demandées caractère par caractère — toutes identiques) |
 | `tests/compat/diff_datemath.py` | les mêmes documents sur une **borne de date** — `now`, `now-1d/d`, `2026-03-15\|\|+1M`, et l'arrondi selon le côté de la borne ? (276/276, messages d'erreur compris ; 45/276 avant le chantier) |
+| `tests/compat/diff_highlight.py` | les mêmes **fragments surlignés** — pas leur nombre, leur contenu exact, balises comprises ? (192 questions, **181 identiques au caractère près, 10 refus assumés, 0 écart** ; `--calibrer` : 192/192 contre deux ES). Le même fichier lancé contre le ferrite d'avant rend **0/192** |
 | `tests/compat/diff_motifs.py` | les mêmes documents sur un **motif** — `regexp`, `wildcard`, `prefix`, `match_phrase_prefix` ? (101/101) |
 | `tests/compat/diff_multi_index.py` | `index=["a","b"]`, `logs-*`, les alias : **les mêmes index visés, fusionnés pareil** ? (87/87, 0 écart, plus aucune divergence assumée ; `--calibrer` : 87/87 contre deux ES) |
 | `tests/compat/sonde_msm.py` | les mêmes documents sur un **`minimum_should_match`** — entier, pourcentage, formes négatives, conditions `3<90%`, et sous un `nested` ? (53/53) |
@@ -685,6 +686,25 @@ bouger**, pas après.
   libère le nom par un renommage atomique sous `.corbeille/` : plus aucun chemin
   n'est partagé entre un index et son successeur. Retirer d'une table n'est pas
   tuer — tant qu'un `Arc` vit, il faut lui retirer le droit d'écrire.
+- **« Les termes de la requête » n'est pas « ce qui a fait correspondre ce
+  document ».** Le surlignage d'ES ne marque que ce qui a vraiment contribué :
+  un `should` placé dans un `bool` dont le `filter` échoue ne marque rien, et un
+  `bool` porteur d'un `must_not: {match_all}` ne marque jamais rien — Lucene le
+  réécrit en `MatchNoDocsQuery`. Une extraction à plat des termes de la requête
+  marquait les deux, en 200. Il a donc fallu garder la **forme booléenne** de la
+  requête et l'évaluer document par document. Et la règle a une seconde moitié
+  qui la retourne : sous `require_field_match: false`, ES abandonne les
+  `Matches` du champ et repart de l'extraction statique — donc le tri par
+  document **disparaît**, et une phrase y est marquée terme par terme au lieu
+  d'une seule fois. Trouvé par le fuzzer (graines 6, 106, puis 900186 sur une
+  plage de contrôle), jamais par les 192 questions écrites à la main.
+- **Un `BreakIterator` de Java n'est pas UAX#29.** Le découpage des fragments
+  s'appuie sur les frontières de mot du JDK, et elles divergent de la norme sur
+  des caractères courants : `abcde-fghij` et `abcde"fghij` sont **un** mot,
+  `abcde:fghij` et `abcde’fghij` en font deux — l'inverse de ce que dit UAX#29
+  pour les deux premiers. Implémenter la norme donnait « tiret- » là où ES rend
+  « tiret-bas ». La seule façon de le savoir a été de poser `no_match_size: 1`
+  sur seize mots construits exprès et de lire où tombait la coupure.
 - **Une clé de bucket entière sur un champ flottant.** `terms` sur un `double`
   rendait la clé `2` là où ES rend `2.0` — un client qui type strictement son
   JSON y lit un entier. Défaut antérieur, invisible parce qu'aucun corpus écrit
@@ -770,10 +790,24 @@ l'instantané de la recherche puis n'écrit **que s'il n'a pas bougé depuis**.
 index vers un autre s'écrit encore côté client avec `scroll` + `_bulk`, ce que
 les deux autres ne permettaient pas.
 
+**Une barre de recherche rend enfin ses extraits.** `highlight` est servi, et
+ce qui a coûté le travail n'est pas de marquer les termes : c'est de couper les
+fragments **là où Lucene les coupe**. Ni « une phrase », ni « `fragment_size`
+caractères » — les phrases sont fusionnées vers l'avant tant que la longueur
+tient sous la borne, puis re-coupées au mot ; un point suivi d'une minuscule
+n'en termine pas une ; le fragment se centre sur le **milieu** de la
+correspondance ; et quand il y en a plus que `number_of_fragments`, ce sont les
+mieux notés par le `PassageScorer` de Lucene qui restent, remis dans l'ordre du
+document. `type`, `highlight_query`, `matched_fields`, `boundary_scanner`,
+`encoder`, `fragmenter` et `order: score` sont refusés en les nommant.
+C'était le **rang 4 mesuré** du corpus d'usage, et la raison pour laquelle
+ReadTheDocs avait été écarté des applications réelles — il ne lui reste que
+`inner_hits`.
+
 Ce qui reste, par ordre de gêne pour un projet réel : `rest_total_hits_as_int`,
 `_msearch`, `_reindex`, les templates de **composants** (`_component_template`, et le
 `composed_of` qui les cite — refusé à la pose plutôt qu'appliqué à moitié),
-`GET /_cat/aliases` et les colonnes `h` / `s` des `_cat`,
+`inner_hits`, `GET /_cat/aliases` et les colonnes `h` / `s` des `_cat`,
 `GET /{index}/_mapping/field/{champs}`, l'agrégation `filters` (la sœur
 plurielle de `filter`), `time_zone` sur un `range` (refusé explicitement), les
 alias **filtrés** (`filter`, refusé explicitement), `?stored_fields=` sur

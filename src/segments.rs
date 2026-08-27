@@ -11,7 +11,9 @@
 //!   fait qu'ES rend la un fragment coupe au mot la ou une lecture naive en
 //!   rendrait trois ;
 //! - une apostrophe **entre deux lettres** ne coupe pas un mot (regle WB6/WB7)
-//!   : `aujourd'hui` est un mot, `allez-vous` en fait trois.
+//!   : `aujourd'hui` est un mot. Le tiret non plus — mais ca, ce n'est **pas**
+//!   UAX#29 : c'est une jointure propre au `BreakIterator` du JDK, mesuree
+//!   contre un ES 8.15 comme les autres (voir `jointures_de_java`).
 //!
 //! Les deux fonctions rendent une **partition** : une suite croissante de
 //! frontieres qui commence a 0 et finit a la longueur du texte, en nombre de
@@ -410,9 +412,13 @@ enum Wb {
 }
 
 impl Wb {
-    /// Ce qui joint deux lettres (regles WB6 / WB7).
+    /// Ce qui joint deux lettres (regles WB6 / WB7, plus les jointures propres
+    /// a Java).
     fn joint_lettre(self) -> bool {
-        matches!(self, Self::MidLetter | Self::MidNumLet | Self::SingleQuote)
+        matches!(
+            self,
+            Self::MidLetter | Self::MidNumLet | Self::SingleQuote | Self::DoubleQuote
+        )
     }
 
     /// Ce qui joint deux chiffres (regles WB11 / WB12).
@@ -426,13 +432,27 @@ fn wb(c: char) -> Wb {
         '\r' => return Wb::Cr,
         '\n' => return Wb::Lf,
         '\u{000B}' | '\u{000C}' | '\u{0085}' | '\u{2028}' | '\u{2029}' => return Wb::Newline,
+        // Les jointures **de Java**, pas celles d'UAX#29 : c'est le
+        // `BreakIterator` du JDK qui decoupe les fragments d'ES, et ses
+        // divergences se voient sur des caracteres courants. Mesurees une par
+        // une contre un ES 8.15 (`no_match_size: 1` dit ou tombe la premiere
+        // frontiere) :
+        //
+        //   `abcde-fghij`  un mot     — le tiret joint deux lettres
+        //   `abcde"fghij`  un mot     — le guillemet droit aussi
+        //   `abcde:fghij`  deux mots  — le deux-points **non**, la ou UAX#29
+        //                               en fait un MidLetter
+        //   `abcde’fghij`  deux mots  — l'apostrophe typographique non plus
+        //   `abcde·fghij`  deux mots
+        //
+        // Le tiret est celui qui compte : sans lui, `tiret-bas` se coupait en
+        // « tiret » (trouve par le fuzzer, graine 31).
         '\'' => return Wb::SingleQuote,
         '"' => return Wb::DoubleQuote,
-        ':' | '\u{00B7}' | '\u{0387}' | '\u{055F}' | '\u{05F4}' | '\u{2027}' | '\u{FE13}'
-        | '\u{FE55}' | '\u{FF1A}' => return Wb::MidLetter,
-        '.' | '\u{2018}' | '\u{2019}' | '\u{2024}' | '\u{FE52}' | '\u{FF07}' | '\u{FF0E}' => {
-            return Wb::MidNumLet
+        '-' | '\u{2010}'..='\u{2015}' | '\u{05F4}' | '\u{2027}' | '\u{FE13}' | '\u{FE55}' => {
+            return Wb::MidLetter
         }
+        '.' | '\u{2024}' | '\u{FE52}' | '\u{FF0E}' => return Wb::MidNumLet,
         ',' | ';' | '\u{037E}' | '\u{0589}' | '\u{060C}' | '\u{060D}' | '\u{066C}' | '\u{07F8}'
         | '\u{2044}' | '\u{FE10}' | '\u{FE14}' | '\u{FE50}' | '\u{FE54}' | '\u{FF0C}'
         | '\u{FF1B}' => return Wb::MidNum,
@@ -549,10 +569,29 @@ mod tests {
     #[test]
     fn mots_avec_apostrophe() {
         assert_eq!(mo("aujourd'hui"), ["aujourd'hui"]);
-        assert_eq!(mo("allez-vous"), ["allez", "-", "vous"]);
+        // Le tiret joint, chez Java : voir `jointures_de_java`.
+        assert_eq!(mo("allez-vous"), ["allez-vous"]);
         assert_eq!(mo("a b"), ["a", " ", "b"]);
         assert_eq!(mo("a   b"), ["a", "   ", "b"]);
         assert_eq!(mo("1,5 kg"), ["1,5", " ", "kg"]);
+    }
+
+    /// Les jointures **de Java**, mesurees contre un ES 8.15 : ce sont elles
+    /// qui coupent les fragments, pas celles d'UAX#29.
+    #[test]
+    fn jointures_de_java() {
+        assert_eq!(mo("tiret-bas"), ["tiret-bas"]);
+        assert_eq!(mo("abcde-fghij-klmno"), ["abcde-fghij-klmno"]);
+        assert_eq!(mo("abcde--fghij"), ["abcde", "-", "-", "fghij"]);
+        assert_eq!(mo("abcde.fghij"), ["abcde.fghij"]);
+        assert_eq!(mo("abcde\"fghij"), ["abcde\"fghij"]);
+        // Le deux-points est un MidLetter chez UAX#29, pas chez Java.
+        assert_eq!(mo("abcde:fghij"), ["abcde", ":", "fghij"]);
+        assert_eq!(mo("abcde\u{2019}fghij"), ["abcde", "\u{2019}", "fghij"]);
+        // Un tiret ne joint pas deux nombres, ni une lettre et un chiffre.
+        assert_eq!(mo("12345-67890"), ["12345", "-", "67890"]);
+        assert_eq!(mo("abcde-12345"), ["abcde", "-", "12345"]);
+        assert_eq!(mo("12345,67890"), ["12345,67890"]);
     }
 
     #[test]

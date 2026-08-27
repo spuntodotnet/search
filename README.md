@@ -266,7 +266,19 @@ du lot fautif et rend 409. Ce qui reste refusé, par son nom : `script`
 (Painless), `slices`, `wait_for_completion=false` (il rendrait une tâche, et
 ferrite n'a pas d'API `_tasks`) et `requests_per_second`.
 
-**Ce qui n'y est pas encore** : `highlight`, `search_after`, `_msearch`,
+**Les fragments surlignés d'une barre de recherche** (`highlight`) sont rendus,
+et ce qui a coûté le travail n'est pas de marquer les termes : c'est de couper
+les fragments **là où Lucene les coupe**. Un fragment n'est ni « une phrase » ni
+« `fragment_size` caractères » — les phrases sont fusionnées vers l'avant tant
+que la longueur tient, puis re-coupées au mot ; un point suivi d'une minuscule
+ne termine pas une phrase ; et quand il y en a plus que demandé, ce sont les
+mieux notés par le `PassageScorer` de Lucene qui restent, remis dans l'ordre du
+document. Le tout est mesuré fragment par fragment contre un ES 8.15
+([`diff_highlight.py`](tests/compat/diff_highlight.py)). Ce qui n'est pas
+reproduit est refusé en le nommant : `type`, `highlight_query`,
+`matched_fields`, `boundary_scanner`, `encoder`, `order: score`.
+
+**Ce qui n'y est pas encore** : `search_after`, `_msearch`,
 `_reindex`, `query_string`, les templates de composants
 (`_component_template`), les champs calculés par un script Painless
 (`script_fields`, `runtime_mappings` — leur objet **vide** est accepté, il ne

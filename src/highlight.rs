@@ -333,6 +333,49 @@ impl Predicat {
     }
 }
 
+/// La requete, reduite a ce qu'elle **marque** — et a sa forme booleenne.
+///
+/// Garder la forme n'est pas un luxe : ES ne surligne que ce qui a vraiment
+/// fait correspondre **ce document-la**. Un `should` place dans un `bool` dont
+/// le `filter` echoue ne marque rien, et un `bool` porteur d'un
+/// `must_not: {match_all}` ne marque jamais rien du tout. Une extraction a plat
+/// marquerait les deux, en 200 (trouve par le fuzzer, graines 6 et 106).
+#[derive(Debug, Clone)]
+enum Noeud {
+    /// Une clause sur un champ surlignable.
+    Feuille {
+        champ: String,
+        motifs: Vec<Motif>,
+    },
+    /// `must` + `filter`, `constant_score` : tout doit tenir.
+    Et(Vec<Noeud>),
+    /// `should`, `dis_max` : au moins `minimum` doivent tenir.
+    Ou {
+        enfants: Vec<Noeud>,
+        minimum: usize,
+    },
+    Non(Box<Noeud>),
+    /// Une clause que le surlignage ne sait pas trancher depuis le `_source`
+    /// (un intervalle de dates, `exists`, `ids`, une jointure). Elle ne marque
+    /// rien, et ne fait echouer personne : dans le doute on marque.
+    Opaque,
+    /// `match_none`, ou un `must_not` qui prend tout.
+    Jamais,
+    /// `match_all` : vrai partout. Sous un `must_not`, c'est lui qui rend le
+    /// `bool` sterile — et ferrite marquait quand meme ses `should`.
+    Toujours,
+}
+
+impl Noeud {
+    fn et(enfants: Vec<Noeud>) -> Self {
+        match enfants.len() {
+            0 => Self::Opaque,
+            1 => enfants.into_iter().next().expect("un enfant"),
+            _ => Self::Et(enfants),
+        }
+    }
+}
+
 /// Ce que la requete cherche dans un champ : un terme isole, ou une suite de
 /// termes cote a cote.
 #[derive(Debug, Clone)]
@@ -341,7 +384,28 @@ enum Motif {
     /// Une phrase rend **une seule** marque, du debut du premier terme a la fin
     /// du dernier (mesure : `match_phrase: "le chat"` rend `<em>le chat</em>`,
     /// pas `<em>le</em> <em>chat</em>`).
-    Phrase(Vec<Predicat>),
+    ///
+    /// Sauf sous `require_field_match: false` : ES perd alors la structure de
+    /// la phrase et marque **chaque terme separement**, aux positions ou la
+    /// phrase l'a trouve — le troisieme `aluminium` de « aluminium batterie
+    /// aluminium » reste non marque. C'est ce que dit `eclatee`.
+    Phrase {
+        positions: Vec<Predicat>,
+        eclatee: bool,
+    },
+}
+
+impl Motif {
+    /// Le meme motif, mais dont chaque terme se marque a part.
+    fn eclate(&self) -> Self {
+        match self {
+            Self::Simple(_) => self.clone(),
+            Self::Phrase { positions, .. } => Self::Phrase {
+                positions: positions.clone(),
+                eclatee: true,
+            },
+        }
+    }
 }
 
 /// La distance d'edition de Levenshtein, avec ou sans transposition — celle que
@@ -372,30 +436,70 @@ fn distance_edition(a: &[char], b: &[char], transpositions: bool) -> usize {
 // Resolution sur un mapping
 // ---------------------------------------------------------------------------
 
-/// Un champ a surligner, resolu sur **un** mapping.
+/// Comment lire un champ : ou prendre ses valeurs, et comment les decouper en
+/// termes. C'est ce qu'il faut pour **trouver** des marques, que le champ soit
+/// surligne ou seulement interroge.
 #[derive(Debug, Clone)]
-struct Champ {
+struct Lecture {
     /// Le chemin rendu dans la reponse.
     chemin: String,
     /// Ou lire la valeur dans `_source` (un multi-field lit son parent).
     source: String,
+    /// Les chemins qui **copient** dans ce champ (`copy_to`). Leur valeur n'est
+    /// pas dans le `_source` de la cible, et ES la surligne quand meme : le
+    /// champ sait de quels chemins du document il est fait (meme regle que
+    /// pour `fields`, trouvee ici par le fuzzer, graine 89).
+    copies: Vec<String>,
     ty: FieldType,
+    /// `ignore_above` : une valeur plus longue n'a **pas ete indexee**, donc
+    /// elle n'a rien a surligner — et `no_match_size` ne la rend pas non plus.
+    /// Meme regle que pour `fields` : lire le `_source` n'est pas lire ce qui
+    /// a ete indexe (trouve par le fuzzer, graine 52).
+    ignore_above: Option<usize>,
     /// L'analyzer **d'indexation** : c'est lui qui a produit les termes de
     /// l'index, donc lui qui dit ou ils commencent dans le texte.
     analyzer: Analyzer,
+}
+
+/// Un champ a surligner, resolu sur **un** mapping.
+#[derive(Debug, Clone)]
+struct Champ {
+    lecture: Lecture,
     reglages: Reglages,
-    motifs: Vec<Motif>,
 }
 
 /// Ce qu'une recherche surligne, resolu sur un mapping.
 #[derive(Debug, Clone, Default)]
 pub struct Plan {
     champs: Vec<Champ>,
+    /// La requete, gardee sous sa forme booleenne : ce qui marque depend du
+    /// document (voir [`Noeud`]).
+    arbre: Option<Noeud>,
+    /// De quoi lire les champs que la requete cite, meme s'ils ne sont pas
+    /// surlignes : sans eux, on ne peut pas savoir si une clause a tenu.
+    lectures: BTreeMap<String, Lecture>,
 }
 
 impl Plan {
     pub fn est_vide(&self) -> bool {
         self.champs.is_empty()
+    }
+}
+
+fn lecture_de(chemin: &str, mapped: &mapping::MappedField, gen: &Generation) -> Lecture {
+    let source = chemin_source(chemin, gen);
+    Lecture {
+        copies: gen
+            .fields
+            .copiants
+            .get(source.as_str())
+            .cloned()
+            .unwrap_or_default(),
+        source,
+        chemin: chemin.to_string(),
+        ty: mapped.ty,
+        ignore_above: mapped.ignore_above,
+        analyzer: mapped.analyzer,
     }
 }
 
@@ -405,14 +509,10 @@ impl Plan {
 /// d'autre, pas meme sous un motif `*` (mesure sur un `integer`, qui ne rend
 /// aucune cle).
 pub fn resoudre(demande: &Demande, query: Option<&Value>, gen: &Generation) -> EsResult<Plan> {
-    let mut par_champ: BTreeMap<String, Vec<Motif>> = BTreeMap::new();
-    let mut tous: Vec<Motif> = Vec::new();
-    if let Some(q) = query {
-        extraire(q, gen, &mut par_champ)?;
-        for motifs in par_champ.values() {
-            tous.extend(motifs.iter().cloned());
-        }
-    }
+    let arbre = match query {
+        Some(q) => Some(extraire(q, gen)?),
+        None => None,
+    };
 
     // Une table, pas une liste : deux motifs peuvent designer le meme champ, et
     // c'est alors la derniere specification qui gagne — comme pour `fields`.
@@ -426,26 +526,30 @@ pub fn resoudre(demande: &Demande, query: Option<&Value>, gen: &Generation) -> E
             if !matches!(mapped.ty.kind(), FieldKind::Text | FieldKind::Keyword) {
                 continue;
             }
-            let motifs = if reglages.champ_exige {
-                par_champ.get(chemin).cloned().unwrap_or_default()
-            } else {
-                tous.clone()
-            };
             retenus.insert(
                 chemin.clone(),
                 Champ {
-                    source: chemin_source(chemin, gen),
-                    chemin: chemin.clone(),
-                    ty: mapped.ty,
-                    analyzer: mapped.analyzer,
+                    lecture: lecture_de(chemin, mapped, gen),
                     reglages: reglages.clone(),
-                    motifs,
                 },
             );
         }
     }
+
+    let mut lectures: BTreeMap<String, Lecture> = BTreeMap::new();
+    if let Some(a) = &arbre {
+        let mut cites = Vec::new();
+        a.champs_cites(&mut cites);
+        for nom in cites {
+            if let Some(mapped) = gen.fields.mapped.get(&nom) {
+                lectures.insert(nom.clone(), lecture_de(&nom, mapped, gen));
+            }
+        }
+    }
     Ok(Plan {
         champs: retenus.into_values().collect(),
+        arbre,
+        lectures,
     })
 }
 
@@ -482,143 +586,153 @@ fn chemin_source(chemin: &str, gen: &Generation) -> String {
 /// Ce qui **ne** contribue pas est aussi mesure : `match_all`, `match_none`,
 /// `exists`, `ids`, `parent_id` et la branche `must_not` d'un `bool` ne
 /// surlignent rien chez ES non plus.
-fn extraire(v: &Value, gen: &Generation, out: &mut BTreeMap<String, Vec<Motif>>) -> EsResult<()> {
+fn extraire(v: &Value, gen: &Generation) -> EsResult<Noeud> {
     let Some(obj) = v.as_object() else {
-        return Ok(());
+        return Ok(Noeud::Opaque);
     };
     let Some((nom, corps)) = obj.iter().next().map(|(k, v)| (k.as_str(), v)) else {
-        return Ok(());
+        return Ok(Noeud::Opaque);
     };
-    match nom {
+    Ok(match nom {
+        "match_none" => Noeud::Jamais,
+        "match_all" => Noeud::Toujours,
         "bool" => {
-            if let Some(o) = corps.as_object() {
-                for cle in ["must", "should", "filter"] {
-                    match o.get(cle) {
-                        Some(Value::Array(a)) => {
-                            for c in a {
-                                extraire(c, gen, out)?;
-                            }
-                        }
-                        Some(c @ Value::Object(_)) => extraire(c, gen, out)?,
-                        _ => {}
-                    }
+            let Some(o) = corps.as_object() else {
+                return Ok(Noeud::Opaque);
+            };
+            let branche = |cle: &str| -> EsResult<Vec<Noeud>> {
+                match o.get(cle) {
+                    Some(Value::Array(a)) => a.iter().map(|c| extraire(c, gen)).collect(),
+                    Some(c @ Value::Object(_)) => Ok(vec![extraire(c, gen)?]),
+                    _ => Ok(Vec::new()),
                 }
+            };
+            let mut requis = branche("must")?;
+            requis.extend(branche("filter")?);
+            let obligatoire = !requis.is_empty();
+            for n in branche("must_not")? {
+                requis.push(Noeud::Non(Box::new(n)));
             }
-        }
-        "constant_score" => {
-            if let Some(f) = corps.as_object().and_then(|o| o.get("filter")) {
-                extraire(f, gen, out)?;
+            for n in branche(crate::dsl::MUST_NOT_CAMEL)? {
+                requis.push(Noeud::Non(Box::new(n)));
             }
-        }
-        "dis_max" => {
-            if let Some(Value::Array(a)) = corps.as_object().and_then(|o| o.get("queries")) {
-                for c in a {
-                    extraire(c, gen, out)?;
-                }
+            let should = branche("should")?;
+            if !should.is_empty() {
+                // Le meme calcul que la clause elle-meme : un `should` n'est
+                // facultatif que sous une clause obligatoire, et un minimum
+                // explicite se resout avant (voir `crate::msm`).
+                let defaut = usize::from(!obligatoire);
+                let minimum =
+                    crate::msm::resoudre(o.get("minimum_should_match"), should.len(), defaut)
+                        .unwrap_or(defaut)
+                        .max(defaut.min(1));
+                requis.push(Noeud::Ou {
+                    enfants: should,
+                    minimum,
+                });
             }
+            Noeud::et(requis)
         }
+        "constant_score" => match corps.as_object().and_then(|o| o.get("filter")) {
+            Some(f) => extraire(f, gen)?,
+            None => Noeud::Opaque,
+        },
+        "dis_max" => match corps.as_object().and_then(|o| o.get("queries")) {
+            Some(Value::Array(a)) => Noeud::Ou {
+                enfants: a
+                    .iter()
+                    .map(|c| extraire(c, gen))
+                    .collect::<EsResult<_>>()?,
+                minimum: 1,
+            },
+            _ => Noeud::Opaque,
+        },
+        // La clause interne d'un `nested` ou d'une jointure porte sur d'autres
+        // documents que celui qu'on surligne : ses termes marquent bien (ES
+        // surligne un sous-champ de `nested` depuis la racine), mais son
+        // verdict ne se lit pas sur ce `_source`-la.
         "nested" | "has_child" | "has_parent" => {
-            if let Some(q) = corps.as_object().and_then(|o| o.get("query")) {
-                extraire(q, gen, out)?;
+            match corps.as_object().and_then(|o| o.get("query")) {
+                Some(q) => Noeud::Ou {
+                    enfants: vec![extraire(q, gen)?],
+                    minimum: 0,
+                },
+                None => Noeud::Opaque,
             }
         }
         "match" | "match_phrase" | "match_phrase_prefix" => {
             let Some((champ, spec)) = premiere_cle(corps) else {
-                return Ok(());
+                return Ok(Noeud::Opaque);
             };
-            let texte = texte_de(spec);
-            if let Some(t) = texte {
-                pose(gen, champ, out, |mf| {
-                    let termes = analyser(gen, mf.search_analyzer, &t);
-                    Ok(match nom {
-                        "match" => termes
-                            .into_iter()
-                            .map(|s| Motif::Simple(Predicat::Terme(s)))
-                            .collect(),
-                        "match_phrase" => phrase(termes, None),
-                        _ => {
-                            let mut p: Vec<String> = termes;
-                            let dernier = p.pop();
-                            let mut positions: Vec<Predicat> =
-                                p.into_iter().map(Predicat::Terme).collect();
-                            if let Some(d) = dernier {
-                                positions.push(prefixe(&d, false)?);
-                            }
-                            vec![Motif::Phrase(positions)]
-                        }
-                    })
-                })?;
-            }
+            let Some(t) = texte_de(spec) else {
+                return Ok(Noeud::Opaque);
+            };
+            pose(gen, champ, |mf| motifs_de_texte(gen, mf, nom, &t))?
         }
         "multi_match" => {
             let Some(o) = corps.as_object() else {
-                return Ok(());
+                return Ok(Noeud::Opaque);
             };
             let (Some(q), Some(Value::Array(champs))) = (o.get("query"), o.get("fields")) else {
-                return Ok(());
+                return Ok(Noeud::Opaque);
             };
-            let Some(t) = texte_de(q) else { return Ok(()) };
+            let Some(t) = texte_de(q) else {
+                return Ok(Noeud::Opaque);
+            };
             let ty = o
                 .get("type")
                 .and_then(Value::as_str)
                 .unwrap_or("best_fields");
+            let clause = match ty {
+                "phrase" => "match_phrase",
+                "phrase_prefix" => "match_phrase_prefix",
+                _ => "match",
+            };
+            let mut enfants = Vec::new();
             for spec in champs {
                 let Some(spec) = spec.as_str() else { continue };
                 let champ = spec.split_once('^').map_or(spec, |(n, _)| n);
-                pose(gen, champ, out, |mf| {
-                    let termes = analyser(gen, mf.search_analyzer, &t);
-                    Ok(match ty {
-                        "phrase" => phrase(termes, None),
-                        "phrase_prefix" => {
-                            let mut p = termes;
-                            let dernier = p.pop();
-                            let mut positions: Vec<Predicat> =
-                                p.into_iter().map(Predicat::Terme).collect();
-                            if let Some(d) = dernier {
-                                positions.push(prefixe(&d, false)?);
-                            }
-                            vec![Motif::Phrase(positions)]
-                        }
-                        _ => termes
-                            .into_iter()
-                            .map(|s| Motif::Simple(Predicat::Terme(s)))
-                            .collect(),
-                    })
-                })?;
+                enfants.push(pose(gen, champ, |mf| motifs_de_texte(gen, mf, clause, &t))?);
+            }
+            // Un `multi_match` correspond des qu'**un** de ses champs
+            // correspond, quel que soit son type.
+            Noeud::Ou {
+                enfants,
+                minimum: 1,
             }
         }
         "term" => {
             let Some((champ, spec)) = premiere_cle(corps) else {
-                return Ok(());
+                return Ok(Noeud::Opaque);
             };
             let valeur = valeur_de(spec);
-            pose(gen, champ, out, |mf| {
+            pose(gen, champ, |mf| {
                 Ok(chaine(champ, mf.ty, valeur)
                     .map(|s| vec![Motif::Simple(Predicat::Terme(s))])
                     .unwrap_or_default())
-            })?;
+            })?
         }
         "terms" => {
             let Some((champ, Value::Array(vals))) = premiere_cle(corps) else {
-                return Ok(());
+                return Ok(Noeud::Opaque);
             };
-            pose(gen, champ, out, |mf| {
+            pose(gen, champ, |mf| {
                 Ok(vals
                     .iter()
                     .filter_map(|v| chaine(champ, mf.ty, Some(v)))
                     .map(|s| Motif::Simple(Predicat::Terme(s)))
                     .collect())
-            })?;
+            })?
         }
         "prefix" | "wildcard" | "regexp" => {
             let Some((champ, spec)) = premiere_cle(corps) else {
-                return Ok(());
+                return Ok(Noeud::Opaque);
             };
             let Some(valeur) = valeur_de(spec).map(|v| match v {
                 Value::String(s) => s.clone(),
                 autre => autre.to_string(),
             }) else {
-                return Ok(());
+                return Ok(Noeud::Opaque);
             };
             let insensible = spec
                 .as_object()
@@ -646,16 +760,16 @@ fn extraire(v: &Value, gen: &Generation, out: &mut BTreeMap<String, Vec<Motif>>)
                 )?,
             };
             let re = compile(&brut)?;
-            pose(gen, champ, out, |_| {
+            pose(gen, champ, |_| {
                 Ok(vec![Motif::Simple(Predicat::Motif(re.clone()))])
-            })?;
+            })?
         }
         "fuzzy" => {
             let Some((champ, spec)) = premiere_cle(corps) else {
-                return Ok(());
+                return Ok(Noeud::Opaque);
             };
             let Some(Value::String(valeur)) = valeur_de(spec) else {
-                return Ok(());
+                return Ok(Noeud::Opaque);
             };
             let o = spec.as_object();
             let distance = match o.and_then(|o| o.get("fuzziness")) {
@@ -678,16 +792,16 @@ fn extraire(v: &Value, gen: &Generation, out: &mut BTreeMap<String, Vec<Motif>>)
                 distance,
                 transpositions,
             };
-            pose(gen, champ, out, |_| Ok(vec![Motif::Simple(p.clone())]))?;
+            pose(gen, champ, |_| Ok(vec![Motif::Simple(p.clone())]))?
         }
         "range" => {
             let Some((champ, spec)) = premiere_cle(corps) else {
-                return Ok(());
+                return Ok(Noeud::Opaque);
             };
             let Some(o) = spec.as_object() else {
-                return Ok(());
+                return Ok(Noeud::Opaque);
             };
-            pose(gen, champ, out, |mf| {
+            pose(gen, champ, |mf| {
                 // Seul un `keyword` a des termes comparables comme des chaines
                 // ; sur une date ou un nombre, ES ne surligne rien (mesure).
                 if mf.ty.kind() != FieldKind::Keyword {
@@ -707,43 +821,89 @@ fn extraire(v: &Value, gen: &Generation, out: &mut BTreeMap<String, Vec<Motif>>)
                     bas: borne(["gte", "gt"]),
                     haut: borne(["lte", "lt"]),
                 })])
-            })?;
+            })?
         }
-        // `match_all`, `match_none`, `exists`, `ids`, `parent_id` : rien a
-        // surligner, chez ES non plus.
-        _ => {}
-    }
-    Ok(())
+        // `match_all`, `exists`, `ids`, `parent_id` : rien a surligner, chez ES
+        // non plus — et rien a trancher sur ce `_source`.
+        _ => Noeud::Opaque,
+    })
 }
 
-/// Ajoute les motifs d'une clause au champ vise, si ce mapping le connait et
-/// qu'il est surlignable.
+/// Une clause posee sur un champ : une feuille si ce mapping le connait et
+/// qu'il est surlignable, `Opaque` sinon.
 fn pose(
     gen: &Generation,
     champ: &str,
-    out: &mut BTreeMap<String, Vec<Motif>>,
     f: impl FnOnce(&mapping::MappedField) -> EsResult<Vec<Motif>>,
-) -> EsResult<()> {
+) -> EsResult<Noeud> {
     let Some(mf) = gen.fields.get(champ) else {
-        return Ok(());
+        return Ok(Noeud::Opaque);
     };
     if !matches!(mf.ty.kind(), FieldKind::Text | FieldKind::Keyword) {
-        return Ok(());
+        return Ok(Noeud::Opaque);
     }
     let motifs = f(&mf)?;
-    if !motifs.is_empty() {
-        out.entry(champ.to_string()).or_default().extend(motifs);
+    if motifs.is_empty() {
+        return Ok(Noeud::Opaque);
     }
-    Ok(())
+    Ok(Noeud::Feuille {
+        champ: champ.to_string(),
+        motifs,
+    })
+}
+
+/// Ce qu'une clause textuelle (`match`, `match_phrase`, `match_phrase_prefix`)
+/// cherche dans un champ.
+///
+/// Un `keyword` **n'est pas analyse** : son terme est la valeur entiere, comme
+/// a l'indexation. Le confondre avec un `text` fait chercher `tiret` et `bas`
+/// la ou l'index porte `tiret-bas`, donc ne surligne rien — en 200 (trouve par
+/// le fuzzer, graine 51).
+fn motifs_de_texte(
+    gen: &Generation,
+    mf: &mapping::MappedField,
+    clause: &str,
+    texte: &str,
+) -> EsResult<Vec<Motif>> {
+    if mf.ty.kind() == FieldKind::Keyword {
+        return Ok(match clause {
+            "match_phrase_prefix" => vec![Motif::Simple(prefixe(texte, false)?)],
+            _ => vec![Motif::Simple(Predicat::Terme(texte.to_string()))],
+        });
+    }
+    let termes = analyser(gen, mf.search_analyzer, texte);
+    Ok(match clause {
+        "match" => termes
+            .into_iter()
+            .map(|s| Motif::Simple(Predicat::Terme(s)))
+            .collect(),
+        "match_phrase" => phrase(termes, None),
+        _ => {
+            let mut p = termes;
+            let dernier = p.pop();
+            let mut positions: Vec<Predicat> = p.into_iter().map(Predicat::Terme).collect();
+            if let Some(d) = dernier {
+                positions.push(prefixe(&d, false)?);
+            }
+            if positions.is_empty() {
+                return Ok(Vec::new());
+            }
+            vec![Motif::Phrase {
+                positions,
+                eclatee: false,
+            }]
+        }
+    })
 }
 
 fn phrase(termes: Vec<String>, _slop: Option<u32>) -> Vec<Motif> {
     if termes.is_empty() {
         return Vec::new();
     }
-    vec![Motif::Phrase(
-        termes.into_iter().map(Predicat::Terme).collect(),
-    )]
+    vec![Motif::Phrase {
+        positions: termes.into_iter().map(Predicat::Terme).collect(),
+        eclatee: false,
+    }]
 }
 
 fn prefixe(valeur: &str, insensible: bool) -> EsResult<Predicat> {
@@ -829,16 +989,72 @@ pub fn rendre(plan: &Plan, gen: &Generation, source: &Value) -> EsResult<Option<
     if plan.est_vide() {
         return Ok(None);
     }
+    // Les valeurs de chaque champ que la requete cite ou que le surlignage
+    // demande, deja decoupees en termes : il en faut pour marquer, mais aussi
+    // pour savoir **quelles clauses ont tenu sur ce document**.
+    let mut vues: BTreeMap<&str, Vec<Valeur>> = BTreeMap::new();
+    for l in plan
+        .lectures
+        .values()
+        .chain(plan.champs.iter().map(|c| &c.lecture))
+    {
+        vues.entry(l.chemin.as_str())
+            .or_insert_with(|| valeurs_analysees(l, gen, source));
+    }
+
+    // Ce que la requete a vraiment trouve dans ce document : ES ne surligne
+    // que ca (voir [`Noeud`]).
+    let mut par_champ: BTreeMap<&str, Vec<Motif>> = BTreeMap::new();
+    let mut tous: Vec<Motif> = Vec::new();
+    if let Some(arbre) = &plan.arbre {
+        let mut actives = Vec::new();
+        collecte(arbre, &vues, true, &mut actives);
+        for (champ, motifs) in actives {
+            par_champ
+                .entry(champ)
+                .or_default()
+                .extend(motifs.iter().cloned());
+        }
+        // Sous `require_field_match: false`, ES ne passe plus par les
+        // `Matches` du champ : il **extrait les termes de la requete reecrite**
+        // et les pose partout. Le tri par document disparait donc avec — seul
+        // ce que la reecriture a rendu sterile (`must_not: {match_all}`) reste
+        // muet (mesure, plage de controle du fuzzer, graine 900186).
+        if plan.champs.iter().any(|c| !c.reglages.champ_exige) {
+            let mut sans_tri = Vec::new();
+            collecte(arbre, &vues, false, &mut sans_tri);
+            tous = sans_tri
+                .into_iter()
+                .flat_map(|(_, motifs)| motifs.iter().cloned())
+                .collect();
+        }
+    }
+
     let mut bloc = Map::new();
     for champ in &plan.champs {
-        let valeurs = valeurs_du_source(source, &champ.source, champ.ty);
+        let Some(valeurs) = vues.get(champ.lecture.chemin.as_str()) else {
+            continue;
+        };
         if valeurs.is_empty() {
             continue;
         }
-        let fragments = fragments_du_champ(champ, gen, &valeurs);
+        let motifs: Vec<Motif> = if champ.reglages.champ_exige {
+            par_champ
+                .get(champ.lecture.chemin.as_str())
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            // `require_field_match: false` fait perdre a ES la structure des
+            // phrases : il ne peut plus s'appuyer sur les `Matches` du champ, et
+            // marque chaque terme separement. `match_phrase "le chat"` rend
+            // alors `<em>le</em> <em>chat</em>` la ou le defaut rend
+            // `<em>le chat</em>` (mesure, trouvee par le fuzzer graine 60).
+            tous.iter().map(Motif::eclate).collect()
+        };
+        let fragments = fragments_du_champ(champ, &motifs, valeurs);
         if !fragments.is_empty() {
             bloc.insert(
-                champ.chemin.clone(),
+                champ.lecture.chemin.clone(),
                 Value::Array(fragments.into_iter().map(Value::String).collect()),
             );
         }
@@ -846,14 +1062,151 @@ pub fn rendre(plan: &Plan, gen: &Generation, source: &Value) -> EsResult<Option<
     Ok((!bloc.is_empty()).then(|| Value::Object(bloc)))
 }
 
+/// Une valeur du document, prete a etre marquee.
+struct Valeur {
+    chars: Vec<char>,
+    jetons: Vec<Jeton>,
+}
+
+/// Les valeurs d'un champ, lues dans le `_source` et decoupees en termes.
+fn valeurs_analysees(l: &Lecture, gen: &Generation, source: &Value) -> Vec<Valeur> {
+    valeurs_du_source(source, l)
+        .into_iter()
+        .map(|texte| {
+            let chars: Vec<char> = texte.chars().collect();
+            let jetons = jetons(l, gen, &texte, &chars);
+            Valeur { chars, jetons }
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Ce que la requete a trouve dans **ce** document
+// ---------------------------------------------------------------------------
+
+impl Noeud {
+    /// Les champs que l'arbre cite : ce sont eux qu'il faut lire pour trancher.
+    fn champs_cites(&self, out: &mut Vec<String>) {
+        match self {
+            Self::Feuille { champ, .. } => out.push(champ.clone()),
+            Self::Et(enfants) | Self::Ou { enfants, .. } => {
+                enfants.iter().for_each(|e| e.champs_cites(out));
+            }
+            Self::Non(e) => e.champs_cites(out),
+            Self::Opaque | Self::Jamais | Self::Toujours => {}
+        }
+    }
+}
+
+/// Le verdict d'un noeud sur un document. `None` = « on ne sait pas », et dans
+/// le doute on laisse passer : mieux vaut marquer de trop que se taire.
+fn evalue(n: &Noeud, vues: &BTreeMap<&str, Vec<Valeur>>) -> Option<bool> {
+    match n {
+        Noeud::Feuille { champ, motifs } => Some(
+            vues.get(champ.as_str())
+                .is_some_and(|vs| vs.iter().any(|v| !marques(motifs, v).is_empty())),
+        ),
+        Noeud::Opaque => None,
+        Noeud::Jamais => Some(false),
+        Noeud::Toujours => Some(true),
+        Noeud::Et(enfants) => {
+            let verdicts: Vec<_> = enfants.iter().map(|e| evalue(e, vues)).collect();
+            if verdicts.contains(&Some(false)) {
+                Some(false)
+            } else if verdicts.iter().all(|v| *v == Some(true)) {
+                Some(true)
+            } else {
+                None
+            }
+        }
+        Noeud::Ou { enfants, minimum } => {
+            let verdicts: Vec<_> = enfants.iter().map(|e| evalue(e, vues)).collect();
+            let surs = verdicts.iter().filter(|v| **v == Some(true)).count();
+            if surs >= *minimum {
+                Some(true)
+            } else if verdicts.iter().any(Option::is_none) {
+                None
+            } else {
+                Some(false)
+            }
+        }
+        // Un `must_not` sur une clause qu'on ne sait pas trancher est suppose
+        // **non** satisfait : c'est le sens qui laisse le reste marquer.
+        Noeud::Non(e) => Some(!evalue(e, vues).unwrap_or(false)),
+    }
+}
+
+/// Les feuilles qui ont le droit de marquer : celles dont le **contexte** tient
+/// sur ce document.
+///
+/// Une feuille ne s'auto-censure pas : sous `require_field_match: false`, ES
+/// applique les termes d'une clause a un **autre** champ que le sien, meme
+/// quand elle n'a rien trouve dans le sien (mesure, fuzzer graine 8). Ce qui la
+/// fait taire, c'est un `must` ou un `filter` voisin qui echoue — ou un
+/// `must_not: {match_all}` qui rend le `bool` sterile (graine 6).
+fn collecte<'a>(
+    n: &'a Noeud,
+    vues: &BTreeMap<&str, Vec<Valeur>>,
+    par_document: bool,
+    out: &mut Vec<(&'a str, &'a [Motif])>,
+) {
+    match n {
+        Noeud::Feuille { champ, motifs } => out.push((champ.as_str(), motifs)),
+        Noeud::Et(_) | Noeud::Ou { .. } => {
+            if sterile(n) || (par_document && evalue(n, vues) == Some(false)) {
+                return;
+            }
+            let enfants = match n {
+                Noeud::Et(e) => e,
+                Noeud::Ou { enfants, .. } => enfants,
+                _ => unreachable!("les deux seuls cas de la branche"),
+            };
+            enfants
+                .iter()
+                .for_each(|e| collecte(e, vues, par_document, out));
+        }
+        // Une clause niee ne marque rien, chez ES non plus.
+        Noeud::Non(_) | Noeud::Opaque | Noeud::Jamais | Noeud::Toujours => {}
+    }
+}
+
+/// Un noeud qui ne peut correspondre a **aucun** document, quel qu'il soit.
+///
+/// C'est ce que la reecriture de Lucene voit : un `bool` porteur d'un
+/// `must_not: {match_all}` devient un `MatchNoDocsQuery`, et ses termes
+/// disparaissent avec lui. La distinction compte sous
+/// `require_field_match: false`, ou rien d'autre ne filtre.
+fn sterile(n: &Noeud) -> bool {
+    match n {
+        Noeud::Jamais => true,
+        Noeud::Non(e) => matches!(**e, Noeud::Toujours),
+        Noeud::Et(enfants) => enfants.iter().any(sterile),
+        Noeud::Ou { enfants, minimum } => *minimum > 0 && enfants.iter().all(sterile),
+        Noeud::Feuille { .. } | Noeud::Opaque | Noeud::Toujours => false,
+    }
+}
+
 /// Les valeurs textuelles d'un chemin pointe, tableaux traverses — c'est le
 /// meme parcours que `fields`, et il fait tomber les sous-champs d'un `nested`
 /// dans l'ordre du document.
-fn valeurs_du_source(source: &Value, chemin: &str, ty: FieldType) -> Vec<String> {
+fn valeurs_du_source(source: &Value, l: &Lecture) -> Vec<String> {
     let mut brutes = Vec::new();
-    descendre(source, chemin, &mut brutes);
+    descendre(source, &l.source, &mut brutes);
+    // Puis ce que les autres champs y ont copie : la valeur d'un `copy_to`
+    // n'est nulle part dans le `_source` de sa cible, et ES la surligne quand
+    // meme. Meme ordre que pour `fields` : la valeur propre d'abord.
+    for copie in &l.copies {
+        descendre(source, copie, &mut brutes);
+    }
+    let (ty, ignore_above) = (l.ty, l.ignore_above);
     brutes
         .into_iter()
+        // Une valeur qu'`ignore_above` a ecartee n'est pas dans l'index : ES ne
+        // la surligne pas, et `no_match_size` ne la rend pas non plus.
+        .filter(|v| match (ignore_above, v.as_str()) {
+            (Some(n), Some(s)) => s.chars().count() <= n,
+            _ => true,
+        })
         .filter_map(|v| match v {
             Value::String(s) => Some(s.clone()),
             // ES surligne aussi ce qu'il a converti en texte a l'indexation.
@@ -904,23 +1257,22 @@ struct Fragment {
     texte: String,
 }
 
-fn fragments_du_champ(champ: &Champ, gen: &Generation, valeurs: &[String]) -> Vec<String> {
+fn fragments_du_champ(champ: &Champ, motifs: &[Motif], valeurs: &[Valeur]) -> Vec<String> {
     // La longueur « du champ » chez ES est celle de ses valeurs mises bout a
     // bout, separateur compris : elle entre dans le score des fragments.
     let longueur: usize =
-        valeurs.iter().map(|v| v.chars().count()).sum::<usize>() + valeurs.len().saturating_sub(1);
+        valeurs.iter().map(|v| v.chars.len()).sum::<usize>() + valeurs.len().saturating_sub(1);
 
     let mut candidats: Vec<Fragment> = Vec::new();
     let mut base = 0usize;
     for valeur in valeurs {
-        let chars: Vec<char> = valeur.chars().collect();
-        let marques = marques(champ, gen, valeur, &chars);
-        if !marques.is_empty() {
-            for f in decouper(champ, &chars, &marques, base, longueur) {
+        let m = marques(motifs, valeur);
+        if !m.is_empty() {
+            for f in decouper(champ, &valeur.chars, &m, base, longueur) {
                 candidats.push(f);
             }
         }
-        base += chars.len() + 1;
+        base += valeur.chars.len() + 1;
     }
 
     if candidats.is_empty() {
@@ -942,21 +1294,24 @@ fn fragments_du_champ(champ: &Champ, gen: &Generation, valeurs: &[String]) -> Ve
 
 /// `no_match_size` : le debut de la **premiere** valeur, etendu a la frontiere
 /// de mot qui suit.
-fn sans_correspondance(champ: &Champ, valeurs: &[String]) -> Vec<String> {
+fn sans_correspondance(champ: &Champ, valeurs: &[Valeur]) -> Vec<String> {
     let n = champ.reglages.sans_correspondance;
     if n == 0 {
         return Vec::new();
     }
-    let Some(premiere) = valeurs.first() else {
+    // La **premiere valeur non vide** : ES concatene les valeurs avec un
+    // separateur et saute les separateurs de tete, donc une premiere valeur
+    // vide ne lui coute pas le fragment (trouve par le fuzzer, graine 31).
+    let Some(premiere) = valeurs.iter().find(|v| !v.chars.is_empty()) else {
         return Vec::new();
     };
-    let chars: Vec<char> = premiere.chars().collect();
+    let chars = &premiere.chars;
     let fin = if n < chars.len() {
-        crate::segments::suivante(&crate::segments::mots(&chars), n)
+        crate::segments::suivante(&crate::segments::mots(chars), n)
     } else {
         chars.len()
     };
-    let (debut, fin) = rogner(&chars, 0, fin);
+    let (debut, fin) = rogner(chars, 0, fin);
     if debut >= fin {
         return Vec::new();
     }
@@ -965,32 +1320,42 @@ fn sans_correspondance(champ: &Champ, valeurs: &[String]) -> Vec<String> {
 
 /// Les correspondances d'un texte, en indices de `char`, triees et sans
 /// doublon.
-fn marques(champ: &Champ, gen: &Generation, valeur: &str, chars: &[char]) -> Vec<(usize, usize)> {
-    if champ.motifs.is_empty() {
+fn marques(motifs: &[Motif], valeur: &Valeur) -> Vec<(usize, usize)> {
+    if motifs.is_empty() {
         return Vec::new();
     }
-    let jetons = jetons(champ, gen, valeur, chars);
+    let jetons = &valeur.jetons;
     let mut out: Vec<(usize, usize)> = Vec::new();
-    for motif in &champ.motifs {
+    for motif in motifs {
         match motif {
             Motif::Simple(p) => {
-                for j in &jetons {
+                for j in jetons {
                     if p.matche(&j.texte) {
                         out.push((j.debut, j.fin));
                     }
                 }
             }
-            Motif::Phrase(positions) => {
-                for suite in suites(&jetons, positions) {
-                    out.push(suite);
+            Motif::Phrase { positions, eclatee } => {
+                for suite in suites(jetons, positions) {
+                    if *eclatee {
+                        out.extend(suite);
+                    } else {
+                        let debut = suite.first().map_or(0, |s| s.0);
+                        let fin = suite.iter().map(|s| s.1).max().unwrap_or(0);
+                        out.push((debut, fin));
+                    }
                 }
             }
         }
     }
-    out.sort_unstable();
+    // Debut croissant, **fin decroissante** : c'est le tri de `Passage.sort()`
+    // chez Lucene, et il decide de ce que deux marques qui se chevauchent
+    // rendent. Le formateur avance sur la fin de la precedente : la plus longue
+    // d'abord donne `<em>optique verre</em>`, la plus courte d'abord donnerait
+    // `<em>optique</em><em> verre</em>` (trouve par une plage de controle du
+    // fuzzer, graine 900138).
+    out.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
     out.dedup();
-    // Deux marques qui se chevauchent ne sont pas fusionnees par Lucene : le
-    // formateur avance sur `pos` et n'en rend que ce qui depasse. Le tri suffit.
     out
 }
 
@@ -1005,8 +1370,8 @@ struct Jeton {
 ///
 /// Un `keyword` n'est pas analyse : sa valeur entiere est le terme, et ES la
 /// surligne d'un bloc.
-fn jetons(champ: &Champ, gen: &Generation, valeur: &str, chars: &[char]) -> Vec<Jeton> {
-    if champ.ty.kind() == FieldKind::Keyword {
+fn jetons(l: &Lecture, gen: &Generation, valeur: &str, chars: &[char]) -> Vec<Jeton> {
+    if l.ty.kind() == FieldKind::Keyword {
         return vec![Jeton {
             texte: valeur.to_string(),
             debut: 0,
@@ -1014,7 +1379,7 @@ fn jetons(champ: &Champ, gen: &Generation, valeur: &str, chars: &[char]) -> Vec<
             position: 0,
         }];
     }
-    let Some(mut ta) = gen.index.tokenizers().get(&champ.analyzer.tokenizer()) else {
+    let Some(mut ta) = gen.index.tokenizers().get(&l.analyzer.tokenizer()) else {
         return Vec::new();
     };
     // Les offsets de tantivy sont en octets ; ceux de Lucene en caracteres.
@@ -1044,8 +1409,9 @@ fn jetons(champ: &Champ, gen: &Generation, valeur: &str, chars: &[char]) -> Vec<
 }
 
 /// Les suites de jetons a positions consecutives qui verifient chaque predicat
-/// de la phrase, dans l'ordre.
-fn suites(jetons: &[Jeton], positions: &[Predicat]) -> Vec<(usize, usize)> {
+/// de la phrase, dans l'ordre — chacune rendue **terme par terme**, a charge de
+/// l'appelant de les fondre en une seule marque ou non.
+fn suites(jetons: &[Jeton], positions: &[Predicat]) -> Vec<Vec<(usize, usize)>> {
     let mut out = Vec::new();
     if positions.is_empty() {
         return out;
@@ -1054,22 +1420,21 @@ fn suites(jetons: &[Jeton], positions: &[Predicat]) -> Vec<(usize, usize)> {
         if !positions[0].matche(&premier.texte) {
             continue;
         }
-        let mut fin = premier.fin;
-        let mut ok = true;
+        let mut suite = vec![(premier.debut, premier.fin)];
         for (attendue, p) in (premier.position + 1..).zip(positions[1..].iter()) {
             match jetons[i + 1..]
                 .iter()
                 .find(|j| j.position == attendue && p.matche(&j.texte))
             {
-                Some(j) => fin = fin.max(j.fin),
+                Some(j) => suite.push((j.debut, j.fin)),
                 None => {
-                    ok = false;
+                    suite.clear();
                     break;
                 }
             }
         }
-        if ok {
-            out.push((premier.debut, fin));
+        if suite.len() == positions.len() {
+            out.push(suite);
         }
     }
     out
@@ -1149,7 +1514,10 @@ impl Decoupeur<'_> {
         let debut = self.phrases[i.min(self.phrases.len() - 1)];
         let mut fin = self.phrases[(i + 1).min(self.phrases.len() - 1)];
         if let Some(max) = self.borne {
-            for &b in &self.phrases[i + 2..] {
+            // `get` et non l'indexation : sur un texte d'une seule phrase il
+            // n'y a rien apres, et `phrases[i + 2..]` y paniquait (trouve par
+            // le fuzzer au premier passage, sur un `keyword` d'un seul mot).
+            for &b in self.phrases.get(i + 2..).unwrap_or(&[]) {
                 if b - debut > max {
                     break;
                 }
