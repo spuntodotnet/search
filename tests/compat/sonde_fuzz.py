@@ -109,6 +109,10 @@ DOCS_SURLIGNE = [
     # indexee, donc elle ne se surligne pas — et `no_match_size` l'ignore.
     ("c", {"t": "beta tout court", "k": "beaucoup trop longue pour douze",
            "u": "c"}),
+    # Des blancs aux deux bords, et un espace fine (U+2009) que `String.trim()`
+    # de Java **ne** rogne pas — il s'arrete a U+0020.
+    ("d", {"t": ["  cible et du texte autour  ", "cible\u2009", "cible\t"],
+           "u": "d"}),
 ]
 
 TROUS = {"mappings": {"properties": {"n": {"type": "integer"},
@@ -378,6 +382,18 @@ CAS = [
       "sort": ["u"],
       "highlight": {"require_field_match": False, "number_of_fragments": 0,
                     "fields": {"t": {}}}}, surligne),
+
+    (SURLIGNE, DOCS_SURLIGNE, "number_of_fragments 0 ne rogne pas",
+     "ES n'y passe plus par le decoupeur borne : le fragment sort avec ses "
+     "blancs de bord",
+     {"query": {"term": {"u": "d"}}, "size": 10, "sort": ["u"],
+      "highlight": {"fields": {"t": {}}, "number_of_fragments": 0,
+                    "require_field_match": False}}, surligne),
+    (SURLIGNE, DOCS_SURLIGNE, "le rognage est celui de String.trim()",
+     "il s'arrete a U+0020 : la tabulation part, l'espace fine (U+2009) reste "
+     "— et la longueur qui note le fragment est celle d'**avant** rognage",
+     {"query": {"match": {"t": "cible"}}, "size": 10, "sort": ["u"],
+      "highlight": {"fields": {"t": {}}, "number_of_fragments": 2}}, surligne),
 
     # -- agregation range --------------------------------------------------
     (TROUS, DOCS_TROUS, "range agg avec un trou",

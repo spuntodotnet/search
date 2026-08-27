@@ -295,8 +295,8 @@ rang qu'un `significant_terms` avec script. Sur un corpus de **5 311 requêtes
 réelles** — la documentation de référence d'ES 8.15, les tracks Rally d'Elastic,
 les tests des clients officiels et le code de 184 dépôts open source — la
 question posée est « celle-ci passerait-elle **entièrement** ? », parce qu'une
-requête supportée à 90 % est une requête qui échoue. Réponse : **93,2 % des
-requêtes trouvées dans du code d'application**, 39,8 % des exemples de la
+requête supportée à 90 % est une requête qui échoue. Réponse : **93,8 % des
+requêtes trouvées dans du code d'application**, 40,1 % des exemples de la
 documentation, 28,6 % des tracks de benchmark. L'écart entre ces trois nombres
 est le résultat ; la méthode, les sources et les biais sont dans
 [`docs/usage.md`](docs/usage.md), le corpus est publié avec.

@@ -100,6 +100,12 @@ DOCS = [
                   "corps": ("un deux trois quatre cinq six sept huit neuf dix "
                             "mot long tres precis suivi de encore plus de mots "
                             "pour laisser de la place a droite du fragment")}),
+    # Des blancs aux deux bords, et trois « espaces » qui n'en sont pas pour
+    # Java : `String.trim()` s'arrete a U+0020, donc l'insecable, l'espace fine
+    # et le separateur de ligne restent dans le fragment.
+    ("blancs", {"titre": "Blancs", "tag": "blancs", "n": 13,
+                "corps": ["  cible et du texte autour  ",
+                          "cible\u00a0", "cible\u2009", "cible\t"]}),
     ("long", {"titre": "Mot long", "tag": "long", "n": 11,
               "corps": "cible " + "z" * 300 + " apres"}),
 ]
@@ -148,6 +154,21 @@ def cas():
             ajoute(f"phrase [{mots}] fs={taille}", q,
                    {"fragment_size": taille, "number_of_fragments": 1,
                     "fields": {"corps": {}}})
+
+    # --- les bords d'un fragment ------------------------------------------
+    # `number_of_fragments: 0` ne rogne pas : ES n'y passe plus par le
+    # decoupeur borne. Des `1`, il rogne — mais au sens de `String.trim()`,
+    # qui s'arrete a U+0020.
+    for nb in (0, 1, 5):
+        ajoute(f"bords, number_of_fragments={nb}", cible,
+               {"number_of_fragments": nb, "fields": {"corps": {}}})
+        ajoute(f"bords, number_of_fragments={nb} fs=8", cible,
+               {"number_of_fragments": nb, "fragment_size": 8,
+                "fields": {"corps": {}}})
+        ajoute(f"bords sans correspondance, number_of_fragments={nb}",
+               {"term": {"tag": "blancs"}},
+               {"number_of_fragments": nb, "no_match_size": 4,
+                "fields": {"corps": {}}})
 
     # --- les balises ------------------------------------------------------
     ajoute("pre/post_tags", chat,

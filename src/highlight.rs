@@ -1016,8 +1016,9 @@ pub fn rendre(plan: &Plan, gen: &Generation, source: &Value) -> EsResult<Option<
     let mut par_champ: BTreeMap<&str, Vec<Motif>> = BTreeMap::new();
     let mut tous: Vec<Motif> = Vec::new();
     if let Some(arbre) = &plan.arbre {
+        let verdict = evalue(arbre, &vues, source);
         let mut actives = Vec::new();
-        collecte(arbre, &vues, source, true, &mut actives);
+        collecte(arbre, &verdict, true, &mut actives);
         for (champ, motifs) in actives {
             par_champ
                 .entry(champ)
@@ -1031,7 +1032,7 @@ pub fn rendre(plan: &Plan, gen: &Generation, source: &Value) -> EsResult<Option<
         // muet (mesure, plage de controle du fuzzer, graine 900186).
         if plan.champs.iter().any(|c| !c.reglages.champ_exige) {
             let mut sans_tri = Vec::new();
-            collecte(arbre, &vues, source, false, &mut sans_tri);
+            collecte(arbre, &verdict, false, &mut sans_tri);
             tous = sans_tri
                 .into_iter()
                 .flat_map(|(_, motifs)| motifs.iter().cloned())
@@ -1107,9 +1108,36 @@ impl Noeud {
     }
 }
 
+/// Le verdict de chaque noeud, calcule **une fois** par document.
+///
+/// L'arbre des verdicts a la meme forme que l'arbre des clauses : le calculer
+/// a part evite de re-analyser le texte d'un champ a chaque fois qu'on demande
+/// si son ancetre tient.
+struct Verdict {
+    valeur: Option<bool>,
+    enfants: Vec<Verdict>,
+}
+
 /// Le verdict d'un noeud sur un document. `None` = « on ne sait pas », et dans
 /// le doute on laisse passer : mieux vaut marquer de trop que se taire.
-fn evalue(n: &Noeud, vues: &BTreeMap<&str, Vec<Valeur>>, source: &Value) -> Option<bool> {
+fn evalue(n: &Noeud, vues: &BTreeMap<&str, Vec<Valeur>>, source: &Value) -> Verdict {
+    let enfants: Vec<Verdict> = match n {
+        Noeud::Et(e) | Noeud::Ou { enfants: e, .. } => {
+            e.iter().map(|x| evalue(x, vues, source)).collect()
+        }
+        Noeud::Non(e) => vec![evalue(e, vues, source)],
+        _ => Vec::new(),
+    };
+    let valeur = verdict_de(n, &enfants, vues, source);
+    Verdict { valeur, enfants }
+}
+
+fn verdict_de(
+    n: &Noeud,
+    enfants: &[Verdict],
+    vues: &BTreeMap<&str, Vec<Valeur>>,
+    source: &Value,
+) -> Option<bool> {
     match n {
         Noeud::Existe(champ) => {
             let mut vus = Vec::new();
@@ -1123,22 +1151,20 @@ fn evalue(n: &Noeud, vues: &BTreeMap<&str, Vec<Valeur>>, source: &Value) -> Opti
         Noeud::Opaque => None,
         Noeud::Jamais => Some(false),
         Noeud::Toujours => Some(true),
-        Noeud::Et(enfants) => {
-            let verdicts: Vec<_> = enfants.iter().map(|e| evalue(e, vues, source)).collect();
-            if verdicts.contains(&Some(false)) {
+        Noeud::Et(_) => {
+            if enfants.iter().any(|v| v.valeur == Some(false)) {
                 Some(false)
-            } else if verdicts.iter().all(|v| *v == Some(true)) {
+            } else if enfants.iter().all(|v| v.valeur == Some(true)) {
                 Some(true)
             } else {
                 None
             }
         }
-        Noeud::Ou { enfants, minimum } => {
-            let verdicts: Vec<_> = enfants.iter().map(|e| evalue(e, vues, source)).collect();
-            let surs = verdicts.iter().filter(|v| **v == Some(true)).count();
+        Noeud::Ou { minimum, .. } => {
+            let surs = enfants.iter().filter(|v| v.valeur == Some(true)).count();
             if surs >= *minimum {
                 Some(true)
-            } else if verdicts.iter().any(Option::is_none) {
+            } else if enfants.iter().any(|v| v.valeur.is_none()) {
                 None
             } else {
                 Some(false)
@@ -1146,7 +1172,7 @@ fn evalue(n: &Noeud, vues: &BTreeMap<&str, Vec<Valeur>>, source: &Value) -> Opti
         }
         // Un `must_not` sur une clause qu'on ne sait pas trancher est suppose
         // **non** satisfait : c'est le sens qui laisse le reste marquer.
-        Noeud::Non(e) => Some(!evalue(e, vues, source).unwrap_or(false)),
+        Noeud::Non(_) => Some(!enfants[0].valeur.unwrap_or(false)),
     }
 }
 
@@ -1160,25 +1186,19 @@ fn evalue(n: &Noeud, vues: &BTreeMap<&str, Vec<Valeur>>, source: &Value) -> Opti
 /// `must_not: {match_all}` qui rend le `bool` sterile (graine 6).
 fn collecte<'a>(
     n: &'a Noeud,
-    vues: &BTreeMap<&str, Vec<Valeur>>,
-    source: &Value,
+    verdict: &Verdict,
     par_document: bool,
     out: &mut Vec<(&'a str, &'a [Motif])>,
 ) {
     match n {
         Noeud::Feuille { champ, motifs } => out.push((champ.as_str(), motifs)),
-        Noeud::Et(_) | Noeud::Ou { .. } => {
-            if sterile(n) || (par_document && evalue(n, vues, source) == Some(false)) {
+        Noeud::Et(enfants) | Noeud::Ou { enfants, .. } => {
+            if sterile(n) || (par_document && verdict.valeur == Some(false)) {
                 return;
             }
-            let enfants = match n {
-                Noeud::Et(e) => e,
-                Noeud::Ou { enfants, .. } => enfants,
-                _ => unreachable!("les deux seuls cas de la branche"),
-            };
-            enfants
-                .iter()
-                .for_each(|e| collecte(e, vues, source, par_document, out));
+            for (e, v) in enfants.iter().zip(&verdict.enfants) {
+                collecte(e, v, par_document, out);
+            }
         }
         // Une clause niee ne marque rien, chez ES non plus.
         Noeud::Non(_) | Noeud::Opaque | Noeud::Jamais | Noeud::Toujours | Noeud::Existe(_) => {}
@@ -1326,14 +1346,15 @@ fn sans_correspondance(champ: &Champ, valeurs: &[Valeur]) -> Vec<String> {
     } else {
         chars.len()
     };
-    // Pas de rognage ici, contrairement a un fragment qui porte une marque :
-    // ES rend la tranche telle quelle, espace de fin compris — la frontiere de
-    // mot tombe apres l'espace qui suit le dernier mot (mesure, fuzzer graine
-    // 5150174).
-    if fin == 0 {
+    let (debut, fin) = if champ.reglages.nb_fragments == 0 {
+        (0, fin)
+    } else {
+        rogner(chars, 0, fin)
+    };
+    if debut >= fin {
         return Vec::new();
     }
-    vec![chars[..fin].iter().collect()]
+    vec![chars[debut..fin].iter().collect()]
 }
 
 /// Les correspondances d'un texte, en indices de `char`, triees et sans
@@ -1546,14 +1567,20 @@ impl Decoupeur<'_> {
     }
 }
 
-/// Rogne les blancs des deux bords : ES ne rend jamais un fragment qui
-/// commence ou finit par une espace, alors que les frontieres de phrase, elles,
-/// les emportent.
+/// Rogne les deux bords d'un fragment, exactement comme le `String.trim()` de
+/// Java : les caracteres **de code inferieur ou egal a U+0020**, et eux seuls.
+///
+/// Ce n'est ni « les espaces » ni la propriete `White_Space` d'Unicode, et la
+/// difference se mesure : ES rogne bien l'espace ordinaire, la tabulation et le
+/// saut de ligne, mais **garde** l'espace insecable (U+00A0), l'espace fine
+/// (U+2009) et le separateur de ligne (U+2028), tous au-dessus de U+0020.
+/// Rogner « les blancs » au sens de Rust en mangeait trois de trop.
 fn rogner(chars: &[char], mut debut: usize, mut fin: usize) -> (usize, usize) {
-    while debut < fin && chars[debut].is_whitespace() {
+    let blanc = |c: char| (c as u32) <= 0x20;
+    while debut < fin && blanc(chars[debut]) {
         debut += 1;
     }
-    while fin > debut && chars[fin - 1].is_whitespace() {
+    while fin > debut && blanc(chars[fin - 1]) {
         fin -= 1;
     }
     (debut, fin)
@@ -1576,7 +1603,11 @@ fn decouper(
         interne: (0, 0),
         ouvert: false,
     };
-    // `number_of_fragments: 0` : la valeur entiere, d'un bloc.
+    // `number_of_fragments: 0` : la valeur entiere, d'un bloc — et **sans
+    // rognage**. ES ne passe alors plus par le decoupeur borne mais par un
+    // simple decoupage sur les separateurs de valeurs, et c'est la que vivait
+    // le `trim` (mesure : `"  abc def  "` ressort tel quel a `nof: 0`, rogne
+    // des `nof: 1` ; fuzzer, graine 5150174).
     let entier = champ.reglages.nb_fragments == 0;
 
     /// Un fragment en cours : ses bornes, et les marques qu'il porte.
@@ -1605,11 +1636,22 @@ fn decouper(
         .into_iter()
         .filter(|(_, _, m)| !m.is_empty())
         .map(|(deb, fin, m)| {
-            let (deb, fin) = rogner(chars, deb, fin);
+            // Le score et le rang se calculent sur le fragment **avant**
+            // rognage : c'est le `Passage` de Lucene qui est note, et le
+            // rognage n'a lieu qu'a la mise en forme. Noter le fragment rogne
+            // faisait gagner « cible\t » (5 caracteres une fois rogne) contre
+            // « cible\u2009 » (6, que Java ne rogne pas), donc rendait un
+            // autre fragment qu'ES.
+            let score = note(&m, chars, deb, fin, base, longueur);
+            let (deb_rendu, fin_rendu) = if entier {
+                (deb, fin)
+            } else {
+                rogner(chars, deb, fin)
+            };
             Fragment {
                 depart: base + deb,
-                score: note(&m, chars, deb, fin, base, longueur),
-                texte: formater(champ, chars, deb, fin, &m),
+                score,
+                texte: formater(champ, chars, deb_rendu, fin_rendu, &m),
             }
         })
         .collect()
@@ -1816,7 +1858,7 @@ mod tests {
             },
         ]);
         let mut out = Vec::new();
-        collecte(&arbre, &vues, &Value::Null, true, &mut out);
+        collecte(&arbre, &evalue(&arbre, &vues, &Value::Null), true, &mut out);
         assert!(out.is_empty(), "{out:?}");
 
         // Le meme arbre dont le filtre tient : le `should` marque.
@@ -1828,7 +1870,7 @@ mod tests {
             },
         ]);
         let mut out = Vec::new();
-        collecte(&arbre, &vues, &Value::Null, true, &mut out);
+        collecte(&arbre, &evalue(&arbre, &vues, &Value::Null), true, &mut out);
         assert_eq!(out.len(), 2);
     }
 
@@ -1847,7 +1889,12 @@ mod tests {
         ]);
         for par_document in [true, false] {
             let mut out = Vec::new();
-            collecte(&arbre, &vues, &Value::Null, par_document, &mut out);
+            collecte(
+                &arbre,
+                &evalue(&arbre, &vues, &Value::Null),
+                par_document,
+                &mut out,
+            );
             assert!(out.is_empty(), "par_document={par_document} : {out:?}");
         }
     }
@@ -1862,7 +1909,12 @@ mod tests {
             minimum: 1,
         };
         let mut out = Vec::new();
-        collecte(&arbre, &vues, &Value::Null, false, &mut out);
+        collecte(
+            &arbre,
+            &evalue(&arbre, &vues, &Value::Null),
+            false,
+            &mut out,
+        );
         assert_eq!(out.len(), 1);
     }
 
