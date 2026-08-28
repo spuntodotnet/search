@@ -386,6 +386,21 @@ rouge — et elle est le bon prix.
 > plutôt que sur ceux qui ont le champ — est toujours là, déclarée dans
 > [`compat.md`](compat.md), et un autre tirage la reposera.
 
+### Les deux divergences ouvertes de ce passage, et ce qu'elles ne sont pas
+
+La campagne complète en a laissé deux, et **aucune des deux ne porte sur le
+surlignage** : leurs requêtes n'ont pas de bloc `highlight` du tout. Elles sont
+publiées ouvertes plutôt que tues, avec leur graine.
+
+| Graine | Ce qui diffère | Ce que c'est |
+|---|---|---|
+| `5500180` | `total` 9 chez ferrite, 8 chez ES, sur un `bool` fait de deux `must_not` dont un `exists` | la divergence **déjà déclarée** sur `exists` appliqué à un champ `text` dont l'analyzer (`stop`) ne laisse aucun terme — vue ici sous une négation, donc dans le sens qui rend **plus** de documents. Le prédicat qui couvre cette famille ne reconnaît pas cette imbrication-là (`dis_max` d'un `bool` à deux `must_not`), et l'élargir masquerait ce qu'il est écrit pour attraper |
+| `8080118` | `total` 17 chez ferrite, 18 chez ES, sur un `match_phrase_prefix` posé sur un champ à **n-grammes** | un défaut **antérieur** au surlignage, de la famille de `MultiPhrasePrefixQuery` : plusieurs grammes par position, et le développement du préfixe ne retient pas les mêmes que Lucene. La carte des n-grammes en avait déjà corrigé un morceau (le budget de `max_expansions`) ; celui-ci est à part |
+
+Les deux se rejouent (`--rejouer 5500180`, `--rejouer 8080118`) et aucune n'est
+absorbée par un prédicat : une divergence qu'on n'a pas expliquée n'a pas à
+compter comme expliquée.
+
 Le détail machine est dans [`fuzz.json`](fuzz.json) : les divergences réelles y
 sont écrites entières, les assumées résumées par famille avec trois exemples.
 
@@ -415,6 +430,8 @@ La preuve : chaque nouvelle plage jamais regardée en a retrouvé.
 | 3535000+ | le défaut des n-grammes : `match_phrase` rendait 3 documents là où ES en rend 12 |
 | 1717000+ | la limite des tokenizers de Lucene : un mot de plus de 255 caractères **coupé** chez ES, **jeté** chez ferrite |
 | 2626000+ | rien de neuf — la deuxième plage de contrôle qui n'ajoute rien |
+| 900001+ | deux des seize défauts du surlignage, dont la règle qui a changé la forme du code : ES ne marque que ce qui a fait correspondre **ce** document |
+| la campagne complète, onze plages | huit défauts de plus, tous sur des **bords** — et deux divergences ouvertes qui n'ont rien à voir avec le surlignage (ci-dessous) |
 
 Et à chaque passage suivant, générateur changé, la règle a rejoué exactement
 pareil : la plage 1–400 — celle sur laquelle on avait itéré — a sorti le
