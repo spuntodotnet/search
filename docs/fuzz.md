@@ -171,8 +171,8 @@ champs (nommés, en motif, ou `*`), des tailles **petites exprès** — c'est so
 est la phrase entière et n'importe quelle implémentation tombe juste — et, une
 fois sur cinq, une surcharge champ par champ.
 
-Elle a sorti **quinze** défauts en quatre passages, et aucun n'était visible
-aux 201 questions écrites à la main la veille. Le premier a coûté un changement
+Elle a sorti **seize** défauts en quatre passages, et aucun n'était visible
+aux 207 questions écrites à la main la veille. Le premier a coûté un changement
 de forme du code :
 
 | Ce que le fuzzer a sorti | Ce que c'était |
@@ -182,7 +182,7 @@ de forme du code :
 | un `match` sur un `keyword` ne surlignait plus rien dès que la valeur portait un tiret | **un `keyword` n'est pas analysé par la clause** : elle y cherche la valeur entière. Le mapping ne déclare pas d'analyzer sur un `keyword`, donc l'analyzer « par défaut » d'un champ y est `standard` — et l'appliquer coupait « tiret-bas » en deux termes qui n'existent pas dans l'index |
 | une valeur écartée par `ignore_above` était surlignée | **lire le `_source` n'est pas lire ce qui a été indexé** — la même leçon que pour `fields`, un an plus tôt, au même endroit. Une valeur trop longue n'est ni marquée, ni rendue par `no_match_size` |
 | la cible d'un `copy_to` ne rendait aucun fragment | sa valeur n'est **nulle part** dans son propre `_source` : elle est dans celui de la source. Là encore, la règle existait déjà pour `fields` ; livrer une troisième lecture, c'est devoir la reposer |
-| `<em>optique</em><em> verre</em>` là où ES rend `<em>optique verre</em>` | deux marques qui se chevauchent se trient **début croissant, fin décroissante** (`Passage.sort()` de Lucene) : le formateur avance sur la fin de la précédente, donc la plus longue doit passer d'abord |
+| `<em>optique</em><em> verre</em>` là où ES rend `<em>optique verre</em>` | deux marques qui **se chevauchent** n'en font qu'une. Celles qui se **touchent** en restent deux, et ça se lit dans les deux sens : des n-grammes de longueurs différentes se recouvrent (`<em>elevee etendue</em>` d'un bloc), des n-grammes posés bout à bout non (`<em>t</em><em>i</em>ssu`). Les fondre toutes donnait le premier résultat dans les deux cas |
 | `no_match_size` ne rendait rien quand la première valeur d'un champ multivalué était vide | ES concatène les valeurs avec un séparateur et **saute les séparateurs de tête** : la première valeur au sens de `no_match_size` est la première **non vide** |
 | un `must: {exists: b}` qui échoue laissait ses voisins marquer | `exists` ne marque rien, mais il se **tranche** sur le `_source`, et un `bool` qu'il fait tomber doit se taire entièrement. Le laisser opaque revenait à supposer qu'il tenait |
 | `"  abc def  "` sortait rogné à `number_of_fragments: 0` | le rognage vit dans le **découpeur borné** ; à `nof: 0` ES ne l'emploie pas et rend le fragment tel quel. Et le rognage lui-même n'est pas « les blancs » : c'est le `String.trim()` de Java, qui s'arrête à U+0020 — l'espace insécable, l'espace fine et le séparateur de ligne restent |
@@ -194,7 +194,7 @@ de forme du code :
 | un `regexp` qui attrape deux mots différents pesait comme deux termes | le `PassageScorer` note **clause par clause**, pas mot par mot. Ça ne change pas le contenu d'un fragment, ça change **lequel** survit à `number_of_fragments` |
 | une valeur de `keyword` **vide** | elle rend `<em></em>` au milieu d'autres valeurs, et **rien** en dernière position : ES s'arrête dès que la correspondance commence au-delà du dernier caractère du champ |
 
-Les treize derniers ont un point commun avec ce que les cartes précédentes ont
+Les quatorze derniers ont un point commun avec ce que les cartes précédentes ont
 appris : ils ne portent pas sur le découpage, qui était le sujet, mais sur ce
 que le champ **contient**, sur la façon dont il est lu, et sur les **bords**.
 Le découpage, lui, était juste dès le premier passage — parce qu'il avait été
