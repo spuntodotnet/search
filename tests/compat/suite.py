@@ -2747,13 +2747,15 @@ def surlignage(es):
     assert frags(query={"term": {"tag": "animaux"}},
                  highlight={"fields": {"*": {}}})[0] == {"tag": ["<em>animaux</em>"]}
     # `require_field_match` (vrai par defaut) : le champ n'est surligne que par
-    # ce que la requete y pose.
+    # ce que la requete y pose. `false` est refuse — ES y cherche les termes de
+    # toutes les clauses dans tous les champs, par une extraction dont il dit
+    # lui-meme qu'elle est approximative.
     assert frags(query={"match": {"titre": "chat"}},
                  highlight={"fields": {"corps": {}}})[0] is None
-    assert frags(query={"match": {"titre": "chat"}},
-                 highlight={"require_field_match": False,
-                            "number_of_fragments": 1,
-                            "fields": {"corps": {}}})[0] is not None
+    refused(lambda: es.search(index=idx, query={"match": {"titre": "chat"}},
+                              highlight={"require_field_match": False,
+                                         "fields": {"corps": {}}}),
+            contains="[require_field_match: false]")
 
     # Ce qui n'est pas reproduit est refuse **par son nom** : accepte en
     # silence, un `type: fvh` rendrait des fragments coupes autrement.

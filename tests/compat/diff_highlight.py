@@ -254,12 +254,14 @@ def cas():
            {"fields": {"*": {}}})
 
     # --- require_field_match ---------------------------------------------
+    # `true` est le defaut ; `false` est refuse, et le refus se mesure comme le
+    # reste (ES y repond, ferrite le nomme).
     ajoute("require_field_match defaut", {"match": {"titre": "chat"}},
            {"fields": {"corps": {}}})
+    ajoute("require_field_match true", {"match": {"titre": "chat"}},
+           {"require_field_match": True, "fields": {"corps": {}}})
     ajoute("require_field_match false", {"match": {"titre": "chat"}},
            {"require_field_match": False, "fields": {"corps": {}}})
-    ajoute("require_field_match false, motif", {"match": {"titre": "chat"}},
-           {"require_field_match": False, "fields": {"*": {}}})
 
     # --- ce que chaque clause marque -------------------------------------
     clauses = [

@@ -1939,6 +1939,7 @@
         "refuses": [
           "type",
           "order",
+          "require_field_match: false",
           "highlight_query",
           "matched_fields",
           "boundary_scanner",

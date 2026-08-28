@@ -643,13 +643,20 @@ frontière) : `abcde-fghij` et `abcde"fghij` sont **un** mot, `abcde:fghij` et
 `abcde’fghij` en font deux — l'inverse de ce que dit UAX#29 pour les deux
 premiers. Sans le tiret, `tiret-bas` se coupait en « tiret ».
 
-**Ce qui est marqué.** Les termes que la requête pose sur **ce champ-là**
-(`require_field_match`, vrai par défaut), et seulement ceux qui ont vraiment
-fait correspondre **ce document-là** : un `should` placé dans un `bool` dont le
-`filter` échoue ne marque rien, et un `bool` porteur d'un `must_not: {match_all}`
-ne marque jamais rien. Une phrase rend **une seule** marque, du premier terme au
-dernier — sauf sous `require_field_match: false`, où ES perd la structure de la
-phrase et marque chaque terme séparément, aux positions où la phrase l'a trouvé.
+**Ce qui est marqué.** Les termes que la requête pose sur **ce champ-là**, et
+seulement ceux qui ont vraiment fait correspondre **ce document-là** : un
+`should` placé dans un `bool` dont le `filter` échoue ne marque rien, et un
+`bool` porteur d'un `must_not: {match_all}` ne marque jamais rien. Une phrase
+rend **une seule** marque, du premier terme au dernier.
+
+`require_field_match: false` — qui ferait chercher les termes de **toutes** les
+clauses dans **tous** les champs — est **refusé**. ES lui-même documente son
+résultat comme approximatif, et ferrite n'en reproduit pas tous les cas : un
+`range` sur un champ non textuel y voit son automate appliqué aux termes des
+autres champs (`{"range": {"drapeau": {"lt": true}}}` marque « AlphA » dans un
+`keyword` voisin, parce que `"AlphA" < "T"`), et une clause qui n'a rien trouvé
+dans son propre champ y marque parfois ailleurs et parfois pas. Un refus se
+voit ; un fragment silencieusement différent, non.
 
 **Quels fragments survivent** à `number_of_fragments` : les mieux notés par le
 `PassageScorer` de Lucene (un BM25 dont le « document » est le fragment, pivoté
@@ -1105,17 +1112,7 @@ pas pour être découverts en production.
     JSON rend un arbre, pas un flux de jetons — et inventer une position serait
     pire que ne pas en donner.
 
-21. **`require_field_match: false` applique l'automate d'un `range` aux autres
-    champs.** `{"range": {"drapeau": {"lt": true}}}` fait marquer « AlphA »
-    dans un `keyword` voisin chez ES, parce que `"AlphA" < "T"` en ordre
-    lexicographique — la clause a quitté son champ **et** son type. C'est le
-    prix de `require_field_match: false`, que la documentation d'ES décrit
-    elle-même comme approximatif ; ferrite ne le reproduit pas : ses bornes de
-    `range` ne quittent pas le type du champ, donc il marque **moins**. Le
-    prédicat du fuzzer n'absorbe que ce sens-là (une marque en trop reste un
-    écart).
-
-22. **Les trois lectures sur le même champ stocké rendent un `500` chez ES.**
+21. **Les trois lectures sur le même champ stocké rendent un `500` chez ES.**
     `{"fields": ["tag"], "docvalue_fields": ["tag"], "stored_fields": ["tag"]}`
     sur un `keyword` déclaré `store: true` fait rendre à ES 8.15 un
     `unsupported_operation_exception`. Un 500 ne se reproduit pas — c'est déjà

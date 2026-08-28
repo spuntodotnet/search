@@ -1895,12 +1895,13 @@ tables:
             - {nom: "number_of_fragments", note: "`0` rend la valeur entière, valeur par valeur"}
             - {nom: "fragment_size", note: "`0` rend une phrase entière ; une valeur négative retombe sur le défaut, comme chez ES"}
             - {nom: "no_match_size", note: "le début de la **première** valeur, étendu à la frontière de mot qui suit"}
-            - {nom: "require_field_match", note: "les deux sens ; le défaut (`true`) n'utilise que les termes posés sur ce champ-là"}
+            - {nom: "require_field_match", note: "`true`, le défaut : le champ n'est surligné que par ce que la requête y pose"}
             - {texte: "la surcharge champ par champ de tous les réglages ci-dessus"}
             - {texte: "`order: none`", note: "le défaut : les fragments sortent dans l'ordre du document"}
           refuses:
             - {nom: "type", note: "`fvh`, `plain` et même `unified` écrit explicitement : ferrite n'a qu'un surligneur, et un `type` accepté en silence laisserait croire qu'un autre découpage a été appliqué"}
             - {nom: "order", note: "`score` trie les fragments par leur note ; ES y emploie un tri **instable** (`introSort`), donc deux fragments de même note ne sortent pas dans un ordre reproductible"}
+            - {texte: "`require_field_match: false`", note: "ES y cherche les termes de **toutes** les clauses dans **tous** les champs, par une extraction qui n'est pas celle du mode normal — il en documente lui-même le résultat comme approximatif, et ferrite n'en reproduit pas tous les cas. Un refus se voit ; un fragment silencieusement différent, non"}
             - {nom: "highlight_query"}
             - {nom: "matched_fields"}
             - {nom: "boundary_scanner"}
@@ -1915,7 +1916,7 @@ tables:
             - {texte: "un fragment d'un `nested` sous `inner_hits`", note: "`inner_hits` est hors périmètre ; un sous-champ de `nested` se surligne bien depuis la racine"}
         conformance:
           erreurs:
-            - "ne supporte pas \\[(type|order|highlight_query|matched_fields|boundary_scanner|boundary_chars|boundary_max_scan|boundary_scanner_locale|fragmenter|encoder|force_source|phrase_limit|max_analyzed_offset)\\] dans \\[highlight"
+            - "ne supporte pas \\[(type|order|highlight_query|matched_fields|boundary_scanner|boundary_chars|boundary_max_scan|boundary_scanner_locale|fragmenter|encoder|force_source|phrase_limit|max_analyzed_offset|require_field_match: false)\\] dans \\[highlight"
 
       - id: recherche.script_fields
         nom: "`script_fields`, `runtime_mappings`"

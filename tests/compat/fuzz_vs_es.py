@@ -1216,8 +1216,6 @@ class Generateur:
             hl["number_of_fragments"] = rng.randint(0, 4)
         if rng.random() < 0.2:
             hl["no_match_size"] = rng.choice([0, 5, 25, 200])
-        if rng.random() < 0.2:
-            hl["require_field_match"] = False
         if rng.random() < 0.15:
             hl["pre_tags"] = ["<b>"]
             hl["post_tags"] = ["</b>"]
@@ -1948,37 +1946,6 @@ def _refus_declare(e, _requete=None, ecarts=()):
 # Chaque entree : (nom, predicat). Un predicat qui declare un second parametre
 # recoit aussi la requete — certaines divergences se reconnaissent a ce qu'on a
 # demande, pas a ce qui est revenu.
-def _range_sous_rfm_false(e, requete):
-    """Un `range` sur un champ non textuel, sous `require_field_match: false`.
-
-    ES y applique l'**automate** de la clause aux termes des autres champs :
-    `{"range": {"drapeau": {"lt": true}}}` marque « AlphA » dans un `keyword`
-    voisin, parce que `"AlphA" < "T"` en ordre lexicographique. C'est une
-    consequence de `require_field_match: false`, que la documentation d'ES
-    decrit elle-meme comme approximative — et ferrite ne la reproduit pas :
-    ses bornes de `range` ne quittent pas le type du champ. Divergence assumee
-    n° 21 de `docs/compat.md`.
-
-    La ligne est etroite dans les trois sens : il faut que le surlignage
-    demande `require_field_match: false`, que la requete porte un `range`, et
-    que l'ecart soit **ferrite qui marque moins**. Une marque en trop a gauche
-    reste un ecart."""
-    hl = (requete or {}).get("highlight")
-    if not isinstance(hl, dict) or hl.get("require_field_match") is not False:
-        return False
-    if ".highlight" not in e.get("chemin", "") or e.get("a") is not None:
-        return False
-    return _contient_clause((requete or {}).get("query"), "range")
-
-
-def _contient_clause(noeud, nom):
-    if isinstance(noeud, dict):
-        return nom in noeud or any(_contient_clause(v, nom) for v in noeud.values())
-    if isinstance(noeud, list):
-        return any(_contient_clause(x, nom) for x in noeud)
-    return False
-
-
 DIVERGENCES_ASSUMEES = [
     ("float sur 32 bits", _meme_float32),
     ("refus declare", _refus_declare),
@@ -1990,7 +1957,6 @@ DIVERGENCES_ASSUMEES = [
     ("ES 8.15 casse sur deux lectures du meme champ", _es_deux_lectures),
     ("ordre des valeurs copiees par copy_to", _ordre_des_copies),
     ("fragment choisi parmi des valeurs sans ordre (copy_to)", _fragments_de_copie),
-    ("range non textuel sous require_field_match: false", _range_sous_rfm_false),
     ("ordre par pertinence (BM25)", _ordre_par_pertinence),
 ]
 

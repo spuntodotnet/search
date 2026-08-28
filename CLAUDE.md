@@ -217,7 +217,7 @@ développement, pas de CI).
 | `tests/compat/diff_aggs.py` | les mêmes agrégations ? (53/53, `filter` comprise, et ce qu'un bucket **vide** doit porter) |
 | `tests/compat/diff_analyzers.py` | les mêmes tokens, **aux mêmes positions et aux mêmes offsets** ? (38 batteries × 217 textes : 7 analyzers intégrés, 21 déclarations de n-grammes, les 5 analyzers de Wagtail, et les 5 classes de `token_chars` demandées caractère par caractère — toutes identiques) |
 | `tests/compat/diff_datemath.py` | les mêmes documents sur une **borne de date** — `now`, `now-1d/d`, `2026-03-15\|\|+1M`, et l'arrondi selon le côté de la borne ? (276/276, messages d'erreur compris ; 45/276 avant le chantier) |
-| `tests/compat/diff_highlight.py` | les mêmes **fragments surlignés** — pas leur nombre, leur contenu exact, balises comprises ? (233 questions, **222 identiques au caractère près, 10 refus assumés, 0 écart** ; `--calibrer` : 233/233 contre deux ES). Le même fichier lancé contre le ferrite d'avant rend **0/233** |
+| `tests/compat/diff_highlight.py` | les mêmes **fragments surlignés** — pas leur nombre, leur contenu exact, balises comprises ? (233 questions, **221 identiques au caractère près, 11 refus assumés, 0 écart** ; `--calibrer` : 233/233 contre deux ES). Le même fichier lancé contre le ferrite d'avant rend **0/233** |
 | `tests/compat/diff_motifs.py` | les mêmes documents sur un **motif** — `regexp`, `wildcard`, `prefix`, `match_phrase_prefix` ? (101/101) |
 | `tests/compat/diff_multi_index.py` | `index=["a","b"]`, `logs-*`, les alias : **les mêmes index visés, fusionnés pareil** ? (87/87, 0 écart, plus aucune divergence assumée ; `--calibrer` : 87/87 contre deux ES) |
 | `tests/compat/sonde_msm.py` | les mêmes documents sur un **`minimum_should_match`** — entier, pourcentage, formes négatives, conditions `3<90%`, et sous un `nested` ? (53/53) |
@@ -285,6 +285,15 @@ bouger**, pas après.
   par document — et les feuilles qu'on ne sait pas trancher depuis le `_source`
   (un intervalle de dates, une jointure) sont **supposées satisfaites**, parce
   que dans le doute il vaut mieux marquer de trop que se taire.
+
+  Le pendant de cette décision est un **refus** : `require_field_match: false`
+  fait chercher chez ES les termes de toutes les clauses dans tous les champs,
+  par une extraction dont il documente lui-même le résultat comme approximatif
+  — et dont trois passages de fuzzing n'ont pas réussi à retrouver tous les
+  cas (l'automate d'un `range` y quitte son champ **et** son type). Reproduire
+  un mode *presque* juste, c'est rendre des fragments silencieusement
+  différents ; il est donc refusé, en le nommant. Quatre requêtes du corpus
+  d'usage sur les 102 qui citent `highlight` le posent.
 - **Un objet n'est pas un champ.** `object` est indexé par chemins pointés
   (`client.ville`), exactement comme le fait Elasticsearch. C'est ce qui a rendu
   le chantier petit : `Fields.mapped` était déjà une table `chemin → champ`.

@@ -65,8 +65,6 @@ pub struct Reglages {
     pub taille: usize,
     /// `no_match_size` : combien de caracteres rendre quand rien ne correspond.
     pub sans_correspondance: usize,
-    /// `require_field_match` : n'utiliser que les termes poses sur ce champ.
-    pub champ_exige: bool,
 }
 
 impl Default for Reglages {
@@ -77,7 +75,6 @@ impl Default for Reglages {
             nb_fragments: 5,
             taille: 100,
             sans_correspondance: 0,
-            champ_exige: true,
         }
     }
 }
@@ -162,13 +159,27 @@ fn lire_reglages(obj: &Map<String, Value>, defauts: &Reglages, ou: &str) -> EsRe
                 };
             }
             "no_match_size" => r.sans_correspondance = lire_taille(v, cle)?.max(0) as usize,
-            "require_field_match" => {
-                r.champ_exige = v.as_bool().ok_or_else(|| {
-                    EsError::illegal_argument(format!(
+            // `true` est le defaut : n'utiliser que les termes poses sur ce
+            // champ-la. `false` fait chercher chez ES les termes de **toutes**
+            // les clauses dans **tous** les champs, par une extraction qui
+            // n'est pas celle du mode normal — ES le documente lui-meme comme
+            // approximatif, et ferrite n'en reproduit pas tous les cas. Un
+            // refus se voit ; un fragment silencieusement different, non.
+            "require_field_match" => match v.as_bool() {
+                Some(true) => {}
+                Some(false) => {
+                    return Err(EsError::unsupported(format!(
+                        "ferrite ne supporte pas [require_field_match: false] dans [{ou}] : ES y \
+                         cherche les termes de toutes les clauses dans tous les champs, par une \
+                         extraction dont il dit lui-meme qu'elle est approximative"
+                    )))
+                }
+                None => {
+                    return Err(EsError::illegal_argument(format!(
                         "[{ou}.require_field_match] : booleen attendu"
-                    ))
-                })?;
-            }
+                    )))
+                }
+            },
             // `none` est le defaut d'ES : les fragments sortent dans l'ordre du
             // document. `score` les trierait par le score du fragment — un
             // classement que ferrite ne sait pas encore rendre identique.
@@ -412,27 +423,7 @@ enum Motif {
     /// du dernier (mesure : `match_phrase: "le chat"` rend `<em>le chat</em>`,
     /// pas `<em>le</em> <em>chat</em>`).
     ///
-    /// Sauf sous `require_field_match: false` : ES perd alors la structure de
-    /// la phrase et marque **chaque terme separement**, aux positions ou la
-    /// phrase l'a trouve — le troisieme `aluminium` de « aluminium batterie
-    /// aluminium » reste non marque. C'est ce que dit `eclatee`.
-    Phrase {
-        positions: Vec<Predicat>,
-        eclatee: bool,
-    },
-}
-
-impl Motif {
-    /// Le meme motif, mais dont chaque terme se marque a part.
-    fn eclate(&self) -> Self {
-        match self {
-            Self::Simple(_) => self.clone(),
-            Self::Phrase { positions, .. } => Self::Phrase {
-                positions: positions.clone(),
-                eclatee: true,
-            },
-        }
-    }
+    Phrase(Vec<Predicat>),
 }
 
 /// La distance d'edition de Levenshtein, avec ou sans transposition — celle que
@@ -959,10 +950,7 @@ fn motifs_de_texte(
             if positions.is_empty() {
                 return Ok(Vec::new());
             }
-            vec![Motif::Phrase {
-                positions,
-                eclatee: false,
-            }]
+            vec![Motif::Phrase(positions)]
         }
     })
 }
@@ -971,10 +959,9 @@ fn phrase(termes: Vec<String>, _slop: Option<u32>) -> Vec<Motif> {
     if termes.is_empty() {
         return Vec::new();
     }
-    vec![Motif::Phrase {
-        positions: termes.into_iter().map(Predicat::Terme).collect(),
-        eclatee: false,
-    }]
+    vec![Motif::Phrase(
+        termes.into_iter().map(Predicat::Terme).collect(),
+    )]
 }
 
 fn prefixe(valeur: &str, insensible: bool) -> EsResult<Predicat> {
@@ -1076,29 +1063,15 @@ pub fn rendre(plan: &Plan, gen: &Generation, source: &Value) -> EsResult<Option<
     // Ce que la requete a vraiment trouve dans ce document : ES ne surligne
     // que ca (voir [`Noeud`]).
     let mut par_champ: BTreeMap<&str, Vec<Motif>> = BTreeMap::new();
-    let mut tous: Vec<Motif> = Vec::new();
     if let Some(arbre) = &plan.arbre {
         let verdict = evalue(arbre, &vues, source);
         let mut actives = Vec::new();
-        collecte(arbre, &verdict, true, &mut actives);
+        collecte(arbre, &verdict, &mut actives);
         for (champ, motifs) in actives {
             par_champ
                 .entry(champ)
                 .or_default()
                 .extend(motifs.iter().cloned());
-        }
-        // Sous `require_field_match: false`, ES ne passe plus par les
-        // `Matches` du champ : il **extrait les termes de la requete reecrite**
-        // et les pose partout. Le tri par document disparait donc avec — seul
-        // ce que la reecriture a rendu sterile (`must_not: {match_all}`) reste
-        // muet (mesure, plage de controle du fuzzer, graine 900186).
-        if plan.champs.iter().any(|c| !c.reglages.champ_exige) {
-            let mut sans_tri = Vec::new();
-            collecte(arbre, &verdict, false, &mut sans_tri);
-            tous = sans_tri
-                .into_iter()
-                .flat_map(|(_, motifs)| motifs.iter().cloned())
-                .collect();
         }
     }
 
@@ -1110,19 +1083,10 @@ pub fn rendre(plan: &Plan, gen: &Generation, source: &Value) -> EsResult<Option<
         if valeurs.is_empty() {
             continue;
         }
-        let motifs: Vec<Motif> = if champ.reglages.champ_exige {
-            par_champ
-                .get(champ.lecture.chemin.as_str())
-                .cloned()
-                .unwrap_or_default()
-        } else {
-            // `require_field_match: false` fait perdre a ES la structure des
-            // phrases : il ne peut plus s'appuyer sur les `Matches` du champ, et
-            // marque chaque terme separement. `match_phrase "le chat"` rend
-            // alors `<em>le</em> <em>chat</em>` la ou le defaut rend
-            // `<em>le chat</em>` (mesure, trouvee par le fuzzer graine 60).
-            tous.iter().map(Motif::eclate).collect()
-        };
+        let motifs = par_champ
+            .get(champ.lecture.chemin.as_str())
+            .cloned()
+            .unwrap_or_default();
         let fragments = fragments_du_champ(champ, &motifs, valeurs);
         if !fragments.is_empty() {
             bloc.insert(
@@ -1263,20 +1227,15 @@ fn verdict_de(
 /// quand elle n'a rien trouve dans le sien (mesure, fuzzer graine 8). Ce qui la
 /// fait taire, c'est un `must` ou un `filter` voisin qui echoue — ou un
 /// `must_not: {match_all}` qui rend le `bool` sterile (graine 6).
-fn collecte<'a>(
-    n: &'a Noeud,
-    verdict: &Verdict,
-    par_document: bool,
-    out: &mut Vec<(&'a str, &'a [Motif])>,
-) {
+fn collecte<'a>(n: &'a Noeud, verdict: &Verdict, out: &mut Vec<(&'a str, &'a [Motif])>) {
     match n {
         Noeud::Feuille { champ, motifs } => out.push((champ.as_str(), motifs)),
         Noeud::Et(enfants) | Noeud::Ou { enfants, .. } => {
-            if sterile(n) || (par_document && verdict.valeur == Some(false)) {
+            if verdict.valeur == Some(false) {
                 return;
             }
             for (e, v) in enfants.iter().zip(&verdict.enfants) {
-                collecte(e, v, par_document, out);
+                collecte(e, v, out);
             }
         }
         // Une clause niee ne marque rien, chez ES non plus.
@@ -1286,26 +1245,6 @@ fn collecte<'a>(
         | Noeud::Toujours
         | Noeud::Existe(_)
         | Noeud::Valeurs { .. } => {}
-    }
-}
-
-/// Un noeud qui ne peut correspondre a **aucun** document, quel qu'il soit.
-///
-/// C'est ce que la reecriture de Lucene voit : un `bool` porteur d'un
-/// `must_not: {match_all}` devient un `MatchNoDocsQuery`, et ses termes
-/// disparaissent avec lui. La distinction compte sous
-/// `require_field_match: false`, ou rien d'autre ne filtre.
-fn sterile(n: &Noeud) -> bool {
-    match n {
-        Noeud::Jamais => true,
-        Noeud::Non(e) => matches!(**e, Noeud::Toujours),
-        Noeud::Et(enfants) => enfants.iter().any(sterile),
-        Noeud::Ou { enfants, minimum } => *minimum > 0 && enfants.iter().all(sterile),
-        Noeud::Feuille { .. }
-        | Noeud::Opaque
-        | Noeud::Toujours
-        | Noeud::Existe(_)
-        | Noeud::Valeurs { .. } => false,
     }
 }
 
@@ -1486,17 +1425,11 @@ fn marques(motifs: &[Motif], valeur: &Valeur) -> Vec<Marque> {
                     }
                 }
             }
-            Motif::Phrase { positions, eclatee } => {
+            Motif::Phrase(positions) => {
                 for suite in suites(jetons, positions) {
-                    if *eclatee {
-                        for (d, f) in suite {
-                            pousse(d, f);
-                        }
-                    } else {
-                        let debut = suite.first().map_or(0, |s| s.0);
-                        let fin = suite.iter().map(|s| s.1).max().unwrap_or(0);
-                        pousse(debut, fin);
-                    }
+                    let debut = suite.first().map_or(0, |s| s.0);
+                    let fin = suite.iter().map(|s| s.1).max().unwrap_or(0);
+                    pousse(debut, fin);
                 }
             }
         }
@@ -1865,6 +1798,10 @@ fn fondre(marques: &[Marque]) -> Vec<(usize, usize)> {
     let mut out: Vec<(usize, usize)> = Vec::with_capacity(marques.len());
     for &Marque { debut, fin, .. } in marques {
         match out.last_mut() {
+            // Deux clauses qui posent la **meme** marque n'en rendent qu'une :
+            // sans ca, un `multi_match` d'une chaine vide sur trois champs
+            // rendait `<b></b><b></b>` (fuzzer, graine 2626208).
+            Some(precedente) if (debut, fin) == *precedente => {}
             Some(precedente) if debut < precedente.1 && fin > precedente.1 => {
                 precedente.1 = fin;
             }
@@ -2050,7 +1987,7 @@ mod tests {
             },
         ]);
         let mut out = Vec::new();
-        collecte(&arbre, &evalue(&arbre, &vues, &Value::Null), true, &mut out);
+        collecte(&arbre, &evalue(&arbre, &vues, &Value::Null), &mut out);
         assert!(out.is_empty(), "{out:?}");
 
         // Le meme arbre dont le filtre tient : le `should` marque.
@@ -2062,13 +1999,12 @@ mod tests {
             },
         ]);
         let mut out = Vec::new();
-        collecte(&arbre, &evalue(&arbre, &vues, &Value::Null), true, &mut out);
+        collecte(&arbre, &evalue(&arbre, &vues, &Value::Null), &mut out);
         assert_eq!(out.len(), 2);
     }
 
-    /// `must_not: {match_all}` rend le `bool` sterile — Lucene le reecrit en
-    /// `MatchNoDocsQuery`, et ses termes disparaissent meme sans tri par
-    /// document (fuzzer, graines 6 et 900186).
+    /// `must_not: {match_all}` fait taire tout le `bool` — Lucene le reecrit en
+    /// `MatchNoDocsQuery` (fuzzer, graine 6).
     #[test]
     fn un_must_not_match_all_rend_le_bool_sterile() {
         let vues = vues_du_texte();
@@ -2079,35 +2015,9 @@ mod tests {
                 minimum: 1,
             },
         ]);
-        for par_document in [true, false] {
-            let mut out = Vec::new();
-            collecte(
-                &arbre,
-                &evalue(&arbre, &vues, &Value::Null),
-                par_document,
-                &mut out,
-            );
-            assert!(out.is_empty(), "par_document={par_document} : {out:?}");
-        }
-    }
-
-    /// Sans tri par document (`require_field_match: false`), une clause qui n'a
-    /// rien trouve dans **son** champ marque quand meme ailleurs (graine 8).
-    #[test]
-    fn sans_tri_par_document_une_clause_muette_marque_ailleurs() {
-        let vues = vues_du_texte();
-        let arbre = Noeud::Ou {
-            enfants: vec![Noeud::Opaque, feuille("autre", "chat")],
-            minimum: 1,
-        };
         let mut out = Vec::new();
-        collecte(
-            &arbre,
-            &evalue(&arbre, &vues, &Value::Null),
-            false,
-            &mut out,
-        );
-        assert_eq!(out.len(), 1);
+        collecte(&arbre, &evalue(&arbre, &vues, &Value::Null), &mut out);
+        assert!(out.is_empty(), "{out:?}");
     }
 
     /// Deux marques qui se chevauchent n'en font qu'une : sans la fusion, le
@@ -2119,10 +2029,10 @@ mod tests {
         let valeur = &vues["t"][0];
         let motifs = vec![
             Motif::Simple(Predicat::Terme("le".into())),
-            Motif::Phrase {
-                positions: vec![Predicat::Terme("le".into()), Predicat::Terme("chat".into())],
-                eclatee: false,
-            },
+            Motif::Phrase(vec![
+                Predicat::Terme("le".into()),
+                Predicat::Terme("chat".into()),
+            ]),
         ];
         // La plus **courte** d'abord : c'est elle qui ouvrira le fragment.
         let bornes: Vec<(usize, usize)> = marques(&motifs, valeur)

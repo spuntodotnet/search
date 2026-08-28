@@ -383,28 +383,18 @@ CAS = [
       "size": 10, "sort": ["u"], "highlight": {"fields": {"t": {}}}}, surligne),
     (SURLIGNE, DOCS_SURLIGNE, "un must_not match_all rend le bool sterile",
      "la reecriture de Lucene en fait un `MatchNoDocsQuery` : ses termes "
-     "disparaissent, y compris sous `require_field_match: false`",
+     "disparaissent, et le `should` qu'il porte ne marque rien",
      {"query": {"dis_max": {"queries": [
          {"exists": {"field": "u"}},
          {"bool": {"should": [{"match": {"t": "beta"}}],
                    "must_not": [{"match_all": {}}]}}]}},
-      "size": 10, "sort": ["u"],
-      "highlight": {"require_field_match": False, "fields": {"t": {}}}},
-     surligne),
-    (SURLIGNE, DOCS_SURLIGNE, "require_field_match false eclate les phrases",
-     "ES y perd la structure de la phrase et marque chaque terme separement, "
-     "aux positions ou la phrase l'a trouve",
-     {"query": {"match_phrase": {"t": "aluminium batterie"}}, "size": 10,
-      "sort": ["u"],
-      "highlight": {"require_field_match": False, "number_of_fragments": 0,
-                    "fields": {"t": {}}}}, surligne),
+      "size": 10, "sort": ["u"], "highlight": {"fields": {"t": {}}}}, surligne),
 
     (SURLIGNE, DOCS_SURLIGNE, "number_of_fragments 0 ne rogne pas",
      "ES n'y passe plus par le decoupeur borne : le fragment sort avec ses "
      "blancs de bord",
      {"query": {"term": {"u": "d"}}, "size": 10, "sort": ["u"],
-      "highlight": {"fields": {"t": {}}, "number_of_fragments": 0,
-                    "require_field_match": False}}, surligne),
+      "highlight": {"fields": {"t": {}}, "number_of_fragments": 0}}, surligne),
     (SURLIGNE, DOCS_SURLIGNE, "le rognage est celui de String.trim()",
      "il s'arrete a U+0020 : la tabulation part, l'espace fine (U+2009) reste "
      "— et la longueur qui note le fragment est celle d'**avant** rognage",
