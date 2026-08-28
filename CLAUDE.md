@@ -542,6 +542,17 @@ bouger**, pas après.
   tranquillement une courbe plate. Ils sont donc **refusés**, pas rendus. Une
   valeur par défaut plausible est le déguisement le plus efficace d'un échec
   silencieux.
+- **Deux outils qui visent le même port se marchent dessus, en silence — et le
+  second peut être le binaire qu'on vient de compiler.** Le piège a une seconde
+  forme, payée une carte plus tard : un `ferrite` lancé à la main tenait
+  toujours le port pendant qu'on en démarrait un neuf ; le neuf a échoué à se
+  lier, sans un mot, et **trois mesures d'affilée ont porté sur le binaire
+  d'avant** — dont une correction qu'on croyait inopérante et qu'on a cherchée
+  ailleurs pendant une demi-heure. Un serveur qui ne répond pas se voit ; un
+  serveur qui répond *l'ancienne* réponse, non. La règle : après un
+  `cargo build`, vérifier que le processus qu'on interroge est bien celui qu'on
+  vient d'écrire (`ferrite.log` porte l'erreur `AddrInUse`, encore faut-il le
+  lire).
 - **Deux outils qui visent le même port se marchent dessus, en silence.**
   `run.sh` écoute par défaut sur 9200 ; lancé pendant qu'un ferrite y tournait
   déjà, son `bind` a échoué sans bruit et il a exercé **ce** serveur-là — index,
