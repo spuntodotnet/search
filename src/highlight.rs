@@ -1826,21 +1826,23 @@ fn note(dans: &[Marque], debut: usize, fin: usize, base: usize, longueur: usize)
     score * (1.0 + 1.0 / ((PIVOT + (base + debut) as f64).ln()))
 }
 
-/// Deux marques qui se touchent ou se chevauchent n'en font qu'une.
+/// Deux marques qui **se chevauchent** n'en font qu'une ; deux marques qui se
+/// **touchent** en restent deux.
 ///
-/// Ca ne se voit pas sur des mots separes — « chat » et « noir » restent deux
-/// marques, l'espace les separe — mais un analyzer a n-grammes pose des jetons
-/// **jointifs** : ES y rend `<em>elevee etendue</em>`, une seule marque, la ou
-/// les rendre une par une donnait `<em>elev</em><em>e</em><em>e</em>…`
-/// (fuzzer, graine 3535187).
+/// La distinction n'est pas cosmetique, et elle se mesure : un analyzer a
+/// n-grammes de longueur variable pose des grammes qui se recouvrent, et ES y
+/// rend `<em>elevee etendue</em>` d'un bloc (fuzzer, graine 3535187) ; des
+/// grammes poses bout a bout, eux, sortent un par un — `<em>t</em><em>i</em>ssu`
+/// (graine 6260166). Les fondre toutes donnait le premier resultat dans les
+/// deux cas.
 fn fondre(marques: &[Marque]) -> Vec<(usize, usize)> {
     let mut out: Vec<(usize, usize)> = Vec::with_capacity(marques.len());
     for &Marque { debut, fin, .. } in marques {
         match out.last_mut() {
-            Some(precedente) if debut <= precedente.1 && fin > precedente.1 => {
+            Some(precedente) if debut < precedente.1 && fin > precedente.1 => {
                 precedente.1 = fin;
             }
-            Some(precedente) if debut <= precedente.1 => {}
+            Some(precedente) if debut < precedente.1 => {}
             _ => out.push((debut, fin)),
         }
     }

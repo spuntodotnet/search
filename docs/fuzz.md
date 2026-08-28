@@ -171,9 +171,9 @@ champs (nommés, en motif, ou `*`), des tailles **petites exprès** — c'est so
 est la phrase entière et n'importe quelle implémentation tombe juste — et, une
 fois sur cinq, une surcharge champ par champ.
 
-Elle a sorti **six** défauts en trois passages, et aucun n'était visible aux
-192 questions écrites à la main la veille. Le premier a coûté un changement de
-forme du code :
+Elle a sorti **quinze** défauts en quatre passages, et aucun n'était visible
+aux 201 questions écrites à la main la veille. Le premier a coûté un changement
+de forme du code :
 
 | Ce que le fuzzer a sorti | Ce que c'était |
 |---|---|
@@ -187,15 +187,22 @@ forme du code :
 | un `must: {exists: b}` qui échoue laissait ses voisins marquer | `exists` ne marque rien, mais il se **tranche** sur le `_source`, et un `bool` qu'il fait tomber doit se taire entièrement. Le laisser opaque revenait à supposer qu'il tenait |
 | `"  abc def  "` sortait rogné à `number_of_fragments: 0` | le rognage vit dans le **découpeur borné** ; à `nof: 0` ES ne l'emploie pas et rend le fragment tel quel. Et le rognage lui-même n'est pas « les blancs » : c'est le `String.trim()` de Java, qui s'arrête à U+0020 — l'espace insécable, l'espace fine et le séparateur de ligne restent |
 | ES rendait `cible\u2009` là où ferrite rendait `cible\t` | le **score** d'un fragment se calcule sur sa longueur **avant** rognage. Noter le fragment rogné faisait gagner celui dont la tabulation partait, à égalité de tout le reste |
+| un `term` sur une **date** ne faisait pas taire le `bool` qui le portait en `filter` | même famille que l'`exists` : il ne marque rien, mais il se tranche sur le `_source`. Et l'`exists`, lui, se tranche par le chemin du **parent** quand c'est un multi-field — lire `e.keyword` dans un document qui porte `e` n'y trouvait jamais rien |
+| un `match_phrase` de trois mots sortait entier là où ES n'en garde qu'un | quand `fragment_size` ne laisse plus de place, la borne droite est la **fin de la correspondance**, pas la frontière de mot suivante. Un caractère d'écart |
+| un `keyword` valant «   espaces   multiples   » sortait rogné | le terme **porte** ces blancs : le rognage ne mord jamais sur une marque |
+| deux marques qui commencent au même endroit ouvraient le mauvais fragment | c'est la plus **courte** qui l'ouvre, et la plus longue s'y fait rogner. Un `dis_max` de deux `match_phrase` imbriqués le montre à une unité de `fragment_size` près |
+| un `regexp` qui attrape deux mots différents pesait comme deux termes | le `PassageScorer` note **clause par clause**, pas mot par mot. Ça ne change pas le contenu d'un fragment, ça change **lequel** survit à `number_of_fragments` |
+| une valeur de `keyword` **vide** | elle rend `<em></em>` au milieu d'autres valeurs, et **rien** en dernière position : ES s'arrête dès que la correspondance commence au-delà du dernier caractère du champ |
 
-Les huit derniers ont un point commun avec ce que les cartes précédentes ont
+Les treize derniers ont un point commun avec ce que les cartes précédentes ont
 appris : ils ne portent pas sur le découpage, qui était le sujet, mais sur ce
 que le champ **contient**, sur la façon dont il est lu, et sur les **bords**.
 Le découpage, lui, était juste dès le premier passage — parce qu'il avait été
 mesuré caractère par caractère avant d'être écrit.
 
 Deux d'entre eux viennent d'une **plage de contrôle** (900001+), c'est-à-dire
-d'une plage jamais utilisée pour corriger. Septième passage, septième plage
+d'une plage jamais utilisée pour corriger, et huit autres d'une campagne
+complète lancée après coup sur onze plages. Septième passage, septième plage
 neuve qui trouve quelque chose.
 
 Et une leçon d'outillage, la même que la section 2 de `CLAUDE.md` : le premier

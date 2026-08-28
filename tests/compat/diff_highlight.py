@@ -48,8 +48,29 @@ import urllib.request
 
 INDEX = "diff-highlight"
 
+# Deux analyzers a n-grammes, et ils ne posent pas les memes jetons : le
+# **filtre** produit des grammes de longueurs differentes qui se recouvrent, le
+# **tokenizer** des grammes bout a bout. ES fond les premiers en une seule
+# marque et laisse les seconds separes — c'est la seule facon de voir la
+# difference entre « se chevaucher » et « se toucher ».
+SETTINGS = {
+    "number_of_shards": 1,
+    "number_of_replicas": 0,
+    "max_ngram_diff": 3,
+    "analysis": {
+        "filter": {"gr_filtre": {"type": "ngram", "min_gram": 2, "max_gram": 4}},
+        "tokenizer": {"gr_tok": {"type": "ngram", "min_gram": 1, "max_gram": 1}},
+        "analyzer": {
+            "ng_filtre": {"tokenizer": "standard", "filter": ["lowercase", "gr_filtre"]},
+            "ng_tok": {"tokenizer": "gr_tok", "filter": ["lowercase"]},
+        },
+    },
+}
+
 MAPPINGS = {
     "properties": {
+        "gramme_filtre": {"type": "text", "analyzer": "ng_filtre"},
+        "gramme_tok": {"type": "text", "analyzer": "ng_tok"},
         "titre": {"type": "text"},
         "corps": {"type": "text"},
         "tag": {"type": "keyword"},
@@ -82,6 +103,8 @@ ACCENTS = (
 
 DOCS = [
     ("prose", {"titre": "Le chat noir", "corps": PROSE, "tag": "animaux", "n": 1,
+               "gramme_filtre": "elevee etendue modele",
+               "gramme_tok": "elevee etendue modele",
                "lignes": [{"ref": "alpha"}, {"ref": "beta"}]}),
     ("court", {"titre": "Court", "corps": "Un chat.", "tag": "bref", "n": 2}),
     ("rien", {"titre": "Sans rien", "corps": "Aucun animal ne passe ici.",
@@ -154,6 +177,16 @@ def cas():
             ajoute(f"phrase [{mots}] fs={taille}", q,
                    {"fragment_size": taille, "number_of_fragments": 1,
                     "fields": {"corps": {}}})
+
+    # --- deux marques qui se touchent, deux marques qui se chevauchent -----
+    # Un analyzer a n-grammes pose des jetons a la chaine. Ceux qui se
+    # **recouvrent** (grammes de longueurs differentes) sortent chez ES en une
+    # seule marque ; ceux qui se **touchent** bout a bout en font une chacun.
+    for champ in ("gramme_filtre", "gramme_tok"):
+        for q in ({"match": {champ: "eve"}}, {"match": {champ: "e"}},
+                  {"prefix": {champ: "e"}}):
+            ajoute(f"n-grammes {champ} {json.dumps(q, ensure_ascii=False)[:40]}",
+                   q, {"fields": {champ: {}}, "number_of_fragments": 0})
 
     # --- les bords d'un fragment ------------------------------------------
     # `number_of_fragments: 0` ne rogne pas : ES n'y passe plus par le
@@ -294,10 +327,8 @@ def vivant(base):
 
 def prepare(base):
     appel(base, "DELETE", "/" + INDEX)
-    corps, code = appel(base, "PUT", "/" + INDEX, {
-        "mappings": MAPPINGS,
-        "settings": {"number_of_shards": 1, "number_of_replicas": 0},
-    })
+    corps, code = appel(base, "PUT", "/" + INDEX,
+                        {"mappings": MAPPINGS, "settings": SETTINGS})
     if code != 200:
         raise SystemExit(f"{base} : creation de l'index refusee — {json.dumps(corps)}")
     for doc_id, doc in DOCS:
