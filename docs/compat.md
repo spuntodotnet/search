@@ -823,7 +823,7 @@ configure. Rien de sa forme n'était devinable, et une lecture naïve —
 « un fragment = une phrase », ou « un fragment = `fragment_size` caractères » —
 rend systématiquement autre chose. Tout ce qui suit est mesuré contre un
 ES 8.15 par
-[`diff_highlight.py`](../tests/compat/diff_highlight.py) (**207 questions
+[`diff_highlight.py`](../tests/compat/diff_highlight.py) (**233 questions
 posées aux deux serveurs, comparées fragment par fragment**), et étalonné
 contre deux Elasticsearch avant de servir.
 

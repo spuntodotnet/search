@@ -498,6 +498,20 @@ pub fn precedente(bornes: &[usize], offset: usize) -> usize {
     }
 }
 
+/// La premiere frontiere **a partir de** `offset` (celle-la comprise).
+///
+/// Ce n'est pas le `following` de Java : elle sert a arreter un fragment sur la
+/// fin d'une correspondance sans couper le mot qui la porte. Sur un terme qui
+/// finit sur une frontiere, les deux coincident ; sur un gramme au milieu d'un
+/// mot, celle-ci va jusqu'au bout du mot et l'autre le depasserait.
+pub fn a_partir_de(bornes: &[usize], offset: usize) -> usize {
+    match bornes.binary_search(&offset) {
+        Ok(i) => bornes[i],
+        Err(i) if i < bornes.len() => bornes[i],
+        Err(_) => *bornes.last().expect("au moins 0"),
+    }
+}
+
 /// La premiere frontiere **strictement** apres `offset` — le `following` de
 /// Java. Rend la fin du texte quand il n'y en a plus.
 pub fn suivante(bornes: &[usize], offset: usize) -> usize {
@@ -603,5 +617,8 @@ mod tests {
         assert_eq!(suivante(&b, 10), 11);
         assert_eq!(suivante(&b, 12), 15);
         assert_eq!(suivante(&b, 26), 26);
+        assert_eq!(a_partir_de(&b, 15), 15);
+        assert_eq!(a_partir_de(&b, 12), 15);
+        assert_eq!(a_partir_de(&b, 26), 26);
     }
 }

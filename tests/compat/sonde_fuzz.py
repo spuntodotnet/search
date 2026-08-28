@@ -91,7 +91,14 @@ DOCS_MULTI = [
 # n'avait pas pense (un tiret dans un mot, une premiere valeur vide, un
 # `should` sous un `filter` qui echoue).
 SURLIGNE = {
+    "settings": {"max_ngram_diff": 12,
+                 "analysis": {
+                     "tokenizer": {"tk": {"type": "ngram", "min_gram": 2,
+                                          "max_gram": 6}},
+                     "analyzer": {"ng_tok": {"type": "custom", "tokenizer": "tk",
+                                             "filter": ["lowercase"]}}}},
     "mappings": {"properties": {
+        "gr": {"type": "text", "analyzer": "ng_tok"},
         "t": {"type": "text"},
         "k": {"type": "keyword", "ignore_above": 12},
         "src": {"type": "text", "copy_to": "tout"},
@@ -120,7 +127,8 @@ DOCS_SURLIGNE = [
     ("f", {"t": "aa bb cible cc dd cible ee ff", "k": ["alpha", ""], "u": "f"}),
     # Un `keyword` dont la valeur porte ses propres blancs : le terme les
     # contient, donc le surlignage aussi.
-    ("g", {"t": "rien", "k": "  espaces   multiples  ", "u": "g"}),
+    ("g", {"t": "rien", "k": "  espaces   multiples  ", "u": "g",
+           "gr": "version"}),
 ]
 
 TROUS = {"mappings": {"properties": {"n": {"type": "integer"},
@@ -422,6 +430,12 @@ CAS = [
          {"match_phrase": {"t": "l'ascension"}}]}},
       "size": 10, "sort": ["u"],
       "highlight": {"fields": {"t": {}}, "fragment_size": 20}}, surligne),
+    (SURLIGNE, DOCS_SURLIGNE, "les marques d'une meme clause n'en font qu'une",
+     "un `prefix` attrape `vers`, `versi` et `versio` au meme endroit sur un "
+     "champ a n-grammes : c'est `versio` qui ouvre le fragment, pas `vers` — "
+     "et le fragment va jusqu'au bout du mot que le gramme coupe",
+     {"query": {"prefix": {"gr": "vers"}}, "size": 10, "sort": ["u"],
+      "highlight": {"fields": {"gr": {}}, "fragment_size": 1}}, surligne),
     (SURLIGNE, DOCS_SURLIGNE, "un regexp compte pour un terme, pas pour un mot",
      "le `PassageScorer` note un fragment clause par clause : deux mots "
      "differents trouves par le **meme** `regexp` pesent comme un mot vu deux "

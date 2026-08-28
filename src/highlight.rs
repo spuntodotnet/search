@@ -1469,7 +1469,15 @@ fn marques(motifs: &[Motif], valeur: &Valeur) -> Vec<Marque> {
     let jetons = &valeur.jetons;
     let mut out: Vec<Marque> = Vec::new();
     for (rang, motif) in motifs.iter().enumerate() {
-        let mut pousse = |debut: usize, fin: usize| out.push(Marque { debut, fin, rang });
+        // Les marques d'**une** clause sont fondues entre elles avant tout le
+        // reste : chez Lucene une clause est un seul `OffsetsEnum`, et ce qu'il
+        // rend d'une position est une marque, pas trois. Sur un champ a
+        // n-grammes, un `prefix` attrape `vers`, `versi` et `versio` au meme
+        // endroit : c'est `versio` qui ouvre le fragment, pas `vers` (fuzzer,
+        // graine 3535137). Deux clauses **distinctes**, elles, restent
+        // distinctes — et c'est la plus courte qui ouvre (graine 5500233).
+        let mut du_motif: Vec<Marque> = Vec::new();
+        let mut pousse = |debut: usize, fin: usize| du_motif.push(Marque { debut, fin, rang });
         match motif {
             Motif::Simple(p) => {
                 for j in jetons {
@@ -1492,6 +1500,12 @@ fn marques(motifs: &[Motif], valeur: &Valeur) -> Vec<Marque> {
                 }
             }
         }
+        du_motif.sort_unstable_by_key(|m| (m.debut, m.fin));
+        out.extend(
+            fondre(&du_motif)
+                .into_iter()
+                .map(|(debut, fin)| Marque { debut, fin, rang }),
+        );
     }
     // Debut croissant puis **fin croissante** : c'est cet ordre-la qui decide
     // quel fragment s'ouvre quand deux marques commencent au meme endroit —
@@ -1650,12 +1664,14 @@ impl Decoupeur<'_> {
                 self.interne.1 = self.interne.1.min(if restant > 1 {
                     crate::segments::suivante(self.mots, offset + restant as usize)
                 } else {
-                    // Plus de place : le fragment s'arrete **a la fin de la
-                    // correspondance**, pas a la frontiere de mot suivante.
-                    // C'est ce qui separe `<em>l'ascension</em>` de
-                    // `<em>l'ascension </em>` a une unite de `fragment_size`
-                    // pres (mesure, fuzzer graine 5500233).
-                    arrivee
+                    // Plus de place : le fragment s'arrete a la fin de la
+                    // correspondance — mais sans couper le mot qui la porte.
+                    // Un terme qui finit sur une frontiere s'arrete pile
+                    // (`<em>l'ascension</em>` et non `<em>l'ascension </em>`,
+                    // graine 5500233) ; un gramme au milieu d'un mot va
+                    // jusqu'au bout de ce mot (`<b>versio</b>n`, graine
+                    // 3535137).
+                    crate::segments::a_partir_de(self.mots, arrivee)
                 });
             }
         }

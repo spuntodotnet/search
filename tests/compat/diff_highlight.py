@@ -191,9 +191,15 @@ def cas():
     # seule marque ; ceux qui se **touchent** bout a bout en font une chacun.
     for champ in ("gramme_filtre", "gramme_tok"):
         for q in ({"match": {champ: "eve"}}, {"match": {champ: "e"}},
-                  {"prefix": {champ: "e"}}):
+                  {"prefix": {champ: "e"}}, {"prefix": {champ: "etend"}}):
             ajoute(f"n-grammes {champ} {json.dumps(q, ensure_ascii=False)[:40]}",
                    q, {"fields": {champ: {}}, "number_of_fragments": 0})
+            # Une taille minuscule : c'est la que la borne droite d'un
+            # fragment se lit, et qu'un gramme qui coupe un mot se voit.
+            for taille in (1, 3, 8):
+                ajoute(f"n-grammes {champ} fs={taille} "
+                       f"{json.dumps(q, ensure_ascii=False)[:30]}",
+                       q, {"fields": {champ: {}}, "fragment_size": taille})
 
     # --- les bords d'un fragment ------------------------------------------
     # `number_of_fragments: 0` ne rogne pas : ES n'y passe plus par le

@@ -171,8 +171,8 @@ champs (nommés, en motif, ou `*`), des tailles **petites exprès** — c'est so
 est la phrase entière et n'importe quelle implémentation tombe juste — et, une
 fois sur cinq, une surcharge champ par champ.
 
-Elle a sorti **seize** défauts en quatre passages, et aucun n'était visible
-aux 207 questions écrites à la main la veille. Le premier a coûté un changement
+Elle a sorti **dix-sept** défauts en cinq passages, et aucun n'était visible
+aux 233 questions écrites à la main la veille. Le premier a coûté un changement
 de forme du code :
 
 | Ce que le fuzzer a sorti | Ce que c'était |
@@ -193,8 +193,9 @@ de forme du code :
 | deux marques qui commencent au même endroit ouvraient le mauvais fragment | c'est la plus **courte** qui l'ouvre, et la plus longue s'y fait rogner. Un `dis_max` de deux `match_phrase` imbriqués le montre à une unité de `fragment_size` près |
 | un `regexp` qui attrape deux mots différents pesait comme deux termes | le `PassageScorer` note **clause par clause**, pas mot par mot. Ça ne change pas le contenu d'un fragment, ça change **lequel** survit à `number_of_fragments` |
 | une valeur de `keyword` **vide** | elle rend `<em></em>` au milieu d'autres valeurs, et **rien** en dernière position : ES s'arrête dès que la correspondance commence au-delà du dernier caractère du champ |
+| `<b>vers</b>` là où ES rend `<b>versio</b>n` | les marques d'**une même clause** n'en font qu'une avant tout le reste : un `prefix` attrape `vers`, `versi` et `versio` au même endroit sur un champ à n-grammes, et c'est `versio` qui ouvre le fragment. Deux clauses **distinctes**, elles, restent distinctes — et c'est la plus courte qui ouvre. Et le fragment va jusqu'au **bout du mot** que le gramme coupe |
 
-Les quatorze derniers ont un point commun avec ce que les cartes précédentes ont
+Les quinze derniers ont un point commun avec ce que les cartes précédentes ont
 appris : ils ne portent pas sur le découpage, qui était le sujet, mais sur ce
 que le champ **contient**, sur la façon dont il est lu, et sur les **bords**.
 Le découpage, lui, était juste dès le premier passage — parce qu'il avait été
