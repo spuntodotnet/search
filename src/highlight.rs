@@ -6,9 +6,12 @@
 //! une par une contre un ES 8.15 par
 //! [`tests/compat/diff_highlight.py`](../tests/compat/diff_highlight.py) :
 //!
-//! - **ce qui est surligne** : les termes que la requete pose *sur ce
-//!   champ-la* (c'est `require_field_match`, vrai par defaut). Une phrase rend
-//!   **une seule** marque qui couvre toute la suite, pas une par terme ;
+//! - **ce qui est surligne** : non pas « les termes de la requete » mais ce qui
+//!   a fait correspondre **ce document-la**, sur *ce champ-la*
+//!   (`require_field_match`, vrai par defaut). C'est la raison pour laquelle
+//!   [`Noeud`] garde la forme booleenne de la requete et l'evalue document par
+//!   document. Une phrase rend **une seule** marque qui couvre toute la suite,
+//!   pas une par terme ;
 //! - **ou le fragment commence et finit** : le `BoundedBreakIteratorScanner`
 //!   d'Elasticsearch. Les phrases (au sens d'UAX#29, voir [`crate::segments`])
 //!   sont fusionnees vers l'avant tant que la longueur reste sous
@@ -22,6 +25,13 @@
 //! Un champ multivalue est traite valeur par valeur — un fragment ne franchit
 //! jamais la frontiere entre deux valeurs — mais les fragments de toutes les
 //! valeurs sont mis en concurrence ensemble.
+//!
+//! Les **bords** sont la quatrieme piece, et celle qui a coute le plus de
+//! mesures : un fragment est rogne au sens du `String.trim()` de Java (donc
+//! jusqu'a U+0020, pas au sens d'Unicode), il ne l'est pas du tout a
+//! `number_of_fragments: 0`, le rognage ne mord jamais sur une marque, et deux
+//! marques qui **se chevauchent** n'en font qu'une la ou deux marques qui se
+//! **touchent** en restent deux.
 
 use std::collections::BTreeMap;
 
