@@ -397,6 +397,20 @@ enum Noeud {
         format: Option<DateFormat>,
         attendues: Vec<mapping::TypedValue>,
     },
+    /// `range` sur un champ qui n'est pas surlignable : meme role que
+    /// [`Noeud::Valeurs`], avec des bornes au lieu d'une liste (fuzzer, graine
+    /// 6260176).
+    Intervalle {
+        champ: String,
+        ty: FieldType,
+        format: Option<DateFormat>,
+        bas: Option<(mapping::TypedValue, bool)>,
+        haut: Option<(mapping::TypedValue, bool)>,
+    },
+    /// `ids` : il ne marque rien, mais il se tranche sur l'`_id` du hit — et un
+    /// `must: {ids: …}` qui echoue fait taire tout le `bool` (fuzzer, graine
+    /// 5500127).
+    Ids(Vec<String>),
     /// `exists` : il ne marque rien, mais il se **tranche** sur le `_source`,
     /// et c'est ce qui compte. Un `must: {exists: b}` qui echoue fait taire
     /// tout le `bool` — le laisser opaque marquait ses voisins (trouve par le
@@ -423,7 +437,12 @@ enum Motif {
     /// du dernier (mesure : `match_phrase: "le chat"` rend `<em>le chat</em>`,
     /// pas `<em>le</em> <em>chat</em>`).
     ///
-    Phrase(Vec<Predicat>),
+    /// Une position peut porter **plusieurs** alternatives : un filtre a
+    /// n-grammes pose tous les grammes d'un mot au meme endroit, et la phrase
+    /// correspond des qu'**une** d'entre elles correspond. C'est la
+    /// `SynonymQuery` de Lucene, et sans elle une phrase d'un seul mot ne
+    /// marquait rien sur un champ a n-grammes (fuzzer, graine 3141765).
+    Phrase(Vec<Vec<Predicat>>),
 }
 
 /// La distance d'edition de Levenshtein, avec ou sans transposition — celle que
@@ -614,13 +633,28 @@ fn extraire(v: &Value, gen: &Generation) -> EsResult<Noeud> {
     Ok(match nom {
         "match_none" => Noeud::Jamais,
         "match_all" => Noeud::Toujours,
+        "ids" => match corps.as_object().and_then(|o| o.get("values")) {
+            Some(Value::Array(a)) => Noeud::Ids(
+                a.iter()
+                    .map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_string))
+                    .collect(),
+            ),
+            _ => Noeud::Opaque,
+        },
         "exists" => match corps.as_object().and_then(|o| o.get("field")) {
             // Le chemin du `_source`, pas celui du champ : un multi-field
             // (`e.keyword`) n'existe pas dans le document, sa valeur est celle
             // de son parent. Lire `e.keyword` y trouvait toujours vide, donc
             // faisait tomber le `bool` qui le portait en `filter` (trouve par
             // le fuzzer, graine 4242005).
-            Some(Value::String(champ)) => Noeud::Existe(chemin_source(champ, gen)),
+            // Seulement sur une **feuille** du mapping : sur la racine d'un
+            // `nested` ou d'un `object`, les valeurs vivent ailleurs et le
+            // `_source` ne tranche pas. On reste opaque plutot que de repondre
+            // « il existe » parce que le `_source` porte un tableau (fuzzer,
+            // graine 1234700).
+            Some(Value::String(champ)) if gen.fields.mapped.contains_key(champ.as_str()) => {
+                Noeud::Existe(chemin_source(champ, gen))
+            }
             _ => Noeud::Opaque,
         },
         "bool" => {
@@ -820,27 +854,54 @@ fn extraire(v: &Value, gen: &Generation) -> EsResult<Noeud> {
             let Some(o) = spec.as_object() else {
                 return Ok(Noeud::Opaque);
             };
-            pose(gen, champ, |mf| {
-                // Seul un `keyword` a des termes comparables comme des chaines
-                // ; sur une date ou un nombre, ES ne surligne rien (mesure).
-                if mf.ty.kind() != FieldKind::Keyword {
-                    return Ok(Vec::new());
-                }
-                let borne = |cles: [&str; 2]| -> Option<(String, bool)> {
-                    o.get(cles[0])
-                        .and_then(|v| chaine(champ, mf.ty, Some(v)))
-                        .map(|s| (s, true))
-                        .or_else(|| {
-                            o.get(cles[1])
-                                .and_then(|v| chaine(champ, mf.ty, Some(v)))
-                                .map(|s| (s, false))
-                        })
+            let Some(mf) = gen.fields.get(champ) else {
+                return Ok(Noeud::Opaque);
+            };
+            let format = gen.fields.format_de(champ).cloned();
+            let borne = |cles: [&str; 2]| -> Option<(Value, bool)> {
+                o.get(cles[0])
+                    .map(|v| (v.clone(), true))
+                    .or_else(|| o.get(cles[1]).map(|v| (v.clone(), false)))
+            };
+            let (bas, haut) = (borne(["gte", "gt"]), borne(["lte", "lt"]));
+            // Seul un `keyword` a des termes comparables comme des chaines :
+            // sur une date ou un nombre, ES ne surligne rien — mais la clause
+            // se **tranche** quand meme, et un `filter` qui tombe fait taire
+            // tout le `bool` (fuzzer, graine 6260176).
+            let typee = |b: &Option<(Value, bool)>| -> Option<(mapping::TypedValue, bool)> {
+                let (v, incl) = b.as_ref()?;
+                Some((
+                    mapping::coerce_avec(champ, mf.ty, v, format.as_ref()).ok()?,
+                    *incl,
+                ))
+            };
+            let (tb, th) = (typee(&bas), typee(&haut));
+            // Une borne qu'on ne sait pas lire (du date math) rend la clause
+            // opaque plutot que fausse.
+            if (bas.is_some() && tb.is_none()) || (haut.is_some() && th.is_none()) {
+                return Ok(Noeud::Opaque);
+            }
+            if mf.ty.kind() == FieldKind::Keyword {
+                let chaine_de = |b: &Option<(mapping::TypedValue, bool)>| match b {
+                    Some((mapping::TypedValue::Str(s), incl)) => Some((s.clone(), *incl)),
+                    _ => None,
                 };
-                Ok(vec![Motif::Simple(Predicat::Intervalle {
-                    bas: borne(["gte", "gt"]),
-                    haut: borne(["lte", "lt"]),
-                })])
-            })?
+                Noeud::Feuille {
+                    champ: champ.to_string(),
+                    motifs: vec![Motif::Simple(Predicat::Intervalle {
+                        bas: chaine_de(&tb),
+                        haut: chaine_de(&th),
+                    })],
+                }
+            } else {
+                Noeud::Intervalle {
+                    champ: chemin_source(champ, gen),
+                    ty: mf.ty,
+                    format,
+                    bas: tb,
+                    haut: th,
+                }
+            }
         }
         // `match_all`, `exists`, `ids`, `parent_id` : rien a surligner, chez ES
         // non plus — et rien a trancher sur ce `_source`.
@@ -933,34 +994,47 @@ fn motifs_de_texte(
             _ => vec![Motif::Simple(Predicat::Terme(texte.to_string()))],
         });
     }
-    let termes = analyser(gen, mf.search_analyzer, texte);
+    let positions = analyser(gen, mf.search_analyzer, texte);
     Ok(match clause {
-        "match" => termes
+        "match" => positions
             .into_iter()
+            .flatten()
             .map(|s| Motif::Simple(Predicat::Terme(s)))
             .collect(),
-        "match_phrase" => phrase(termes, None),
+        "match_phrase" => phrase(positions),
         _ => {
-            let mut p = termes;
+            let mut p = positions;
             let dernier = p.pop();
-            let mut positions: Vec<Predicat> = p.into_iter().map(Predicat::Terme).collect();
+            let mut suite: Vec<Vec<Predicat>> = p
+                .into_iter()
+                .map(|alt| alt.into_iter().map(Predicat::Terme).collect())
+                .collect();
             if let Some(d) = dernier {
-                positions.push(prefixe(&d, false)?);
+                // La derniere position est un **prefixe**, et chacune de ses
+                // alternatives en est un.
+                suite.push(
+                    d.iter()
+                        .map(|t| prefixe(t, false))
+                        .collect::<EsResult<Vec<_>>>()?,
+                );
             }
-            if positions.is_empty() {
+            if suite.is_empty() {
                 return Ok(Vec::new());
             }
-            vec![Motif::Phrase(positions)]
+            vec![Motif::Phrase(suite)]
         }
     })
 }
 
-fn phrase(termes: Vec<String>, _slop: Option<u32>) -> Vec<Motif> {
-    if termes.is_empty() {
+fn phrase(positions: Vec<Vec<String>>) -> Vec<Motif> {
+    if positions.is_empty() {
         return Vec::new();
     }
     vec![Motif::Phrase(
-        termes.into_iter().map(Predicat::Terme).collect(),
+        positions
+            .into_iter()
+            .map(|alt| alt.into_iter().map(Predicat::Terme).collect())
+            .collect(),
     )]
 }
 
@@ -1023,16 +1097,27 @@ fn chaine(champ: &str, ty: FieldType, v: Option<&Value>) -> Option<String> {
     }
 }
 
-fn analyser(gen: &Generation, analyzer: Analyzer, texte: &str) -> Vec<String> {
+/// Les termes d'une chaine de requete, **groupes par position**.
+///
+/// La distinction compte : un filtre a n-grammes pose tous les grammes d'un mot
+/// a la position de ce mot, et une phrase doit alors accepter n'importe lequel
+/// a cette position-la — c'est la meme lecture que [`crate::dsl`].
+fn analyser(gen: &Generation, analyzer: Analyzer, texte: &str) -> Vec<Vec<String>> {
     let Some(mut ta) = gen.index.tokenizers().get(&analyzer.tokenizer()) else {
         return Vec::new();
     };
     let mut flux = ta.token_stream(texte);
-    let mut out = Vec::new();
+    let mut out: Vec<(usize, Vec<String>)> = Vec::new();
     while flux.advance() {
-        out.push(flux.token().text.clone());
+        let t = flux.token();
+        match out.last_mut() {
+            Some((pos, alternatives)) if *pos == t.position => {
+                alternatives.push(t.text.clone());
+            }
+            _ => out.push((t.position, vec![t.text.clone()])),
+        }
     }
-    out
+    out.into_iter().map(|(_, a)| a).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -1043,7 +1128,7 @@ fn analyser(gen: &Generation, analyzer: Analyzer, texte: &str) -> Vec<String> {
 ///
 /// Un champ sans correspondance est **absent** de la reponse (et non une chaine
 /// vide), sauf `no_match_size` ; un bloc entierement vide n'apparait pas.
-pub fn rendre(plan: &Plan, gen: &Generation, source: &Value) -> EsResult<Option<Value>> {
+pub fn rendre(plan: &Plan, gen: &Generation, source: &Value, id: &str) -> EsResult<Option<Value>> {
     if plan.est_vide() {
         return Ok(None);
     }
@@ -1064,7 +1149,7 @@ pub fn rendre(plan: &Plan, gen: &Generation, source: &Value) -> EsResult<Option<
     // que ca (voir [`Noeud`]).
     let mut par_champ: BTreeMap<&str, Vec<Motif>> = BTreeMap::new();
     if let Some(arbre) = &plan.arbre {
-        let verdict = evalue(arbre, &vues, source);
+        let verdict = evalue(arbre, &vues, source, id);
         let mut actives = Vec::new();
         collecte(arbre, &verdict, &mut actives);
         for (champ, motifs) in actives {
@@ -1133,8 +1218,27 @@ impl Noeud {
             | Self::Jamais
             | Self::Toujours
             | Self::Existe(_)
-            | Self::Valeurs { .. } => {}
+            | Self::Valeurs { .. }
+            | Self::Intervalle { .. }
+            | Self::Ids(_) => {}
         }
+    }
+}
+
+/// L'ordre entre deux valeurs typees, quand il en existe un.
+///
+/// Sert a trancher un `range` sur un champ non surlignable : il ne marque rien,
+/// mais un `filter` qui tombe doit faire taire tout le `bool`.
+fn ordre(a: &mapping::TypedValue, b: &mapping::TypedValue) -> Option<std::cmp::Ordering> {
+    use mapping::TypedValue::{Bool, Date, Str, F64, I64};
+    match (a, b) {
+        (I64(x), I64(y)) | (Date(x), Date(y)) => Some(x.cmp(y)),
+        (F64(x), F64(y)) => Some(x.total_cmp(y)),
+        (Bool(x), Bool(y)) => Some(x.cmp(y)),
+        (Str(x), Str(y)) => Some(x.cmp(y)),
+        (I64(x), F64(y)) => Some((*x as f64).total_cmp(y)),
+        (F64(x), I64(y)) => Some(x.total_cmp(&(*y as f64))),
+        _ => None,
     }
 }
 
@@ -1150,15 +1254,15 @@ struct Verdict {
 
 /// Le verdict d'un noeud sur un document. `None` = « on ne sait pas », et dans
 /// le doute on laisse passer : mieux vaut marquer de trop que se taire.
-fn evalue(n: &Noeud, vues: &BTreeMap<&str, Vec<Valeur>>, source: &Value) -> Verdict {
+fn evalue(n: &Noeud, vues: &BTreeMap<&str, Vec<Valeur>>, source: &Value, id: &str) -> Verdict {
     let enfants: Vec<Verdict> = match n {
         Noeud::Et(e) | Noeud::Ou { enfants: e, .. } => {
-            e.iter().map(|x| evalue(x, vues, source)).collect()
+            e.iter().map(|x| evalue(x, vues, source, id)).collect()
         }
-        Noeud::Non(e) => vec![evalue(e, vues, source)],
+        Noeud::Non(e) => vec![evalue(e, vues, source, id)],
         _ => Vec::new(),
     };
-    let valeur = verdict_de(n, &enfants, vues, source);
+    let valeur = verdict_de(n, &enfants, vues, source, id);
     Verdict { valeur, enfants }
 }
 
@@ -1167,12 +1271,35 @@ fn verdict_de(
     enfants: &[Verdict],
     vues: &BTreeMap<&str, Vec<Valeur>>,
     source: &Value,
+    id: &str,
 ) -> Option<bool> {
     match n {
+        Noeud::Ids(valeurs) => Some(valeurs.iter().any(|v| v == id)),
         Noeud::Existe(champ) => {
             let mut vus = Vec::new();
             descendre(source, champ, &mut vus);
             Some(!vus.is_empty())
+        }
+        Noeud::Intervalle {
+            champ,
+            ty,
+            format,
+            bas,
+            haut,
+        } => {
+            let mut vus = Vec::new();
+            descendre(source, champ, &mut vus);
+            Some(vus.iter().any(|v| {
+                mapping::coerce_avec(champ, *ty, v, format.as_ref()).is_ok_and(|t| {
+                    let apres = bas.as_ref().is_none_or(|(b, incl)| {
+                        ordre(&t, b).is_some_and(|o| o.is_gt() || (*incl && o.is_eq()))
+                    });
+                    let avant = haut.as_ref().is_none_or(|(h, incl)| {
+                        ordre(&t, h).is_some_and(|o| o.is_lt() || (*incl && o.is_eq()))
+                    });
+                    apres && avant
+                })
+            }))
         }
         Noeud::Valeurs {
             champ,
@@ -1244,7 +1371,9 @@ fn collecte<'a>(n: &'a Noeud, verdict: &Verdict, out: &mut Vec<(&'a str, &'a [Mo
         | Noeud::Jamais
         | Noeud::Toujours
         | Noeud::Existe(_)
-        | Noeud::Valeurs { .. } => {}
+        | Noeud::Valeurs { .. }
+        | Noeud::Intervalle { .. }
+        | Noeud::Ids(_) => {}
     }
 }
 
@@ -1516,20 +1645,22 @@ fn jetons(l: &Lecture, gen: &Generation, valeur: &str, chars: &[char]) -> Vec<Je
 /// Les suites de jetons a positions consecutives qui verifient chaque predicat
 /// de la phrase, dans l'ordre — chacune rendue **terme par terme**, a charge de
 /// l'appelant de les fondre en une seule marque ou non.
-fn suites(jetons: &[Jeton], positions: &[Predicat]) -> Vec<Vec<(usize, usize)>> {
+fn suites(jetons: &[Jeton], positions: &[Vec<Predicat>]) -> Vec<Vec<(usize, usize)>> {
     let mut out = Vec::new();
     if positions.is_empty() {
         return out;
     }
+    let tient =
+        |alternatives: &[Predicat], terme: &str| alternatives.iter().any(|p| p.matche(terme));
     for (i, premier) in jetons.iter().enumerate() {
-        if !positions[0].matche(&premier.texte) {
+        if !tient(&positions[0], &premier.texte) {
             continue;
         }
         let mut suite = vec![(premier.debut, premier.fin)];
-        for (attendue, p) in (premier.position + 1..).zip(positions[1..].iter()) {
+        for (attendue, alternatives) in (premier.position + 1..).zip(positions[1..].iter()) {
             match jetons[i + 1..]
                 .iter()
-                .find(|j| j.position == attendue && p.matche(&j.texte))
+                .find(|j| j.position == attendue && tient(alternatives, &j.texte))
             {
                 Some(j) => suite.push((j.debut, j.fin)),
                 None => {
@@ -1987,7 +2118,7 @@ mod tests {
             },
         ]);
         let mut out = Vec::new();
-        collecte(&arbre, &evalue(&arbre, &vues, &Value::Null), &mut out);
+        collecte(&arbre, &evalue(&arbre, &vues, &Value::Null, ""), &mut out);
         assert!(out.is_empty(), "{out:?}");
 
         // Le meme arbre dont le filtre tient : le `should` marque.
@@ -1999,7 +2130,7 @@ mod tests {
             },
         ]);
         let mut out = Vec::new();
-        collecte(&arbre, &evalue(&arbre, &vues, &Value::Null), &mut out);
+        collecte(&arbre, &evalue(&arbre, &vues, &Value::Null, ""), &mut out);
         assert_eq!(out.len(), 2);
     }
 
@@ -2016,7 +2147,7 @@ mod tests {
             },
         ]);
         let mut out = Vec::new();
-        collecte(&arbre, &evalue(&arbre, &vues, &Value::Null), &mut out);
+        collecte(&arbre, &evalue(&arbre, &vues, &Value::Null, ""), &mut out);
         assert!(out.is_empty(), "{out:?}");
     }
 
@@ -2030,8 +2161,8 @@ mod tests {
         let motifs = vec![
             Motif::Simple(Predicat::Terme("le".into())),
             Motif::Phrase(vec![
-                Predicat::Terme("le".into()),
-                Predicat::Terme("chat".into()),
+                vec![Predicat::Terme("le".into())],
+                vec![Predicat::Terme("chat".into())],
             ]),
         ];
         // La plus **courte** d'abord : c'est elle qui ouvrira le fragment.

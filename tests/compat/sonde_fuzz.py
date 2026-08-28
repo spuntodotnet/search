@@ -99,6 +99,9 @@ SURLIGNE = {
                                              "filter": ["lowercase"]}}}},
     "mappings": {"properties": {
         "gr": {"type": "text", "analyzer": "ng_tok"},
+        "n": {"type": "integer"},
+        "j": {"type": "date"},
+        "lignes": {"type": "nested", "properties": {"x": {"type": "long"}}},
         "t": {"type": "text"},
         "k": {"type": "keyword", "ignore_above": 12},
         "src": {"type": "text", "copy_to": "tout"},
@@ -129,6 +132,11 @@ DOCS_SURLIGNE = [
     # contient, donc le surlignage aussi.
     ("g", {"t": "rien", "k": "  espaces   multiples  ", "u": "g",
            "gr": "version"}),
+    # De quoi trancher les clauses qui ne marquent rien : un nombre, une date,
+    # un `nested` (dont l'`exists` ne se lit pas dans le `_source` du parent).
+    ("h", {"t": "cible parmi d'autres mots", "n": 7,
+           "j": "2025-03-04T00:00:00.000Z", "u": "h",
+           "lignes": [{"x": 1}]}),
 ]
 
 TROUS = {"mappings": {"properties": {"n": {"type": "integer"},
@@ -433,6 +441,32 @@ CAS = [
      {"query": {"regexp": {"t": "[a-z].*"}}, "size": 10, "sort": ["u"],
       "highlight": {"fields": {"t": {"fragment_size": 15,
                                      "number_of_fragments": 2}}}}, surligne),
+
+    (SURLIGNE, DOCS_SURLIGNE, "un filter qui ne marque rien fait taire le bool",
+     "un `range` sur un nombre, un `term` sur une date, un `ids` : aucun ne "
+     "marque, tous se tranchent sur le document — et un `bool` qu'ils font "
+     "tomber ne marque rien du tout",
+     {"query": {"dis_max": {"queries": [
+         {"exists": {"field": "u"}},
+         {"bool": {"should": [{"match": {"t": "cible"}}],
+                   "filter": [{"range": {"n": {"gte": 1000}}}]}},
+         {"bool": {"should": [{"match": {"t": "cible"}}],
+                   "filter": [{"term": {"j": "2001-01-01"}}]}},
+         {"bool": {"should": [{"match": {"t": "cible"}}],
+                   "filter": [{"ids": {"values": ["introuvable"]}}]}}]}},
+      "size": 10, "sort": ["u"], "highlight": {"fields": {"t": {}}}}, surligne),
+    (SURLIGNE, DOCS_SURLIGNE, "un exists sur une racine nested ne tranche pas",
+     "ses valeurs vivent dans des documents caches : le `_source` du parent "
+     "porte bien un tableau, mais ES n'y voit pas le champ",
+     {"query": {"bool": {"should": [{"match": {"t": "cible"}}],
+                         "must_not": [{"exists": {"field": "lignes"}}]}},
+      "size": 10, "sort": ["u"], "highlight": {"fields": {"t": {}}}}, surligne),
+    (SURLIGNE, DOCS_SURLIGNE, "une phrase sur un champ a n-grammes",
+     "un filtre a n-grammes pose tous les grammes d'un mot **a la meme "
+     "position** : une phrase doit accepter n'importe lequel a cet endroit, "
+     "sinon elle ne marque rien",
+     {"query": {"match_phrase": {"gr": "version"}}, "size": 10, "sort": ["u"],
+      "highlight": {"fields": {"gr": {}}, "fragment_size": 12}}, surligne),
 
     # -- agregation range --------------------------------------------------
     (TROUS, DOCS_TROUS, "range agg avec un trou",

@@ -821,7 +821,7 @@ fn build_hit(
     // Le surlignage lit le `_source` **complet** lui aussi, et pour la meme
     // raison : ES rend les fragments d'un champ que le filtre `_source` a
     // retire. Il se calcule donc avant que le filtre ne consomme la valeur.
-    let fragments = crate::highlight::rendre(hl, gen, &source)?;
+    let fragments = crate::highlight::rendre(hl, gen, &source, &id)?;
     if let Some(filtered) = rendu.source.apply(source) {
         hit.insert("_source".into(), filtered);
     }
