@@ -28,6 +28,13 @@ Ce qu'il separe, et pourquoi chacune de ces lignes existe :
   `keyword` — et ce qui ne marque **rien** (`match_all`, `exists`, `ids`, un
   `must_not`, un champ numerique) ;
 - **`require_field_match`**, dans ses deux sens ;
+- **les bords d'un fragment** : le rognage est celui du `String.trim()` de
+  Java — il s'arrete a U+0020, donc l'espace insecable et l'espace fine
+  restent — et il disparait entierement a `number_of_fragments: 0` ;
+- **deux marques qui se touchent, deux marques qui se chevauchent** : seules
+  les secondes n'en font qu'une. Ca ne se voit que sur des n-grammes, et le
+  corpus declare donc les deux formes d'analyzer (le filtre, qui pose des
+  grammes qui se recouvrent ; le tokenizer, qui les pose bout a bout) ;
 - **un champ multivalue** : un fragment ne franchit jamais la frontiere entre
   deux valeurs, mais les fragments de toutes les valeurs sont en concurrence.
 
