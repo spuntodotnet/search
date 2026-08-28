@@ -124,44 +124,46 @@ avec sa raison, et `--tout` les imprime.
 
 ## La mesure du jour
 
-Le générateur a changé — trois briques de plus (`search_analyzer`, `copy_to`,
-`store`) — donc **toutes les graines ont changé de sens** : la campagne
-précédente ne mesurait plus les mêmes cas, et ses chiffres ne sont pas
-reconduits. Ce tableau est celui de ce passage, refait en entier.
+Le générateur a changé — une brique de plus (`highlight`) — donc **toutes les
+graines ont changé de sens** : la campagne précédente ne mesurait plus les mêmes
+cas, et ses chiffres ne sont pas reconduits. Ce tableau est celui de ce passage,
+refait en entier.
 
 ```
-graines 5150000+       250 cas, 11 020 requêtes, 0 divergence réelle
-graines 6260000+       250 cas, 11 131 requêtes, 0 divergence réelle
-graines 7370000+       250 cas, 11 037 requêtes, 0 divergence réelle
-graines 3535000+       250 cas, 10 959 requêtes, 0 divergence réelle
-graines 9494000+       250 cas, 11 098 requêtes, 0 divergence réelle
-graines 4242000+       250 cas, 11 082 requêtes, 1 divergence ouverte
-graines 1717000+       250 cas, 11 000 requêtes, 0 divergence réelle
-graines 2626000+       250 cas, 11 040 requêtes, 0 divergence réelle
+graines 5150000+       250 cas, 10 965 requêtes, 0 divergence réelle
+graines 6260000+       250 cas, 11 035 requêtes, 0 divergence réelle
+graines 7370000+       250 cas, 11 000 requêtes, 0 divergence réelle
+graines 3535000+       250 cas, 11 016 requêtes, 0 divergence réelle
+graines 9494000+       250 cas, 10 995 requêtes, 0 divergence réelle
+graines 4242000+       250 cas, 11 023 requêtes, 1 divergence ouverte
+graines 1717000+       250 cas, 10 987 requêtes, 0 divergence réelle
+graines 2626000+       250 cas, 11 060 requêtes, 0 divergence réelle
+graines 5500000+       250 cas, 11 026 requêtes, 1 divergence ouverte
+graines 8080000+       250 cas, 11 078 requêtes, 0 divergence réelle
+graines 1234500+       250 cas, 11 061 requêtes, 0 divergence réelle
+graines 3141590+       250 cas, 11 059 requêtes, 0 divergence réelle   (contrôle)
+graines 2718280+       250 cas, 11 060 requêtes, 0 divergence réelle   (contrôle)
+graines 1414210+       250 cas, 11 155 requêtes, 0 divergence réelle   (contrôle)
                      ------------------------------------------------
-                     2 000 cas, 88 367 requêtes, 1 divergence ouverte
+                     3 500 cas, 154 520 requêtes, 2 divergences ouvertes
 
-étalonnage ES vs ES     50 cas,  2 145 requêtes, 0 divergence
+étalonnage ES vs ES     60 cas,  2 523 requêtes, 0 divergence
 ```
 
-Trois de ces plages ont servi à corriger : **5150000+**, qui a montré que la
-valeur stockée écrasait la valeur formatée de `fields` ; **4242000+**, qui a
-sorti le budget de `max_expansions` ; et **1717000+**, qui a sorti la limite des
-tokenizers de Lucene — une plage jamais regardée avant ce passage, comme
-**2626000+**. Les cinq autres sont des plages de contrôle de ce passage-ci :
-elles n'ont servi à rien corriger. Le rapport machine publié est celui de la
-dernière, [`fuzz.json`](fuzz.json).
+Onze de ces plages ont servi à corriger, et elles ont sorti **dix-sept** défauts
+du surlignage à elles seules (le détail plus bas). Les **trois dernières** sont
+des plages de contrôle : elles n'ont servi à rien corriger, et elles sont
+vertes. Le rapport machine publié est celui de la dernière,
+[`fuzz.json`](fuzz.json).
 
-Et la règle a rejoué exactement comme les fois précédentes : **les deux plages
-neuves en ont sorti une chacune**, et aucune n'était dans le sujet de la carte.
-Six passages, aucune plage neuve muette.
+C'est la première fois qu'une plage de contrôle ne sort rien — et ça se lit
+exactement pour ce que c'est : **onze plages avaient été passées avant elles**,
+sur une seule fonctionnalité. Le tirage n'a plus rien de neuf à dire sur ce
+morceau-là ; il en aura sur le prochain.
 
-**La divergence de 4242000+ est ouverte, pas corrigée.** C'est celle que ce
-document décrit plus bas : un ordre par `_score` que BM25 sépare et qu'ES rend
-ex æquo, sur un champ `text` **facultatif** — l'`avgdl` de Lucene se calcule sur
-les documents qui ont le champ, celui de tantivy sur tous. Le prédicat refuse de
-l'absorber, exprès ; élargir la ligne masquerait exactement ce qu'elle a été
-écrite pour attraper.
+**Les deux divergences sont ouvertes, et aucune ne porte sur le surlignage** :
+ni l'une ni l'autre n'a de bloc `highlight` dans sa requête. Elles sont
+décrites plus bas, avec leur graine.
 
 ### Ce que la brique « surlignage » a sorti
 
@@ -396,9 +398,9 @@ publiées ouvertes plutôt que tues, avec leur graine.
 | Graine | Ce qui diffère | Ce que c'est |
 |---|---|---|
 | `5500180` | `total` 9 chez ferrite, 8 chez ES, sur un `bool` fait de deux `must_not` dont un `exists` | la divergence **déjà déclarée** sur `exists` appliqué à un champ `text` dont l'analyzer (`stop`) ne laisse aucun terme — vue ici sous une négation, donc dans le sens qui rend **plus** de documents. Le prédicat qui couvre cette famille ne reconnaît pas cette imbrication-là (`dis_max` d'un `bool` à deux `must_not`), et l'élargir masquerait ce qu'il est écrit pour attraper |
-| `8080118` | `total` 17 chez ferrite, 18 chez ES, sur un `match_phrase_prefix` posé sur un champ à **n-grammes** | un défaut **antérieur** au surlignage, de la famille de `MultiPhrasePrefixQuery` : plusieurs grammes par position, et le développement du préfixe ne retient pas les mêmes que Lucene. La carte des n-grammes en avait déjà corrigé un morceau (le budget de `max_expansions`) ; celui-ci est à part |
+| `4242241` | un ordre par `_score` : ferrite place `d014` là où ES place `d020`, les deux à `1.0` dans le tableau `sort` | la **même famille** que la divergence ouverte du passage précédent : un `dis_max` dont une branche est un `term` sur un `boolean`. ES le note sous `1.0` (le `match_all` voisin l'emporte), ferrite au-dessus — ce sont deux constantes de BM25, et le prédicat n'accepte une inversion que si ES donne aux deux documents des scores **différents**. Ici il les rend ex æquo, et c'est ferrite qui les sépare |
 
-Les deux se rejouent (`--rejouer 5500180`, `--rejouer 8080118`) et aucune n'est
+Les deux se rejouent (`--rejouer 5500180`, `--rejouer 4242241`) et aucune n'est
 absorbée par un prédicat : une divergence qu'on n'a pas expliquée n'a pas à
 compter comme expliquée.
 
