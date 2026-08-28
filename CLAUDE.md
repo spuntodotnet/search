@@ -259,6 +259,32 @@ bouger**, pas après.
   garde-fou est le troisième verdict : un cas qu'aucune capacité ne réclame
   compte **contre** nous, sinon oublier de déclarer une capacité ferait monter
   le taux.
+- **Un fragment de surlignage se reproduit, il ne s'invente pas.** Le bloc
+  `highlight` aurait pu se livrer en une journée : marquer les termes trouvés
+  et couper autour. Ça aurait rendu, sur presque chaque texte, **d'autres
+  fragments** qu'Elasticsearch — sans que rien ne le signale, puisqu'un
+  fragment plausible ressemble à un fragment juste. Ce que ferrite reproduit
+  est donc le `UnifiedHighlighter` de Lucene tel qu'ES le configure, mesuré
+  pièce par pièce ([`src/highlight.rs`](src/highlight.rs),
+  [`src/segments.rs`](src/segments.rs)) : la fusion des phrases jusqu'à
+  `fragment_size` puis la re-coupe au mot, les frontières de phrase d'UAX#29 —
+  dont la règle SB8, qui fait qu'un point suivi d'une **minuscule** ne termine
+  rien —, les frontières de mot **du JDK** (qui ne sont pas celles de la norme :
+  le tiret y joint, le deux-points non), le `PassageScorer` pour choisir
+  lesquels survivent. Trois conséquences de méthode : le découpeur a été
+  **mesuré avant d'être écrit** (quatre sondes contre le conteneur de
+  référence) et il n'a plus bougé ensuite ; ce qui n'est pas reproduit est
+  refusé en le nommant (`type`, `order: score`, `encoder`…) plutôt qu'ignoré ;
+  et les seize défauts que le fuzzer a sortis portaient tous sur ce que le
+  champ **contient** ou sur les **bords**, jamais sur la coupe.
+- **Le surlignage garde la forme booléenne de la requête.** ES ne marque pas
+  « les termes de la requête » : il marque ce qui a fait correspondre **ce
+  document-là**, via les `Matches` de Lucene. Un `should` placé sous un
+  `filter` qui échoue ne marque rien. Une extraction à plat était plus simple
+  et fausse en 200 ; l'arbre de clauses est donc conservé et évalué document
+  par document — et les feuilles qu'on ne sait pas trancher depuis le `_source`
+  (un intervalle de dates, une jointure) sont **supposées satisfaites**, parce
+  que dans le doute il vaut mieux marquer de trop que se taire.
 - **Un objet n'est pas un champ.** `object` est indexé par chemins pointés
   (`client.ville`), exactement comme le fait Elasticsearch. C'est ce qui a rendu
   le chantier petit : `Fields.mapped` était déjà une table `chemin → champ`.
