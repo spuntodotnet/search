@@ -29,7 +29,7 @@ comme un banc.
 | Mapping | celui de la track, **lu** dans son `index.json` — pas retapé ici (six écarts, listés plus bas) |
 | Requêtes | les 31 opérations de recherche de son `operations/default.json`, dont les trois requêtes à 45 586 termes que son `track.py` fabrique depuis `terms.txt` |
 | Indexation | 8 clients en parallèle, lots de 5 000 documents — les défauts de la track |
-| ferrite | image `scratch` du dépôt, `docker run -p 9200:9200 -v …:/data` |
+| ferrite | image `scratch` du dépôt, `docker run -p 9200:9200 -v …:/data` — **4,0 Mo compressés** au sens de [l'enveloppe](#lenveloppe-de-limage), contre 669,1 Mo pour celle d'Elasticsearch |
 | Elasticsearch | `docker.elastic.co/elasticsearch/elasticsearch:8.15.0`, `discovery.type=single-node`, `ES_JAVA_OPTS=-Xms2g -Xmx2g` |
 | Machine | la même pour les deux, l'un après l'autre : 8 cœurs, 31 Gio de RAM, disque local |
 
@@ -90,7 +90,29 @@ Deux échelles, la même machine, les deux serveurs l'un après l'autre. Le
 rapport `×` compare **toujours** ferrite à Elasticsearch dans le même sens :
 au-dessus de 1, ferrite est devant.
 
-### L'enveloppe
+### L'enveloppe de l'image
+
+Avant de mesurer ce que les deux serveurs coûtent en marche, ce qu'ils coûtent à
+l'arrêt. Ces trois lignes sont mesurées par
+[`measure_container.sh`](../tests/compat/measure_container.sh) et **pas** par le
+banc ; elles sont ici parce qu'une taille d'image publiée sans sa définition est
+un chiffre qu'on ne peut pas vérifier — et parce que ce dépôt en a publié trois
+différents pour la même image.
+
+| | ferrite 0.7.0 | ES 8.15.0 | × |
+|---|---|---|---|
+| **Image compressée**, telle qu'un registre la sert | **4,0 Mo** | 669,1 Mo | **×167** |
+| Image décompressée, ce que son système de fichiers occupe | 9,5 Mo | 1 266,1 Mo | ×133 |
+| Le binaire seul | 9,5 Mo | — (une JVM) | |
+
+Le chiffre publié est le premier — **ce qu'un `docker pull` télécharge**. Les Mo
+sont décimaux (10⁶ octets), comme ceux de `docker images`. Le README annonçait
+« 638 Mo contre 8,2 Mo » : deux définitions différentes sur la même ligne, en
+Mio sous le nom de Mo, et un `docker image inspect --format '{{.Size}}'` dont le
+sens a changé entre Docker 28 et Docker 29. Le détail de la correction est dans
+[le README](../README.md#le-conteneur).
+
+### L'enveloppe, à l'échelle
 
 | | 500 000 documents | | | 2 000 000 documents | | |
 |---|---|---|---|---|---|---|
@@ -129,8 +151,8 @@ mesures est le maximum déguisé en centile.
 | `phrase` (`match_phrase`) | **1,40** / 1,58 | 2,33 / 2,92 | **×1,66** | 100/100 |
 | `term` | **1,38** / 1,65 | 2,07 / 3,03 | **×1,50** | 100/100 |
 | `default` (`match_all`) | 2,11 / 3,06 | 2,14 / 2,98 | ×1,01 | 100/100 |
-| `country_agg_uncached` | 22,10 / 22,87 | **17,58** / 19,61 | ×0,80 | 100/100 |
-| `country_agg_cached` | 22,05 / 22,61 | **14,17** / 18,80 | ×0,64 | 100/100 |
+| `country_agg_uncached` † | 22,10 / 22,87 | **17,58** / 19,61 | ×0,80 | 100/100 |
+| `country_agg_cached` † | 22,05 / 22,61 | **14,17** / 18,80 | ×0,64 | 100/100 |
 | `scroll` (25 pages × 1 000) | 1 498,72 / 1 511,27 | **515,22** / 536,58 | ×0,34 | 41/100 |
 | `large_terms` (45 587 termes) | 957,06 / 976,34 | **120,66** / 129,59 | ×0,13 | 63/100 |
 | `large_filtered_terms` | 959,11 / 970,04 | **114,12** / 122,06 | ×0,12 | 63/100 |
@@ -140,14 +162,19 @@ mesures est le maximum déguisé en centile.
 | `desc_sort_geonameid` | 273,73 / 282,57 | **4,50** / 6,30 | ×0,016 | 100/100 |
 | `asc_sort_geonameid` | 254,89 / 265,54 | **3,45** / 3,92 | ×0,014 | 100/100 |
 
+† **à jeter** : mesuré sur un ferrite dont les sous-agrégations ne comptaient pas
+tous les documents de leurs buckets rares. Ces deux lignes disent le prix d'un
+calcul faux, corrigé depuis, et ne se comparent plus à rien —
+[détail plus bas](#ce-que-la-correction-coûte-et-ce-que-les-deux-lignes-du-tableau-valent-encore).
+
 #### 2 000 000 de documents
 
 | Requête | ferrite méd. / p95 | ES méd. / p95 | × | n (f/ES) |
 |---|---|---|---|---|
 | `phrase` (`match_phrase`) | **1,20** / 1,43 | 3,13 / 3,92 | **×2,61** | 100/100 |
 | `term` | **1,55** / 1,91 | 2,58 / 3,25 | **×1,67** | 100/100 |
-| `country_agg_uncached` | **51,77** / 55,71 | 66,88 / 73,38 | **×1,29** | 100/100 |
-| `country_agg_cached` | **52,15** / 61,92 | 66,52 / 69,68 | **×1,28** | 100/100 |
+| `country_agg_uncached` † | **51,77** / 55,71 | 66,88 / 73,38 | **×1,29** | 100/100 |
+| `country_agg_cached` † | **52,15** / 61,92 | 66,52 / 69,68 | **×1,28** | 100/100 |
 | `default` (`match_all`) | 5,00 / 7,96 | **3,34** / 3,84 | ×0,67 | 100/100 |
 | `scroll` (25 pages × 1 000) | 1 737,06 / 1 773,03 | **432,68** / 458,18 | ×0,25 | 35/100 |
 | `large_filtered_terms` | 1 029,87 / 1 058,20 | **144,88** / 152,23 | ×0,14 | 59/100 |
@@ -157,6 +184,9 @@ mesures est le maximum déguisé en centile.
 | `desc_sort_population` | 727,25 / 740,62 | **4,93** / 5,66 | ×0,007 | 83/100 |
 | `asc_sort_population` | 721,78 / 738,01 | **2,88** / 3,16 | ×0,004 | 84/100 |
 | `asc_sort_geonameid` | 1 177,58 / 1 206,89 | **4,00** / 4,27 | ×0,003 | 51/100 |
+
+† **à jeter**, pour la même raison qu'à l'échelle précédente —
+[détail plus bas](#ce-que-la-correction-coûte-et-ce-que-les-deux-lignes-du-tableau-valent-encore).
 
 ## Ce que ferrite gagne
 

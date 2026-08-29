@@ -12,14 +12,16 @@ répondre à des requêtes `bool` + `terms` + un tri.
 
 `ferrite` vise le même contrat d'API, dans une enveloppe sans commune mesure :
 
-|  | Elasticsearch | ferrite |
+|  | Elasticsearch 8.15.0 | ferrite |
 |---|---|---|
-| Image | ~1,3 Go | **8,2 Mo** (`scratch`) |
-| RSS au repos | > 1 Go | **3,6 Mo** |
-| Démarrage | 30-60 s | **225 ms** (`docker run` → premier `GET /` servi) |
+| Image compressée, telle qu'un registre la sert | 669,1 Mo | **4,0 Mo** (`scratch`) |
+| RSS au repos | 1,11 Go | **4,3 Mo** |
+| Démarrage | 18,7 s | **184 ms** (`docker run` → premier `GET /` servi) |
 | Runtime | JVM + tuning heap | un binaire statique |
 
-Ces chiffres sont mesurés, pas visés — voir [Le conteneur](#le-conteneur).
+Ces chiffres sont mesurés, pas visés, et les deux colonnes sont mesurées **de la
+même façon** — voir [Le conteneur](#le-conteneur), qui dit aussi pourquoi une
+taille d'image sans sa définition ne veut rien dire.
 
 ### Et une fois qu'il y a des documents dedans ?
 
@@ -33,7 +35,6 @@ serveurs en conteneur sur la même machine :
 |---|---|---|
 | `match_phrase` (latence médiane / p95) | 3,13 / 3,92 ms | **1,20 / 1,43 ms** |
 | `term` | 2,58 / 3,25 ms | **1,55 / 1,91 ms** |
-| Agrégation `terms` + `sum` | 66,88 ms | **51,77 ms** |
 | RSS | 3,40 Go | **425 Mo** |
 | Tri sur `match_all` | **4,00 ms** | 1 178 ms |
 | `scroll`, 25 pages × 1 000 | **433 ms** | 1 737 ms |
@@ -49,6 +50,12 @@ trouvé** — des valeurs fausses en 200 dans les buckets rares, corrigé depuis
 (voir [`docs/tantivy-patch.md`](docs/tantivy-patch.md)) — et **la taille au-delà
 de laquelle il n'est plus le bon choix** sont dans
 [`docs/bench.md`](docs/bench.md).
+
+La ligne d'agrégation qui figurait ici (`terms` + `sum`, 51,77 ms contre 66,88)
+a été **retirée** : elle a été mesurée par la campagne qui a trouvé ce défaut,
+donc sur un moteur qui ne comptait pas tous les documents de ses buckets rares.
+Elle disait le prix d'un calcul faux. La campagne n'a pas été relancée, et
+publier un chiffre qu'on ne tient plus coûte plus cher que de ne rien publier.
 
 L'argument n'est pas « on refait Elasticsearch en mieux ». C'est : **le code
 client existant ne change pas** (mêmes bibliothèques officielles, mêmes
@@ -132,16 +139,110 @@ Variables d'environnement : `FERRITE_BIND` (défaut `0.0.0.0:9200`),
 
 Les chiffres ci-dessous sont mesurés, pas visés — par
 [`tests/compat/measure_container.sh`](tests/compat/measure_container.sh), à
-chaque CI. Elasticsearch 8.15.0 est mesuré sur la même machine, dans les mêmes
-conditions.
+chaque CI. Elasticsearch 8.15.0 est mesuré par **le même script**, sur la même
+machine, dans la même campagne.
 
-| | Elasticsearch 8.15.0 | ferrite 0.7.0 |
-|---|---|---|
-| Image | 638 Mo | **8,2 Mo** |
-| Mémoire au repos | 1,02 Gio | **3,6 Mo** (RSS) |
-| Démarrage (`docker run` → premier `GET /` servi) | 22,9 s | **225 ms** (l'essentiel est la création du conteneur par Docker) |
+| | Elasticsearch 8.15.0 | ferrite 0.7.0 | × |
+|---|---|---|---|
+| **Image compressée**, telle qu'un registre la sert | 669,1 Mo | **4,0 Mo** | **×167** |
+| Image décompressée, ce que son système de fichiers occupe | 1 266,1 Mo | 9,5 Mo | ×133 |
+| Le binaire seul | — | 9,5 Mo | |
+| Mémoire au repos (RSS) | 1 113,6 Mo | **4,3 Mo** | **×258** |
+| Démarrage (`docker run` → premier `GET /` servi) | 18,7 s | **184 ms** (médiane de 5 ; l'essentiel est la création du conteneur par Docker) | ×101 |
 
-L'image finale est un `scratch` qui ne contient que le binaire statique.
+L'image finale est un `scratch` qui ne contient que le binaire statique — d'où
+la troisième ligne, qui est la deuxième à 2 Ko près (l'en-tête `tar` de la
+couche). Elle n'a pas de contrepartie chez Elasticsearch, dont l'`ENTRYPOINT`
+est un lien vers un script qui lance une JVM : le script l'imprime alors « non
+mesuré » plutôt que d'aller chercher un nombre qui ne se comparerait à rien.
+Le RSS, lui, est la somme des `VmRSS` de **tous** les processus du cgroup du
+conteneur — ferrite est seul dans le sien, mais l'`ENTRYPOINT` d'Elasticsearch
+lance un shell qui lance la JVM, et lire le seul PID 1 y aurait rendu le RSS du
+shell : deux ordres de grandeur en dessous, et du bon côté pour nous.
+
+**Le chiffre que ce dépôt publie est le premier : l'image compressée, celle
+qu'un `docker pull` télécharge.** Les trois sont honnêtes et ne répondent pas à
+la même question ; la seule exigence est que les deux colonnes portent la même
+définition, ce qui n'était pas le cas jusqu'ici (voir juste en dessous). Les
+« Mo » sont des mégaoctets décimaux (10⁶ octets), les mêmes que ceux qu'affiche
+`docker images` ; en Mio (2²⁰) la première ligne se lirait 638,1 contre 3,8.
+
+### Correction : les 8,2 Mo annoncés jusqu'ici
+
+Cette page a longtemps annoncé « Image : 638 Mo contre 8,2 Mo ». **Les deux
+moitiés de cette ligne ne mesuraient pas la même chose** : 638 était la taille
+*compressée* d'Elasticsearch, 8,2 la taille *décompressée* de ferrite, et les
+deux étaient des Mio affichés sous le nom de Mo. Sous sa propre définition, le
+8,2 Mo était juste — c'est ce que `docker image inspect --format '{{.Size}}'`
+rendait pour l'image 0.3.0, sur les Docker d'alors. Il est faux aujourd'hui deux
+fois :
+
+- **le binaire a grossi** : la même définition rendrait 9,1 Mio (9,5 Mo) sur la
+  0.7.0 ;
+- **`.Size` a changé de sens.** Il dépend du **magasin d'images**, donc en
+  pratique de la version : avec le magasin classique il rendait la somme des
+  couches décompressées, avec celui de containerd — le défaut depuis Docker 29 —
+  il rend la somme des blobs compressés. Le script de mesure rendait
+  donc **3,8** sur la machine de mesure pendant que `docker images` affichait
+  **13,5** pour la même image — et cette troisième valeur est encore autre
+  chose : la colonne `DISK USAGE` additionne les blobs compressés *et* leur
+  copie dépliée, que containerd garde tous les deux.
+
+Une image, quatre nombres, aucune définition écrite à côté. C'est pour ça que le
+script ne lit plus aucun champ dont le sens dépend de la version de Docker : il
+demande l'image (`docker save`, format OCI) et **compte les octets** — la
+version du serveur Docker est imprimée quand même, puisqu'elle change ce que les
+autres outils répondent à la même question.
+
+```
+$ ./tests/compat/measure_container.sh ferrite:0.7.0
+docker serveur   : 29.7.1 (magasin d'images : overlayfs)
+
+== image : ferrite:0.7.0  (linux/amd64, 1 couche(s))
+compressee (registre) :     4 007 597 octets     4,0 Mo   <- ce qu'un `docker pull` telecharge
+decompressee (disque) :     9 519 104 octets     9,5 Mo   <- ce que le systeme de fichiers de l'image occupe
+binaire /ferrite      :     9 517 184 octets     9,5 Mo   <- le fichier que le conteneur execute
+```
+
+La même commande mesure n'importe quelle image, ce qui est la seule façon de
+tenir la ligne « même définition des deux côtés » :
+
+```bash
+./tests/compat/measure_container.sh --tailles docker.elastic.co/elasticsearch/elasticsearch:8.15.0
+```
+
+### Le premier passage en CI a rendu un chiffre faux, en vert
+
+`docker save` ne rend les blobs **compressés** que depuis le magasin d'images de
+containerd. Les runners de la CI sont encore en Docker 28, où il écrit bien un
+layout OCI — mais avec des **couches nues**, et un manifeste qui déclare leur
+taille décompressée. Le script a donc imprimé « compressée (registre) :
+9 520 806 octets », c'est-à-dire la taille décompressée sous le nom de l'autre,
+sans un mot et dans un job vert. Le défaut que cette page corrige, reproduit
+par sa propre correction.
+
+La question se pose maintenant **aux octets de chaque couche** : si l'une d'elles
+n'est pas compressée, la taille qu'un registre servirait n'est pas déductible, et
+le script la refuse (`NON MESURABLE`, code de retour non nul) plutôt que de la
+remplacer par un nombre plausible. Recompresser pour combler le trou mesurerait
+notre `gzip`, pas celui du registre.
+
+La CI produit donc l'artefact OCI directement — c'est exactement ce qu'un
+`docker push` enverrait, et il sort du cache du build :
+
+```bash
+docker buildx build --output type=oci,dest=/tmp/ferrite-oci.tar .
+IMAGE_TAR=/tmp/ferrite-oci.tar ./tests/compat/measure_container.sh ferrite:ci
+```
+
+Les deux chemins ont été étalonnés l'un contre l'autre, et c'est ce qui permet
+de croire celui que la CI publie. Le **blob de la couche est identique à
+l'octet** — 4 005 821 des deux côtés, soit tout ce qu'un `docker pull`
+télécharge vraiment. Les totaux diffèrent de **6 octets**, entièrement dans le
+JSON de configuration de l'image (1 295 contre 1 289) : ce sont deux builds
+distincts, et l'horodatage qu'ils y écrivent n'a pas la même longueur. D'où le
+chiffre publié en Mo et non à l'octet : les six octets sont une propriété du
+build, pas de l'image.
 
 ## État
 
