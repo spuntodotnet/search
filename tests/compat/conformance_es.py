@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Faire passer a ferrite la suite de conformance **d'Elasticsearch lui-meme**.
+"""Faire passer a ferrite la suite de conformance **d'un autre moteur**.
 
     python3 tests/compat/conformance_es.py [URL] [--suites search,get,...] [--verbeux]
     python3 tests/compat/conformance_es.py [URL] --json docs/conformance.json
     python3 tests/compat/conformance_es.py [URL] --diff docs/conformance.json
     python3 tests/compat/conformance_es.py [URL] --etat
+    python3 tests/compat/conformance_es.py [URL] --source opensearch \\
+        --divergences docs/conformance-opensearch-es8150.json
 
 Le harnais de ce repo compare ferrite a un vrai ES sur des cas qu'on a ecrits.
-Celui-ci change de nature : les cas viennent d'**Elastic**, pas de nous. C'est
+Celui-ci change de nature : les cas viennent d'**ailleurs**, pas de nous. C'est
 la seule facon d'attraper ce qu'on ne sait pas qu'on ignore — un test qu'on
 ecrit soi-meme porte la meme idee fausse que le code qu'il teste.
 
@@ -20,9 +22,28 @@ Apache 2.0** (la 7.11 bascule en SSPL + Elastic License) : c'est donc celle-la
 qu'on utilise, et elle est compatible avec la licence de ferrite. Heureuse
 coincidence, c'est aussi la version du projet qu'on cherche a servir.
 
+# Deux sources, et pourquoi la seconde
+
+Une seule suite, c'est un examen dont on connait le sujet. Celle d'Elastic a en
+plus deux limites qu'on ne peut pas lui retirer : elle est **figee en 2020**, et
+une partie de ses echecs porte sur ce que la 8.x a supprime (`include_type_name`,
+`_type` dans les reponses, `action.destructive_requires_name` a `false`).
+
+`--source opensearch` joue la suite REST d'**OpenSearch**
+(`opensearch-project/OpenSearch`), qui descend du meme fork de 2020 mais a ete
+maintenue et etendue depuis. Le format des cas est le meme, donc c'est le meme
+runner qui la joue — le tri se fait dans le rapport, pas dans un second chemin.
+Deux equipes differentes qui trouvent le meme trou, c'est une mesure.
+
+**Licence, verifiee avant de s'en servir** : OpenSearch est publie sous
+**Apache-2.0** (`LICENSE.txt` a la racine du depot, « Apache License, Version
+2.0 »), comme la 7.10.2 d'Elastic. Les deux sont compatibles avec la licence de
+ferrite.
+
 Les fichiers ne sont pas recopies dans ce depot : ils sont telecharges a la
-demande dans `.es-rest-spec/` (ignore par git). Provenance et licence restent
-donc chez Elastic, et ce fichier n'en contient aucune ligne.
+demande dans `.es-rest-spec/` et `.opensearch-rest-spec/` (ignores par git).
+Provenance et licence restent donc chez leurs auteurs, et ce fichier n'en
+contient aucune ligne.
 
 # Ce que le runner sait faire
 
@@ -35,7 +56,7 @@ n'est code en dur ici.
 
 Quatre categories, et c'est la distinction qui compte :
 
-  reussis      ferrite repond comme Elasticsearch
+  reussis      ferrite repond comme le moteur d'origine de la suite
   refuses      ferrite refuse explicitement (hors perimetre) — attendu, pas un bug
   sautes       le cas ne mesure pas la cible (borne de version, verbe du runner)
   echecs       ferrite repond, mais autre chose : **ce sont les vrais**
@@ -53,12 +74,40 @@ Trois taux en sortent, qui ne repondent pas a la meme question :
       (c'est une regression). Un cas qu'aucune capacite ne reclame y reste
       aussi : un trou dans la declaration ne doit pas flatter le taux.
   couverture brute                     reussis / total
-      Quelle part de la suite d'Elastic passe, perimetre non declare compris.
+      Quelle part de la suite passe, perimetre non declare compris.
 
 Le premier dit « est-ce que ce qu'on annonce est juste », le dernier « quelle
-part d'Elasticsearch on couvre ». Confondre les deux, c'est soit se flatter,
+part du moteur d'origine on couvre ». Confondre les deux, c'est soit se flatter,
 soit se punir. Le rattachement est explique dans `perimetre.py` ; il est mesure
 par ce que le serveur repond, pas decide ici.
+
+# La troisieme categorie : les deux moteurs ne s'accordent pas
+
+Un cas de la suite d'OpenSearch qui echoue contre ferrite n'echoue pas
+forcement **parce que** c'est ferrite : ferrite reproduit Elasticsearch 8.15, et
+OpenSearch a diverge d'Elasticsearch depuis 2021. Un cas qui exerce ce sur quoi
+les deux moteurs ne sont plus d'accord ne peut rien dire de ferrite.
+
+Cette categorie ne se decrete pas, sinon elle serait une opinion dont on
+choisirait le contenu — exactement le defaut du denominateur qu'on ecrit
+soi-meme. Elle se **mesure** : on joue la meme suite contre un **vrai
+Elasticsearch 8.15**, et un cas que ce vrai Elasticsearch echoue lui aussi est
+range `divergence_moteurs`. C'est ce que fait `--divergences <rapport.json>`, ou
+le rapport est celui de la meme suite contre un vrai moteur.
+
+Trois garde-fous, parce qu'un rapport de reference mal choisi rendrait la
+categorie plus flatteuse sans rien dire :
+
+  - la reference doit porter la **meme suite** (meme source, meme version), sinon
+    les identifiants de cas ne designent pas les memes cas ;
+  - la reference ne doit pas etre ferrite : un rapport de ferrite contre
+    lui-meme classerait tous ses echecs en « divergence » ;
+  - les cas que la reference **ne couvre pas** sont comptes et imprimes. Une
+    categorie qui se tait sur ce qu'elle n'a pas mesure se lit « rien a
+    signaler ».
+
+Le rapport compte aussi les cas que ferrite **reussit** la ou la reference
+echoue : c'est le sens qui flatte, donc celui qu'il faut regarder en premier.
 
 # Le rapport machine
 
@@ -108,14 +157,45 @@ import genere_compat  # noqa: E402
 import perimetre as perimetre_declare  # noqa: E402
 
 RACINE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
-SPEC_DIR = os.path.abspath(os.path.join(RACINE, ".es-rest-spec"))
-VERSION = "7.10.2"
-TARBALL = f"https://github.com/elastic/elasticsearch/archive/refs/tags/v{VERSION}.tar.gz"
+
+# Les deux suites REST qu'on sait jouer. Elles ont le meme format de cas (elles
+# descendent du meme fork de 2020), donc le meme runner les joue : ce qui change
+# tient dans ce tableau.
+#
+# `licence` n'est pas decoratif — c'est la condition pour s'en servir, et elle a
+# ete verifiee dans le depot avant d'ecrire la ligne (`LICENSE.txt` a la racine
+# des deux). `version_evaluee` est la version que les bornes `skip: {version}` de
+# la suite decrivent : ce sont ses cas, donc c'est son numerotation.
+SOURCES = {
+    "elasticsearch": {
+        "nom": "Elasticsearch",
+        "version": "7.10.2",
+        "tarball": "https://github.com/elastic/elasticsearch/archive/refs/tags/v7.10.2.tar.gz",
+        "prefixe": "elasticsearch-7.10.2/rest-api-spec/src/main/resources/rest-api-spec/",
+        "cache": ".es-rest-spec",
+        "licence": "Apache-2.0",
+        "pourquoi": "la 7.10.2 est la derniere version d'Elasticsearch publiee "
+                    "sous Apache 2.0 : la 7.11 bascule en SSPL + Elastic License",
+        "version_evaluee": (7, 10, 2),
+    },
+    "opensearch": {
+        "nom": "OpenSearch",
+        "version": "2.19.1",
+        "tarball": "https://github.com/opensearch-project/OpenSearch/archive/refs/tags/2.19.1.tar.gz",
+        "prefixe": "OpenSearch-2.19.1/rest-api-spec/src/main/resources/rest-api-spec/",
+        "cache": ".opensearch-rest-spec",
+        "licence": "Apache-2.0",
+        "pourquoi": "OpenSearch est publie sous Apache 2.0 (LICENSE.txt a la "
+                    "racine du depot) — descendant du fork de 2020, mais "
+                    "maintenu et etendu depuis",
+        "version_evaluee": (2, 19, 1),
+    },
+}
 
 # Les options a valeur consomment l'argument qui suit : sans ca, le chemin passe
 # a `--json` serait pris pour l'URL de la cible, et la mesure viserait un
 # serveur qui n'existe pas — en silence.
-A_VALEUR = {"--suites", "--json", "--diff"}
+A_VALEUR = {"--suites", "--json", "--diff", "--source", "--divergences"}
 
 
 def lis_arguments(argv):
@@ -140,6 +220,17 @@ URL = POSITIONNELS[0] if POSITIONNELS else "http://localhost:9200"
 VERBEUX = "--verbeux" in OPTIONS
 SORTIE_JSON = OPTIONS.get("--json")
 RAPPORT_ANCIEN = OPTIONS.get("--diff")
+RAPPORT_DIVERGENCES = OPTIONS.get("--divergences")
+
+SOURCE_ID = OPTIONS.get("--source", "elasticsearch")
+if SOURCE_ID not in SOURCES:
+    print(f"source inconnue [{SOURCE_ID}] : {', '.join(sorted(SOURCES))}",
+          file=sys.stderr)
+    sys.exit(2)
+SOURCE = SOURCES[SOURCE_ID]
+SPEC_DIR = os.path.abspath(os.path.join(RACINE, SOURCE["cache"]))
+VERSION = SOURCE["version"]
+TARBALL = SOURCE["tarball"]
 # Renseignes une fois la suite recuperee : on ne choisit pas les domaines, on
 # les lit sur le disque (voir `suites_disponibles`).
 SUITES = []
@@ -166,11 +257,11 @@ def assure_spec():
     import io
     import tarfile
 
-    print(f"== telechargement de la suite REST d'Elasticsearch {VERSION} "
-          f"(Apache 2.0) -> {SPEC_DIR}")
+    print(f"== telechargement de la suite REST de {SOURCE['nom']} {VERSION} "
+          f"({SOURCE['licence']}) -> {SPEC_DIR}")
     with urllib.request.urlopen(TARBALL, timeout=600) as r:
         brut = r.read()
-    prefixe = f"elasticsearch-{VERSION}/rest-api-spec/src/main/resources/rest-api-spec/"
+    prefixe = SOURCE["prefixe"]
     os.makedirs(SPEC_DIR, exist_ok=True)
     with tarfile.open(fileobj=io.BytesIO(brut), mode="r:gz") as t:
         for membre in t.getmembers():
@@ -337,30 +428,63 @@ APIS_A_ETAT_GLOBAL = {
 # signal plutot que de balayer a chaque cas ce qui n'existe pas.
 ETAT_GLOBAL_SALE = True
 
+# Ce que la cible portait **avant** la campagne, releve une fois au demarrage
+# (voir `etat_de_depart`). Le nettoyage s'en sert pour ne defaire que ce que les
+# cas ont pose : un vrai Elasticsearch arrive avec ses propres templates, et les
+# lui retirer serait sortir du role du runner.
+ETAT_DE_DEPART = {}
 
-# La suite est celle de la 7.10.2, et ses bornes `skip: version` sont ecrites
-# pour un serveur de cette version : c'est donc celle qu'on evalue, quel que
-# soit le numero annonce par la cible.
-VERSION_EVALUEE = (7, 10, 2)
+
+# Les bornes `skip: version` d'une suite sont ecrites pour un serveur de la
+# version **de cette suite** : c'est donc celle qu'on evalue, quel que soit le
+# numero annonce par la cible. Et la numerotation d'OpenSearch n'est pas celle
+# d'Elasticsearch — sa suite se lit contre 2.19.1, pas contre 7.10.2.
+VERSION_EVALUEE = SOURCE["version_evaluee"]
 
 
-def _num(v, defaut):
-    v = v.strip()
-    if not v:
-        return defaut
+def _num(v):
     morceaux = [int(x) for x in re.findall(r"\d+", v)][:3]
     while len(morceaux) < 3:
         morceaux.append(0)
     return tuple(morceaux)
 
 
+# Deux bornes hors de toute version reelle : une borne absente n'est pas la
+# version 0.0.0 ni la 99.99.99, c'est « pas de borne de ce cote ».
+PLUS_PETIT = (-1,)
+PLUS_GRAND = (9,)
+
+
+def cle_de_version(v):
+    """La cle de tri d'un numero de version, **dans l'ordre du moteur qui a
+    ecrit la suite**.
+
+    Pour Elasticsearch, c'est l'ordre des nombres. Pour OpenSearch, non : il a
+    renumerote a 1.0.0 en repartant d'Elasticsearch 7.10, et son propre
+    comparateur range les versions « legacy » 6.x et 7.x **en dessous** de
+    toutes les siennes. Lire `skip: {version: " - 7.9.99"}` comme un nombre fait
+    donc sauter, sur un OpenSearch 2.19, des cas qu'il joue — et lire
+    `skip: {version: "7.2.0 -"}` comme un nombre fait jouer des cas qu'il saute.
+
+    Ce n'est pas une hypothese : c'est l'etalonnage qui l'a dit. Les deux seuls
+    cas « (pre 7.2.0) » de la suite echouaient contre un **vrai OpenSearch
+    2.19.1**, parce qu'ils y sont sautes et qu'on les jouait.
+    """
+    if SOURCE_ID == "opensearch" and v[0] >= 6:
+        return (0,) + v
+    return (1,) + v
+
+
 def dans_la_plage(plage):
     """`skip: {version: "7.0.0 - 7.9.99"}` s'applique-t-il a notre version ?"""
     if plage.strip() == "all":
         return True
+    courant = cle_de_version(VERSION_EVALUEE)
     for morceau in str(plage).split(","):
         bas, _, haut = morceau.partition("-")
-        if _num(bas, (0, 0, 0)) <= VERSION_EVALUEE <= _num(haut, (99, 99, 99)):
+        bas = cle_de_version(_num(bas)) if bas.strip() else PLUS_PETIT
+        haut = cle_de_version(_num(haut)) if haut.strip() else PLUS_GRAND
+        if bas <= courant <= haut:
             return True
     return False
 
@@ -479,60 +603,46 @@ def joue(serveur, actions, pile, trace, corps_precedent=None):
             arg.pop("node_selector", None)
             if not arg:
                 continue
-            api, params = next(iter(arg.items()))
-            trace["api"] = api
-            trace["api_typee"] = False
-            if api in APIS_A_ETAT_GLOBAL:
-                global ETAT_GLOBAL_SALE
-                ETAT_GLOBAL_SALE = True
-            params = resous(params or {}, pile)
-            try:
-                statut, reponse = serveur.appelle(api, params)
-                trace["api_typee"] = serveur.derniere_url_typee
-            except KeyError as e:
-                # Aucun chemin ne correspond : un vrai client refuserait aussi.
-                # C'est une reponse valable quand le test attend une erreur.
-                if attrape in ("param", "request", "bad_request"):
-                    continue
-                raise Echec(str(e)) from e
-            if isinstance(reponse, bool):  # API en HEAD : la reponse est le booleen
-                if attrape:
-                    continue
-                continue
-            err = reponse.get("error", {}) if isinstance(reponse, dict) else {}
-            err = err if isinstance(err, dict) else {}
-            # Un refus de ferrite peut arriver **enveloppe** : une erreur de la
-            # phase de fetch (un `docvalue_fields` sur un `text`, un `format`
-            # sur un numerique) sort dans le « all shards failed » d'ES, dont le
-            # `type` est celui de l'enveloppe et non celui du refus. Ne regarder
-            # que le `type` de tete faisait alors passer un cout de perimetre
-            # pour une regression — le rapport designait la mauvaise chose a
-            # corriger.
-            racines = err.get("root_cause") or []
-            types = [err.get("type")] + [
-                r.get("type") for r in racines if isinstance(r, dict)]
-            if REFUS_FERRITE in types:
-                motif = err.get("reason") or ""
-                for r in racines:
-                    if isinstance(r, dict) and r.get("type") == REFUS_FERRITE:
-                        motif = r.get("reason") or motif
+            # Un `do` porte normalement **une** API. Il arrive qu'un cas en
+            # empile deux dans le meme bloc (`indices.create` puis `bulk` dans
+            # `index/90_unsigned_long.yml` d'OpenSearch) : n'en jouer que la
+            # premiere laissait le document non indexe, donc « 1 document au
+            # lieu de 2 » — un echec qui ne ressemble pas a un defaut du runner.
+            # Les jouer toutes, dans l'ordre du fichier, ne change rien au cas
+            # normal.
+            for api, params in list(arg.items()):
+                trace["api"] = api
+                trace["api_typee"] = False
+                if api in APIS_A_ETAT_GLOBAL:
+                    global ETAT_GLOBAL_SALE
+                    ETAT_GLOBAL_SALE = True
+                params = resous(params or {}, pile)
+                try:
+                    statut, reponse = serveur.appelle(api, params)
+                    trace["api_typee"] = serveur.derniere_url_typee
+                except KeyError as e:
+                    # Aucun chemin ne correspond : un vrai client refuserait
+                    # aussi. C'est une reponse valable quand le test attend une
+                    # erreur.
+                    if attrape in ("param", "request", "bad_request"):
                         break
-                raise Refus(motif[:150])
-            if attrape:
-                attendu = CATCH.get(attrape)
-                if attendu is None and attrape.startswith("/"):
-                    if not compare(attrape, json.dumps(reponse, default=str)):
-                        raise Echec(f"[{api}] devait echouer sur {attrape}, a rendu {statut}")
-                elif statut != attendu and not (attendu == 400 and 400 <= statut < 500):
-                    raise Echec(f"[{api}] devait echouer en {attrape}, a rendu {statut}")
-            elif statut >= 400:
-                raison = (reponse or {}).get("error")
-                raison = raison.get("reason") if isinstance(raison, dict) else raison
-                raise Echec(f"[{api}] {statut} : {str(raison)[:200]}")
+                    raise Echec(str(e)) from e
+                if isinstance(reponse, bool):  # HEAD : la reponse est le booleen
+                    break
+                verifie_la_reponse(api, statut, reponse, attrape)
             continue
 
         if verbe == "set":
             for chemin, nom in arg.items():
+                # `_arbitrary_key_` est une fonctionnalite du runner officiel
+                # (« prends une cle quelconque de cet objet ») que celui-ci
+                # n'implemente pas. Elle se declare normalement en
+                # `features: [arbitrary_key]`, et le cas est alors saute — mais
+                # tous les cas ne la declarent pas. La detecter sur l'action
+                # plutot que sur la declaration evite de rendre un echec la ou
+                # il n'y a qu'un verbe qu'on ne sait pas jouer.
+                if "_arbitrary_key_" in chemin:
+                    raise Saute("exige ['arbitrary_key']")
                 pile[nom] = chemin_de(reponse, chemin)
             continue
 
@@ -546,7 +656,10 @@ def joue(serveur, actions, pile, trace, corps_precedent=None):
             attendu = resous(attendu, pile)
             if verbe == "match" and not compare(attendu, obtenu):
                 raise Echec(f"[{chemin}] attendu {attendu!r}, obtenu {obtenu!r}")
-            if verbe == "length" and len(obtenu or []) != attendu:
+            # `int(attendu)` : un cas ecrit parfois la longueur entre guillemets
+            # (`length: {…: "1"}`). Comparer sans convertir rendait « longueur 1
+            # != 1 », un message qui accuse le serveur d'un defaut du runner.
+            if verbe == "length" and len(obtenu or []) != int(attendu):
                 raise Echec(f"[{chemin}] longueur {len(obtenu or [])} != {attendu}")
             if verbe == "is_true" and (obtenu is None or obtenu is False or obtenu == ""):
                 raise Echec(f"[{chemin}] devait etre vrai, vaut {obtenu!r}")
@@ -562,6 +675,39 @@ def joue(serveur, actions, pile, trace, corps_precedent=None):
                 raise Echec(f"[{chemin}] ne contient pas {attendu!r}")
             continue
         raise Saute(f"verbe [{verbe}] inconnu du runner")
+
+
+def verifie_la_reponse(api, statut, reponse, attrape):
+    """Ce que le serveur a rendu est-il ce que le cas attendait ?"""
+    err = reponse.get("error", {}) if isinstance(reponse, dict) else {}
+    err = err if isinstance(err, dict) else {}
+    # Un refus de ferrite peut arriver **enveloppe** : une erreur de la phase de
+    # fetch (un `docvalue_fields` sur un `text`, un `format` sur un numerique)
+    # sort dans le « all shards failed » d'ES, dont le `type` est celui de
+    # l'enveloppe et non celui du refus. Ne regarder que le `type` de tete
+    # faisait alors passer un cout de perimetre pour une regression — le rapport
+    # designait la mauvaise chose a corriger.
+    racines = err.get("root_cause") or []
+    types = [err.get("type")] + [
+        r.get("type") for r in racines if isinstance(r, dict)]
+    if REFUS_FERRITE in types:
+        motif = err.get("reason") or ""
+        for r in racines:
+            if isinstance(r, dict) and r.get("type") == REFUS_FERRITE:
+                motif = r.get("reason") or motif
+                break
+        raise Refus(motif[:150])
+    if attrape:
+        attendu = CATCH.get(attrape)
+        if attendu is None and attrape.startswith("/"):
+            if not compare(attrape, json.dumps(reponse, default=str)):
+                raise Echec(f"[{api}] devait echouer sur {attrape}, a rendu {statut}")
+        elif statut != attendu and not (attendu == 400 and 400 <= statut < 500):
+            raise Echec(f"[{api}] devait echouer en {attrape}, a rendu {statut}")
+    elif statut >= 400:
+        raison = (reponse or {}).get("error")
+        raison = raison.get("reason") if isinstance(raison, dict) else raison
+        raise Echec(f"[{api}] {statut} : {str(raison)[:200]}")
 
 
 def nettoie(serveur):
@@ -601,23 +747,50 @@ def nettoie(serveur):
         depots = None
     for nom in (depots if isinstance(depots, dict) and "error" not in depots else {}):
         serveur.appelle("snapshot.delete", {"repository": nom, "snapshot": "*"})
-    for api, params in (
-        ("indices.delete_template", {"name": "*"}),
-        ("indices.delete_index_template", {"name": "*"}),
-        ("cluster.delete_component_template", {"name": "*"}),
-        ("ingest.delete_pipeline", {"id": "*"}),
-        ("snapshot.delete_repository", {"repository": "*"}),
-    ):
-        try:
-            serveur.appelle(api, params)
-        except (KeyError, urllib.error.URLError, OSError):
-            pass
+    for balayage in BALAYAGES:
+        balaye(serveur, *balayage)
     # `"*": null` remet a leur defaut *tous* les reglages poses : sans ca, un
     # `cluster.routing.allocation.enable: none` laisse par un cas se lit encore
     # dans le cas suivant, qui le prend pour sa propre reponse.
     serveur.appelle("cluster.put_settings", {
         "body": {"transient": {"*": None}, "persistent": {"*": None}}})
     return nettoie_les_index(serveur)
+
+
+def balaye(serveur, nom, api_suppr, cle, api_liste, extrait):
+    """Supprimer tout ce qu'un cas a pu poser d'une sorte d'etat global.
+
+    Le joker d'abord, parce qu'il coute un appel. Mais un vrai Elasticsearch 8
+    refuse `DELETE /_component_template/*` **en bloc** des qu'un seul element
+    est protege — ses templates de composants integres sont « still in use by
+    index templates » — et alors *rien* n'est supprime, pas meme ce que le cas
+    vient de poser. On enumere donc, et on ne touche qu'a ce qui n'etait pas la
+    au demarrage : le runner defait ce que les cas ont fait, il ne demonte pas
+    le serveur qu'on lui prete. Trouve par `--etat` contre un ES 8.15, sur la
+    suite d'OpenSearch.
+    """
+    try:
+        statut, _ = serveur.appelle(api_suppr, {cle: "*"})
+    except (KeyError, urllib.error.URLError, OSError):
+        return
+    if statut < 400:
+        return
+    try:
+        _, liste = serveur.appelle(api_liste, {})
+    except (KeyError, urllib.error.URLError, OSError):
+        return
+    if not isinstance(liste, (dict, list)) or (
+            isinstance(liste, dict) and "error" in liste):
+        return
+    try:
+        noms = extrait(liste)
+    except (AttributeError, TypeError):
+        return
+    for n in sorted(noms - ETAT_DE_DEPART.get(nom, set())):
+        try:
+            serveur.appelle(api_suppr, {cle: n})
+        except (KeyError, urllib.error.URLError, OSError):
+            pass
 
 
 def nettoie_les_index(serveur):
@@ -632,10 +805,19 @@ def nettoie_les_index(serveur):
         "index": "*", "ignore_unavailable": True, "expand_wildcards": "all"})
     if statut < 400:
         return
-    # Le joker n'est pas universel — ferrite exige un index nomme. On enumere
-    # alors, plutot que de laisser un index survivre : sans table rase, le cas
-    # suivant echoue sur « already exists » et la mesure ne veut plus rien dire.
-    _, indices = serveur.appelle("cat.indices", {"format": "json"})
+    # Le joker n'est pas universel — ferrite exige un index nomme, et un vrai
+    # Elasticsearch 8 refuse `DELETE /*` tant que `action.destructive_requires_name`
+    # vaut `true`. On enumere alors, plutot que de laisser un index survivre :
+    # sans table rase, le cas suivant echoue sur « already exists » et la mesure
+    # ne veut plus rien dire.
+    #
+    # `expand_wildcards: all` n'est pas decoratif : sans lui, l'enumeration ne
+    # voit pas les index **caches**, et `cat.aliases/40_hidden.yml` laissait
+    # derriere lui un `test` cache et son alias. Contre un ES 7.10 le chemin
+    # n'etait jamais emprunte (le joker y passait) ; c'est le mode `--etat`,
+    # contre un ES 8.15, qui l'a nomme.
+    _, indices = serveur.appelle("cat.indices",
+                                 {"format": "json", "expand_wildcards": "all"})
     for entree in indices or []:
         nom = entree.get("index") if isinstance(entree, dict) else None
         if nom:
@@ -694,6 +876,23 @@ SONDES_D_ETAT = (
      _noms_de_liste("component_templates")),
     ("pipeline", "ingest.get_pipeline", {}, _cles),
     ("depot de snapshots", "snapshot.get_repository", {}, _cles),
+)
+
+# Les cinq sortes d'etat global que `nettoie` balaie, et de quoi les enumerer
+# quand le joker est refuse : (nom d'etat, API de suppression, nom du parametre,
+# API de listage, extracteur des noms). Le nom d'etat est celui de
+# `SONDES_D_ETAT` — c'est ce qui permet de ne supprimer que ce qui n'etait pas
+# la au demarrage.
+BALAYAGES = (
+    ("template", "indices.delete_template", "name",
+     "indices.get_template", _cles),
+    ("template d'index", "indices.delete_index_template", "name",
+     "indices.get_index_template", _noms_de_liste("index_templates")),
+    ("template de composants", "cluster.delete_component_template", "name",
+     "cluster.get_component_template", _noms_de_liste("component_templates")),
+    ("pipeline", "ingest.delete_pipeline", "id", "ingest.get_pipeline", _cles),
+    ("depot de snapshots", "snapshot.delete_repository", "repository",
+     "snapshot.get_repository", _cles),
 )
 
 
@@ -784,10 +983,16 @@ def verifie_l_etat(serveur, reference):
 #   1  totaux, deux taux, detail par suite et par cas
 #   2  chaque echec est rattache au perimetre declare (`compat.yaml`) :
 #      regression / cout de perimetre / indetermine, et le troisieme taux
-SCHEMA = 2
+#   3  la suite jouee est nommee (`mesure.suite_rest.source`), et un echec peut
+#      porter un quatrieme verdict, `divergence_moteurs` : la suite vient d'un
+#      moteur, un vrai moteur de reference echoue le meme cas — mesure, pas
+#      decidee (voir `--divergences`)
+SCHEMA = 3
+
+DIVERGENCE = "divergence_moteurs"
 
 VERDICTS = (perimetre_declare.REGRESSION, perimetre_declare.COUT,
-            perimetre_declare.INDETERMINE)
+            perimetre_declare.INDETERMINE, DIVERGENCE)
 
 CATEGORIES = ("reussi", "refus", "saute", "echec")
 PLURIEL = {"reussi": "reussis", "refus": "refuses", "saute": "sautes",
@@ -851,8 +1056,10 @@ def taux_de(totaux, perimetre_totaux=None):
             "definition": "reussis / (reussis + regressions + indetermines) — "
                           "le taux precedent, mais en sortant du denominateur "
                           "les echecs qui portent sur une capacite declaree "
-                          "refusee dans compat.yaml (le cout du perimetre). Les "
-                          "cas qu'aucune capacite ne reclame restent dedans",
+                          "refusee dans compat.yaml (le cout du perimetre), et "
+                          "ceux qu'un vrai moteur de reference echoue lui aussi "
+                          "(divergence_moteurs, mesuree — voir [divergences]). "
+                          "Les cas qu'aucune capacite ne reclame restent dedans",
         }
     return taux
 
@@ -890,8 +1097,8 @@ def exclusions_de(cas, with_types):
     }
 
 
-def croise_avec_le_perimetre(cas):
-    """Range chaque echec : regression, cout de perimetre, ou indetermine.
+def croise_avec_le_perimetre(cas, reference=None):
+    """Range chaque echec : divergence, regression, cout de perimetre, indetermine.
 
     C'est ce qui separe un chiffre qu'on subit d'un chiffre qu'on pilote. Un
     echec sur `_snapshot` (declare hors perimetre) et un echec sur `_search`
@@ -899,22 +1106,47 @@ def croise_avec_le_perimetre(cas):
 
     Un cas qu'aucune capacite ne reclame est compte `indetermine`, **contre**
     nous : sinon, oublier de declarer une capacite ferait monter le taux.
+
+    `reference` est le meme rapport, joue contre un **vrai** moteur (voir
+    `--divergences`). Un echec que ce moteur echoue lui aussi ne mesure pas
+    ferrite : il mesure un desaccord entre le moteur d'origine de la suite et
+    celui que ferrite reproduit. Ce verdict passe **avant** les trois autres,
+    parce qu'il porte sur le pouvoir discriminant du cas, pas sur ce qu'on
+    declare : un cas qu'aucun Elasticsearch ne passe ne peut pas etablir une
+    regression de ferrite, meme sur une capacite declaree supportee.
+
+    La raison de l'echec de la reference est **conservee** a cote de celle de
+    ferrite : les deux moteurs peuvent buter au meme endroit pour deux raisons
+    differentes, et c'est au lecteur du rapport de le voir plutot qu'au runner
+    de le cacher.
     """
     try:
         index = perimetre_declare.Perimetre()
     except (OSError, genere_compat.Invalide) as e:
         print(f"compat.yaml illisible, le croisement est saute : {e}", file=sys.stderr)
         return None
+    reference = reference or {}
     compte = {v: 0 for v in VERDICTS}
     par_capacite = {}
+    non_couverts = 0
     for c in cas:
         if c["categorie"] != "echec":
+            continue
+        ref = reference.get(cle_de(c))
+        if reference and ref is None:
+            non_couverts += 1
+        if ref is not None and ref["categorie"] == "echec":
+            c["perimetre"] = DIVERGENCE
+            c["reference"] = ref
+            compte[DIVERGENCE] += 1
             continue
         marqueurs = ["api_typee"] if c.get("api_typee") else []
         verdict, cid, _ = index.verdict(c.get("api"), c.get("raison"), marqueurs)
         c["perimetre"] = verdict
         if cid:
             c["capacite"] = cid
+        if ref is not None:
+            c["reference"] = ref
         compte[verdict] += 1
         cle = cid or "(non declaree)"
         par_capacite[cle] = par_capacite.get(cle, 0) + 1
@@ -922,13 +1154,31 @@ def croise_avec_le_perimetre(cas):
         "regressions": compte[perimetre_declare.REGRESSION],
         "couts_perimetre": compte[perimetre_declare.COUT],
         "indetermines": compte[perimetre_declare.INDETERMINE],
+        "divergences_moteurs": compte[DIVERGENCE],
+        "echecs_hors_reference": non_couverts,
         "par_capacite": dict(sorted(par_capacite.items(),
                                     key=lambda kv: (-kv[1], kv[0]))),
         "source": "compat.yaml",
     }
 
 
-def construis_rapport(cas, info, with_types):
+def moteur_de(info):
+    """Quel moteur repond a cette URL — mesure sur `GET /`, pas suppose.
+
+    Les trois se distinguent sans ambiguite : OpenSearch annonce sa
+    `distribution`, ferrite signe son `build_hash`. Sans ce champ, un rapport de
+    ferrite contre lui-meme pourrait servir de reference aux divergences, et
+    **tous** ses echecs y deviendraient des desaccords entre moteurs.
+    """
+    v = (info.get("version") or {}) if isinstance(info, dict) else {}
+    if str(v.get("distribution") or "").lower() == "opensearch":
+        return "opensearch"
+    if str(v.get("build_hash") or "").startswith("ferrite-"):
+        return "ferrite"
+    return "elasticsearch"
+
+
+def construis_rapport(cas, info, with_types, divergences=None):
     totaux = {"cas": len(cas)}
     for categorie in CATEGORIES:
         totaux[PLURIEL[categorie]] = sum(1 for c in cas if c["categorie"] == categorie)
@@ -938,10 +1188,11 @@ def construis_rapport(cas, info, with_types):
             c["suite"], {PLURIEL[k]: 0 for k in CATEGORIES} | {"cas": 0})
         compte[PLURIEL[c["categorie"]]] += 1
         compte["cas"] += 1
-    perimetre = croise_avec_le_perimetre(cas)
+    perimetre = croise_avec_le_perimetre(
+        cas, divergences["index"] if divergences else None)
     sha, sale = etat_du_depot()
     version_cible = (info.get("version") or {}) if isinstance(info, dict) else {}
-    return {
+    rapport = {
         "schema": SCHEMA,
         "mesure": {
             "date": datetime.datetime.now(datetime.timezone.utc)
@@ -950,13 +1201,17 @@ def construis_rapport(cas, info, with_types):
             "ferrite_arbre_modifie": sale,
             "cible": {
                 "url": URL,
+                "moteur": moteur_de(info),
                 "version_annoncee": version_cible.get("number"),
                 "build_hash": version_cible.get("build_hash"),
             },
             "suite_rest": {
+                "source": SOURCE_ID,
+                "moteur": SOURCE["nom"],
                 "version": VERSION,
-                "licence": "Apache-2.0",
-                "source": TARBALL,
+                "licence": SOURCE["licence"],
+                "pourquoi_cette_version": SOURCE["pourquoi"],
+                "archive": TARBALL,
             },
             "suites": list(SUITES),
             "partiel": PARTIEL,
@@ -968,6 +1223,9 @@ def construis_rapport(cas, info, with_types):
         "par_suite": dict(sorted(par_suite.items())),
         "cas": sorted(cas, key=lambda c: (c["suite"], c["fichier"], c["cas"])),
     }
+    if divergences:
+        rapport["divergences"] = bilan_des_divergences(divergences, cas, perimetre)
+    return rapport
 
 
 def ecris_rapport(rapport, chemin):
@@ -984,6 +1242,85 @@ def lis_rapport(chemin):
         raise ValueError(f"schema {ancien.get('schema')} inconnu "
                          f"(ce runner ecrit le {SCHEMA})")
     return ancien
+
+
+def lis_les_divergences(chemin):
+    """Le rapport de la **meme suite** contre un **vrai** moteur.
+
+    Trois refus plutot que trois hypotheses, parce que chacun rendrait la
+    troisieme categorie plus grosse sans rien mesurer de plus : une suite
+    differente (les identifiants de cas ne designeraient pas les memes cas), une
+    mesure partielle (les cas absents passeraient pour non divergents), et
+    surtout une reference qui serait ferrite lui-meme.
+    """
+    rapport = lis_rapport(chemin)
+    m = rapport["mesure"]
+    suite = m.get("suite_rest") or {}
+    if suite.get("source") != SOURCE_ID or suite.get("version") != VERSION:
+        raise ValueError(
+            f"porte la suite {suite.get('source')} {suite.get('version')}, "
+            f"pas {SOURCE_ID} {VERSION} : les cas ne se correspondent pas")
+    if m.get("partiel"):
+        raise ValueError("mesure partielle : les cas qu'elle n'a pas joues "
+                         "passeraient pour non divergents")
+    moteur = (m.get("cible") or {}).get("moteur")
+    if moteur == "ferrite":
+        raise ValueError("la reference est ferrite : tous ses echecs "
+                         "deviendraient des desaccords entre moteurs")
+    if moteur is None:
+        raise ValueError("la reference ne dit pas quel moteur elle a mesure")
+    return {
+        "chemin": chemin,
+        "mesure": m,
+        "index": {cle_de(c): {"categorie": c["categorie"],
+                              "raison": c.get("raison", "")}
+                  for c in rapport["cas"]},
+    }
+
+
+def bilan_des_divergences(divergences, cas, perimetre):
+    """Ce que la reference a servi a trancher, et ce qu'elle n'a pas couvert.
+
+    Le compte qui flatte est imprime le premier : les cas que ferrite **reussit**
+    la ou la reference echoue. Un resultat massivement vert n'est pas plus
+    fiable qu'un rouge, et c'est celui-la qui n'alarme personne.
+    """
+    index = divergences["index"]
+    m = divergences["mesure"]
+    reussis_ou_la_reference_echoue = sorted(
+        cle_de(c) for c in cas if c["categorie"] == "reussi"
+        and (index.get(cle_de(c)) or {}).get("categorie") == "echec")
+    absents = sorted(cle_de(c) for c in cas if cle_de(c) not in index)
+    return {
+        "rapport": divergences["chemin"],
+        "reference": {
+            "moteur": (m.get("cible") or {}).get("moteur"),
+            "version_annoncee": (m.get("cible") or {}).get("version_annoncee"),
+            "url": (m.get("cible") or {}).get("url"),
+            "date": m.get("date"),
+        },
+        "definition": "un echec que la reference — un vrai moteur, joue sur la "
+                      "meme suite — echoue lui aussi. Le cas ne discrimine pas : "
+                      "il porte sur ce dont les deux moteurs ne conviennent "
+                      "plus, donc il ne peut rien dire de ferrite. Mesure, pas "
+                      "decidee",
+        "echecs_partages": (perimetre or {}).get("divergences_moteurs"),
+        "cas_absents_de_la_reference": {
+            "cas": len(absents),
+            "exemples": absents[:20],
+            "pourquoi": "la reference n'a pas joue ces cas : leur verdict ne "
+                        "peut pas etre tranche par elle. Comptes plutot que "
+                        "passes sous silence",
+        },
+        "reussis_alors_que_la_reference_echoue": {
+            "cas": len(reussis_ou_la_reference_echoue),
+            "exemples": reussis_ou_la_reference_echoue[:20],
+            "pourquoi": "ferrite passe un cas qu'un vrai moteur ne passe pas. "
+                        "C'est le sens qui flatte, donc celui qu'il faut lire "
+                        "en premier : un defaut d'outillage s'y cache mieux "
+                        "que dans un echec",
+        },
+    }
 
 
 def compare_rapports(ancien, nouveau):
@@ -1160,10 +1497,16 @@ def affiche(rapport):
     print(f"  couverture brute                   : {pourcent(taux['couverture_brute'])}")
 
     p = rapport.get("perimetre")
+    d = rapport.get("divergences")
     if p:
         print(f"\n  les {rapport['totaux']['echecs']} echecs, croises avec compat.yaml :")
+        if d:
+            ref = d["reference"]
+            print(f"    divergences      {p['divergences_moteurs']:>4}  "
+                  f"{ref['moteur']} {ref['version_annoncee']} echoue le meme cas — "
+                  f"ne mesure pas ferrite")
         print(f"    regressions      {p['regressions']:>4}  une capacite declaree "
-              f"supportee ne repond pas comme ES")
+              f"supportee ne repond pas comme le moteur d'origine")
         print(f"    cout de perimetre{p['couts_perimetre']:>5}  une capacite declaree "
               f"refusee — attendu")
         print(f"    indetermines     {p['indetermines']:>4}  aucune capacite ne les "
@@ -1171,6 +1514,15 @@ def affiche(rapport):
         premiers = list(p["par_capacite"].items())[: (10_000 if VERBEUX else 12)]
         for cid, n in premiers:
             print(f"      {n:>4}  {cid}")
+    if d:
+        flatteurs = d["reussis_alors_que_la_reference_echoue"]
+        absents = d["cas_absents_de_la_reference"]
+        print(f"\n  reference des divergences : {d['rapport']}")
+        print(f"    reussis alors que la reference echoue : {flatteurs['cas']}  "
+              f"(le sens qui flatte)")
+        for cle in flatteurs["exemples"][: (10_000 if VERBEUX else 5)]:
+            print(f"      {cle}")
+        print(f"    cas que la reference n'a pas joues     : {absents['cas']}")
 
     ex = rapport["mesure"]["exclusions"]
     print(f"\n  hors denominateur : {ex['fichiers_with_types']['cas']} cas dans "
@@ -1189,7 +1541,7 @@ def affiche(rapport):
 
 
 def main():
-    global SUITES, PARTIEL
+    global SUITES, PARTIEL, ETAT_DE_DEPART
     assure_spec()
     try:
         import yaml
@@ -1215,21 +1567,49 @@ def main():
             print("--diff exige deux mesures completes : une selection de suites "
                   "ne se compare pas a la suite entiere", file=sys.stderr)
             return 2
+        source_ancienne = (ancien["mesure"].get("suite_rest") or {}).get("source")
+        if source_ancienne != SOURCE_ID:
+            print(f"--diff compare deux suites differentes : le rapport porte "
+                  f"[{source_ancienne}], la mesure [{SOURCE_ID}]", file=sys.stderr)
+            return 2
+
+    divergences = None
+    if RAPPORT_DIVERGENCES:
+        # Lu **avant** la mesure, pour la meme raison que `--diff` : une
+        # reference invalide doit arreter le runner tout de suite.
+        try:
+            divergences = lis_les_divergences(RAPPORT_DIVERGENCES)
+        except (OSError, ValueError, KeyError, json.JSONDecodeError) as e:
+            print(f"reference des divergences illisible "
+                  f"[{RAPPORT_DIVERGENCES}] : {e}", file=sys.stderr)
+            return 2
 
     serveur = Serveur(URL)
     info = repond(serveur)
     if info is None:
         print(f"la cible [{URL}] ne repond pas", file=sys.stderr)
         return 2
-    print(f"== cible : {URL} — {info.get('version', {}).get('number', '?')}")
-    print(f"== suite REST d'Elasticsearch {VERSION} (Apache 2.0), "
-          f"{len(SUITES)} domaines\n")
+    print(f"== cible : {URL} — {moteur_de(info)} "
+          f"{info.get('version', {}).get('number', '?')}")
+    print(f"== suite REST de {SOURCE['nom']} {VERSION} ({SOURCE['licence']}), "
+          f"{len(SUITES)} domaines")
+    if divergences:
+        ref = divergences["mesure"].get("cible") or {}
+        print(f"== divergences tranchees par {RAPPORT_DIVERGENCES} — "
+              f"{ref.get('moteur')} {ref.get('version_annoncee')}, "
+              f"mesure du {divergences['mesure'].get('date')}")
+    print()
+
+    # Releve **avant** le premier nettoyage, et toujours : la reference est
+    # l'etat de depart de la cible, pas le vide (voir `etat_de_depart`). Elle
+    # sert a `--etat`, mais aussi au nettoyage, qui ne doit defaire que ce que
+    # les cas ont pose (voir `balaye`).
+    depart, muettes = etat_de_depart(serveur)
+    ETAT_DE_DEPART = depart
 
     reference = None
     if ETAT_VERIFIE:
-        # Releve **avant** le premier nettoyage : la reference est l'etat de
-        # depart de la cible, pas le vide (voir `etat_de_depart`).
-        reference, muettes = etat_de_depart(serveur)
+        reference = depart
         print("== etat verifie entre deux cas : " + ", ".join(reference))
         if muettes:
             print("   non verifiable (la cible ne sert pas la route) : "
@@ -1247,7 +1627,7 @@ def main():
               "   pas : le verdict de tous les cas suivants en herite. La mesure\n"
               "   s'arrete ici, et aucun rapport n'est ecrit.", file=sys.stderr)
         return 2
-    rapport = construis_rapport(resultats, info, with_types)
+    rapport = construis_rapport(resultats, info, with_types, divergences)
     affiche(rapport)
     nettoie(serveur)
 

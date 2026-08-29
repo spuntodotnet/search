@@ -429,6 +429,18 @@ ne correspondent plus. C'est le même fichier que lit le rapport de conformance
 pour dire, d'un cas qui échoue, s'il porte sur une capacité qu'on **annonce**
 (une régression) ou sur une capacité qu'on **refuse** (le coût du périmètre).
 
+**Deux suites de tests écrites ailleurs**, pas une : celle d'Elasticsearch
+7.10.2 (la dernière sous Apache 2.0) et celle d'**OpenSearch** 2.19.1 (Apache 2.0
+aussi), jouées toutes les deux par le même runner, sans liste blanche. Une seule
+serait un examen dont on connaît le sujet — et celle d'Elastic est figée en
+2020, donc aveugle à tout ce qui a été ajouté depuis. Les deux rangent chacune
+36 échecs en « régression » et se recoupent sur 12 capacités ; celle d'OpenSearch
+en sort trois de plus, toutes postérieures à 2020. Et « ce n'est pas un défaut de
+ferrite, les deux moteurs divergent » ne s'y décrète pas : la même suite est
+jouée contre un vrai Elasticsearch 8.15, et un cas qu'il échoue lui aussi est
+rangé à part — mesuré, pas décidé. Voir
+[`docs/conformance.md`](docs/conformance.md).
+
 Cet inventaire est aussi ce qui **borne un tirage au sort**. Un fuzzer
 différentiel ([`tests/compat/fuzz_vs_es.py`](tests/compat/fuzz_vs_es.py)) génère
 des mappings, des documents et des requêtes dans le périmètre que `compat.yaml`
