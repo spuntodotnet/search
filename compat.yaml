@@ -1861,6 +1861,63 @@ tables:
           refuses:
             - {texte: "un champ stocké sous un `nested`", note: "ES ne le rend pas non plus : la valeur vit dans le document enfant"}
 
+      - id: recherche.highlight
+        nom: "`highlight`"
+        etat: partiel
+        poids: 1.9
+        detail: >-
+          les fragments surlignés d'une barre de recherche. Ce qui se reproduit
+          ici n'est pas « marquer les termes » mais le **découpage** de Lucene,
+          et aucune de ses règles n'était devinable : les phrases (au sens
+          d'UAX#29) sont fusionnées vers l'avant tant que la longueur reste sous
+          `fragment_size`, et une phrase qui déborde à elle seule est re-coupée
+          **au mot** autour de la correspondance — donc `fragment_size: 19` rend
+          une phrase là où `20` en rend deux, sur le même texte. Un point suivi
+          d'une **minuscule** ne termine pas une phrase (règle SB8), un point
+          entre deux capitales non plus. Le fragment se centre sur le **milieu**
+          de la correspondance : sur un mot isolé ça ne se voit pas, sur un
+          `match_phrase` de quatre mots le bord gauche se décale de plusieurs
+          mots. Quand il y a plus de fragments que `number_of_fragments`, ce
+          sont les mieux notés par le `PassageScorer` de Lucene qui restent,
+          puis remis dans **l'ordre du document**. Une phrase rend **une seule**
+          marque, du premier terme au dernier. Un champ multivalué est traité
+          valeur par valeur — un fragment ne franchit jamais la frontière entre
+          deux valeurs — mais les fragments de toutes les valeurs sont mis en
+          concurrence ensemble. Un champ sans correspondance est **absent** de
+          la réponse, pas une chaîne vide. Mesuré fragment par fragment par
+          [`diff_highlight.py`](../tests/compat/diff_highlight.py)
+        parametres:
+          supportes:
+            - {nom: "fields", note: "un nom, un motif `*`, la forme héritée en liste d'objets ; seuls les champs `text` et `keyword` répondent, comme chez ES"}
+            - {nom: "pre_tags", note: "seule la première balise est employée, comme le surligneur par défaut d'ES"}
+            - {nom: "post_tags"}
+            - {nom: "tags_schema", note: "`default` et `styled` (`<em class=\"hlt1\">`)"}
+            - {nom: "number_of_fragments", note: "`0` rend la valeur entière, valeur par valeur"}
+            - {nom: "fragment_size", note: "`0` rend une phrase entière ; une valeur négative retombe sur le défaut, comme chez ES"}
+            - {nom: "no_match_size", note: "le début de la **première** valeur, étendu à la frontière de mot qui suit"}
+            - {nom: "require_field_match", note: "`true`, le défaut : le champ n'est surligné que par ce que la requête y pose"}
+            - {texte: "la surcharge champ par champ de tous les réglages ci-dessus"}
+            - {texte: "`order: none`", note: "le défaut : les fragments sortent dans l'ordre du document"}
+          refuses:
+            - {nom: "type", note: "`fvh`, `plain` et même `unified` écrit explicitement : ferrite n'a qu'un surligneur, et un `type` accepté en silence laisserait croire qu'un autre découpage a été appliqué"}
+            - {nom: "order", note: "`score` trie les fragments par leur note ; ES y emploie un tri **instable** (`introSort`), donc deux fragments de même note ne sortent pas dans un ordre reproductible"}
+            - {texte: "`require_field_match: false`", note: "ES y cherche les termes de **toutes** les clauses dans **tous** les champs, par une extraction qui n'est pas celle du mode normal — il en documente lui-même le résultat comme approximatif, et ferrite n'en reproduit pas tous les cas. Un refus se voit ; un fragment silencieusement différent, non"}
+            - {nom: "highlight_query"}
+            - {nom: "matched_fields"}
+            - {nom: "boundary_scanner"}
+            - {nom: "boundary_chars"}
+            - {nom: "boundary_max_scan"}
+            - {nom: "boundary_scanner_locale"}
+            - {nom: "fragmenter"}
+            - {nom: "encoder", note: "`html` échappe le texte du fragment"}
+            - {nom: "force_source"}
+            - {nom: "phrase_limit"}
+            - {nom: "max_analyzed_offset"}
+            - {texte: "un fragment d'un `nested` sous `inner_hits`", note: "`inner_hits` est hors périmètre ; un sous-champ de `nested` se surligne bien depuis la racine"}
+        conformance:
+          erreurs:
+            - "ne supporte pas \\[(type|order|highlight_query|matched_fields|boundary_scanner|boundary_chars|boundary_max_scan|boundary_scanner_locale|fragmenter|encoder|force_source|phrase_limit|max_analyzed_offset|require_field_match: false)\\] dans \\[highlight"
+
       - id: recherche.script_fields
         nom: "`script_fields`, `runtime_mappings`"
         etat: refuse
@@ -1956,25 +2013,24 @@ tables:
 
       - id: recherche.non_supportes
         nom: >-
-          `highlight`, `search_after`, `pit`, `collapse`, `knn`, `explain`,
+          `search_after`, `pit`, `collapse`, `knn`, `explain`,
           `seq_no_primary_term`, `post_filter`, `min_score`, `suggest`,
           `rescore`, `track_scores`, `q`, `timeout`, `terminate_after`,
           `version`, `indices_boost`, `profile`, `slice`, `stats`, `ext`,
           `retriever`
         etat: refuse
         motif: pas_encore
-        poids: 5.6
+        poids: 4.8
         raison: >-
-          aucun n'est un obstacle de moteur ; `highlight` et `search_after`
-          sont les deux qui manquent le plus, le premier pour une liste de
-          résultats, le second pour paginer au-delà de 10 000.
+          aucun n'est un obstacle de moteur ; `search_after` est celui qui
+          manque le plus, pour paginer au-delà de 10 000.
         conformance:
           erreurs:
             # Le meme refus arrive par deux chemins : dans le corps (« ferrite
-            # ne supporte pas [highlight] dans [_search] ») et en query string
-            # (« unrecognized parameter: [docvalue_fields] »).
-            - "ferrite ne supporte pas \\[(highlight|search_after|collapse|knn|explain|post_filter|min_score|suggest|rescore|track_scores|q|pit|profile|timeout|terminate_after|version|indices_boost|slice|stats|ext|retriever)\\] dans \\[_search\\]"
-            - "unrecognized parameter: \\[(highlight|search_after|collapse|knn|explain|fields|seq_no_primary_term|post_filter|min_score|suggest|rescore|track_scores|q)\\]"
+            # ne supporte pas [search_after] dans [_search] ») et en query
+            # string (« unrecognized parameter: [docvalue_fields] »).
+            - "ferrite ne supporte pas \\[(search_after|collapse|knn|explain|post_filter|min_score|suggest|rescore|track_scores|q|pit|profile|timeout|terminate_after|version|indices_boost|slice|stats|ext|retriever)\\] dans \\[_search\\]"
+            - "unrecognized parameter: \\[(search_after|collapse|knn|explain|fields|seq_no_primary_term|post_filter|min_score|suggest|rescore|track_scores|q)\\]"
 
       - id: recherche.expressions_index
         nom: "`ignore_unavailable`, `allow_no_indices`, `expand_wildcards`"

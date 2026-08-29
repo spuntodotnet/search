@@ -606,6 +606,81 @@ Rally — et sur les 19 non vides, **18 portent un script**. L'objet **vide** es
 donc accepté (il ne définit aucun champ, donc ne demande rien, et ES rend la même
 réponse avec ou sans) ; un objet non vide est refusé explicitement.
 
+### Les fragments surlignés (`highlight`)
+
+Ce qui se reproduit ici n'est pas « marquer les termes » : c'est le
+**découpage** du `UnifiedHighlighter` de Lucene, tel qu'Elasticsearch le
+configure. Rien de sa forme n'était devinable, et une lecture naïve —
+« un fragment = une phrase », ou « un fragment = `fragment_size` caractères » —
+rend systématiquement autre chose. Tout ce qui suit est mesuré contre un
+ES 8.15 par
+[`diff_highlight.py`](../tests/compat/diff_highlight.py) (**233 questions
+posées aux deux serveurs, comparées fragment par fragment**), et étalonné
+contre deux Elasticsearch avant de servir.
+
+**Où le fragment commence et finit.** Les phrases sont fusionnées **vers
+l'avant** tant que la longueur totale reste sous `fragment_size` ; si une seule
+phrase déborde déjà, elle est re-coupée **au mot** autour de la correspondance.
+Sur le même texte, `fragment_size: 19` rend une phrase et `20` en rend deux. Le
+fragment se centre sur le **milieu** de la correspondance, pas sur son début :
+sur un mot isolé les deux se confondent, sur un `match_phrase` de quatre mots le
+bord gauche se décale de plusieurs mots.
+
+**Où une phrase s'arrête.** C'est UAX#29, et deux de ses règles décident de
+presque tout :
+
+- un point suivi d'une **minuscule** ne termine pas une phrase (règle SB8).
+  « zzz cible. aaa. bbb cible cible. » est **une seule** phrase — donc ES y rend
+  trois fragments coupés au mot, là où « une phrase par fragment » en rendrait
+  trois autres ;
+- un point entre deux capitales non plus (`U.S.A.`), ni entre deux chiffres
+  (`8.15`).
+
+**Où un mot s'arrête** — et là, ce n'est **pas** UAX#29 : c'est le
+`BreakIterator` du JDK, dont les jointures diffèrent sur des caractères
+courants. Mesurées une par une (`no_match_size: 1` dit où tombe la première
+frontière) : `abcde-fghij` et `abcde"fghij` sont **un** mot, `abcde:fghij` et
+`abcde’fghij` en font deux — l'inverse de ce que dit UAX#29 pour les deux
+premiers. Sans le tiret, `tiret-bas` se coupait en « tiret ».
+
+**Ce qui est marqué.** Les termes que la requête pose sur **ce champ-là**, et
+seulement ceux qui ont vraiment fait correspondre **ce document-là** : un
+`should` placé dans un `bool` dont le `filter` échoue ne marque rien, et un
+`bool` porteur d'un `must_not: {match_all}` ne marque jamais rien. Une phrase
+rend **une seule** marque, du premier terme au dernier.
+
+`require_field_match: false` — qui ferait chercher les termes de **toutes** les
+clauses dans **tous** les champs — est **refusé**. ES lui-même documente son
+résultat comme approximatif, et ferrite n'en reproduit pas tous les cas : un
+`range` sur un champ non textuel y voit son automate appliqué aux termes des
+autres champs (`{"range": {"drapeau": {"lt": true}}}` marque « AlphA » dans un
+`keyword` voisin, parce que `"AlphA" < "T"`), et une clause qui n'a rien trouvé
+dans son propre champ y marque parfois ailleurs et parfois pas. Un refus se
+voit ; un fragment silencieusement différent, non.
+
+**Quels fragments survivent** à `number_of_fragments` : les mieux notés par le
+`PassageScorer` de Lucene (un BM25 dont le « document » est le fragment, pivoté
+sur 87 caractères), puis remis dans **l'ordre du document**. Le `freq()` y vaut
+**1** — c'est ce que rend Lucene quand le surligneur travaille sur les
+`Matches` — et ça n'est pas un détail : prendre le vrai nombre d'occurrences
+rend le poids négatif dès qu'un terme apparaît plus de trois fois, ce qui
+**inverse** le classement.
+
+**Un champ multivalué** est traité valeur par valeur — un fragment ne franchit
+jamais la frontière entre deux valeurs — mais les fragments de toutes les
+valeurs sont mis en concurrence ensemble. `no_match_size` ne lit que la
+**première valeur non vide**.
+
+**Ce que le `_source` ne dit pas.** Une valeur écartée par `ignore_above` n'a
+pas été indexée : elle n'est pas surlignée, et `no_match_size` ne la rend pas
+non plus. À l'inverse, la valeur qu'un `copy_to` dépose dans sa cible n'est
+**nulle part** dans le `_source` de celle-ci, et elle est bien surlignée — même
+règle que pour `fields`.
+
+Un champ sans correspondance est **absent** de la réponse : ce n'est pas une
+chaîne vide. Un champ qui n'est ni `text` ni `keyword` ne répond pas, même sous
+un motif `*`.
+
 ### Date math et arrondi des bornes
 
 Une borne de date d'une requête n'est pas une date : c'est une expression que le
@@ -1016,7 +1091,28 @@ pas pour être découverts en production.
     ne porte que sur l'ordre — une valeur en trop ou un doublon perdu y reste un
     écart.
 
-19. **Les trois lectures sur le même champ stocké rendent un `500` chez ES.**
+    Le **surlignage** de la cible hérite du même désordre, et il ne se rattrape
+    pas de la même façon : il ne rend pas toutes les valeurs, il en **choisit**
+    (`no_match_size` prend la première, `number_of_fragments` garde les mieux
+    notées) — et « la première » n'existe pas quand l'ordre vient d'un
+    `HashSet`. Deux Elasticsearch de la même version n'y rendent déjà pas la
+    même chose : `fuzz_vs_es.py --calibrer` le montre.
+
+19. **Un fragment de surlignage se compte en `char`, pas en unité UTF-16.**
+    `fragment_size` et `no_match_size` sont des longueurs, et Java les compte en
+    unités UTF-16 — deux par caractère au-delà du plan multilingue de base
+    (émojis, écritures anciennes). ferrite les compte en `char`. Sur du texte
+    ordinaire, accents compris, les deux coïncident ; ils divergent d'un
+    caractère par émoji présent **avant** le point de coupe, et seulement là.
+
+20. **Une erreur de lecture du corps ne porte pas de position.** ES préfixe ses
+    `x_content_parse_exception` par la ligne et la colonne fautives
+    (`[1:82] [highlight] unknown field [nawak]`) ; ferrite rend la même phrase
+    sans le préfixe. Il ne tient pas de position de lecture — son analyseur
+    JSON rend un arbre, pas un flux de jetons — et inventer une position serait
+    pire que ne pas en donner.
+
+21. **Les trois lectures sur le même champ stocké rendent un `500` chez ES.**
     `{"fields": ["tag"], "docvalue_fields": ["tag"], "stored_fields": ["tag"]}`
     sur un `keyword` déclaré `store: true` fait rendre à ES 8.15 un
     `unsupported_operation_exception`. Un 500 ne se reproduit pas — c'est déjà

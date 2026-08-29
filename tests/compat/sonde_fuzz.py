@@ -86,6 +86,59 @@ DOCS_MULTI = [
     ("d", {"n": 9223372036854775807, "u": "d"}),
 ]
 
+# Le surlignage : six ecarts trouves par le fuzzing, chacun invisible au
+# harnais ecrit a la main parce qu'il demande une combinaison a laquelle on
+# n'avait pas pense (un tiret dans un mot, une premiere valeur vide, un
+# `should` sous un `filter` qui echoue).
+SURLIGNE = {
+    "settings": {"max_ngram_diff": 12,
+                 "analysis": {
+                     "tokenizer": {"tk": {"type": "ngram", "min_gram": 2,
+                                          "max_gram": 6}},
+                     "analyzer": {"ng_tok": {"type": "custom", "tokenizer": "tk",
+                                             "filter": ["lowercase"]}}}},
+    "mappings": {"properties": {
+        "gr": {"type": "text", "analyzer": "ng_tok"},
+        "n": {"type": "integer"},
+        "j": {"type": "date"},
+        "lignes": {"type": "nested", "properties": {"x": {"type": "long"}}},
+        "t": {"type": "text"},
+        "k": {"type": "keyword", "ignore_above": 12},
+        "src": {"type": "text", "copy_to": "tout"},
+        "tout": {"type": "text"},
+        "u": {"type": "keyword"},
+    }},
+}
+DOCS_SURLIGNE = [
+    ("a", {"t": "aluminium batterie aluminium leger ecole", "k": "tiret-bas",
+           "src": "capteur edition batterie verre", "u": "a"}),
+    # Une premiere valeur **vide** : ES saute les separateurs de tete, donc
+    # `no_match_size` lui rend « delta », pas rien.
+    ("b", {"t": "optique verre et rien d'autre", "k": ["", "delta"], "u": "b"}),
+    # Une valeur plus longue que l'`ignore_above` du champ : elle n'a pas ete
+    # indexee, donc elle ne se surligne pas — et `no_match_size` l'ignore.
+    ("c", {"t": "beta tout court", "k": "beaucoup trop longue pour douze",
+           "u": "c"}),
+    # Des blancs aux deux bords, et un espace fine (U+2009) que `String.trim()`
+    # de Java **ne** rogne pas — il s'arrete a U+0020.
+    ("d", {"t": ["  cible et du texte autour  ", "cible\u2009", "cible\t"],
+           "u": "d"}),
+    # Une valeur de `keyword` vide **au milieu** puis **a la fin** : la
+    # premiere rend `<em></em>`, la seconde rien du tout.
+    ("e", {"t": "compact hotel l'ascension silencieux ecran",
+           "k": ["alpha", "", "beta"], "u": "e"}),
+    ("f", {"t": "aa bb cible cc dd cible ee ff", "k": ["alpha", ""], "u": "f"}),
+    # Un `keyword` dont la valeur porte ses propres blancs : le terme les
+    # contient, donc le surlignage aussi.
+    ("g", {"t": "rien", "k": "  espaces   multiples  ", "u": "g",
+           "gr": "version"}),
+    # De quoi trancher les clauses qui ne marquent rien : un nombre, une date,
+    # un `nested` (dont l'`exists` ne se lit pas dans le `_source` du parent).
+    ("h", {"t": "cible parmi d'autres mots", "n": 7,
+           "j": "2025-03-04T00:00:00.000Z", "u": "h",
+           "lignes": [{"x": 1}]}),
+]
+
 TROUS = {"mappings": {"properties": {"n": {"type": "integer"},
                                      "d": {"type": "date"},
                                      "dm": {"type": "date", "format": "yyyy-MM-dd"}}}}
@@ -238,6 +291,12 @@ def agg(nom):
     return lambda r: r.get("aggregations", {}).get(nom)
 
 
+def surligne(r):
+    """Le bloc `highlight` de chaque hit, par identifiant."""
+    return {h["_id"]: h.get("highlight")
+            for h in r.get("hits", {}).get("hits", [])}
+
+
 def statut(r):
     """Pour un cas ou seule la frontiere accepte/refuse se compare.
 
@@ -286,6 +345,128 @@ CAS = [
      "sur un keyword, et seulement la, ES rend bien `null`",
      {"sort": [{"k": {"order": "asc"}}, {"u": {"order": "asc"}}],
       "_source": False, "size": 10}, hits),
+
+    # -- surlignage --------------------------------------------------------
+    (SURLIGNE, DOCS_SURLIGNE, "un tiret ne coupe pas un mot",
+     "le `BreakIterator` de Java joint deux lettres par un tiret, la ou UAX#29 "
+     "coupe : `no_match_size: 5` rendait « tiret- » au lieu de « tiret-bas »",
+     {"query": {"term": {"u": "a"}}, "size": 10, "sort": ["u"],
+      "highlight": {"fields": {"k": {}}, "no_match_size": 5}}, surligne),
+    (SURLIGNE, DOCS_SURLIGNE, "une premiere valeur vide ne coute pas le fragment",
+     "ES concatene les valeurs et saute les separateurs de tete : "
+     "`no_match_size` rend la premiere valeur **non vide**",
+     {"query": {"term": {"u": "b"}}, "size": 10, "sort": ["u"],
+      "highlight": {"fields": {"k": {}}, "no_match_size": 5}}, surligne),
+    (SURLIGNE, DOCS_SURLIGNE, "ignore_above ecarte la valeur du surlignage",
+     "une valeur trop longue n'a pas ete indexee : ni surlignee, ni rendue par "
+     "`no_match_size` — lire le `_source` n'est pas lire ce qui est indexe",
+     {"query": {"term": {"u": "c"}}, "size": 10, "sort": ["u"],
+      "highlight": {"fields": {"k": {}}, "no_match_size": 200}}, surligne),
+    (SURLIGNE, DOCS_SURLIGNE, "un keyword n'est pas analyse par la clause",
+     "`match` sur un `keyword` cherche la valeur **entiere** : l'analyser "
+     "coupait « tiret-bas » en deux termes, et plus rien ne se surlignait",
+     {"query": {"match": {"k": "tiret-bas"}}, "size": 10, "sort": ["u"],
+      "highlight": {"fields": {"k": {}}}}, surligne),
+    (SURLIGNE, DOCS_SURLIGNE, "la cible d'un copy_to se surligne",
+     "sa valeur n'est nulle part dans son `_source` : elle est dans celui de "
+     "la source, et ES la surligne quand meme",
+     {"query": {"match": {"tout": "batterie"}}, "size": 10, "sort": ["u"],
+      "highlight": {"fields": {"tout": {}}}}, surligne),
+    (SURLIGNE, DOCS_SURLIGNE, "deux marques qui se chevauchent",
+     "debut croissant, **fin decroissante** : la plus longue d'abord rend "
+     "`<em>optique verre</em>`, l'autre ordre rendait "
+     "`<em>optique</em><em> verre</em>`",
+     {"query": {"dis_max": {"queries": [
+         {"match_phrase_prefix": {"t": "optiq"}},
+         {"match_phrase": {"t": "optique verre"}}]}},
+      "size": 10, "sort": ["u"], "highlight": {"fields": {"t": {}}}}, surligne),
+    (SURLIGNE, DOCS_SURLIGNE, "un should sous un filter qui echoue ne marque rien",
+     "ES ne surligne que ce qui a fait correspondre **ce** document : le "
+     "`bool` ne tient pas, donc son `should` ne marque pas, meme quand le "
+     "document sort par l'autre branche du `dis_max`",
+     {"query": {"dis_max": {"queries": [
+         {"exists": {"field": "u"}},
+         {"bool": {"should": [{"match": {"t": "beta"}}],
+                   "filter": [{"match": {"t": "introuvable"}}]}}]}},
+      "size": 10, "sort": ["u"], "highlight": {"fields": {"t": {}}}}, surligne),
+    (SURLIGNE, DOCS_SURLIGNE, "un must_not match_all rend le bool sterile",
+     "la reecriture de Lucene en fait un `MatchNoDocsQuery` : ses termes "
+     "disparaissent, et le `should` qu'il porte ne marque rien",
+     {"query": {"dis_max": {"queries": [
+         {"exists": {"field": "u"}},
+         {"bool": {"should": [{"match": {"t": "beta"}}],
+                   "must_not": [{"match_all": {}}]}}]}},
+      "size": 10, "sort": ["u"], "highlight": {"fields": {"t": {}}}}, surligne),
+
+    (SURLIGNE, DOCS_SURLIGNE, "number_of_fragments 0 ne rogne pas",
+     "ES n'y passe plus par le decoupeur borne : le fragment sort avec ses "
+     "blancs de bord",
+     {"query": {"term": {"u": "d"}}, "size": 10, "sort": ["u"],
+      "highlight": {"fields": {"t": {}}, "number_of_fragments": 0}}, surligne),
+    (SURLIGNE, DOCS_SURLIGNE, "le rognage est celui de String.trim()",
+     "il s'arrete a U+0020 : la tabulation part, l'espace fine (U+2009) reste "
+     "— et la longueur qui note le fragment est celle d'**avant** rognage",
+     {"query": {"match": {"t": "cible"}}, "size": 10, "sort": ["u"],
+      "highlight": {"fields": {"t": {}}, "number_of_fragments": 2}}, surligne),
+
+    (SURLIGNE, DOCS_SURLIGNE, "une valeur de keyword vide se surligne",
+     "vide **au milieu** d'autres valeurs, elle rend `<em></em>` ; vide **en "
+     "derniere position**, elle ne rend rien — ES s'arrete des que la "
+     "correspondance commence au-dela du dernier caractere du champ",
+     {"query": {"terms": {"k": ["", ""]}}, "size": 10, "sort": ["u"],
+      "highlight": {"fields": {"k": {}}}}, surligne),
+    (SURLIGNE, DOCS_SURLIGNE, "un keyword porte ses propres blancs",
+     "le terme est la valeur entiere : le rognage ne mord pas dessus",
+     {"query": {"term": {"k": "  espaces   multiples  "}}, "size": 10,
+      "sort": ["u"], "highlight": {"fields": {"k": {}}}}, surligne),
+    (SURLIGNE, DOCS_SURLIGNE, "la borne droite s'arrete a la correspondance",
+     "quand `fragment_size` ne laisse plus de place, le fragment finit **a la "
+     "fin de la marque**, pas a la frontiere de mot suivante — un caractere "
+     "d'ecart, et une phrase entiere de difference sur la marque",
+     {"query": {"dis_max": {"queries": [
+         {"match_phrase": {"t": "l'ascension silencieux ecran"}},
+         {"match_phrase": {"t": "l'ascension"}}]}},
+      "size": 10, "sort": ["u"],
+      "highlight": {"fields": {"t": {}}, "fragment_size": 20}}, surligne),
+    (SURLIGNE, DOCS_SURLIGNE, "les marques d'une meme clause n'en font qu'une",
+     "un `prefix` attrape `vers`, `versi` et `versio` au meme endroit sur un "
+     "champ a n-grammes : c'est `versio` qui ouvre le fragment, pas `vers` — "
+     "et le fragment va jusqu'au bout du mot que le gramme coupe",
+     {"query": {"prefix": {"gr": "vers"}}, "size": 10, "sort": ["u"],
+      "highlight": {"fields": {"gr": {}}, "fragment_size": 1}}, surligne),
+    (SURLIGNE, DOCS_SURLIGNE, "un regexp compte pour un terme, pas pour un mot",
+     "le `PassageScorer` note un fragment clause par clause : deux mots "
+     "differents trouves par le **meme** `regexp` pesent comme un mot vu deux "
+     "fois, et ca change quel fragment survit a `number_of_fragments`",
+     {"query": {"regexp": {"t": "[a-z].*"}}, "size": 10, "sort": ["u"],
+      "highlight": {"fields": {"t": {"fragment_size": 15,
+                                     "number_of_fragments": 2}}}}, surligne),
+
+    (SURLIGNE, DOCS_SURLIGNE, "un filter qui ne marque rien fait taire le bool",
+     "un `range` sur un nombre, un `term` sur une date, un `ids` : aucun ne "
+     "marque, tous se tranchent sur le document — et un `bool` qu'ils font "
+     "tomber ne marque rien du tout",
+     {"query": {"dis_max": {"queries": [
+         {"exists": {"field": "u"}},
+         {"bool": {"should": [{"match": {"t": "cible"}}],
+                   "filter": [{"range": {"n": {"gte": 1000}}}]}},
+         {"bool": {"should": [{"match": {"t": "cible"}}],
+                   "filter": [{"term": {"j": "2001-01-01"}}]}},
+         {"bool": {"should": [{"match": {"t": "cible"}}],
+                   "filter": [{"ids": {"values": ["introuvable"]}}]}}]}},
+      "size": 10, "sort": ["u"], "highlight": {"fields": {"t": {}}}}, surligne),
+    (SURLIGNE, DOCS_SURLIGNE, "un exists sur une racine nested ne tranche pas",
+     "ses valeurs vivent dans des documents caches : le `_source` du parent "
+     "porte bien un tableau, mais ES n'y voit pas le champ",
+     {"query": {"bool": {"should": [{"match": {"t": "cible"}}],
+                         "must_not": [{"exists": {"field": "lignes"}}]}},
+      "size": 10, "sort": ["u"], "highlight": {"fields": {"t": {}}}}, surligne),
+    (SURLIGNE, DOCS_SURLIGNE, "une phrase sur un champ a n-grammes",
+     "un filtre a n-grammes pose tous les grammes d'un mot **a la meme "
+     "position** : une phrase doit accepter n'importe lequel a cet endroit, "
+     "sinon elle ne marque rien",
+     {"query": {"match_phrase": {"gr": "version"}}, "size": 10, "sort": ["u"],
+      "highlight": {"fields": {"gr": {}}, "fragment_size": 12}}, surligne),
 
     # -- agregation range --------------------------------------------------
     (TROUS, DOCS_TROUS, "range agg avec un trou",

@@ -145,8 +145,10 @@ ECARTES = [
         "nom": "ReadTheDocs (readthedocs.org)",
         "raison": (
             "sa recherche est batie sur `highlight` et `inner_hits` "
-            "(readthedocs/search/faceted_search.py) : les deux sont declares "
-            "refuses, et sans eux la suite ne mesurerait que l'absence d'extraits"
+            "(readthedocs/search/faceted_search.py). `highlight` est livre "
+            "depuis ; `inner_hits` reste refuse, et sans lui la suite ne "
+            "mesurerait que l'absence de resultats imbriques — la cible "
+            "redevient candidate le jour ou il tombe"
         ),
     },
     {

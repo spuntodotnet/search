@@ -65,7 +65,7 @@ code source et croisé avec [`compat.yaml`](../compat.yaml) :
 
 | Écarté | Pourquoi |
 |---|---|
-| ReadTheDocs | sa recherche est bâtie sur `highlight` et `inner_hits` (`readthedocs/search/faceted_search.py`) : les deux sont déclarés refusés, et la suite ne mesurerait que l'absence d'extraits |
+| ReadTheDocs | sa recherche est bâtie sur `highlight` et `inner_hits` (`readthedocs/search/faceted_search.py`) : les deux étaient déclarés refusés, et la suite ne mesurerait que l'absence d'extraits. **`highlight` est livré depuis** ; `inner_hits` reste le blocage, et la cible redevient candidate le jour où il tombe |
 | Open Food Facts *search-a-licious* | ses index reposent sur des filtres `synonym` que ferrite ne compose pas : l'index ne se créerait pas |
 | Zammad, Mastodon | exigent Postgres + Redis + une stack Ruby complète pour lancer un test — le temps passé à monter l'environnement ne mesure rien |
 | Graylog, Jaeger, elastalert2 | du log à l'échelle : rotation d'index, ILM, `_msearch`. Ils mesureraient l'exploitation d'un cluster, pas la recherche |
@@ -336,7 +336,8 @@ Ce qui est épinglé, et pourquoi :
 - **Un module, pas toute l'application.** Gitea sait aussi indexer le *code*
   dans Elasticsearch ; ce module-là n'a pas de test d'intégration dans le dépôt
   (seulement un test unitaire hors serveur), donc il n'est pas mesuré ici. Son
-  code lit `highlight`, déclaré refusé : il ne passerait pas.
+  code lit `highlight` — livré depuis, mais toujours pas mesuré ici faute de
+  test d'intégration.
 - **34 et 83 cas, pas 34 000.** La suite d'un module d'application est petite
   par nature. Ce qu'elle prouve n'est pas une couverture, c'est qu'un logiciel
   entier se branche : mapping, indexation en masse, recherche, tri, pagination,

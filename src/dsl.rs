@@ -1273,7 +1273,7 @@ fn range_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
 /// donc pas un manque de ferrite mais un refus de trop, du meme genre que
 /// l'`index: true` de Gitea — et il rendait Wagtail inutilisable, qui l'ecrit
 /// sur chacune de ses negations.
-const MUST_NOT_CAMEL: &str = "mustNot";
+pub(crate) const MUST_NOT_CAMEL: &str = "mustNot";
 
 fn bool_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     let obj = as_object(body, "bool")?;

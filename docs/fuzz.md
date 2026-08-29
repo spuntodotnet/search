@@ -27,7 +27,7 @@ python3 tests/compat/fuzz_vs_es.py --couverture          # ce qu'il fuzze, et pa
 
 ## Le périmètre est lu, pas réécrit
 
-[`compat.yaml`](../compat.yaml) déclare 193 capacités avec leur état. Le
+[`compat.yaml`](../compat.yaml) déclare 197 capacités avec leur état. Le
 générateur ne redit pas cette liste : chaque **brique** (une clause du DSL, un
 type de champ, une agrégation, un paramètre du corps) cite l'identifiant de la
 capacité qu'elle exerce, et au démarrage le fuzzer
@@ -124,44 +124,95 @@ avec sa raison, et `--tout` les imprime.
 
 ## La mesure du jour
 
-Le générateur a changé — trois briques de plus (`search_analyzer`, `copy_to`,
-`store`) — donc **toutes les graines ont changé de sens** : la campagne
-précédente ne mesurait plus les mêmes cas, et ses chiffres ne sont pas
-reconduits. Ce tableau est celui de ce passage, refait en entier.
+Le générateur a changé — une brique de plus (`highlight`) — donc **toutes les
+graines ont changé de sens** : la campagne précédente ne mesurait plus les mêmes
+cas, et ses chiffres ne sont pas reconduits. Ce tableau est celui de ce passage,
+refait en entier.
 
 ```
-graines 5150000+       250 cas, 11 020 requêtes, 0 divergence réelle
-graines 6260000+       250 cas, 11 131 requêtes, 0 divergence réelle
-graines 7370000+       250 cas, 11 037 requêtes, 0 divergence réelle
-graines 3535000+       250 cas, 10 959 requêtes, 0 divergence réelle
-graines 9494000+       250 cas, 11 098 requêtes, 0 divergence réelle
-graines 4242000+       250 cas, 11 082 requêtes, 1 divergence ouverte
-graines 1717000+       250 cas, 11 000 requêtes, 0 divergence réelle
-graines 2626000+       250 cas, 11 040 requêtes, 0 divergence réelle
+graines 5150000+       250 cas, 10 965 requêtes, 0 divergence réelle
+graines 6260000+       250 cas, 11 035 requêtes, 0 divergence réelle
+graines 7370000+       250 cas, 11 000 requêtes, 0 divergence réelle
+graines 3535000+       250 cas, 11 016 requêtes, 0 divergence réelle
+graines 9494000+       250 cas, 10 995 requêtes, 0 divergence réelle
+graines 4242000+       250 cas, 11 023 requêtes, 1 divergence ouverte
+graines 1717000+       250 cas, 10 987 requêtes, 0 divergence réelle
+graines 2626000+       250 cas, 11 060 requêtes, 0 divergence réelle
+graines 5500000+       250 cas, 11 026 requêtes, 1 divergence ouverte
+graines 8080000+       250 cas, 11 078 requêtes, 0 divergence réelle
+graines 1234500+       250 cas, 11 061 requêtes, 0 divergence réelle
+graines 3141590+       250 cas, 11 059 requêtes, 0 divergence réelle   (contrôle)
+graines 2718280+       250 cas, 11 060 requêtes, 0 divergence réelle   (contrôle)
+graines 1414210+       250 cas, 11 155 requêtes, 0 divergence réelle   (contrôle)
                      ------------------------------------------------
-                     2 000 cas, 88 367 requêtes, 1 divergence ouverte
+                     3 500 cas, 154 520 requêtes, 2 divergences ouvertes
 
-étalonnage ES vs ES     50 cas,  2 145 requêtes, 0 divergence
+étalonnage ES vs ES     60 cas,  2 523 requêtes, 0 divergence
 ```
 
-Trois de ces plages ont servi à corriger : **5150000+**, qui a montré que la
-valeur stockée écrasait la valeur formatée de `fields` ; **4242000+**, qui a
-sorti le budget de `max_expansions` ; et **1717000+**, qui a sorti la limite des
-tokenizers de Lucene — une plage jamais regardée avant ce passage, comme
-**2626000+**. Les cinq autres sont des plages de contrôle de ce passage-ci :
-elles n'ont servi à rien corriger. Le rapport machine publié est celui de la
-dernière, [`fuzz.json`](fuzz.json).
+Onze de ces plages ont servi à corriger, et elles ont sorti **dix-sept** défauts
+du surlignage à elles seules (le détail plus bas). Les **trois dernières** sont
+des plages de contrôle : elles n'ont servi à rien corriger, et elles sont
+vertes. Le rapport machine publié est celui de la dernière,
+[`fuzz.json`](fuzz.json).
 
-Et la règle a rejoué exactement comme les fois précédentes : **les deux plages
-neuves en ont sorti une chacune**, et aucune n'était dans le sujet de la carte.
-Six passages, aucune plage neuve muette.
+C'est la première fois qu'une plage de contrôle ne sort rien — et ça se lit
+exactement pour ce que c'est : **onze plages avaient été passées avant elles**,
+sur une seule fonctionnalité. Le tirage n'a plus rien de neuf à dire sur ce
+morceau-là ; il en aura sur le prochain.
 
-**La divergence de 4242000+ est ouverte, pas corrigée.** C'est celle que ce
-document décrit plus bas : un ordre par `_score` que BM25 sépare et qu'ES rend
-ex æquo, sur un champ `text` **facultatif** — l'`avgdl` de Lucene se calcule sur
-les documents qui ont le champ, celui de tantivy sur tous. Le prédicat refuse de
-l'absorber, exprès ; élargir la ligne masquerait exactement ce qu'elle a été
-écrite pour attraper.
+**Les deux divergences sont ouvertes, et aucune ne porte sur le surlignage** :
+ni l'une ni l'autre n'a de bloc `highlight` dans sa requête. Elles sont
+décrites plus bas, avec leur graine.
+
+### Ce que la brique « surlignage » a sorti
+
+La brique pose un bloc `highlight` sur un quart des recherches : un ou deux
+champs (nommés, en motif, ou `*`), des tailles **petites exprès** — c'est sous
+`fragment_size` que deux lectures du découpeur divergent, au-dessus le fragment
+est la phrase entière et n'importe quelle implémentation tombe juste — et, une
+fois sur cinq, une surcharge champ par champ.
+
+Elle a sorti **dix-sept** défauts en cinq passages, et aucun n'était visible
+aux 233 questions écrites à la main la veille. Le premier a coûté un changement
+de forme du code :
+
+| Ce que le fuzzer a sorti | Ce que c'était |
+|---|---|
+| un `should` placé dans un `bool` dont le `filter` échoue était quand même marqué | **« les termes de la requête » n'est pas « ce qui a fait correspondre ce document ».** ES surligne depuis les `Matches` de Lucene, qui sont calculées **par document** : un `bool` qui ne tient pas ne rend aucune marque, et un `must_not: {match_all}` le réécrit en `MatchNoDocsQuery`. Le surlignage garde donc la forme booléenne de la requête et l'évalue document par document. La règle a une seconde moitié qui la retourne : sous `require_field_match: false`, ES abandonne les `Matches` et repart d'une extraction statique — le tri par document disparaît avec, et une phrase y est marquée terme par terme. Trois passages plus tard, ce mode s'est révélé irréproductible dans plusieurs de ses cas (un `range` dont l'automate quitte son champ **et** son type, une clause muette qui marque parfois ailleurs et parfois pas) : il est **refusé**, pas approximé |
+| `no_match_size: 5` rendait « tiret- » là où ES rend « tiret-bas » | **un `BreakIterator` de Java n'est pas UAX#29.** `abcde-fghij` et `abcde"fghij` sont **un** mot chez Java, `abcde:fghij` et `abcde’fghij` en font deux — l'inverse de la norme pour les deux premiers. Ça ne se lit nulle part : il a fallu poser `no_match_size: 1` sur seize mots construits exprès et regarder où tombait la coupure |
+| un `match` sur un `keyword` ne surlignait plus rien dès que la valeur portait un tiret | **un `keyword` n'est pas analysé par la clause** : elle y cherche la valeur entière. Le mapping ne déclare pas d'analyzer sur un `keyword`, donc l'analyzer « par défaut » d'un champ y est `standard` — et l'appliquer coupait « tiret-bas » en deux termes qui n'existent pas dans l'index |
+| une valeur écartée par `ignore_above` était surlignée | **lire le `_source` n'est pas lire ce qui a été indexé** — la même leçon que pour `fields`, un an plus tôt, au même endroit. Une valeur trop longue n'est ni marquée, ni rendue par `no_match_size` |
+| la cible d'un `copy_to` ne rendait aucun fragment | sa valeur n'est **nulle part** dans son propre `_source` : elle est dans celui de la source. Là encore, la règle existait déjà pour `fields` ; livrer une troisième lecture, c'est devoir la reposer |
+| `<em>optique</em><em> verre</em>` là où ES rend `<em>optique verre</em>` | deux marques qui **se chevauchent** n'en font qu'une. Celles qui se **touchent** en restent deux, et ça se lit dans les deux sens : des n-grammes de longueurs différentes se recouvrent (`<em>elevee etendue</em>` d'un bloc), des n-grammes posés bout à bout non (`<em>t</em><em>i</em>ssu`). Les fondre toutes donnait le premier résultat dans les deux cas |
+| `no_match_size` ne rendait rien quand la première valeur d'un champ multivalué était vide | ES concatène les valeurs avec un séparateur et **saute les séparateurs de tête** : la première valeur au sens de `no_match_size` est la première **non vide** |
+| un `must: {exists: b}` qui échoue laissait ses voisins marquer | `exists` ne marque rien, mais il se **tranche** sur le `_source`, et un `bool` qu'il fait tomber doit se taire entièrement. Le laisser opaque revenait à supposer qu'il tenait |
+| `"  abc def  "` sortait rogné à `number_of_fragments: 0` | le rognage vit dans le **découpeur borné** ; à `nof: 0` ES ne l'emploie pas et rend le fragment tel quel. Et le rognage lui-même n'est pas « les blancs » : c'est le `String.trim()` de Java, qui s'arrête à U+0020 — l'espace insécable, l'espace fine et le séparateur de ligne restent |
+| ES rendait `cible\u2009` là où ferrite rendait `cible\t` | le **score** d'un fragment se calcule sur sa longueur **avant** rognage. Noter le fragment rogné faisait gagner celui dont la tabulation partait, à égalité de tout le reste |
+| un `term` sur une **date** ne faisait pas taire le `bool` qui le portait en `filter` | même famille que l'`exists` : il ne marque rien, mais il se tranche sur le `_source`. Et l'`exists`, lui, se tranche par le chemin du **parent** quand c'est un multi-field — lire `e.keyword` dans un document qui porte `e` n'y trouvait jamais rien |
+| un `match_phrase` de trois mots sortait entier là où ES n'en garde qu'un | quand `fragment_size` ne laisse plus de place, la borne droite est la **fin de la correspondance**, pas la frontière de mot suivante. Un caractère d'écart |
+| un `keyword` valant «   espaces   multiples   » sortait rogné | le terme **porte** ces blancs : le rognage ne mord jamais sur une marque |
+| deux marques qui commencent au même endroit ouvraient le mauvais fragment | c'est la plus **courte** qui l'ouvre, et la plus longue s'y fait rogner. Un `dis_max` de deux `match_phrase` imbriqués le montre à une unité de `fragment_size` près |
+| un `regexp` qui attrape deux mots différents pesait comme deux termes | le `PassageScorer` note **clause par clause**, pas mot par mot. Ça ne change pas le contenu d'un fragment, ça change **lequel** survit à `number_of_fragments` |
+| une valeur de `keyword` **vide** | elle rend `<em></em>` au milieu d'autres valeurs, et **rien** en dernière position : ES s'arrête dès que la correspondance commence au-delà du dernier caractère du champ |
+| `<b>vers</b>` là où ES rend `<b>versio</b>n` | les marques d'**une même clause** n'en font qu'une avant tout le reste : un `prefix` attrape `vers`, `versi` et `versio` au même endroit sur un champ à n-grammes, et c'est `versio` qui ouvre le fragment. Deux clauses **distinctes**, elles, restent distinctes — et c'est la plus courte qui ouvre. Et le fragment va jusqu'au **bout du mot** que le gramme coupe |
+
+Les quinze derniers ont un point commun avec ce que les cartes précédentes ont
+appris : ils ne portent pas sur le découpage, qui était le sujet, mais sur ce
+que le champ **contient**, sur la façon dont il est lu, et sur les **bords**.
+Le découpage, lui, était juste dès le premier passage — parce qu'il avait été
+mesuré caractère par caractère avant d'être écrit.
+
+Deux d'entre eux viennent d'une **plage de contrôle** (900001+), c'est-à-dire
+d'une plage jamais utilisée pour corriger, et huit autres d'une campagne
+complète lancée après coup sur onze plages. Septième passage, septième plage
+neuve qui trouve quelque chose.
+
+Et une leçon d'outillage, la même que la section 2 de `CLAUDE.md` : le premier
+lancement de la campagne a signalé un écart de `mapping` et de `field_caps`
+**dès la première graine**. Rejoué seul, le cas était vert — c'étaient trois
+index laissés par des sondes précédentes sur le conteneur de référence. Un
+résultat rouge au démarrage est presque toujours un défaut d'instrument.
 
 ### Ce que la brique « n-grammes » a sorti, en un passage
 
@@ -244,7 +295,7 @@ portait sur aucun des trois :
 | Ce que le fuzzer a sorti | Ce que c'était |
 |---|---|
 | une clé de `terms` **entière** sur un champ `float` ou `double` : ferrite rendait `2`, ES rend `2.0` | un défaut **antérieur**, dans la mise en forme des buckets. Le corpus de `diff_aggs.py` n'a pas de valeur flottante entière ; le fuzzer, qui tire `0.0`, `1.0` et `1024.0` exprès, en produit. Un client qui type strictement son JSON y lit un entier là où ES lui donne un flottant. Corrigé |
-| un **500** d'ES quand le même champ est demandé par `docvalue_fields` **et** `stored_fields` | un bug d'ES 8.15 (`unsupported_operation_exception`, `reason: null`), pas un défaut de ferrite — qui rend les valeurs, comme il le fait pour chacune des deux lectures prises séparément. Un 500 ne se reproduit pas : c'est déjà la raison pour laquelle `_seq_no` nommé dans `fields` est refusé. Divergence assumée n° 19 |
+| un **500** d'ES quand le même champ est demandé par `docvalue_fields` **et** `stored_fields` | un bug d'ES 8.15 (`unsupported_operation_exception`, `reason: null`), pas un défaut de ferrite — qui rend les valeurs, comme il le fait pour chacune des deux lectures prises séparément. Un 500 ne se reproduit pas : c'est déjà la raison pour laquelle `_seq_no` nommé dans `fields` est refusé. Divergence assumée n° 21 |
 | l'ordre des valeurs qu'un `copy_to` dépose dans sa cible | ce n'est pas un ordre : c'est l'itération d'un `HashSet<String>` de Java sur {cible} ∪ {sources}. Divergence assumée n° 18, avec un prédicat qui **mesure** que l'écart ne porte que sur l'ordre |
 | un mot de plus de **255 caractères** disparaissait de l'index | `maxTokenLength` n'est pas une limite qui jette : les tokenizers de Lucene **coupent** le mot en morceaux de 255 caractères, chacun à la position suivante — donc tout ce qui suit se décale aussi. ferrite jetait le mot entier (et, à 255 pile, un mot que Lucene garde). Défaut **antérieur** : aucun texte du corpus de `diff_analyzers.py` n'avait de mot si long, et il a fallu qu'un `keyword` de 300 caractères soit recopié par `copy_to` dans un `text` pour qu'un tokenizer le voie. Corrigé, et les longueurs 254 / 255 / 256 / 300 / 512 sont entrées dans le corpus |
 | `match_phrase_prefix` d'un seul mot sur un champ à n-grammes rendait **un document de plus** qu'ES | `max_expansions` est chez Lucene un budget **par position**, pas par terme : `MultiPhrasePrefixQuery` remplit un seul ensemble en parcourant les termes de la position et s'arrête dès qu'il est plein. La distinction ne se voyait pas tant qu'un analyzer posait un terme par position ; un filtre à n-grammes en pose vingt, et un budget par terme en développe vingt fois plus. Défaut antérieur lui aussi. Corrigé |
@@ -338,6 +389,21 @@ rouge — et elle est le bon prix.
 > plutôt que sur ceux qui ont le champ — est toujours là, déclarée dans
 > [`compat.md`](compat.md), et un autre tirage la reposera.
 
+### Les deux divergences ouvertes de ce passage, et ce qu'elles ne sont pas
+
+La campagne complète en a laissé deux, et **aucune des deux ne porte sur le
+surlignage** : leurs requêtes n'ont pas de bloc `highlight` du tout. Elles sont
+publiées ouvertes plutôt que tues, avec leur graine.
+
+| Graine | Ce qui diffère | Ce que c'est |
+|---|---|---|
+| `5500180` | `total` 9 chez ferrite, 8 chez ES, sur un `bool` fait de deux `must_not` dont un `exists` | la divergence **déjà déclarée** sur `exists` appliqué à un champ `text` dont l'analyzer (`stop`) ne laisse aucun terme — vue ici sous une négation, donc dans le sens qui rend **plus** de documents. Le prédicat qui couvre cette famille ne reconnaît pas cette imbrication-là (`dis_max` d'un `bool` à deux `must_not`), et l'élargir masquerait ce qu'il est écrit pour attraper |
+| `4242241` | un ordre par `_score` : ferrite place `d014` là où ES place `d020`, les deux à `1.0` dans le tableau `sort` | la **même famille** que la divergence ouverte du passage précédent : un `dis_max` dont une branche est un `term` sur un `boolean`. ES le note sous `1.0` (le `match_all` voisin l'emporte), ferrite au-dessus — ce sont deux constantes de BM25, et le prédicat n'accepte une inversion que si ES donne aux deux documents des scores **différents**. Ici il les rend ex æquo, et c'est ferrite qui les sépare |
+
+Les deux se rejouent (`--rejouer 5500180`, `--rejouer 4242241`) et aucune n'est
+absorbée par un prédicat : une divergence qu'on n'a pas expliquée n'a pas à
+compter comme expliquée.
+
 Le détail machine est dans [`fuzz.json`](fuzz.json) : les divergences réelles y
 sont écrites entières, les assumées résumées par famille avec trois exemples.
 
@@ -367,6 +433,8 @@ La preuve : chaque nouvelle plage jamais regardée en a retrouvé.
 | 3535000+ | le défaut des n-grammes : `match_phrase` rendait 3 documents là où ES en rend 12 |
 | 1717000+ | la limite des tokenizers de Lucene : un mot de plus de 255 caractères **coupé** chez ES, **jeté** chez ferrite |
 | 2626000+ | rien de neuf — la deuxième plage de contrôle qui n'ajoute rien |
+| 900001+ | deux des seize défauts du surlignage, dont la règle qui a changé la forme du code : ES ne marque que ce qui a fait correspondre **ce** document |
+| la campagne complète, onze plages | huit défauts de plus, tous sur des **bords** — et deux divergences ouvertes qui n'ont rien à voir avec le surlignage (ci-dessous) |
 
 Et à chaque passage suivant, générateur changé, la règle a rejoué exactement
 pareil : la plage 1–400 — celle sur laquelle on avait itéré — a sorti le

@@ -88,8 +88,8 @@ qu'un zéro qui aurait l'air d'une mesure.
 | `stored_fields` | 6,6 % | ✅ |
 | `query_string`, `simple_query_string`, `function_score`, `boosting`, `intervals`, `terms_set`, `script`… | 6,5 % | ❌ |
 | `percentiles`, `extended_stats`, `top_hits`, `composite`, `filters`, `nested`, `significant_terms`, `date_range`, `ip_range`… | 6,1 % | ❌ |
-| `highlight`, `search_after`, `pit`, `collapse`, `knn`, `explain`, `seq_no_primary_term`, `post_filter`, `min_score`, `suggest`, `rescore`, `track_scores`, `q`, `timeout`, `terminate_after`, `version`, `indices_boost`, `profile`, `slice`, `stats`, `ext`, `retriever` | 5,6 % | ❌ |
 | `date_histogram` | 5,3 % | 🟡 |
+| `search_after`, `pit`, `collapse`, `knn`, `explain`, `seq_no_primary_term`, `post_filter`, `min_score`, `suggest`, `rescore`, `track_scores`, `q`, `timeout`, `terminate_after`, `version`, `indices_boost`, `profile`, `slice`, `stats`, `ext`, `retriever` | 4,8 % | ❌ |
 | `match_phrase` | 4,5 % | 🟡 |
 | `_all`, `*`, URL sans index | 4,1 % | ✅ |
 | `_source` | 3,7 % | ✅ |
@@ -723,6 +723,7 @@ de documents que demandé, sans que rien ne le signale.
 | `fields` | 🟡 | la façon que la 7.10+ met en avant — et celle qu'envoie Kibana — de demander autre chose que le `_source` complet. Les valeurs sont lues dans le **`_source`** puis typées selon le mapping : l'ordre du document et ses **doublons** sont donc conservés (`["zoulou","alpha","alpha"]` ressort tel quel), et `{"tag": 42}` sur un `keyword` ressort `["42"]`. **La forme est ce qui compte** : chaque valeur est un tableau, même pour un champ mono-valué, et un champ absent n'a **pas de clé** — ce n'est pas une valeur nulle. Un multi-field (`titre.keyword`) est adressable, un sous-champ de `nested` se rend **groupé par élément** sous sa racine (`{"lignes": [{"ref": ["X1"]}, {"q": [5]}]}`, un élément sans valeur demandée étant omis), et un motif `*` ne ramène **pas** les métadonnées. Mesuré champ par champ par [`sonde_fields.py`](../tests/compat/sonde_fields.py). Supporté : `field` (un nom, un motif `*`, un multi-field, un chemin pointé), `format` (sur un champ `date` ; il remplace celui du mapping), `include_unmapped` (lit dans `_source` les chemins qu'aucun champ ne mappe — ce que Kibana envoie sur chaque recherche), `_id`, `_index` et `_version` nommés explicitement. Refusé : `_seq_no` et `_source` nommés dans `fields` (ES rend un **500** dessus (« Cannot fetch values for internal field ») ; un 500 ne se reproduit pas, ferrite les refuse explicitement), `?fields=` en query string (ES ne le connaît pas non plus — il le refuse comme un paramètre inconnu), un `format` qui n'est pas dans le vocabulaire de [`dateformat`](../src/dateformat.rs) (ES accepte un motif inconnu et rend une chaîne absurde (`format: "nawak"` rend `"0AM11AM24"`) ; ferrite le refuse, comme partout ailleurs où il lit un `format`) |
 | `docvalue_fields` | 🟡 | la valeur telle qu'elle est **stockée en colonne**, et ce n'est pas la même que celle du `_source` : les colonnes sont triées, donc un `keyword` en ressort trié **et dédoublonné** (`["alpha","zoulou"]`) là où `fields` garde `["zoulou","alpha","alpha"]`, un numérique trié **avec** ses doublons (`[1,1,3]`), et un `float` avec la précision de son stockage sur 32 bits — ES rend `0.10000000149011612` là où le `_source` porte `0.1`. Accepté aussi en query string (`?docvalue_fields=`). Supporté : `field` (un nom, un motif, un multi-field, un chemin pointé), `format` (sur un champ `date`). Refusé : un champ `text` (il n'a pas de colonne ; ES fait échouer le shard (« Fielddata is disabled on [x] »), que le champ soit nommé ou attrapé par un motif — ferrite rend la même phrase), un `format` sur un champ numérique (ES l'interprète comme un `DecimalFormat` de Java (`format: "yyyy"` sur la valeur 1 rend `"yyyy1"`) ; ferrite ne l'imite pas), une métadonnée (`_id`, ...) (ES la refuse aussi (« Fielddata access on the _id field is disallowed »)) |
 | `stored_fields` | ✅ | rend les champs que le mapping déclare [`store: true`](#types-de-champ) — et **rien** pour les autres, comme un Elasticsearch dont le mapping ne le porte pas. Il ne reconstitue rien depuis `_source` : ce serait rendre des valeurs qu'ES ne rend pas. L'ordre est celui du document, doublons compris, là où `docvalue_fields` trie et dédoublonne. Il change aussi la réponse elle-même : il **retire `_source`** (sauf `_source` explicite), `_none_` retire **aussi `_id`**, et `_none_` avec `fields` est un 400. Accepté aussi en query string. Supporté : une liste de noms, un motif, `_none_`, `?stored_fields=` en query string, sur `GET /{index}/_doc/{id}` et `_mget` aussi (en query string, et par descripteur dans le corps d'un `_mget` — celui du descripteur l'emporte sur celui de l'URL). Refusé : un champ stocké sous un `nested` (ES ne le rend pas non plus : la valeur vit dans le document enfant) |
+| `highlight` | 🟡 | les fragments surlignés d'une barre de recherche. Ce qui se reproduit ici n'est pas « marquer les termes » mais le **découpage** de Lucene, et aucune de ses règles n'était devinable : les phrases (au sens d'UAX#29) sont fusionnées vers l'avant tant que la longueur reste sous `fragment_size`, et une phrase qui déborde à elle seule est re-coupée **au mot** autour de la correspondance — donc `fragment_size: 19` rend une phrase là où `20` en rend deux, sur le même texte. Un point suivi d'une **minuscule** ne termine pas une phrase (règle SB8), un point entre deux capitales non plus. Le fragment se centre sur le **milieu** de la correspondance : sur un mot isolé ça ne se voit pas, sur un `match_phrase` de quatre mots le bord gauche se décale de plusieurs mots. Quand il y a plus de fragments que `number_of_fragments`, ce sont les mieux notés par le `PassageScorer` de Lucene qui restent, puis remis dans **l'ordre du document**. Une phrase rend **une seule** marque, du premier terme au dernier. Un champ multivalué est traité valeur par valeur — un fragment ne franchit jamais la frontière entre deux valeurs — mais les fragments de toutes les valeurs sont mis en concurrence ensemble. Un champ sans correspondance est **absent** de la réponse, pas une chaîne vide. Mesuré fragment par fragment par [`diff_highlight.py`](../tests/compat/diff_highlight.py). Supporté : `fields` (un nom, un motif `*`, la forme héritée en liste d'objets ; seuls les champs `text` et `keyword` répondent, comme chez ES), `pre_tags` (seule la première balise est employée, comme le surligneur par défaut d'ES), `post_tags`, `tags_schema` (`default` et `styled` (`<em class="hlt1">`)), `number_of_fragments` (`0` rend la valeur entière, valeur par valeur), `fragment_size` (`0` rend une phrase entière ; une valeur négative retombe sur le défaut, comme chez ES), `no_match_size` (le début de la **première** valeur, étendu à la frontière de mot qui suit), `require_field_match` (`true`, le défaut : le champ n'est surligné que par ce que la requête y pose), la surcharge champ par champ de tous les réglages ci-dessus, `order: none` (le défaut : les fragments sortent dans l'ordre du document). Refusé : `type` (`fvh`, `plain` et même `unified` écrit explicitement : ferrite n'a qu'un surligneur, et un `type` accepté en silence laisserait croire qu'un autre découpage a été appliqué), `order` (`score` trie les fragments par leur note ; ES y emploie un tri **instable** (`introSort`), donc deux fragments de même note ne sortent pas dans un ordre reproductible), `require_field_match: false` (ES y cherche les termes de **toutes** les clauses dans **tous** les champs, par une extraction qui n'est pas celle du mode normal — il en documente lui-même le résultat comme approximatif, et ferrite n'en reproduit pas tous les cas. Un refus se voit ; un fragment silencieusement différent, non), `highlight_query`, `matched_fields`, `boundary_scanner`, `boundary_chars`, `boundary_max_scan`, `boundary_scanner_locale`, `fragmenter`, `encoder` (`html` échappe le texte du fragment), `force_source`, `phrase_limit`, `max_analyzed_offset`, un fragment d'un `nested` sous `inner_hits` (`inner_hits` est hors périmètre ; un sous-champ de `nested` se surligne bien depuis la racine) |
 | `script_fields`, `runtime_mappings` | ❌ | **hors périmètre assumé** — les deux définissent des champs **calculés par un script Painless**, que ferrite n'exécute pas. La mesure le confirme plutôt que la supposition : sur les 444 requêtes du corpus qui portent `runtime_mappings`, **425 l'envoient vide** (des gabarits de tracks Rally), et sur les 19 non vides **18 portent un script**. L'objet **vide** est donc accepté — il ne définit aucun champ, donc ne demande rien, et ES rend la même réponse avec ou sans (mesuré) ; un objet non vide est refusé explicitement |
 | `track_total_hits` | 🟡 | le total est **toujours exact** (`relation: "eq"`). Supporté : `true`, une valeur numérique. Refusé : `false` (il n'y a rien à économiser sur un total déjà exact) |
 | Scoring | 🟡 | BM25 (tantivy), `_score` et `max_score` renseignés ; `null` quand un tri est demandé, comme chez ES. Les **valeurs** ne sont pas comparées à celles d'ES (les constantes diffèrent) ; c'est l'**ordre** qui l'est, par [`diff_relevance.py`](../tests/compat/diff_relevance.py). Un `term` sur un champ numérique vaut `1.0` comme chez ES (requête de points), un `keyword` et un `boolean` sont indexés sans *fieldnorm* comme chez Lucene — donc deux documents qui portent la même valeur marquent pareil, quel que soit le nombre de valeurs du champ. Refusé : l'`avgdl` de BM25 sur un champ `text` **facultatif** (Lucene calcule la longueur moyenne sur les documents **qui ont le champ**, tantivy sur **tous** les documents de l'index. Deux scores voisins peuvent alors s'inverser. Mesuré par [`fuzz_vs_es.py`](../tests/compat/fuzz_vs_es.py) ; l'ampleur est mesurée par `diff_relevance.py`), le score d'un `fuzzy` (tantivy le rend **constant** ; Lucene pondère chaque terme par sa distance d'édition. Les documents rendus sont les mêmes, leur ordre non) |
@@ -730,7 +731,7 @@ de documents que demandé, sans que rien ne le signale.
 | `preference` | 🟡 | accepté, sans objet : il n'y a qu'un shard |
 | `aggs` / `aggregations` | 🟡 | voir la section dédiée |
 | `scroll` | ✅ | `?scroll=1m` ouvre un contexte figé et rend un `_scroll_id` — voir la section dédiée |
-| `highlight`, `search_after`, `pit`, `collapse`, `knn`, `explain`, `seq_no_primary_term`, `post_filter`, `min_score`, `suggest`, `rescore`, `track_scores`, `q`, `timeout`, `terminate_after`, `version`, `indices_boost`, `profile`, `slice`, `stats`, `ext`, `retriever` | ❌ | **pas encore** — aucun n'est un obstacle de moteur ; `highlight` et `search_after` sont les deux qui manquent le plus, le premier pour une liste de résultats, le second pour paginer au-delà de 10 000 |
+| `search_after`, `pit`, `collapse`, `knn`, `explain`, `seq_no_primary_term`, `post_filter`, `min_score`, `suggest`, `rescore`, `track_scores`, `q`, `timeout`, `terminate_after`, `version`, `indices_boost`, `profile`, `slice`, `stats`, `ext`, `retriever` | ❌ | **pas encore** — aucun n'est un obstacle de moteur ; `search_after` est celui qui manque le plus, pour paginer au-delà de 10 000 |
 | `ignore_unavailable`, `allow_no_indices`, `expand_wildcards` | ✅ | voir [Expressions d'index](#expressions-dindex-listes-motifs-alias) — `expand_wildcards=none` reste ❌ |
 | `routing`, `filter_path`, `typed_keys` | ❌ | **hors périmètre assumé** — ferrite est mono-shard, `routing` n'a rien à choisir ; les deux autres changent la forme de la réponse, et une forme qui dépend d'un paramètre est une seconde API à mesurer |
 | `search_type`, `max_concurrent_shard_requests`, `pre_filter_shard_size`, `batched_reduce_size` | ❌ | **hors périmètre assumé** — ils reglent la façon dont une recherche se distribue entre shards ; il n'y en a qu'un, donc rien à distribuer et rien à régler |
@@ -813,6 +814,81 @@ portent `runtime_mappings`, **425 l'envoient vide** — des gabarits de tracks
 Rally — et sur les 19 non vides, **18 portent un script**. L'objet **vide** est
 donc accepté (il ne définit aucun champ, donc ne demande rien, et ES rend la même
 réponse avec ou sans) ; un objet non vide est refusé explicitement.
+
+### Les fragments surlignés (`highlight`)
+
+Ce qui se reproduit ici n'est pas « marquer les termes » : c'est le
+**découpage** du `UnifiedHighlighter` de Lucene, tel qu'Elasticsearch le
+configure. Rien de sa forme n'était devinable, et une lecture naïve —
+« un fragment = une phrase », ou « un fragment = `fragment_size` caractères » —
+rend systématiquement autre chose. Tout ce qui suit est mesuré contre un
+ES 8.15 par
+[`diff_highlight.py`](../tests/compat/diff_highlight.py) (**233 questions
+posées aux deux serveurs, comparées fragment par fragment**), et étalonné
+contre deux Elasticsearch avant de servir.
+
+**Où le fragment commence et finit.** Les phrases sont fusionnées **vers
+l'avant** tant que la longueur totale reste sous `fragment_size` ; si une seule
+phrase déborde déjà, elle est re-coupée **au mot** autour de la correspondance.
+Sur le même texte, `fragment_size: 19` rend une phrase et `20` en rend deux. Le
+fragment se centre sur le **milieu** de la correspondance, pas sur son début :
+sur un mot isolé les deux se confondent, sur un `match_phrase` de quatre mots le
+bord gauche se décale de plusieurs mots.
+
+**Où une phrase s'arrête.** C'est UAX#29, et deux de ses règles décident de
+presque tout :
+
+- un point suivi d'une **minuscule** ne termine pas une phrase (règle SB8).
+  « zzz cible. aaa. bbb cible cible. » est **une seule** phrase — donc ES y rend
+  trois fragments coupés au mot, là où « une phrase par fragment » en rendrait
+  trois autres ;
+- un point entre deux capitales non plus (`U.S.A.`), ni entre deux chiffres
+  (`8.15`).
+
+**Où un mot s'arrête** — et là, ce n'est **pas** UAX#29 : c'est le
+`BreakIterator` du JDK, dont les jointures diffèrent sur des caractères
+courants. Mesurées une par une (`no_match_size: 1` dit où tombe la première
+frontière) : `abcde-fghij` et `abcde"fghij` sont **un** mot, `abcde:fghij` et
+`abcde’fghij` en font deux — l'inverse de ce que dit UAX#29 pour les deux
+premiers. Sans le tiret, `tiret-bas` se coupait en « tiret ».
+
+**Ce qui est marqué.** Les termes que la requête pose sur **ce champ-là**, et
+seulement ceux qui ont vraiment fait correspondre **ce document-là** : un
+`should` placé dans un `bool` dont le `filter` échoue ne marque rien, et un
+`bool` porteur d'un `must_not: {match_all}` ne marque jamais rien. Une phrase
+rend **une seule** marque, du premier terme au dernier.
+
+`require_field_match: false` — qui ferait chercher les termes de **toutes** les
+clauses dans **tous** les champs — est **refusé**. ES lui-même documente son
+résultat comme approximatif, et ferrite n'en reproduit pas tous les cas : un
+`range` sur un champ non textuel y voit son automate appliqué aux termes des
+autres champs (`{"range": {"drapeau": {"lt": true}}}` marque « AlphA » dans un
+`keyword` voisin, parce que `"AlphA" < "T"`), et une clause qui n'a rien trouvé
+dans son propre champ y marque parfois ailleurs et parfois pas. Un refus se
+voit ; un fragment silencieusement différent, non.
+
+**Quels fragments survivent** à `number_of_fragments` : les mieux notés par le
+`PassageScorer` de Lucene (un BM25 dont le « document » est le fragment, pivoté
+sur 87 caractères), puis remis dans **l'ordre du document**. Le `freq()` y vaut
+**1** — c'est ce que rend Lucene quand le surligneur travaille sur les
+`Matches` — et ça n'est pas un détail : prendre le vrai nombre d'occurrences
+rend le poids négatif dès qu'un terme apparaît plus de trois fois, ce qui
+**inverse** le classement.
+
+**Un champ multivalué** est traité valeur par valeur — un fragment ne franchit
+jamais la frontière entre deux valeurs — mais les fragments de toutes les
+valeurs sont mis en concurrence ensemble. `no_match_size` ne lit que la
+**première valeur non vide**.
+
+**Ce que le `_source` ne dit pas.** Une valeur écartée par `ignore_above` n'a
+pas été indexée : elle n'est pas surlignée, et `no_match_size` ne la rend pas
+non plus. À l'inverse, la valeur qu'un `copy_to` dépose dans sa cible n'est
+**nulle part** dans le `_source` de celle-ci, et elle est bien surlignée — même
+règle que pour `fields`.
+
+Un champ sans correspondance est **absent** de la réponse : ce n'est pas une
+chaîne vide. Un champ qui n'est ni `text` ni `keyword` ne répond pas, même sous
+un motif `*`.
 
 ### Date math et arrondi des bornes
 
@@ -1261,7 +1337,28 @@ pas pour être découverts en production.
     ne porte que sur l'ordre — une valeur en trop ou un doublon perdu y reste un
     écart.
 
-19. **Les trois lectures sur le même champ stocké rendent un `500` chez ES.**
+    Le **surlignage** de la cible hérite du même désordre, et il ne se rattrape
+    pas de la même façon : il ne rend pas toutes les valeurs, il en **choisit**
+    (`no_match_size` prend la première, `number_of_fragments` garde les mieux
+    notées) — et « la première » n'existe pas quand l'ordre vient d'un
+    `HashSet`. Deux Elasticsearch de la même version n'y rendent déjà pas la
+    même chose : `fuzz_vs_es.py --calibrer` le montre.
+
+19. **Un fragment de surlignage se compte en `char`, pas en unité UTF-16.**
+    `fragment_size` et `no_match_size` sont des longueurs, et Java les compte en
+    unités UTF-16 — deux par caractère au-delà du plan multilingue de base
+    (émojis, écritures anciennes). ferrite les compte en `char`. Sur du texte
+    ordinaire, accents compris, les deux coïncident ; ils divergent d'un
+    caractère par émoji présent **avant** le point de coupe, et seulement là.
+
+20. **Une erreur de lecture du corps ne porte pas de position.** ES préfixe ses
+    `x_content_parse_exception` par la ligne et la colonne fautives
+    (`[1:82] [highlight] unknown field [nawak]`) ; ferrite rend la même phrase
+    sans le préfixe. Il ne tient pas de position de lecture — son analyseur
+    JSON rend un arbre, pas un flux de jetons — et inventer une position serait
+    pire que ne pas en donner.
+
+21. **Les trois lectures sur le même champ stocké rendent un `500` chez ES.**
     `{"fields": ["tag"], "docvalue_fields": ["tag"], "stored_fields": ["tag"]}`
     sur un `keyword` déclaré `store: true` fait rendre à ES 8.15 un
     `unsupported_operation_exception`. Un 500 ne se reproduit pas — c'est déjà

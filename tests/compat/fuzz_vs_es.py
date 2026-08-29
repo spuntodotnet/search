@@ -253,6 +253,7 @@ BRIQUES = {
     "corps.fields": "recherche.fields",
     "corps.docvalue_fields": "recherche.docvalue_fields",
     "corps.stored_fields": "recherche.stored_fields",
+    "corps.highlight": "recherche.highlight",
     "corps.track_total_hits": "recherche.track_total_hits",
     "corps.aggs": "recherche.aggs",
     "corps.scroll": "recherche.scroll",
@@ -1178,7 +1179,53 @@ class Generateur:
                 [[c.nom for c in champs[:2]], ["*"], []])
         if rng.random() < 0.4 and self.brique("corps.aggs"):
             corps["aggs"] = self.aggs(champs, docs)
+        if rng.random() < 0.25 and self.brique("corps.highlight"):
+            hl = self._highlight(champs)
+            if hl:
+                corps["highlight"] = hl
         return corps
+
+    def _highlight(self, champs):
+        """Un bloc `highlight` : ce qui est marque, et surtout **ou le fragment
+        est coupe**.
+
+        Les tailles sont tirees petites expres : c'est sous `fragment_size` que
+        les deux lectures du decoupeur divergent — au-dessus, le fragment est
+        la phrase entiere et n'importe quelle implementation tombe juste."""
+        rng = self.rng
+        surlignables = [c for c in champs if c.ty in ("text", "keyword",
+                                                      "text_devine", "keyword_devine")]
+        surlignables += [c for c in feuilles_de_nested(champs)
+                         if c.ty in ("text", "keyword")]
+        if not surlignables:
+            return None
+        cibles = {}
+        for _ in range(rng.randint(1, 2)):
+            r = rng.random()
+            if r < 0.15:
+                nom = "*"
+            elif r < 0.25:
+                nom = rng.choice(surlignables).chemin.split(".")[0] + "*"
+            else:
+                nom = rng.choice(surlignables).chemin
+            cibles[nom] = {}
+        hl = {"fields": cibles}
+        if rng.random() < 0.6:
+            hl["fragment_size"] = rng.choice([0, 1, 5, 12, 20, 30, 60, 100])
+        if rng.random() < 0.5:
+            hl["number_of_fragments"] = rng.randint(0, 4)
+        if rng.random() < 0.2:
+            hl["no_match_size"] = rng.choice([0, 5, 25, 200])
+        if rng.random() < 0.15:
+            hl["pre_tags"] = ["<b>"]
+            hl["post_tags"] = ["</b>"]
+        # Une surcharge champ par champ, une fois sur cinq : les reglages
+        # globaux et locaux se melangent, et c'est le local qui gagne.
+        if cibles and rng.random() < 0.2:
+            nom = rng.choice(list(cibles))
+            cibles[nom] = {"fragment_size": rng.choice([1, 15, 40]),
+                           "number_of_fragments": rng.randint(0, 3)}
+        return hl
 
     def _fields(self, champs):
         """Ce que `fields` demande : des noms, des motifs, un `format`.
@@ -1802,6 +1849,24 @@ def _prefixe_de_copie(chemin):
     return chemin[:i + len(marque)]
 
 
+def _fragments_de_copie(e):
+    """Un fragment de surlignage sur la cible d'un `copy_to`.
+
+    Meme cause que la ligne precedente, mais elle ne se rattrape pas par un
+    multi-ensemble : le surlignage ne rend pas **toutes** les valeurs, il en
+    choisit. `no_match_size` prend la premiere, `number_of_fragments` garde les
+    mieux notees — et « la premiere » n'existe pas quand l'ordre vient d'un
+    `HashSet` de Java. Deux Elasticsearch de la meme version n'y rendent deja
+    pas la meme chose : `--calibrer` le montre sur la graine 34.
+
+    La ligne reste bornee au champ `tout`, la seule cible de `copy_to` que le
+    generateur declare, et aux ecarts qui portent bien un fragment des deux
+    cotes — une cle absente d'un cote reste un ecart."""
+    chemin = e.get("chemin", "")
+    return (".highlight.tout[" in chemin
+            and isinstance(e.get("a"), str) and isinstance(e.get("b"), str))
+
+
 def _ordre_par_pertinence(e, requete):
     """Un ordre par `_score` que les statistiques de BM25 separent.
 
@@ -1891,6 +1956,7 @@ DIVERGENCES_ASSUMEES = [
     ("ES 8.15 casse sur epoch_millis", _es_casse),
     ("ES 8.15 casse sur deux lectures du meme champ", _es_deux_lectures),
     ("ordre des valeurs copiees par copy_to", _ordre_des_copies),
+    ("fragment choisi parmi des valeurs sans ordre (copy_to)", _fragments_de_copie),
     ("ordre par pertinence (BM25)", _ordre_par_pertinence),
 ]
 

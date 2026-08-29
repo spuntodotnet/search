@@ -367,7 +367,19 @@ du lot fautif et rend 409. Ce qui reste refusé, par son nom : `script`
 (Painless), `slices`, `wait_for_completion=false` (il rendrait une tâche, et
 ferrite n'a pas d'API `_tasks`) et `requests_per_second`.
 
-**Ce qui n'y est pas encore** : `highlight`, `search_after`, `_msearch`,
+**Les fragments surlignés d'une barre de recherche** (`highlight`) sont rendus,
+et ce qui a coûté le travail n'est pas de marquer les termes : c'est de couper
+les fragments **là où Lucene les coupe**. Un fragment n'est ni « une phrase » ni
+« `fragment_size` caractères » — les phrases sont fusionnées vers l'avant tant
+que la longueur tient, puis re-coupées au mot ; un point suivi d'une minuscule
+ne termine pas une phrase ; et quand il y en a plus que demandé, ce sont les
+mieux notés par le `PassageScorer` de Lucene qui restent, remis dans l'ordre du
+document. Le tout est mesuré fragment par fragment contre un ES 8.15
+([`diff_highlight.py`](tests/compat/diff_highlight.py)). Ce qui n'est pas
+reproduit est refusé en le nommant : `type`, `highlight_query`,
+`matched_fields`, `boundary_scanner`, `encoder`, `order: score`.
+
+**Ce qui n'y est pas encore** : `search_after`, `_msearch`,
 `_reindex`, `query_string`, les templates de composants
 (`_component_template`), les champs calculés par un script Painless
 (`script_fields`, `runtime_mappings` — leur objet **vide** est accepté, il ne
@@ -384,8 +396,8 @@ rang qu'un `significant_terms` avec script. Sur un corpus de **5 311 requêtes
 réelles** — la documentation de référence d'ES 8.15, les tracks Rally d'Elastic,
 les tests des clients officiels et le code de 184 dépôts open source — la
 question posée est « celle-ci passerait-elle **entièrement** ? », parce qu'une
-requête supportée à 90 % est une requête qui échoue. Réponse : **93,2 % des
-requêtes trouvées dans du code d'application**, 39,8 % des exemples de la
+requête supportée à 90 % est une requête qui échoue. Réponse : **93,8 % des
+requêtes trouvées dans du code d'application**, 40,1 % des exemples de la
 documentation, 28,6 % des tracks de benchmark. L'écart entre ces trois nombres
 est le résultat ; la méthode, les sources et les biais sont dans
 [`docs/usage.md`](docs/usage.md), le corpus est publié avec.
@@ -403,9 +415,9 @@ Cet inventaire est aussi ce qui **borne un tirage au sort**. Un fuzzer
 différentiel ([`tests/compat/fuzz_vs_es.py`](tests/compat/fuzz_vs_es.py)) génère
 des mappings, des documents et des requêtes dans le périmètre que `compat.yaml`
 déclare, les pose à ferrite **et** à un vrai Elasticsearch 8.15, et compare les
-réponses champ par champ : **2 000 cas, 88 367 requêtes, 1 divergence ouverte**
-(un ordre que BM25 sépare, déclarée) sur huit plages de graines, dont cinq
-jamais utilisées pour corriger. Il
+réponses champ par champ : **3 500 cas, 154 520 requêtes, 2 divergences
+ouvertes** (deux ordres que BM25 sépare et qu'ES rend ex æquo, déclarés) sur
+quatorze plages de graines, dont trois jamais utilisées pour corriger. Il
 s'étalonne d'abord contre deux Elasticsearch — tant qu'il n'y est pas à zéro, ce
 qu'il dit de ferrite ne vaut rien. Son premier passage a trouvé vingt et un défauts
 que personne n'avait signalés, tous silencieux ; ils sont racontés dans

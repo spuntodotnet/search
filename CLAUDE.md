@@ -219,6 +219,7 @@ développement, pas de CI).
 | `tests/compat/diff_aggs.py` | les mêmes agrégations ? (53/53, `filter` comprise, et ce qu'un bucket **vide** doit porter) |
 | `tests/compat/diff_analyzers.py` | les mêmes tokens, **aux mêmes positions et aux mêmes offsets** ? (38 batteries × 217 textes : 7 analyzers intégrés, 21 déclarations de n-grammes, les 5 analyzers de Wagtail, et les 5 classes de `token_chars` demandées caractère par caractère — toutes identiques) |
 | `tests/compat/diff_datemath.py` | les mêmes documents sur une **borne de date** — `now`, `now-1d/d`, `2026-03-15\|\|+1M`, et l'arrondi selon le côté de la borne ? (276/276, messages d'erreur compris ; 45/276 avant le chantier) |
+| `tests/compat/diff_highlight.py` | les mêmes **fragments surlignés** — pas leur nombre, leur contenu exact, balises comprises ? (233 questions, **221 identiques au caractère près, 11 refus assumés, 0 écart** ; `--calibrer` : 233/233 contre deux ES). Le même fichier lancé contre le ferrite d'avant rend **0/233** |
 | `tests/compat/diff_motifs.py` | les mêmes documents sur un **motif** — `regexp`, `wildcard`, `prefix`, `match_phrase_prefix` ? (101/101) |
 | `tests/compat/diff_multi_index.py` | `index=["a","b"]`, `logs-*`, les alias : **les mêmes index visés, fusionnés pareil** ? (87/87, 0 écart, plus aucune divergence assumée ; `--calibrer` : 87/87 contre deux ES) |
 | `tests/compat/sonde_msm.py` | les mêmes documents sur un **`minimum_should_match`** — entier, pourcentage, formes négatives, conditions `3<90%`, et sous un `nested` ? (53/53) |
@@ -227,13 +228,13 @@ développement, pas de CI).
 | `tests/compat/sonde_par_requete.py` | **modifier ou purger par requête** — `_delete_by_query`, `_update_by_query`. Compare les compteurs de la réponse **et l'état laissé derrière** (documents restants, `_version`, `_source`) : 62/74 identiques, 12 refus assumés écrits, 0 écart. Les conflits sont provoqués pour de vrai, par une écriture non rafraîchie. Refuse de tourner sans ses deux cibles |
 | `tests/compat/sonde_alias.py` | les mêmes alias sur une **expression de noms** — liste, joker, exclusion, `_all` — et le même 404 ? (21/21, corps et message compris) |
 | `tests/compat/sonde_vide.py` | sur un serveur **sans aucun index**, la même chose qu'ES — et rien accepté en silence ? (28/28 identiques, 0 refus muet ; les deux serveurs doivent être vides, c'est l'état mesuré) |
-| `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **2 000 cas, 88 367 requêtes, 1 divergence ouverte** (un ordre que BM25 sépare, déclaré), sur huit plages de graines dont **cinq** n'ont jamais servi à corriger — celle sur laquelle on itère ne mesure plus rien, et le générateur ayant changé, les plages du passage précédent ne mesurent plus les mêmes cas. 21 défauts silencieux trouvés au premier passage, 10 de plus depuis, dont un `max_docs` qui ne supprimait pas les mêmes documents qu'ES et un mot de plus de 255 caractères qui disparaissait de l'index. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (50 cas, 2 145 requêtes, 0) |
-| `tests/compat/sonde_fuzz.py` | les écarts trouvés par le fuzzing, **figés** hors d'une graine (65/65, plus 12 refus assumés) |
+| `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **3 500 cas, 154 520 requêtes, 2 divergences ouvertes** (deux ordres que BM25 sépare et qu'ES rend ex æquo, déclarés), sur quatorze plages de graines dont **trois** n'ont jamais servi à corriger — celle sur laquelle on itère ne mesure plus rien, et le générateur ayant changé, les plages du passage précédent ne mesurent plus les mêmes cas. 21 défauts silencieux trouvés au premier passage, 27 de plus depuis — dont **dix-sept** sur le seul surlignage, tous invisibles aux 233 questions écrites à la main. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (60 cas, 2 523 requêtes, 0) |
+| `tests/compat/sonde_fuzz.py` | les écarts trouvés par le fuzzing, **figés** hors d'une graine (80/80, plus 12 refus assumés) |
 | `tests/compat/appli_reelle.py` | **un logiciel écrit par d'autres démarre-t-il ?** Clone une vraie application à une révision figée, vérifie que rien n'y a bougé, lance sa **propre** suite d'intégration contre un vrai ES puis contre ferrite, et relève tout le trafic HTTP au passage. Gitea v1.27.2 : **34/34 des deux côtés**. Wagtail v7.1 : **83/83 des deux côtés**, et plus un seul refus que ferrite prononce là où ES répond. Voir [`docs/application.md`](docs/application.md) |
 | `tests/compat/genere_compat.py` | le périmètre déclaré et la doc disent-ils la **même chose** ? [`compat.yaml`](compat.yaml) est la source (une entrée par capacité : état, paramètres, motif du refus, poids d'usage) ; [`docs/compat.md`](docs/compat.md) et [`docs/compat.json`](docs/compat.json) en sont **générés**, et la CI échoue s'ils divergent |
 | `tests/compat/perimetre.py` | ce cas qui échoue, il porte sur quoi ? Il rattache un échec de conformance à une capacité déclarée : **régression** si elle est annoncée supportée, **coût de périmètre** si elle est annoncée refusée |
 | `tests/compat/recolte_usage.py` | à quoi ressemblent les requêtes que les gens envoient **vraiment** ? Constitue le corpus ([`tests/compat/usage/corpus.jsonl`](tests/compat/usage/corpus.jsonl), 5 311 requêtes) depuis quatre sources citables : doc de référence 8.15, tracks Rally, clients officiels, code open source. Chaque requête porte l'URL d'où elle vient |
-| `tests/compat/ponderation.py` | **quelle part de ces requêtes passe entièrement ?** (42,5 % du corpus, mais **93,5 % du code d'application** et 28,6 % des tracks Rally — l'écart *est* le résultat). Écrit les `poids` de `compat.yaml`, publie [`docs/usage.json`](docs/usage.json) et la table « ce qui manque, par fréquence d'usage ». `--rejoue` pose la même requête à ferrite et à un vrai ES 8.15 : les deux mesures s'accordent sur 99,3 % des cas |
+| `tests/compat/ponderation.py` | **quelle part de ces requêtes passe entièrement ?** (42,8 % du corpus, mais **93,8 % du code d'application** et 28,6 % des tracks Rally — l'écart *est* le résultat). Écrit les `poids` de `compat.yaml`, publie [`docs/usage.json`](docs/usage.json) et la table « ce qui manque, par fréquence d'usage ». `--rejoue` pose la même requête à ferrite et à un vrai ES 8.15 : les deux mesures s'accordent sur 99,3 % des cas |
 | `tests/compat/conformance_es.py` | que dit la suite de tests **d'Elastic** ? Ses **107 domaines**, sans liste blanche. Son rapport est un fichier, pas une phrase : [`docs/conformance.json`](docs/conformance.json) (totaux, deux taux, exclusions comptées, détail par cas), régénéré par `--json`, tenu par un cliquet en CI (`--diff`). `--etat` vérifie entre deux cas que rien n'est **apparu** depuis l'état de départ de la cible — index, alias, templates, réglages de cluster — et arrête la campagne au premier écart (+27 %, payés par la CI) : 79 campagnes consécutives rendent le même rapport à l'octet près |
 | `tests/compat/bench_vs_es.py` | mêmes résultats, **et à quel prix** ? Garde-fou de développement : 600 documents et 138 requêtes **écrites ici**, donc un dénominateur qu'on a choisi soi-même — ne sert plus à publier |
 | `tests/compat/bench_echelle.py` | et **à l'échelle**, sur un corpus que nous n'avons pas écrit ? La track Rally `geonames` d'Elastic (Apache-2.0, révision figée, corpus vérifié à l'octet près), 500 000 et 2 000 000 de documents, **ses** 31 requêtes. `term` ×1,7 et `match_phrase` ×2,6 pour ferrite a deux millions de documents (et l'avance **grandit** avec la taille), RSS ×8 en sa faveur — et le **tri jusqu'a ×290 contre lui**, l'indexation ×0,20, le `scroll` ×0,25. 13 requêtes jouables, 18 refusées, toutes rattachées à une capacité déclarée. Voir [`docs/bench.md`](docs/bench.md) |
@@ -260,6 +261,41 @@ bouger**, pas après.
   garde-fou est le troisième verdict : un cas qu'aucune capacité ne réclame
   compte **contre** nous, sinon oublier de déclarer une capacité ferait monter
   le taux.
+- **Un fragment de surlignage se reproduit, il ne s'invente pas.** Le bloc
+  `highlight` aurait pu se livrer en une journée : marquer les termes trouvés
+  et couper autour. Ça aurait rendu, sur presque chaque texte, **d'autres
+  fragments** qu'Elasticsearch — sans que rien ne le signale, puisqu'un
+  fragment plausible ressemble à un fragment juste. Ce que ferrite reproduit
+  est donc le `UnifiedHighlighter` de Lucene tel qu'ES le configure, mesuré
+  pièce par pièce ([`src/highlight.rs`](src/highlight.rs),
+  [`src/segments.rs`](src/segments.rs)) : la fusion des phrases jusqu'à
+  `fragment_size` puis la re-coupe au mot, les frontières de phrase d'UAX#29 —
+  dont la règle SB8, qui fait qu'un point suivi d'une **minuscule** ne termine
+  rien —, les frontières de mot **du JDK** (qui ne sont pas celles de la norme :
+  le tiret y joint, le deux-points non), le `PassageScorer` pour choisir
+  lesquels survivent. Trois conséquences de méthode : le découpeur a été
+  **mesuré avant d'être écrit** (quatre sondes contre le conteneur de
+  référence) et il n'a plus bougé ensuite ; ce qui n'est pas reproduit est
+  refusé en le nommant (`type`, `order: score`, `encoder`…) plutôt qu'ignoré ;
+  et les seize défauts que le fuzzer a sortis portaient tous sur ce que le
+  champ **contient** ou sur les **bords**, jamais sur la coupe.
+- **Le surlignage garde la forme booléenne de la requête.** ES ne marque pas
+  « les termes de la requête » : il marque ce qui a fait correspondre **ce
+  document-là**, via les `Matches` de Lucene. Un `should` placé sous un
+  `filter` qui échoue ne marque rien. Une extraction à plat était plus simple
+  et fausse en 200 ; l'arbre de clauses est donc conservé et évalué document
+  par document — et les feuilles qu'on ne sait pas trancher depuis le `_source`
+  (un intervalle de dates, une jointure) sont **supposées satisfaites**, parce
+  que dans le doute il vaut mieux marquer de trop que se taire.
+
+  Le pendant de cette décision est un **refus** : `require_field_match: false`
+  fait chercher chez ES les termes de toutes les clauses dans tous les champs,
+  par une extraction dont il documente lui-même le résultat comme approximatif
+  — et dont trois passages de fuzzing n'ont pas réussi à retrouver tous les
+  cas (l'automate d'un `range` y quitte son champ **et** son type). Reproduire
+  un mode *presque* juste, c'est rendre des fragments silencieusement
+  différents ; il est donc refusé, en le nommant. Quatre requêtes du corpus
+  d'usage sur les 102 qui citent `highlight` le posent.
 - **Un objet n'est pas un champ.** `object` est indexé par chemins pointés
   (`client.ville`), exactement comme le fait Elasticsearch. C'est ce qui a rendu
   le chantier petit : `Fields.mapped` était déjà une table `chemin → champ`.
@@ -517,6 +553,17 @@ bouger**, pas après.
   tranquillement une courbe plate. Ils sont donc **refusés**, pas rendus. Une
   valeur par défaut plausible est le déguisement le plus efficace d'un échec
   silencieux.
+- **Deux outils qui visent le même port se marchent dessus, en silence — et le
+  second peut être le binaire qu'on vient de compiler.** Le piège a une seconde
+  forme, payée une carte plus tard : un `ferrite` lancé à la main tenait
+  toujours le port pendant qu'on en démarrait un neuf ; le neuf a échoué à se
+  lier, sans un mot, et **trois mesures d'affilée ont porté sur le binaire
+  d'avant** — dont une correction qu'on croyait inopérante et qu'on a cherchée
+  ailleurs pendant une demi-heure. Un serveur qui ne répond pas se voit ; un
+  serveur qui répond *l'ancienne* réponse, non. La règle : après un
+  `cargo build`, vérifier que le processus qu'on interroge est bien celui qu'on
+  vient d'écrire (`ferrite.log` porte l'erreur `AddrInUse`, encore faut-il le
+  lire).
 - **Deux outils qui visent le même port se marchent dessus, en silence.**
   `run.sh` écoute par défaut sur 9200 ; lancé pendant qu'un ferrite y tournait
   déjà, son `bind` a échoué sans bruit et il a exercé **ce** serveur-là — index,
@@ -687,6 +734,25 @@ bouger**, pas après.
   libère le nom par un renommage atomique sous `.corbeille/` : plus aucun chemin
   n'est partagé entre un index et son successeur. Retirer d'une table n'est pas
   tuer — tant qu'un `Arc` vit, il faut lui retirer le droit d'écrire.
+- **« Les termes de la requête » n'est pas « ce qui a fait correspondre ce
+  document ».** Le surlignage d'ES ne marque que ce qui a vraiment contribué :
+  un `should` placé dans un `bool` dont le `filter` échoue ne marque rien, et un
+  `bool` porteur d'un `must_not: {match_all}` ne marque jamais rien — Lucene le
+  réécrit en `MatchNoDocsQuery`. Une extraction à plat des termes de la requête
+  marquait les deux, en 200. Il a donc fallu garder la **forme booléenne** de la
+  requête et l'évaluer document par document. Et la règle a une seconde moitié
+  qui la retourne : sous `require_field_match: false`, ES abandonne les
+  `Matches` du champ et repart de l'extraction statique — donc le tri par
+  document **disparaît**, et une phrase y est marquée terme par terme au lieu
+  d'une seule fois. Trouvé par le fuzzer (graines 6, 106, puis 900186 sur une
+  plage de contrôle), jamais par les 192 questions écrites à la main.
+- **Un `BreakIterator` de Java n'est pas UAX#29.** Le découpage des fragments
+  s'appuie sur les frontières de mot du JDK, et elles divergent de la norme sur
+  des caractères courants : `abcde-fghij` et `abcde"fghij` sont **un** mot,
+  `abcde:fghij` et `abcde’fghij` en font deux — l'inverse de ce que dit UAX#29
+  pour les deux premiers. Implémenter la norme donnait « tiret- » là où ES rend
+  « tiret-bas ». La seule façon de le savoir a été de poser `no_match_size: 1`
+  sur seize mots construits exprès et de lire où tombait la coupure.
 - **Une clé de bucket entière sur un champ flottant.** `terms` sur un `double`
   rendait la clé `2` là où ES rend `2.0` — un client qui type strictement son
   JSON y lit un entier. Défaut antérieur, invisible parce qu'aucun corpus écrit
@@ -808,10 +874,24 @@ l'instantané de la recherche puis n'écrit **que s'il n'a pas bougé depuis**.
 index vers un autre s'écrit encore côté client avec `scroll` + `_bulk`, ce que
 les deux autres ne permettaient pas.
 
+**Une barre de recherche rend enfin ses extraits.** `highlight` est servi, et
+ce qui a coûté le travail n'est pas de marquer les termes : c'est de couper les
+fragments **là où Lucene les coupe**. Ni « une phrase », ni « `fragment_size`
+caractères » — les phrases sont fusionnées vers l'avant tant que la longueur
+tient sous la borne, puis re-coupées au mot ; un point suivi d'une minuscule
+n'en termine pas une ; le fragment se centre sur le **milieu** de la
+correspondance ; et quand il y en a plus que `number_of_fragments`, ce sont les
+mieux notés par le `PassageScorer` de Lucene qui restent, remis dans l'ordre du
+document. `type`, `highlight_query`, `matched_fields`, `boundary_scanner`,
+`encoder`, `fragmenter` et `order: score` sont refusés en les nommant.
+C'était le **rang 4 mesuré** du corpus d'usage, et la raison pour laquelle
+ReadTheDocs avait été écarté des applications réelles — il ne lui reste que
+`inner_hits`.
+
 Ce qui reste, par ordre de gêne pour un projet réel : `rest_total_hits_as_int`,
 `_msearch`, `_reindex`, les templates de **composants** (`_component_template`, et le
 `composed_of` qui les cite — refusé à la pose plutôt qu'appliqué à moitié),
-`GET /_cat/aliases` et les colonnes `h` / `s` des `_cat`,
+`inner_hits`, `GET /_cat/aliases` et les colonnes `h` / `s` des `_cat`,
 `GET /{index}/_mapping/field/{champs}`, l'agrégation `filters` (la sœur
 plurielle de `filter`), `time_zone` sur un `range` (refusé explicitement), les
 alias **filtrés** (`filter`, refusé explicitement), `?stored_fields=` sur

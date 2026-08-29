@@ -1,8 +1,8 @@
 {
   "schema": 2,
   "mesure": {
-    "date": "2026-08-22T13:10:33Z",
-    "ferrite_sha": "4ebb8b6c3de6ea7029bb845e469edf95916ae15f",
+    "date": "2026-08-27T04:04:11Z",
+    "ferrite_sha": "819dcf0ca5450e5015667276af4b6e82bdd20d0c",
     "ferrite_arbre_modifie": true,
     "cible": {
       "url": "http://localhost:9200",
@@ -9849,14 +9849,14 @@
       "fichier": "40_keyword_ignore.yml",
       "cas": "Plain Highligher should skip highlighting ignored keyword values",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas [highlight] dans [_search] ; cles acceptees : [\"query\", \"from\", \"size\", \"sort\", \"_source\", \"track_total_hits\", \"aggs\", \"aggreg"
+      "raison": "ferrite ne supporte pas [type] dans [highlight.fields.k2] : seul le surligneur par defaut ([type: unified], balises `<em>`, fragments dans l'ordre du "
     },
     {
       "suite": "search.highlight",
       "fichier": "40_keyword_ignore.yml",
       "cas": "Unified Highligher should skip highlighting ignored keyword values",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas [highlight] dans [_search] ; cles acceptees : [\"query\", \"from\", \"size\", \"sort\", \"_source\", \"track_total_hits\", \"aggs\", \"aggreg"
+      "raison": "ferrite ne supporte pas [type] dans [highlight.fields.k2] : seul le surligneur par defaut ([type: unified], balises `<em>`, fragments dans l'ordre du "
     },
     {
       "suite": "search.inner_hits",

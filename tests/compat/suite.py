@@ -2662,12 +2662,125 @@ def parametres_de_reglages_non_appliques_refuses(es):
 @scenario
 def fonctionnalites_hors_perimetre_refusees(es):
     refused(lambda: es.search(index=INDEX, query={"match_all": {}},
-                              highlight={"fields": {"resume": {}}}),
-            contains="highlight")
-    refused(lambda: es.search(index=INDEX, query={"match_all": {}},
                               search_after=[1885], sort=[{"annee": "asc"}]),
             contains="search_after")
     refused(lambda: es.search(index=INDEX, q="titre:bel"), contains="q")
+
+
+@scenario
+def surlignage(es):
+    """Les fragments surlignes d'une barre de recherche.
+
+    Ce qui compte pour le client n'est pas qu'il y ait des `<em>` : c'est **ou**
+    le fragment commence et finit. ES ne rend ni « la phrase » ni
+    « `fragment_size` caracteres » — il fusionne les phrases vers l'avant tant
+    que ca tient sous la borne, et re-coupe au mot sinon. Les valeurs attendues
+    ici sont celles qu'un vrai ES 8.15 rend sur le meme texte
+    (`tests/compat/diff_highlight.py` le rejoue sur un corpus entier)."""
+    idx = "compat_highlight"
+    es.options(ignore_status=404).indices.delete(index=idx)
+    es.indices.create(index=idx, mappings={"properties": {
+        "titre": {"type": "text"},
+        "corps": {"type": "text"},
+        "tag": {"type": "keyword"},
+        "n": {"type": "integer"},
+    }})
+    prose = ("Le chat dort sur le tapis. Le chien aboie dans le jardin voisin "
+             "depuis ce matin. Un oiseau chante sur la branche du grand chene. "
+             "Le chat se reveille et regarde l'oiseau avec attention.")
+    es.index(index=idx, id="1", document={
+        "titre": "Le chat noir", "corps": prose, "tag": "animaux", "n": 1})
+    es.index(index=idx, id="2", document={
+        "titre": "Multi", "n": 2, "tag": "multi",
+        "corps": ["Premier chat ici.", "Rien la.", "Troisieme chat enfin."]})
+    es.indices.refresh(index=idx)
+
+    def frags(**kw):
+        r = es.search(index=idx, size=10, sort=["n"], **kw)
+        return [h.get("highlight") for h in r["hits"]["hits"]]
+
+    # Le defaut : `<em>`, cinq fragments au plus, cent caracteres visés — donc
+    # deux phrases fusionnees ici, la seconde etant courte.
+    assert frags(query={"match": {"corps": "chat"}},
+                 highlight={"fields": {"corps": {}}}) == [
+        {"corps": [
+            "Le <em>chat</em> dort sur le tapis. Le chien aboie dans le jardin "
+            "voisin depuis ce matin.",
+            "Le <em>chat</em> se reveille et regarde l'oiseau avec attention."]},
+        {"corps": ["Premier <em>chat</em> ici.", "Troisieme <em>chat</em> enfin."]},
+    ]
+    # `fragment_size` re-coupe **au mot** quand une phrase deborde a elle seule.
+    assert frags(query={"match": {"corps": "chat"}},
+                 highlight={"fragment_size": 30, "fields": {"corps": {}}}) == [
+        {"corps": ["Le <em>chat</em> dort sur le tapis.",
+                   "Le <em>chat</em> se reveille et regarde"]},
+        {"corps": ["Premier <em>chat</em> ici.", "Troisieme <em>chat</em> enfin."]},
+    ]
+    # Une phrase rend **une seule** marque, du premier terme au dernier.
+    assert frags(query={"match_phrase": {"corps": "le chat"}},
+                 highlight={"fragment_size": 30, "fields": {"corps": {}}})[0] == {
+        "corps": ["<em>Le chat</em> dort sur le tapis.",
+                  "<em>Le chat</em> se reveille et regarde"]}
+    # Les balises se choisissent, et `number_of_fragments` borne le nombre.
+    # Celui qui reste n'est pas le premier : c'est le mieux note (le
+    # `PassageScorer` de Lucene prefere ici le fragment le plus court).
+    assert frags(query={"match": {"corps": "chat"}},
+                 highlight={"pre_tags": ["<b>"], "post_tags": ["</b>"],
+                            "number_of_fragments": 1,
+                            "fields": {"corps": {}}})[0] == {
+        "corps": ["Le <b>chat</b> se reveille et regarde l'oiseau avec attention."]}
+    # `number_of_fragments: 0` rend la valeur entiere, valeur par valeur.
+    assert frags(query={"match": {"corps": "chat"}},
+                 highlight={"number_of_fragments": 0,
+                            "fields": {"corps": {}}})[1] == {
+        "corps": ["Premier <em>chat</em> ici.", "Troisieme <em>chat</em> enfin."]}
+    # Un champ sans correspondance est **absent** — ce n'est pas une chaine
+    # vide — et `no_match_size` est ce qui le ramene.
+    assert frags(query={"match": {"corps": "chat"}},
+                 highlight={"fields": {"corps": {}, "titre": {}}})[0].keys() \
+        == {"corps"}
+    assert frags(query={"match": {"corps": "chat"}},
+                 highlight={"no_match_size": 20,
+                            "fields": {"titre": {}}})[0] == {
+        "titre": ["Le chat noir"]}
+    # Un motif designe les champs, et seuls les `text` / `keyword` repondent.
+    assert frags(query={"term": {"tag": "animaux"}},
+                 highlight={"fields": {"*": {}}})[0] == {"tag": ["<em>animaux</em>"]}
+    # `require_field_match` (vrai par defaut) : le champ n'est surligne que par
+    # ce que la requete y pose. `false` est refuse — ES y cherche les termes de
+    # toutes les clauses dans tous les champs, par une extraction dont il dit
+    # lui-meme qu'elle est approximative.
+    assert frags(query={"match": {"titre": "chat"}},
+                 highlight={"fields": {"corps": {}}})[0] is None
+    refused(lambda: es.search(index=idx, query={"match": {"titre": "chat"}},
+                              highlight={"require_field_match": False,
+                                         "fields": {"corps": {}}}),
+            contains="[require_field_match: false]")
+
+    # Ce qui n'est pas reproduit est refuse **par son nom** : accepte en
+    # silence, un `type: fvh` rendrait des fragments coupes autrement.
+    for cle, valeur in (("type", "fvh"), ("boundary_scanner", "word"),
+                        ("encoder", "html"), ("fragmenter", "simple"),
+                        ("order", "score")):
+        refused(lambda c=cle, v=valeur: es.search(
+            index=idx, query={"match": {"corps": "chat"}},
+            highlight={c: v, "fields": {"corps": {}}}), contains=f"[{cle}]")
+    refused(lambda: es.search(index=idx, query={"match_all": {}},
+                              highlight={"highlight_query": {"match": {"corps": "chat"}},
+                                         "fields": {"corps": {}}}),
+            contains="[highlight_query]")
+    refused(lambda: es.search(index=idx, query={"match": {"corps": "chat"}},
+                              highlight={"fields": {"corps": {
+                                  "matched_fields": ["corps"]}}}),
+            contains="[matched_fields]")
+    # Deux fautes de forme qu'ES refuse aussi, avec ses phrases.
+    refused(lambda: es.search(index=idx, query={"match": {"corps": "chat"}},
+                              highlight={"pre_tags": ["<b>"], "fields": {"corps": {}}}),
+            contains="pre_tags are set but post_tags are not set")
+    refused(lambda: es.search(index=idx, query={"match": {"corps": "chat"}},
+                              highlight={"nawak": 1, "fields": {"corps": {}}}),
+            contains="unknown field [nawak]")
+    es.indices.delete(index=idx)
 
 
 @scenario

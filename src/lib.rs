@@ -20,6 +20,8 @@
 //! - [`fetch`] : ce que la reponse transporte — `fields`, `docvalue_fields`,
 //!   `stored_fields`. Les trois lisent a trois endroits differents (le
 //!   `_source`, les colonnes, les champs stockes), et c'est tout le sujet.
+//! - [`highlight`] : les fragments surlignes — quels termes marquer, et ou
+//!   couper. Le decoupage est celui de Lucene, pas une idee de decoupage.
 //! - [`parrequete`] : `_delete_by_query` et `_update_by_query` — chercher sur un
 //!   instantane, puis ecrire chaque document **a condition qu'il n'ait pas
 //!   bouge**. C'est cette condition qui fait les `version_conflicts`.
@@ -28,6 +30,8 @@
 //!   une seule fois.
 //! - [`templates`] : les templates d'index, appliques a un index **qui n'existe
 //!   pas encore**.
+//! - [`segments`] : les frontieres de phrase et de mot d'UAX#29, dont depend le
+//!   decoupage des fragments de surlignage.
 //! - [`api`] : la couche HTTP — routage, parametres, format de reponse et
 //!   d'erreur. Ne contient aucune logique de moteur.
 
@@ -42,6 +46,7 @@ pub mod dsl;
 pub mod engine;
 pub mod error;
 pub mod fetch;
+pub mod highlight;
 pub mod mapping;
 pub mod msm;
 pub mod nested;
@@ -51,6 +56,7 @@ pub mod regexp;
 pub mod reglages;
 pub mod scroll;
 pub mod search;
+pub mod segments;
 pub mod selection;
 pub mod stemmer;
 pub mod templates;
