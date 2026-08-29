@@ -610,7 +610,6 @@ def joue(serveur, actions, pile, trace, corps_precedent=None):
             # lieu de 2 » — un echec qui ne ressemble pas a un defaut du runner.
             # Les jouer toutes, dans l'ordre du fichier, ne change rien au cas
             # normal.
-            saute_le_do = False
             for api, params in list(arg.items()):
                 trace["api"] = api
                 trace["api_typee"] = False
@@ -626,15 +625,11 @@ def joue(serveur, actions, pile, trace, corps_precedent=None):
                     # aussi. C'est une reponse valable quand le test attend une
                     # erreur.
                     if attrape in ("param", "request", "bad_request"):
-                        saute_le_do = True
                         break
                     raise Echec(str(e)) from e
                 if isinstance(reponse, bool):  # HEAD : la reponse est le booleen
-                    saute_le_do = True
                     break
                 verifie_la_reponse(api, statut, reponse, attrape)
-            if saute_le_do:
-                continue
             continue
 
         if verbe == "set":
