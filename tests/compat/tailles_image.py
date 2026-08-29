@@ -116,7 +116,7 @@ def flux_decompresse(brut, media_type: str):
 
 def mo(octets: int) -> str:
     """Megaoctets decimaux, comme ceux qu'affiche `docker images`."""
-    return f"{octets / 1_000_000:.1f} Mo".replace(".", ",")
+    return f"{octets / 1_000_000:,.1f} Mo".replace(",", " ").replace(".", ",")
 
 
 def espace(octets: int) -> str:
@@ -171,12 +171,13 @@ def descend(tar: tarfile.TarFile, descripteur: dict, os_: str, arch: str) -> dic
     return descend(tar, candidats[0], os_, arch)
 
 
-def main() -> int:
-    chemin = os.environ.get("IMAGE_TAR")
-    if not chemin:
-        print("IMAGE_TAR manquant (chemin de l'archive `docker save`)", file=sys.stderr)
-        return 2
-    nom_image = sys.argv[1] if len(sys.argv) > 1 else chemin
+def mesure(chemin: str, nom_image: str) -> dict:
+    """Les octets d'une archive OCI, rendus en donnees plutot qu'en phrases.
+
+    ``compressee_octets`` vaut ``None`` quand l'archive porte des couches nues :
+    la taille qu'un registre servirait n'en est pas deductible, et la remplacer
+    par un nombre plausible est exactement le defaut que ce fichier repare.
+    """
     os_, arch = plateforme_locale()
 
     with tarfile.open(chemin) as tar:
@@ -246,7 +247,26 @@ def main() -> int:
                         pass
                 decompressee += compteur.octets
 
-    print(f"== image : {nom_image}  ({os_}/{arch}, {len(manifeste['layers'])} couche(s))")
+    return {
+        "reference": nom_image,
+        "plateforme": f"{os_}/{arch}",
+        "couches": len(manifeste["layers"]),
+        "digest_manifeste": descripteur["digest"],
+        "compressee_octets": compressee,
+        "couches_nues": nues,
+        "decompressee_octets": decompressee,
+        "entrypoint": f"/{entrypoint}" if entrypoint is not None else None,
+        "binaire_octets": taille_entrypoint,
+    }
+
+
+def imprime(m: dict) -> int:
+    """La meme mesure, pour un humain. Rend le code de retour du programme."""
+    nom_image, compressee = m["reference"], m["compressee_octets"]
+    decompressee, nues = m["decompressee_octets"], m["couches_nues"]
+    entrypoint, taille_entrypoint = m["entrypoint"], m["binaire_octets"]
+
+    print(f"== image : {nom_image}  ({m['plateforme']}, {m['couches']} couche(s))")
     lignes = [
         (
             "compressee (registre)",
@@ -262,7 +282,7 @@ def main() -> int:
     if taille_entrypoint is not None:
         lignes.append(
             (
-                f"binaire /{entrypoint}",
+                f"binaire {entrypoint}",
                 taille_entrypoint,
                 "le fichier que le conteneur execute",
             )
@@ -272,11 +292,11 @@ def main() -> int:
         if valeur is None:
             print(f"{nom.ljust(largeur)} : NON MESURABLE sur cette archive")
             continue
-        print(f"{nom.ljust(largeur)} : {espace(valeur).rjust(13)} octets  {mo(valeur).rjust(9)}   <- {quoi}")
+        print(f"{nom.ljust(largeur)} : {espace(valeur).rjust(13)} octets  {mo(valeur).rjust(10)}   <- {quoi}")
     if entrypoint is not None and taille_entrypoint is None:
         # Ne rien imprimer se lirait « pas de binaire », donc « image vide ».
         print(
-            f"{'binaire /' + entrypoint:{largeur}} : non mesure — aucune couche ne porte ce"
+            f"{'binaire ' + entrypoint:{largeur}} : non mesure — aucune couche ne porte ce"
             " chemin en fichier ordinaire (lien symbolique, ou chemin traversant un lien)"
         )
     if compressee is None:
@@ -296,6 +316,20 @@ def main() -> int:
         )
         return 1
     return 0
+
+
+def main() -> int:
+    chemin = os.environ.get("IMAGE_TAR")
+    if not chemin:
+        print("IMAGE_TAR manquant (chemin de l'archive `docker save`)", file=sys.stderr)
+        return 2
+    argv = [a for a in sys.argv[1:] if a != "--json"]
+    nom_image = argv[0] if argv else chemin
+    m = mesure(chemin, nom_image)
+    if "--json" in sys.argv[1:]:
+        print(json.dumps(m, ensure_ascii=False, indent=2))
+        return 0 if m["compressee_octets"] is not None else 1
+    return imprime(m)
 
 
 if __name__ == "__main__":

@@ -74,6 +74,15 @@ jobs:
       - name: les briques du fuzzer citent des capacites qui existent
         run: python3 tests/compat/fuzz_vs_es.py --couverture
 
+      # Le premier argument du projet est une taille d'image, et c'est le chiffre
+      # le plus facile a verifier pour un lecteur — donc celui qui coute le plus
+      # cher quand il derive. Il ne se saisit plus a la main nulle part : la
+      # campagne ecrit docs/container.json, le README et docs/bench.md en sont
+      # generes, et cette etape echoue si un caractere differe. Elle ne parle a
+      # aucun Docker : elle relit le rapport commite.
+      - name: les chiffres du conteneur viennent de docs/container.json
+        run: python3 tests/compat/chiffres_conteneur.py --verifie
+
   tantivy:
     name: l'epingle de tantivy contient ce qu'elle declare
     runs-on: ubuntu-latest
@@ -212,5 +221,12 @@ jobs:
 
       # Les chiffres qui portent le projet sont mesures a chaque CI, pas une fois
       # pour toutes dans un README.
+      #
+      # Cette etape ne reecrit PAS docs/container.json : le rapport publie compare
+      # ferrite et Elasticsearch mesures par le meme outil sur la MEME machine, et
+      # un RSS ou un demarrage releves sur un runner partage ne se comparent pas a
+      # ceux de la campagne. Elle prouve que l'outil tourne et que la taille reste
+      # mesurable sur l'artefact OCI ; c'est le job `perimetre` qui tient le
+      # cliquet entre le rapport et ce que la documentation publie.
       - name: taille d'image, RSS au repos, temps de demarrage
         run: IMAGE_TAR=/tmp/ferrite-oci.tar ./tests/compat/measure_container.sh ferrite:ci
