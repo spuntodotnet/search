@@ -6,22 +6,26 @@ pensé pour tenir dans un conteneur minuscule.
 ## Pourquoi
 
 Elasticsearch est excellent et surdimensionné pour l'immense majorité des
-usages : une JVM, plus d'un gigaoctet de RSS, 30 à 60 secondes de démarrage, du
-tuning de heap — pour indexer quelques centaines de milliers de documents et
-répondre à des requêtes `bool` + `terms` + un tri.
+usages : une JVM, plus d'un gigaoctet de RSS, un démarrage qui se compte en
+dizaines de secondes, du tuning de heap — pour indexer quelques centaines de
+milliers de documents et répondre à des requêtes `bool` + `terms` + un tri.
 
 `ferrite` vise le même contrat d'API, dans une enveloppe sans commune mesure :
 
+<!-- chiffres-conteneur:apercu — généré depuis docs/container.json par `python3 tests/compat/chiffres_conteneur.py --injecte`, ne pas éditer à la main -->
 |  | Elasticsearch 8.15.0 | ferrite |
 |---|---|---|
-| Image compressée, telle qu'un registre la sert | 669,1 Mo | **4,0 Mo** (`scratch`) |
-| RSS au repos | 1,11 Go | **4,3 Mo** |
-| Démarrage | 18,7 s | **184 ms** (`docker run` → premier `GET /` servi) |
+| Image compressée, telle qu'un registre la sert | 669,1 Mo | **4,1 Mo** (`scratch`) |
+| RSS au repos | 1,10 Go | **4,6 Mo** |
+| Démarrage | 17,1 s | **171 ms** (`docker run` → premier `GET /` servi) |
 | Runtime | JVM + tuning heap | un binaire statique |
+<!-- /chiffres-conteneur:apercu -->
 
 Ces chiffres sont mesurés, pas visés, et les deux colonnes sont mesurées **de la
 même façon** — voir [Le conteneur](#le-conteneur), qui dit aussi pourquoi une
-taille d'image sans sa définition ne veut rien dire.
+taille d'image sans sa définition ne veut rien dire. Ils ne sont pas saisis
+ici : ils sont **générés** depuis [`docs/container.json`](docs/container.json),
+le rapport de la campagne, et la CI échoue s'ils en divergent.
 
 ### Et une fois qu'il y a des documents dedans ?
 
@@ -140,15 +144,20 @@ Variables d'environnement : `FERRITE_BIND` (défaut `0.0.0.0:9200`),
 Les chiffres ci-dessous sont mesurés, pas visés — par
 [`tests/compat/measure_container.sh`](tests/compat/measure_container.sh), à
 chaque CI. Elasticsearch 8.15.0 est mesuré par **le même script**, sur la même
-machine, dans la même campagne.
+machine, dans la même campagne. Et ils ne sont pas recopiés ici : le rapport de
+la campagne est un fichier, [`docs/container.json`](docs/container.json), d'où
+ce tableau est **généré** — chaque valeur y porte sa définition, et un cliquet
+de CI échoue si le tableau et le fichier divergent.
 
+<!-- chiffres-conteneur:tableau — généré depuis docs/container.json par `python3 tests/compat/chiffres_conteneur.py --injecte`, ne pas éditer à la main -->
 | | Elasticsearch 8.15.0 | ferrite 0.7.0 | × |
 |---|---|---|---|
-| **Image compressée**, telle qu'un registre la sert | 669,1 Mo | **4,0 Mo** | **×167** |
-| Image décompressée, ce que son système de fichiers occupe | 1 266,1 Mo | 9,5 Mo | ×133 |
-| Le binaire seul | — | 9,5 Mo | |
-| Mémoire au repos (RSS) | 1 113,6 Mo | **4,3 Mo** | **×258** |
-| Démarrage (`docker run` → premier `GET /` servi) | 18,7 s | **184 ms** (médiane de 5 ; l'essentiel est la création du conteneur par Docker) | ×101 |
+| **Image compressée**, telle qu'un registre la sert | 669,1 Mo | **4,1 Mo** | **×164** |
+| Image décompressée, ce que son système de fichiers occupe | 1 266,1 Mo | 9,7 Mo | ×131 |
+| Le binaire seul | — | 9,7 Mo | |
+| Mémoire au repos (RSS) | 1,10 Go | **4,6 Mo** | **×239** |
+| Démarrage (`docker run` → premier `GET /` servi) | 17,1 s | **171 ms** (médiane de 5 ; l'essentiel est la création du conteneur par Docker) | ×100 |
+<!-- /chiffres-conteneur:tableau -->
 
 L'image finale est un `scratch` qui ne contient que le binaire statique — d'où
 la troisième ligne, qui est la deuxième à 2 Ko près (l'en-tête `tar` de la
@@ -163,9 +172,13 @@ shell : deux ordres de grandeur en dessous, et du bon côté pour nous.
 **Le chiffre que ce dépôt publie est le premier : l'image compressée, celle
 qu'un `docker pull` télécharge.** Les trois sont honnêtes et ne répondent pas à
 la même question ; la seule exigence est que les deux colonnes portent la même
-définition, ce qui n'était pas le cas jusqu'ici (voir juste en dessous). Les
-« Mo » sont des mégaoctets décimaux (10⁶ octets), les mêmes que ceux qu'affiche
-`docker images` ; en Mio (2²⁰) la première ligne se lirait 638,1 contre 3,8.
+définition, ce qui n'était pas le cas jusqu'ici (voir juste en dessous).
+
+<!-- chiffres-conteneur:unites — généré depuis docs/container.json par `python3 tests/compat/chiffres_conteneur.py --injecte`, ne pas éditer à la main -->
+Les « Mo » sont des mégaoctets décimaux (10⁶ octets), les mêmes que ceux
+qu'affiche `docker images` ; en Mio (2²⁰) la première ligne se lirait
+638,1 contre 3,9.
+<!-- /chiffres-conteneur:unites -->
 
 ### Correction : les 8,2 Mo annoncés jusqu'ici
 
@@ -177,16 +190,16 @@ deux étaient des Mio affichés sous le nom de Mo. Sous sa propre définition, l
 rendait pour l'image 0.3.0, sur les Docker d'alors. Il est faux aujourd'hui deux
 fois :
 
-- **le binaire a grossi** : la même définition rendrait 9,1 Mio (9,5 Mo) sur la
-  0.7.0 ;
+- **le binaire a grossi** : la même définition rendrait aujourd'hui la ligne
+  « décompressée » du tableau ci-dessus ;
 - **`.Size` a changé de sens.** Il dépend du **magasin d'images**, donc en
   pratique de la version : avec le magasin classique il rendait la somme des
   couches décompressées, avec celui de containerd — le défaut depuis Docker 29 —
-  il rend la somme des blobs compressés. Le script de mesure rendait
-  donc **3,8** sur la machine de mesure pendant que `docker images` affichait
-  **13,5** pour la même image — et cette troisième valeur est encore autre
-  chose : la colonne `DISK USAGE` additionne les blobs compressés *et* leur
-  copie dépliée, que containerd garde tous les deux.
+  il rend la somme des blobs compressés. Sur la machine de mesure, le script
+  rendait donc la taille compressée pendant que `docker images` en affichait,
+  pour la même image, plus du triple — et cette troisième valeur est encore
+  autre chose : la colonne `DISK USAGE` additionne les blobs compressés *et*
+  leur copie dépliée, que containerd garde tous les deux.
 
 Une image, quatre nombres, aucune définition écrite à côté. C'est pour ça que le
 script ne lit plus aucun champ dont le sens dépend de la version de Docker : il
@@ -194,15 +207,20 @@ demande l'image (`docker save`, format OCI) et **compte les octets** — la
 version du serveur Docker est imprimée quand même, puisqu'elle change ce que les
 autres outils répondent à la même question.
 
+<!-- chiffres-conteneur:sortie — généré depuis docs/container.json par `python3 tests/compat/chiffres_conteneur.py --injecte`, ne pas éditer à la main -->
 ```
 $ ./tests/compat/measure_container.sh ferrite:0.7.0
-docker serveur   : 29.7.1 (magasin d'images : overlayfs)
+docker serveur   : 29.7.2 (magasin d'images : overlayfs)
 
 == image : ferrite:0.7.0  (linux/amd64, 1 couche(s))
-compressee (registre) :     4 007 597 octets     4,0 Mo   <- ce qu'un `docker pull` telecharge
-decompressee (disque) :     9 519 104 octets     9,5 Mo   <- ce que le systeme de fichiers de l'image occupe
-binaire /ferrite      :     9 517 184 octets     9,5 Mo   <- le fichier que le conteneur execute
+compressee (registre) :     4 073 564 octets      4,1 Mo   <- ce qu'un `docker pull` telecharge
+decompressee (disque) :     9 658 368 octets      9,7 Mo   <- ce que le systeme de fichiers de l'image occupe
+binaire /ferrite      :     9 656 448 octets      9,7 Mo   <- le fichier que le conteneur execute
+
+demarrage        : 171 ms (docker run -> premier GET / servi, mediane de 5 tours)
+RSS au repos     : 4 488 Ko (4,6 Mo)
 ```
+<!-- /chiffres-conteneur:sortie -->
 
 La même commande mesure n'importe quelle image, ce qui est la seule façon de
 tenir la ligne « même définition des deux côtés » :

@@ -15,7 +15,7 @@ fichier-ci dit **comment penser** dans ce dépôt.
 
 Un moteur de recherche compatible avec l'API Elasticsearch, écrit en Rust
 au-dessus de [tantivy](https://github.com/quickwit-oss/tantivy), tenant dans une
-image de 4,0 Mo compressés — la taille qu'un registre sert, la seule qu'on
+image de 4,1 Mo compressés — la taille qu'un registre sert, la seule qu'on
 publie, et la définition compte : voir [Le conteneur](README.md#le-conteneur).
 Le produit, c'est **« le code client existant ne change pas »**.
 L'index inversé n'est pas réécrit : le travail réel est la couche de
@@ -240,6 +240,7 @@ développement, pas de CI).
 | `tests/compat/bench_echelle.py` | et **à l'échelle**, sur un corpus que nous n'avons pas écrit ? La track Rally `geonames` d'Elastic (Apache-2.0, révision figée, corpus vérifié à l'octet près), 500 000 et 2 000 000 de documents, **ses** 31 requêtes. `term` ×1,7 et `match_phrase` ×2,6 pour ferrite a deux millions de documents (et l'avance **grandit** avec la taille), RSS ×8 en sa faveur — et le **tri jusqu'a ×290 contre lui**, l'indexation ×0,20, le `scroll` ×0,25. 13 requêtes jouables, 18 refusées, toutes rattachées à une capacité déclarée. Voir [`docs/bench.md`](docs/bench.md) |
 | `tests/compat/sonde_sous_aggs.py` | une **sous-agrégation** voit-elle tous les documents de son bucket ? (46 combinaisons parent × sous-agrégation, 50 000 documents déséquilibrés : **46/46** avec l'épingle de tantivy, **32/46** sans ; `--seuil` rejoue les deux bornes du défaut, 2 047 juste / 2 048 faux) |
 | `tests/compat/verifie_tantivy.py` | **qu'est-ce que l'épingle de `Cargo.toml` contient ?** Télécharge les 9 crates publiées que le `[patch.crates-io]` remplace et les compare fichier par fichier à l'arbre du fork : 0.26.1 à l'octet près, plus exactement un fichier. Tourne en CI. Voir [`docs/tantivy-patch.md`](docs/tantivy-patch.md) |
+| `./tests/compat/measure_container.sh --json docs/container.json` | **que pèse le conteneur, et sous quelle définition ?** Mesure les deux images que le README compare — ferrite et l'ES de référence — dans la même campagne, avec le même outil, et écrit [`docs/container.json`](docs/container.json) : une entrée par image, et pour chaque valeur sa **définition en une phrase**. `chiffres_conteneur.py --injecte` publie ces chiffres dans le README et [`docs/bench.md`](docs/bench.md), `--verifie` est le cliquet de la CI — un chiffre de conteneur ne se saisit plus à la main |
 | `tests/compat/probe_es7.py` | un **client** 7.x peut-il se brancher ? |
 | `tests/compat/diff_es7.py` | une **instance** 7.x peut-elle être reprise ? `--inventaire` liste ses types de champ |
 
@@ -794,6 +795,20 @@ bouger**, pas après.
   builds distincts n'y écrivent pas un horodatage de la même longueur. C'est
   cette mesure-là, et pas la ressemblance des deux commandes, qui autorise à
   croire le second.
+
+  **Et une mesure juste qui n'existe que dans un terminal ne protège de rien.**
+  Une fois le protocole réparé, le chiffre restait recopié à la main : la page
+  produit annonçait encore 2,4 Mo (22 occurrences) pendant que la mesure disait
+  4,0, et le README portait des nombres qu'aucun outil ne relisait. C'est le
+  même défaut que `docs/compat.md` tenu à la main — la source est maintenant
+  [`docs/container.json`](docs/container.json), écrit par la campagne, où
+  **chaque valeur porte sa définition** ; le README et
+  [`docs/bench.md`](docs/bench.md) en sont générés, et la CI échoue s'ils
+  divergent. Le cliquet a une seconde moitié qui compte autant : un marqueur ou
+  un motif introuvable est une **erreur**, sinon supprimer une ligne du README
+  ferait passer le contrôle au vert. Et la version de `Cargo.toml` est comparée
+  à celle du rapport — sans quoi un binaire qui grossit republierait la taille
+  de l'ancien sous son nouveau numéro.
 
 ## Où va le projet
 

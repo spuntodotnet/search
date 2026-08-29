@@ -1,0 +1,93 @@
+{
+  "schema": 1,
+  "mesure": {
+    "date": "2026-08-29T02:50:40Z",
+    "ferrite_version": "0.7.0",
+    "ferrite_sha": "0dfd19b81579d1434540aed7c31b8fea18b25602",
+    "ferrite_arbre_modifie": false,
+    "outil": "./tests/compat/measure_container.sh --json docs/container.json",
+    "tours_demarrage": 5,
+    "hote": {
+      "docker_serveur": "29.7.2",
+      "magasin_images": "overlayfs",
+      "plateforme": "linux/amd64"
+    },
+    "pourquoi_la_version_de_docker_est_ici": "La version du serveur Docker et son magasin d'images ne changent pas ce que cet outil mesure — il compte les octets de l'archive — mais ils changent ce que les AUTRES outils repondent a la meme question : `docker image inspect --format '{{.Size}}'` rendait la taille decompressee jusqu'a Docker 28 et rend la compressee depuis la 29, et la colonne DISK USAGE de `docker images` en additionne encore une troisieme."
+  },
+  "definitions": {
+    "compressee_octets": "La somme des blobs qu'un registre sert pour cette image — le manifeste, la configuration et les couches telles qu'elles sont poussees. C'est ce qu'un `docker pull` telecharge, et le seul chiffre que ce depot publie. `null` quand l'archive porte des couches nues : la taille qu'un registre servirait n'en est alors pas deductible, et un nombre plausible mis a sa place serait la taille decompressee sous le nom de l'autre.",
+    "decompressee_octets": "La somme des couches une fois depliees, c'est-a-dire ce que le systeme de fichiers de l'image occupe une fois l'image tiree.",
+    "binaire_octets": "La taille du fichier que l'ENTRYPOINT du conteneur execute. `null` quand l'ENTRYPOINT n'est pas un binaire — celui d'Elasticsearch est un lien vers un script qui lance une JVM, et un nombre qui ne se compare a rien vaut moins que son absence.",
+    "rss_repos_ko": "La somme des VmRSS de **tous** les processus du cgroup du conteneur, en kilo-octets, relevee 2 s apres le premier `GET /` servi et avant qu'aucun document ne soit indexe. Lire le seul PID 1 rendrait le RSS du shell qui lance la JVM d'Elasticsearch : deux ordres de grandeur en dessous, et du bon cote pour nous.",
+    "demarrage_ms": "Le temps entre `docker run -d` et le premier `GET /` servi en 200, mediane de `mesure.tours_demarrage` demarrages successifs (conteneur recree a chaque tour). Pour ferrite l'essentiel est la creation du conteneur par Docker.",
+    "digest_manifeste": "Le digest du manifeste de la plateforme locale dans l'archive mesuree : il dit exactement quels octets ont ete comptes.",
+    "couches": "Le nombre de couches du manifeste de cette plateforme.",
+    "couches_nues": "Les couches de l'archive dont les octets ne sont pas compresses. Une seule suffit a rendre `compressee_octets` non deductible : `docker save` n'ecrit des blobs compresses que depuis le magasin d'images containerd.",
+    "demarrage_tours_ms": "Les `mesure.tours_demarrage` demarrages dont `demarrage_ms` est la mediane, dans l'ordre. Publies parce qu'une mediane seule ne dit pas si les tours sont serres.",
+    "docker_run": "Les arguments exacts du `docker run` de la mesure. Ils font partie de la definition du RSS et du demarrage : un Elasticsearch lance avec une autre heap ne se compare pas a celui d'hier.",
+    "origine": "D'ou vient l'image mesuree : construite ici, ou tiree telle quelle.",
+    "mesure.ferrite_arbre_modifie": "Vrai si un des fichiers dont l'image est faite (`src/`, `Cargo.toml`, `Cargo.lock`, `Dockerfile`) differait de `mesure.ferrite_sha` pendant la campagne — donc si l'image mesuree pourrait ne pas etre celle que ce commit produit. Un README modifie au meme moment ne compte pas : il ne change pas un octet du binaire."
+  },
+  "images": [
+    {
+      "nom": "ferrite",
+      "reference": "ferrite:0.7.0",
+      "tag": "0.7.0",
+      "origine": "construite ici depuis le Dockerfile du depot (`scratch` + binaire statique musl)",
+      "docker_run": [
+        "-p",
+        "9299:9200"
+      ],
+      "plateforme": "linux/amd64",
+      "couches": 1,
+      "digest_manifeste": "sha256:8be274bf8aaaf8f1c90a9e7a7ec46e68042d8bda24cb4b03cfacae823a13efac",
+      "compressee_octets": 4073564,
+      "couches_nues": [],
+      "decompressee_octets": 9658368,
+      "entrypoint": "/ferrite",
+      "binaire_octets": 9656448,
+      "demarrage_ms": 171,
+      "demarrage_tours_ms": [
+        201,
+        174,
+        171,
+        167,
+        171
+      ],
+      "rss_repos_ko": 4488
+    },
+    {
+      "nom": "elasticsearch",
+      "reference": "docker.elastic.co/elasticsearch/elasticsearch:8.15.0",
+      "tag": "8.15.0",
+      "origine": "image officielle d'Elastic, tiree telle quelle",
+      "docker_run": [
+        "-p",
+        "9299:9200",
+        "-e",
+        "discovery.type=single-node",
+        "-e",
+        "xpack.security.enabled=false",
+        "-e",
+        "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      ],
+      "plateforme": "linux/amd64",
+      "couches": 10,
+      "digest_manifeste": "sha256:7dc0d398250eb0641c4dd9080933351238a664e43a77df359ea9f14082d5957d",
+      "compressee_octets": 669097124,
+      "couches_nues": [],
+      "decompressee_octets": 1266139136,
+      "entrypoint": "/bin/tini",
+      "binaire_octets": null,
+      "demarrage_ms": 17083,
+      "demarrage_tours_ms": [
+        16960,
+        17083,
+        16963,
+        17162,
+        17156
+      ],
+      "rss_repos_ko": 1071560
+    }
+  ]
+}
