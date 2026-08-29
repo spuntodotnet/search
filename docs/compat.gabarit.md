@@ -26,21 +26,32 @@ précisément « Elasticsearch sait faire, ferrite pas encore ».
 Version d'API annoncée : **Elasticsearch 8.15.0** (`version.number`,
 `_nodes`). Toutes les réponses portent `X-elastic-product: Elasticsearch`.
 
-**La suite de conformance d'Elasticsearch elle-même** (`tests/compat/conformance_es.py`,
-la 7.10.2 — la dernière version Apache 2.0) donne l'état d'ensemble. Ses chiffres
-ne sont pas recopiés ici : ils vivent dans [`conformance.json`](conformance.json),
-régénéré par le runner et commité (l'étalonnage du runner contre un vrai
-Elasticsearch 7.10.2 est dans [`conformance-es7102.json`](conformance-es7102.json)).
+**Les suites de conformance de deux autres moteurs** (`tests/compat/conformance_es.py`)
+donnent l'état d'ensemble : celle d'Elasticsearch 7.10.2 — la dernière version
+Apache 2.0 — et celle d'**OpenSearch 2.19.1**, Apache 2.0 elle aussi, descendante
+du même fork de 2020 mais maintenue depuis. Leurs chiffres ne sont pas recopiés
+ici : ils vivent dans [`conformance.json`](conformance.json) et
+[`conformance-opensearch.json`](conformance-opensearch.json), régénérés par le
+runner et commités (les étalonnages contre un vrai serveur de chaque moteur sont
+dans [`conformance-es7102.json`](conformance-es7102.json) et
+[`conformance-opensearch-os2191.json`](conformance-opensearch-os2191.json)).
 
 ```bash
 python3 -c "import json; print(json.load(open('docs/conformance.json'))['totaux'])"
+python3 -c "import json; print(json.load(open('docs/conformance-opensearch.json'))['totaux'])"
 ```
 
-La colonne « échecs » de ce rapport est l'inventaire des écarts qui restent — les
-familles sont listées dans [`conformance.md`](conformance.md), avec de quoi les
-compter soi-même. C'est la mesure la moins complaisante du projet : les cas
-viennent d'Elastic, pas de nous. La CI en fait un cliquet : le nombre d'échecs
-ne remonte pas.
+La colonne « échecs » de ces rapports est l'inventaire des écarts qui restent —
+les familles sont listées dans [`conformance.md`](conformance.md), avec de quoi
+les compter soi-même. C'est la mesure la moins complaisante du projet : les cas
+viennent d'Elastic et d'OpenSearch, pas de nous, et une seule des deux sources
+serait un examen dont on connaît le sujet. La CI en fait un cliquet, sur les
+deux : le nombre d'échecs ne remonte pas.
+
+Sur la suite d'OpenSearch, un troisième verdict existe et il est **mesuré** :
+un cas qu'un **vrai Elasticsearch 8.15** échoue lui aussi ne mesure pas ferrite,
+il mesure ce sur quoi les deux moteurs ne s'accordent plus. La référence est
+[`conformance-opensearch-es8150.json`](conformance-opensearch-es8150.json).
 
 **Le fuzzing différentiel** ([`fuzz.md`](fuzz.md)) mesure ce qui reste en dehors
 de ces deux inventaires : mapping, documents et requêtes tirés au sort **dans le

@@ -5,6 +5,7 @@ __pycache__/
 .venv/
 .venv-*/
 .es-rest-spec/
+.opensearch-rest-spec/
 .corpus-usage/
 .appli-reelle/
 .bench-echelle/

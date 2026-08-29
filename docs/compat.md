@@ -35,21 +35,32 @@ précisément « Elasticsearch sait faire, ferrite pas encore ».
 Version d'API annoncée : **Elasticsearch 8.15.0** (`version.number`,
 `_nodes`). Toutes les réponses portent `X-elastic-product: Elasticsearch`.
 
-**La suite de conformance d'Elasticsearch elle-même** (`tests/compat/conformance_es.py`,
-la 7.10.2 — la dernière version Apache 2.0) donne l'état d'ensemble. Ses chiffres
-ne sont pas recopiés ici : ils vivent dans [`conformance.json`](conformance.json),
-régénéré par le runner et commité (l'étalonnage du runner contre un vrai
-Elasticsearch 7.10.2 est dans [`conformance-es7102.json`](conformance-es7102.json)).
+**Les suites de conformance de deux autres moteurs** (`tests/compat/conformance_es.py`)
+donnent l'état d'ensemble : celle d'Elasticsearch 7.10.2 — la dernière version
+Apache 2.0 — et celle d'**OpenSearch 2.19.1**, Apache 2.0 elle aussi, descendante
+du même fork de 2020 mais maintenue depuis. Leurs chiffres ne sont pas recopiés
+ici : ils vivent dans [`conformance.json`](conformance.json) et
+[`conformance-opensearch.json`](conformance-opensearch.json), régénérés par le
+runner et commités (les étalonnages contre un vrai serveur de chaque moteur sont
+dans [`conformance-es7102.json`](conformance-es7102.json) et
+[`conformance-opensearch-os2191.json`](conformance-opensearch-os2191.json)).
 
 ```bash
 python3 -c "import json; print(json.load(open('docs/conformance.json'))['totaux'])"
+python3 -c "import json; print(json.load(open('docs/conformance-opensearch.json'))['totaux'])"
 ```
 
-La colonne « échecs » de ce rapport est l'inventaire des écarts qui restent — les
-familles sont listées dans [`conformance.md`](conformance.md), avec de quoi les
-compter soi-même. C'est la mesure la moins complaisante du projet : les cas
-viennent d'Elastic, pas de nous. La CI en fait un cliquet : le nombre d'échecs
-ne remonte pas.
+La colonne « échecs » de ces rapports est l'inventaire des écarts qui restent —
+les familles sont listées dans [`conformance.md`](conformance.md), avec de quoi
+les compter soi-même. C'est la mesure la moins complaisante du projet : les cas
+viennent d'Elastic et d'OpenSearch, pas de nous, et une seule des deux sources
+serait un examen dont on connaît le sujet. La CI en fait un cliquet, sur les
+deux : le nombre d'échecs ne remonte pas.
+
+Sur la suite d'OpenSearch, un troisième verdict existe et il est **mesuré** :
+un cas qu'un **vrai Elasticsearch 8.15** échoue lui aussi ne mesure pas ferrite,
+il mesure ce sur quoi les deux moteurs ne s'accordent plus. La référence est
+[`conformance-opensearch-es8150.json`](conformance-opensearch-es8150.json).
 
 **Le fuzzing différentiel** ([`fuzz.md`](fuzz.md)) mesure ce qui reste en dehors
 de ces deux inventaires : mapping, documents et requêtes tirés au sort **dans le
@@ -534,8 +545,8 @@ veulent dire quelque chose : 87/87.
 
 | Route | État | Détail |
 |---|---|---|
-| `POST /_aliases` | 🟡 | `index`/`indices` et `alias`/`aliases` au singulier comme au pluriel, motifs compris. Tout ou rien, comme chez ES — c'est ce qui rend une bascule atomique. Supporté : `add`, `remove`, `remove_index`. Refusé : `filter`, `routing` (`index_routing`, `search_routing`) |
-| `PUT\|POST /{index}/_alias/{nom}` | ✅ | `{index}` est une expression, `{nom}` accepte une liste |
+| `POST /_aliases` | 🟡 | `index`/`indices` et `alias`/`aliases` au singulier comme au pluriel, motifs compris. Tout ou rien, comme chez ES — c'est ce qui rend une bascule atomique. Écart connu, trouvé par la suite de conformance d'OpenSearch et **compté en régression** : `must_exist` sur un `remove` n'est pas lu, donc retirer un alias qui n'existe pas ne lève pas l'`aliases [...] missing` qu'ES 8.15 lève. Supporté : `add`, `remove`, `remove_index`. Refusé : `filter`, `routing` (`index_routing`, `search_routing`) |
+| `PUT\|POST /{index}/_alias/{nom}` | ✅ | `{index}` est une expression, `{nom}` accepte une liste. Écart connu, trouvé par la suite de conformance d'OpenSearch et **compté en régression** : les formes sans `{nom}` dans l'URL — `PUT /{index}/_alias` et `PUT /_alias`, où le nom de l'alias est dans le corps — rendent 405 là où ES 8.15 répond |
 | `DELETE /{index}/_alias/{nom}` | ✅ | `{nom}` accepte un motif |
 | `GET /_alias`, `/_alias/{nom}`, `/{index}/_alias`, `/{index}/_alias/{nom}` | ✅ | `{nom}` est une **expression** (liste, jokers, exclusions, `_all`) — voir ci-dessous — y compris le 404 « à corps de chaîne » d'ES (`{"error": "alias [x] missing", "status": 404}`), qui porte quand même les alias trouvés |
 | `HEAD /_alias/{nom}`, `/{index}/_alias/{nom}` | ✅ | |
@@ -715,7 +726,7 @@ de documents que demandé, sans que rien ne le signale.
 
 | | État | Détail |
 |---|---|---|
-| `POST\|GET /{index}/_search`, `POST\|GET /_search` | ✅ | `{index}` est une **expression** au sens d'ES (voir [Expressions d'index](#expressions-dindex-listes-motifs-alias)) ; sans index, la recherche porte sur tout, comme `_all`. Une recherche qui ne vise **aucun** index (cluster vide, motif sans correspondance) valide quand même son corps : requête, agrégations et tri sont lus contre un schéma vide avant qu'on conclue qu'il n'y a rien à chercher |
+| `POST\|GET /{index}/_search`, `POST\|GET /_search` | ✅ | `{index}` est une **expression** au sens d'ES (voir [Expressions d'index](#expressions-dindex-listes-motifs-alias)) ; sans index, la recherche porte sur tout, comme `_all`. Une recherche qui ne vise **aucun** index (cluster vide, motif sans correspondance) valide quand même son corps : requête, agrégations et tri sont lus contre un schéma vide avant qu'on conclue qu'il n'y a rien à chercher. Écart connu, trouvé par la suite de conformance d'OpenSearch et **compté en régression** : `include_named_queries_score` (ajouté par ES en 8.13, donc absent de la suite figée d'Elastic) est refusé comme un paramètre inconnu |
 | `query` | ✅ | |
 | `from` / `size` | ✅ | corps ou query string. `from + size > 10000` ❌ (`max_result_window`) |
 | `sort` | 🟡 | multi-clés, `asc` / `desc`, sur `keyword` / numérique / `date` / `boolean`, plus `_score` et `_doc`. Valeurs manquantes en dernier (`missing: _last`). Le tableau `sort` est rendu dans chaque hit. En multi-index, un champ non mappé par un des index donne un échec **de ce shard**, comme chez ES. Refusé : `missing`, `mode`, `nested`, `unmapped_type`, le tri par script, le tri sur un champ `text` |

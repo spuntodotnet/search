@@ -1254,7 +1254,7 @@
       "nom_texte": "POST /_aliases",
       "etat": "partiel",
       "poids": 0.3,
-      "detail": "`index`/`indices` et `alias`/`aliases` au singulier comme au pluriel, motifs compris. Tout ou rien, comme chez ES — c'est ce qui rend une bascule atomique",
+      "detail": "`index`/`indices` et `alias`/`aliases` au singulier comme au pluriel, motifs compris. Tout ou rien, comme chez ES — c'est ce qui rend une bascule atomique. Écart connu, trouvé par la suite de conformance d'OpenSearch et **compté en régression** : `must_exist` sur un `remove` n'est pas lu, donc retirer un alias qui n'existe pas ne lève pas l'`aliases [...] missing` qu'ES 8.15 lève",
       "parametres": {
         "supportes": [
           "add",
@@ -1274,7 +1274,7 @@
       "nom_texte": "PUT|POST /{index}/_alias/{nom}",
       "etat": "supporte",
       "poids": 0.1,
-      "detail": "`{index}` est une expression, `{nom}` accepte une liste"
+      "detail": "`{index}` est une expression, `{nom}` accepte une liste. Écart connu, trouvé par la suite de conformance d'OpenSearch et **compté en régression** : les formes sans `{nom}` dans l'URL — `PUT /{index}/_alias` et `PUT /_alias`, où le nom de l'alias est dans le corps — rendent 405 là où ES 8.15 répond"
     },
     {
       "id": "alias.delete",
@@ -1807,7 +1807,7 @@
       "nom_texte": "POST|GET /{index}/_search, POST|GET /_search",
       "etat": "supporte",
       "poids": 33.9,
-      "detail": "`{index}` est une **expression** au sens d'ES (voir [Expressions d'index](#expressions-dindex-listes-motifs-alias)) ; sans index, la recherche porte sur tout, comme `_all`. Une recherche qui ne vise **aucun** index (cluster vide, motif sans correspondance) valide quand même son corps : requête, agrégations et tri sont lus contre un schéma vide avant qu'on conclue qu'il n'y a rien à chercher"
+      "detail": "`{index}` est une **expression** au sens d'ES (voir [Expressions d'index](#expressions-dindex-listes-motifs-alias)) ; sans index, la recherche porte sur tout, comme `_all`. Une recherche qui ne vise **aucun** index (cluster vide, motif sans correspondance) valide quand même son corps : requête, agrégations et tri sont lus contre un schéma vide avant qu'on conclue qu'il n'y a rien à chercher. Écart connu, trouvé par la suite de conformance d'OpenSearch et **compté en régression** : `include_named_queries_score` (ajouté par ES en 8.13, donc absent de la suite figée d'Elastic) est refusé comme un paramètre inconnu"
     },
     {
       "id": "recherche.query",

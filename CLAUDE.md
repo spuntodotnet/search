@@ -90,6 +90,26 @@ teste ce à quoi *Elastic* a pensé — et c'est elle qui a trouvé les deux vra
 manques (création d'index à l'écriture, routes sans index) qu'aucun test écrit
 ici n'avait vus. Voir [`docs/conformance.md`](docs/conformance.md).
 
+**Et une seule suite reste un examen dont on connaît le sujet.** Celle d'Elastic
+est figée en 2020 : elle ne peut rien dire de ce qui a été ajouté depuis. D'où
+la seconde source, la suite REST d'**OpenSearch** (Apache-2.0, licence vérifiée
+dans le dépôt avant usage), jouée par **le même runner**. Les deux rangent
+chacune 36 échecs en régression et se recoupent sur **12 capacités** — deux
+équipes qui butent au même endroit, c'est une mesure ; celle d'OpenSearch en
+sort **trois** de plus, toutes des routes ou paramètres postérieurs à 2020
+(`PUT /{index}/_alias` avec l'alias dans le corps, `must_exist` au retrait d'un
+alias, `include_named_queries_score`), et un vrai ES 8.15 les passe.
+
+Le corollaire coûte une campagne de plus, et il est le vrai contenu du geste :
+**« ce n'est pas un défaut de ferrite, les deux moteurs divergent » ne se
+décrète pas.** La même suite est jouée contre un vrai Elasticsearch 8.15, et un
+cas qu'il échoue lui aussi est rangé `divergence_moteurs` — 92 cas sur 350. Sans
+cette mesure, la catégorie serait une opinion dont on choisirait le contenu,
+c'est-à-dire un dénominateur qu'on écrit soi-même sous un autre nom. Le rapport
+publie aussi les deux comptes qui la rendent lisible : les cas que la référence
+n'a pas joués (0), et ceux que ferrite **réussit alors que la référence
+échoue** (0) — le sens qui flatte, donc celui qu'on lit en premier.
+
 Corollaire payé cher : **un dénominateur qu'on choisit soi-même ne prouve
 rien.** Le runner a porté une liste blanche de 22 domaines sur 107, avec une
 bonne raison (« les autres ne mesureraient rien ») et deux conséquences. La
@@ -235,7 +255,7 @@ développement, pas de CI).
 | `tests/compat/perimetre.py` | ce cas qui échoue, il porte sur quoi ? Il rattache un échec de conformance à une capacité déclarée : **régression** si elle est annoncée supportée, **coût de périmètre** si elle est annoncée refusée |
 | `tests/compat/recolte_usage.py` | à quoi ressemblent les requêtes que les gens envoient **vraiment** ? Constitue le corpus ([`tests/compat/usage/corpus.jsonl`](tests/compat/usage/corpus.jsonl), 5 311 requêtes) depuis quatre sources citables : doc de référence 8.15, tracks Rally, clients officiels, code open source. Chaque requête porte l'URL d'où elle vient |
 | `tests/compat/ponderation.py` | **quelle part de ces requêtes passe entièrement ?** (42,8 % du corpus, mais **93,8 % du code d'application** et 28,6 % des tracks Rally — l'écart *est* le résultat). Écrit les `poids` de `compat.yaml`, publie [`docs/usage.json`](docs/usage.json) et la table « ce qui manque, par fréquence d'usage ». `--rejoue` pose la même requête à ferrite et à un vrai ES 8.15 : les deux mesures s'accordent sur 99,3 % des cas |
-| `tests/compat/conformance_es.py` | que dit la suite de tests **d'Elastic** ? Ses **107 domaines**, sans liste blanche. Son rapport est un fichier, pas une phrase : [`docs/conformance.json`](docs/conformance.json) (totaux, deux taux, exclusions comptées, détail par cas), régénéré par `--json`, tenu par un cliquet en CI (`--diff`). `--etat` vérifie entre deux cas que rien n'est **apparu** depuis l'état de départ de la cible — index, alias, templates, réglages de cluster — et arrête la campagne au premier écart (+27 %, payés par la CI) : 79 campagnes consécutives rendent le même rapport à l'octet près |
+| `tests/compat/conformance_es.py` | que disent les suites de tests **d'Elastic** et d'**OpenSearch** ? Deux sources indépendantes (`--source`), Apache-2.0 toutes les deux, **107** et **112 domaines**, sans liste blanche. Leurs rapports sont des fichiers, pas des phrases : [`conformance.json`](docs/conformance.json) et [`conformance-opensearch.json`](docs/conformance-opensearch.json) (totaux, trois taux, exclusions comptées, détail par cas), régénérés par `--json`, tenus par un cliquet en CI (`--diff`). `--divergences` range à part les cas qu'un **vrai ES 8.15 échoue lui aussi** sur la même suite — mesuré ([`conformance-opensearch-es8150.json`](docs/conformance-opensearch-es8150.json)), pas décidé. `--etat` vérifie entre deux cas que rien n'est **apparu** depuis l'état de départ de la cible — index, alias, templates, réglages de cluster — et arrête la campagne au premier écart (+27 %, payés par la CI) : 79 campagnes consécutives rendent le même rapport à l'octet près |
 | `tests/compat/bench_vs_es.py` | mêmes résultats, **et à quel prix** ? Garde-fou de développement : 600 documents et 138 requêtes **écrites ici**, donc un dénominateur qu'on a choisi soi-même — ne sert plus à publier |
 | `tests/compat/bench_echelle.py` | et **à l'échelle**, sur un corpus que nous n'avons pas écrit ? La track Rally `geonames` d'Elastic (Apache-2.0, révision figée, corpus vérifié à l'octet près), 500 000 et 2 000 000 de documents, **ses** 31 requêtes. `term` ×1,7 et `match_phrase` ×2,6 pour ferrite a deux millions de documents (et l'avance **grandit** avec la taille), RSS ×8 en sa faveur — et le **tri jusqu'a ×290 contre lui**, l'indexation ×0,20, le `scroll` ×0,25. 13 requêtes jouables, 18 refusées, toutes rattachées à une capacité déclarée. Voir [`docs/bench.md`](docs/bench.md) |
 | `tests/compat/sonde_sous_aggs.py` | une **sous-agrégation** voit-elle tous les documents de son bucket ? (46 combinaisons parent × sous-agrégation, 50 000 documents déséquilibrés : **46/46** avec l'épingle de tantivy, **32/46** sans ; `--seuil` rejoue les deux bornes du défaut, 2 047 juste / 2 048 faux) |
@@ -444,6 +464,21 @@ bouger**, pas après.
   `/{index}/_doc/_search` n'est plus une recherche en 8.x : c'est l'indexation
   d'un document dont l'`_id` est `_search`. Vérifié sur un vrai ES 8.15 **et**
   sur ferrite. À grepper avant toute migration.
+- **Un instrument étalonné l'est pour la source contre laquelle on l'a réglé.**
+  Le runner de conformance passait 992/1173 contre un vrai ES : branché sur la
+  suite d'OpenSearch, il est retombé à 973/978, et les cinq échecs étaient lui.
+  Le plus coûteux ne se devinait pas : **OpenSearch a renuméroté à 1.0.0 en
+  repartant d'ES 7.10**, et son propre comparateur range les versions *legacy*
+  6.x et 7.x **en dessous** de toutes les siennes. Lues comme des nombres, ses
+  bornes `skip: {version: " - 7.9.99"}` faisaient sauter 223 cas qu'il joue, et
+  `"7.2.0 -"` en faisait jouer deux qu'il saute — lesquels échouaient, ce qui est
+  la seule raison pour laquelle on l'a vu. Deux fuites d'état de plus sont
+  sorties de la campagne de référence contre un ES **8** : `cat.indices` sans
+  `expand_wildcards: all` ne voit pas les index cachés, et `DELETE
+  /_component_template/*` échoue **en bloc** dès qu'un seul élément est protégé,
+  donc ne supprime rien. Le repli énumère maintenant, et ne touche qu'à ce qui
+  n'était pas là au démarrage : un runner défait ce que les cas ont posé, il ne
+  démonte pas le serveur qu'on lui prête.
 - **Un pré-filtre doit être un sur-ensemble.** Le `nested` cassait sur les
   `must_not` : une négation évaluée à plat écarte un document dont une *autre*
   ligne satisfait la clause.

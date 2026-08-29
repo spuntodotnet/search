@@ -140,17 +140,23 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: PyYAML (le runner lit les cas d'Elastic au format YAML)
+      - name: PyYAML (le runner lit les cas au format YAML)
         run: pip install pyyaml
 
-      # La suite REST d'Elastic n'est pas recopiee dans ce depot : elle est
-      # telechargee a la demande. Le cache evite de retirer l'archive de la
-      # 7.10.2 a chaque CI ; la cle porte la version, donc en changer invalide.
+      # Les suites REST ne sont pas recopiees dans ce depot : elles sont
+      # telechargees a la demande. Le cache evite de retirer les archives a
+      # chaque CI ; la cle porte la version, donc en changer invalide.
       - name: cache de la suite REST d'Elasticsearch
         uses: actions/cache@v4
         with:
           path: .es-rest-spec
           key: es-rest-spec-7.10.2
+
+      - name: cache de la suite REST d'OpenSearch
+        uses: actions/cache@v4
+        with:
+          path: .opensearch-rest-spec
+          key: opensearch-rest-spec-2.19.1
 
       - name: cargo build --release
         run: cargo build --release
@@ -187,12 +193,28 @@ jobs:
           python3 tests/compat/conformance_es.py http://127.0.0.1:9200 --etat \
             --json conformance-mesure.json --diff docs/conformance.json
 
-      - name: rapport de la mesure
+      # La seconde source : la suite REST d'OpenSearch (Apache-2.0), ecrite par
+      # une autre equipe et maintenue depuis 2021. Meme cliquet, meme forme de
+      # rapport. `--divergences` est le rapport de **cette** suite contre un
+      # vrai Elasticsearch 8.15 (commite) : il range les cas sur lesquels les
+      # deux moteurs ne s'accordent plus, qui ne mesurent donc pas ferrite.
+      # C'est un fichier, pas un jugement — la CI n'a besoin d'aucun conteneur.
+      - name: suite de conformance d'OpenSearch, compare au rapport commite
+        run: |
+          python3 tests/compat/conformance_es.py http://127.0.0.1:9200 --etat \
+            --source opensearch \
+            --divergences docs/conformance-opensearch-es8150.json \
+            --json conformance-opensearch-mesure.json \
+            --diff docs/conformance-opensearch.json
+
+      - name: rapports des mesures
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: conformance-mesure
-          path: conformance-mesure.json
+          path: |
+            conformance-mesure.json
+            conformance-opensearch-mesure.json
           if-no-files-found: warn
 
   docker:

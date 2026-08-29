@@ -1,14 +1,24 @@
-# La suite de conformance d'Elasticsearch, passée à ferrite
+# Les suites de conformance des autres, passées à ferrite
 
 Tout le reste du harnais compare ferrite à Elasticsearch sur des cas **qu'on a
 écrits**. C'est utile, et c'est limité de la même façon que le code : on teste
 ce à quoi on a pensé. Cette page-ci rapporte l'inverse — les cas viennent
-d'Elastic.
+d'ailleurs.
+
+Il y en a maintenant **deux jeux**, écrits par deux équipes différentes : la
+suite REST d'Elasticsearch 7.10.2 et celle d'OpenSearch 2.19.1, toutes deux sous
+Apache 2.0. Une seule suite, c'est un examen dont on connaît le sujet.
 
 ```bash
 python3 tests/compat/conformance_es.py http://localhost:9200                    # à l'écran
 python3 tests/compat/conformance_es.py http://localhost:9200 --json docs/conformance.json
 python3 tests/compat/conformance_es.py http://localhost:9200 --diff docs/conformance.json
+
+# la seconde source, et la mesure qui range ce sur quoi les deux moteurs ne
+# s'accordent plus (voir « Deux sources » plus bas)
+python3 tests/compat/conformance_es.py http://localhost:9200 --source opensearch \
+  --divergences docs/conformance-opensearch-es8150.json \
+  --json docs/conformance-opensearch.json
 ```
 
 ## Le dénominateur n'est pas choisi
@@ -46,10 +56,19 @@ lire : ni la CI, ni le lecteur qui veut vérifier. Les chiffres de cette mesure
 vivent donc dans **[`conformance.json`](conformance.json)**, commité, régénéré
 par la commande ci-dessus — et cette page n'en recopie aucun.
 
-| Fichier | Ce qu'il contient |
-|---|---|
-| [`conformance.json`](conformance.json) | la mesure contre **ferrite** |
-| [`conformance-es7102.json`](conformance-es7102.json) | la même mesure contre un **vrai Elasticsearch 7.10.2** — l'étalonnage de l'instrument |
+| Fichier | Suite jouée | Cible |
+|---|---|---|
+| [`conformance.json`](conformance.json) | Elasticsearch 7.10.2 | **ferrite** |
+| [`conformance-es7102.json`](conformance-es7102.json) | Elasticsearch 7.10.2 | un **vrai Elasticsearch 7.10.2** — l'étalonnage de l'instrument |
+| [`conformance-opensearch.json`](conformance-opensearch.json) | OpenSearch 2.19.1 | **ferrite** |
+| [`conformance-opensearch-os2191.json`](conformance-opensearch-os2191.json) | OpenSearch 2.19.1 | un **vrai OpenSearch 2.19.1** — l'étalonnage |
+| [`conformance-opensearch-es8150.json`](conformance-opensearch-es8150.json) | OpenSearch 2.19.1 | un **vrai Elasticsearch 8.15.0** — la mesure des divergences entre les deux moteurs |
+
+Chaque rapport dit quelle suite il a jouée (`mesure.suite_rest.source`) et quel
+moteur il a mesuré (`mesure.cible.moteur`, déduit de `GET /`). Les deux champs
+ne sont pas décoratifs : sans eux, un rapport d'une suite pourrait servir de
+référence à l'autre, et un rapport de ferrite pourrait servir de référence à
+ferrite.
 
 Chaque rapport porte de quoi savoir ce qu'il vaut : la version de la suite REST
 utilisée, la date de la mesure, le SHA du dépôt mesuré (et s'il était modifié),
@@ -83,10 +102,10 @@ compte :
 
 | Catégorie | Ce qu'elle veut dire |
 |---|---|
-| `reussi` | ferrite répond comme Elasticsearch |
+| `reussi` | ferrite répond comme le moteur d'origine de la suite |
 | `refus` | ferrite répond « je ne sais pas faire » (`not_implemented_in_ferrite_exception`) : c'est le contrat, pas un bug |
 | `saute` | le cas ne mesure pas la cible — borne de version de la suite, ou verbe que ce runner n'implémente pas |
-| `echec` | ferrite répond **autre chose** qu'Elasticsearch : ce sont les seuls vrais écarts |
+| `echec` | ferrite répond **autre chose** : ce sont les seuls vrais écarts |
 
 D'où trois taux, qui ne répondent pas à la même question :
 
@@ -120,9 +139,16 @@ trancher, cas par cas :
 
 | Verdict | Ce que c'est |
 |---|---|
+| `divergence_moteurs` | un vrai moteur de référence échoue le **même cas** : il ne discrimine pas, donc il ne peut rien dire de ferrite. **Mesuré**, pas décidé — voir plus bas |
 | `regression` | le cas exerce une capacité déclarée **supportée** — c'est un vrai écart, il compte |
 | `cout_perimetre` | le cas exerce une capacité déclarée **refusée** — attendu, c'est le prix affiché du périmètre |
 | `indetermine` | aucune capacité ne réclame ce cas. Il compte **contre nous**, comme une régression |
+
+Le premier passe avant les trois autres, et l'ordre se défend : il porte sur le
+**pouvoir discriminant du cas**, pas sur ce qu'on déclare. Un cas qu'aucun
+Elasticsearch ne passe ne peut pas établir une régression de ferrite, même sur
+une capacité déclarée supportée. Il n'existe que quand une référence a été
+fournie (`--divergences`) ; sans elle, le rapport n'a que les trois derniers.
 
 Le troisième verdict est le garde-fou : si un cas non rattaché sortait du
 dénominateur, oublier de déclarer une capacité ferait monter le taux — le
@@ -205,8 +231,138 @@ l'API typée (9 cas, un `{type}` dans l'URL), et — celui qui comptait —
 la 8.x comme un `epoch_millis`. **ferrite rend la même chose qu'ES 8.15**, donc
 ce cas ne mesure pas un manque de ferrite — il mesure un coût de migration
 7→8, comme le probe 7.x en mesure d'autres. Le rapport le compte pourtant en
-régression : le runner n'a pas de troisième catégorie pour ça, et inventer une
-exception au cas par cas serait le début d'un dénominateur choisi.
+régression sur la suite d'Elastic : la catégorie `divergence_moteurs` n'y est
+pas alimentée, faute d'un rapport de référence complet de **cette** suite contre
+un ES 8.15. Elle l'est sur la suite d'OpenSearch, où le problème se pose à
+chaque page — voir ci-dessous. Inventer une exception au cas par cas, ici comme
+là, serait le début d'un dénominateur choisi.
+
+## Deux sources, parce qu'une seule est un examen dont on connaît le sujet
+
+La suite d'Elastic est irremplaçable et elle a deux limites qu'on ne peut pas
+lui retirer : elle est **figée en 2020**, et une partie de ses échecs porte sur
+ce que la 8.x a supprimé (`include_type_name`, `_type` dans les réponses,
+`action.destructive_requires_name` à `false`). Quand le seul juge d'un dossier
+est immobile depuis six ans, on finit par optimiser pour lui.
+
+D'où la seconde source : la suite REST d'**OpenSearch**
+(`opensearch-project/OpenSearch`). Elle descend du même fork de 2020 — donc le
+format des cas est le même et c'est **le même runner** qui la joue, `--source
+opensearch` — mais elle a été maintenue et étendue depuis par une autre équipe.
+
+**La licence a été vérifiée avant de s'en servir** : OpenSearch est publié sous
+**Apache-2.0** (`LICENSE.txt` à la racine du dépôt, « Apache License, Version
+2.0 »), comme la 7.10.2 d'Elastic. Les deux sont compatibles avec la licence de
+ferrite, et les fichiers ne sont pas recopiés ici : ils sont téléchargés à la
+demande dans `.opensearch-rest-spec/`, ignoré par git.
+
+### La troisième catégorie se mesure, sinon c'est une opinion
+
+Un cas de la suite d'OpenSearch qui échoue contre ferrite n'échoue pas forcément
+**parce que** c'est ferrite : ferrite reproduit Elasticsearch 8.15, et OpenSearch
+a divergé d'Elasticsearch depuis 2021. Un cas qui exerce ce sur quoi les deux
+moteurs ne s'accordent plus ne peut rien dire de ferrite.
+
+Décréter cette catégorie au cas par cas serait exactement le défaut du
+dénominateur qu'on écrit soi-même. Elle se **mesure** : la même suite est jouée
+contre un **vrai Elasticsearch 8.15**, et un cas qu'il échoue lui aussi est rangé
+`divergence_moteurs`. C'est le rôle de
+[`conformance-opensearch-es8150.json`](conformance-opensearch-es8150.json), passé
+au runner par `--divergences`.
+
+Trois garde-fous, parce qu'une référence mal choisie rendrait la catégorie plus
+grosse sans rien mesurer de plus :
+
+| Refus | Pourquoi |
+|---|---|
+| la référence porte une **autre suite** (source ou version) | les identifiants de cas ne désigneraient pas les mêmes cas |
+| la référence est une mesure **partielle** | les cas qu'elle n'a pas joués passeraient pour non divergents |
+| la référence est **ferrite** | tous ses échecs deviendraient des désaccords entre moteurs |
+
+Le troisième repose sur `mesure.cible.moteur`, déduit de `GET /` : OpenSearch
+annonce sa `distribution`, ferrite signe son `build_hash`. C'est mesuré sur la
+cible, pas saisi à la main.
+
+Et deux comptes sont **publiés plutôt que tus**, dans le bloc `divergences` du
+rapport : les cas que la référence n'a pas joués (donc dont elle ne peut rien
+dire), et les cas que **ferrite réussit alors que la référence échoue**. Ce
+dernier est le sens qui flatte, donc celui qu'il faut lire en premier : un défaut
+d'outillage s'y cache mieux que dans un échec. Il vaut **0** aujourd'hui.
+
+### L'instrument s'étalonne d'abord contre un vrai OpenSearch
+
+Même geste que pour la suite d'Elastic, et il a payé pareil. Premier passage
+contre un `opensearchproject/opensearch:2.19.1` : **973/978**, cinq échecs — et
+les cinq étaient le runner, pas OpenSearch.
+
+```bash
+docker run -d --name os-ref -p 9203:9200 \
+  -e discovery.type=single-node \
+  -e DISABLE_SECURITY_PLUGIN=true -e DISABLE_INSTALL_DEMO_CONFIG=true \
+  -e OPENSEARCH_JAVA_OPTS="-Xms512m -Xmx512m" \
+  -e node.attr.testattr=test -e path.repo=/tmp/repo \
+  opensearchproject/opensearch:2.19.1
+docker exec -u 0 os-ref sh -c 'mkdir -p /tmp/repo && chown 1000:0 /tmp/repo'
+python3 tests/compat/conformance_es.py http://localhost:9203 --source opensearch \
+  --etat --json docs/conformance-opensearch-os2191.json
+```
+
+| Ce que l'étalonnage a trouvé | Ce que c'était |
+|---|---|
+| **l'ordre des numéros de version** | OpenSearch a renuméroté à 1.0.0 en repartant d'Elasticsearch 7.10, et son propre comparateur range les versions *legacy* 6.x et 7.x **en dessous** de toutes les siennes. Lu comme des nombres, `skip: {version: " - 7.9.99"}` faisait sauter des cas qu'un OpenSearch 2.19 joue, et `"7.2.0 -"` en faisait jouer qu'il saute. 223 cas récupérés, et les deux seuls cas « (pre 7.2.0) » de la suite cessent d'échouer |
+| une **longueur entre guillemets** | `length: {…: "1"}` rendait « longueur 1 != 1 » — un message qui accuse le serveur d'un défaut du runner |
+| un `do` qui porte **deux** appels | `index/90_unsigned_long.yml` empile `indices.create` et `bulk` dans le même bloc ; n'en jouer que le premier laissait le document non indexé, donc « 1 document au lieu de 2 » |
+| `_arbitrary_key_` **non déclaré** | un cas emploie cette fonctionnalité du runner officiel sans la déclarer en `features:`. Elle est maintenant détectée sur l'action, et le cas est sauté plutôt que rendu faux |
+
+Après correction : **1196/1199, trois échecs** — et ce sont *exactement* les
+trois quirks que le même conteneur d'ES 7.10.2 avait montrés (`distance_feature`
+sur `date` et `date_nanos`, une agrégation `range` sur un champ non mappé : « all
+shards failed »). Ils sont comptés, pas cachés.
+
+Ces quatre corrections **ne déplacent pas d'un cas** la mesure de la suite
+d'Elastic contre ferrite : 1173 cas, 0 mouvement, 0 apparu, 0 disparu. C'est ce
+qui prouve qu'elles corrigent le runner sur ce que la seconde source exerce, et
+rien d'autre.
+
+### Deux fuites d'état de plus, trouvées par `--etat` contre un ES 8.15
+
+La campagne de référence — la suite d'OpenSearch contre un vrai Elasticsearch
+8.15 — a fait crier le mode `--etat` deux fois, et les deux défauts étaient dans
+le nettoyage du runner, pas dans les cas :
+
+| Ce qui fuyait | Pourquoi ça n'était jamais apparu |
+|---|---|
+| un index **caché** et son alias (`cat.aliases/40_hidden.yml`) | le repli d'énumération de `nettoie` appelait `cat.indices` **sans** `expand_wildcards: all`, donc ne voyait pas les index cachés. Contre un ES 7.10 le repli n'était jamais emprunté (`DELETE /*` y passait, `action.destructive_requires_name` valant `false`) ; contre un ES 8 il l'est toujours |
+| un **template de composants** `ct` | un vrai ES 8 refuse `DELETE /_component_template/*` **en bloc** dès qu'un seul élément est protégé (« still in use by index templates »), et alors *rien* n'est supprimé. Le balayage énumère maintenant, et ne touche qu'à ce qui n'était **pas là au démarrage** : le runner défait ce que les cas ont posé, il ne démonte pas le serveur qu'on lui prête |
+
+Un troisième écart n'est pas un défaut du runner mais un réglage de la cible, du
+même genre que `node.attr.testattr` : un ES 8.15 indexe ses avertissements de
+dépréciation dans un flux de données, que la suite d'OpenSearch déclenche à
+répétition. Le conteneur de référence porte donc
+`cluster.deprecation_indexing.enabled=false`.
+
+### Ce que la seconde source a trouvé que la première ne voit pas
+
+Le résultat qui compte n'est pas un taux, c'est **l'intersection**. Les deux
+suites rangent chacune 36 échecs en `regression`, et se recoupent sur **12
+capacités** — deux équipes différentes qui butent au même endroit, ce qui est
+une mesure et non plus une impression.
+
+Quatre capacités ne sont trouvées que par Elastic (`_cat/health`, `_cat/indices`,
+la suppression d'index, `_field_caps`), et **trois ne sont trouvées que par
+OpenSearch** — toutes des routes ou paramètres qui n'existaient pas en 2020, donc
+invisibles à une suite figée :
+
+| Ce qu'OpenSearch exerce et Elastic 7.10 non | Ce que ferrite répond | Un vrai ES 8.15 |
+|---|---|---|
+| `PUT /{index}/_alias` et `PUT /_alias`, le nom de l'alias dans le **corps** (2 cas) | `405`, la route n'accepte que `GET`/`HEAD` | passe |
+| `must_exist` sur le retrait d'un alias (`_aliases`) | pas d'exception `aliases [...] missing` | passe |
+| `include_named_queries_score` sur `_search` (ajouté par ES en 8.13) | `unrecognized parameter` | passe |
+
+Les quatre cas restent comptés en **régression** : ils portent sur des capacités
+déclarées supportées, et un vrai Elasticsearch 8.15 les passe. Les déclarer
+refusées pour les sortir du dénominateur serait le geste que ce fichier interdit
+partout ailleurs.
 
 ## D'où viennent ces tests, et pourquoi on a le droit
 
@@ -219,8 +375,15 @@ utilise, et sa licence est compatible avec celle de ferrite.
 Heureuse coïncidence : c'est aussi la version de l'instance qu'on cherche à
 servir (voir [`compat-es7.md`](compat-es7.md)).
 
+OpenSearch, lui, est **entièrement** sous Apache-2.0 : la contrainte de licence
+n'y borne pas la version, et c'est la 2.19.1 qui est retenue — la dernière 2.x,
+donc la plus proche de la lignée 7.10 qu'on cherche à servir. La vérification a
+été faite dans le dépôt (`LICENSE.txt`) avant que la suite ne serve, et elle est
+écrite dans le fichier qui la joue comme dans chaque rapport
+(`mesure.suite_rest.licence`).
+
 Les fichiers ne sont **pas recopiés** dans ce dépôt : ils sont téléchargés à la
-demande dans `.es-rest-spec/`, ignoré par git.
+demande dans `.es-rest-spec/` et `.opensearch-rest-spec/`, ignorés par git.
 
 ## Le runner se valide avant de mesurer
 
@@ -255,6 +418,11 @@ faux échecs, le NDJSON pré-sérialisé, le paramètre `ignore` du runner offic
 pris pour un paramètre d'API, et les réponses `_cat` en texte plutôt qu'en JSON.
 C'est exactement pour ça qu'on ne mesure pas avant d'avoir étalonné l'instrument.
 
+La seconde source a repayé le même geste, et pour quatre corrections de plus :
+voir [« L'instrument s'étalonne d'abord contre un vrai OpenSearch »](#linstrument-sétalonne-dabord-contre-un-vrai-opensearch).
+Un instrument qu'on branche sur une source nouvelle n'est pas un instrument déjà
+étalonné : il l'est pour la source contre laquelle on l'a réglé.
+
 ### Passer de 22 à 107 domaines a coûté quatre corrections de plus
 
 Toutes trouvées de la même façon, et toutes du même genre : **un cas laisse
@@ -286,7 +454,18 @@ compare la mesure fraîche au rapport commité :
 ```bash
 python3 tests/compat/conformance_es.py http://127.0.0.1:9200 --etat \
   --json conformance-mesure.json --diff docs/conformance.json
+
+python3 tests/compat/conformance_es.py http://127.0.0.1:9200 --etat \
+  --source opensearch \
+  --divergences docs/conformance-opensearch-es8150.json \
+  --json conformance-opensearch-mesure.json \
+  --diff docs/conformance-opensearch.json
 ```
+
+Les deux sources ont le même cliquet, et **aucune** n'a besoin d'un conteneur :
+la référence des divergences est un fichier commité, pas un serveur à démarrer.
+`--diff` refuse de comparer deux suites différentes, pour la même raison qu'il
+refuse de comparer une mesure partielle à une mesure complète.
 
 Avec `--diff`, le code de sortie devient un **cliquet** : il vaut 1 si le nombre
 d'échecs augmente, ou si un cas passe de `reussi` à `echec` — même à total
@@ -488,7 +667,8 @@ aussi `h=`, `s=`, `help` sur les `_cat`) et `GET /{index}/_mapping/field/{champs
 ## Ce qui reste, et comment le compter soi-même
 
 Les familles d'échecs qui restent. Aucun compte n'est recopié ici — il serait
-faux à la PR suivante ; celui du jour se sort du rapport :
+faux à la PR suivante ; celui du jour se sort du rapport (remplacer le nom du
+fichier par `conformance-opensearch.json` pour la seconde source) :
 
 ```bash
 python3 - <<'PY'
@@ -518,11 +698,17 @@ PY
   — est dans `mesure.exclusions`.
 - Les cas qui exigent un verbe ou une `feature` que ce runner n'implémente pas
   sont comptés en `sautes`, et leur nombre est isolé dans `mesure.exclusions`.
-- Les `skip: {version}` sont évalués **comme pour un serveur 7.10.2**, puisque
-  c'est la version de la suite.
+- Les `skip: {version}` sont évalués **comme pour un serveur de la version de la
+  suite jouée** — 7.10.2 pour Elastic, 2.19.1 pour OpenSearch — et dans l'ordre
+  de numérotation du moteur qui l'a écrite, ce qui n'est pas le même chez les
+  deux (voir l'étalonnage).
 - `--suites` ne joue qu'une partie des domaines : le rapport le dit
   (`mesure.partiel`), et `--diff` refuse alors de trancher — une mesure
-  partielle ne se compare pas à la suite entière.
+  partielle ne se compare pas à la suite entière. Il refuse aussi de comparer
+  deux **suites** différentes.
+- Sans `--divergences`, le verdict `divergence_moteurs` n'existe pas : le
+  rapport ne dit rien de ce sur quoi les moteurs ne s'accordent pas, plutôt que
+  de le deviner.
 
 Le rapport porte le nombre exact de cas joués, et ce qu'il laisse dehors avec
 son compte : une exclusion sans son compte n'est pas vérifiable.
