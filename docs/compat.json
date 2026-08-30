@@ -1873,10 +1873,12 @@
           "nested",
           "numeric_type",
           "format",
-          "le tri par script",
+          "ignore_unmapped",
+          "le tri par script (_script, et son type)",
+          "le tri géographique (_geo_distance, et avec lui unit, distance_type, pin.location)",
           "le tri sur un champ text",
-          "missing, mode et unmapped_type à côté de _score",
-          "missing / mode / unmapped_type en query string"
+          "les trois paramètres ci-dessus à côté de _score",
+          "les trois paramètres ci-dessus en query string"
         ]
       }
     },

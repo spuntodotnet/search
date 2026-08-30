@@ -429,8 +429,8 @@ réelles** — la documentation de référence d'ES 8.15, les tracks Rally d'Ela
 les tests des clients officiels et le code de 184 dépôts open source — la
 question posée est « celle-ci passerait-elle **entièrement** ? », parce qu'une
 requête supportée à 90 % est une requête qui échoue. Réponse : **96,2 % des
-requêtes trouvées dans du code d'application**, 40,2 % des exemples de la
-documentation, 28,6 % des tracks de benchmark. L'écart entre ces trois nombres
+requêtes trouvées dans du code d'application**, 40,1 % des exemples de la
+documentation, 30,5 % des tracks de benchmark. L'écart entre ces trois nombres
 est le résultat ; la méthode, les sources et les biais sont dans
 [`docs/usage.md`](docs/usage.md), le corpus est publié avec.
 

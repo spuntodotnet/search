@@ -1870,10 +1870,12 @@ tables:
             - {nom: "nested"}
             - {nom: "numeric_type"}
             - {nom: "format", note: "sur une clé de tri `date`"}
-            - {texte: "le tri par script"}
+            - {nom: "ignore_unmapped", note: "il fait taire l'échec de shard d'un champ non mappé sous un `nested` ou un `_geo_distance` ; `unmapped_type` couvre le cas mappable, celui-ci ne se pose que sur les deux clés refusées ci-dessous"}
+            - {texte: "le tri par script (`_script`, et son `type`)"}
+            - {texte: "le tri géographique (`_geo_distance`, et avec lui `unit`, `distance_type`, `pin.location`)"}
             - {texte: "le tri sur un champ `text`", note: "y compris via `unmapped_type: text` — ES fait échouer le shard (« Fielddata is disabled »), ferrite aussi"}
-            - {texte: "`missing`, `mode` et `unmapped_type` à côté de `_score`", note: "ES les refuse aussi (`[_score] unknown field [mode]`) ; à côté de `_doc` il les **accepte et les ignore**, ferrite comme lui"}
-            - {texte: "`missing` / `mode` / `unmapped_type` en query string", note: "`?sort=` ne connaît que `champ:sens` chez ES comme ici"}
+            - {texte: "les trois paramètres ci-dessus à côté de `_score`", note: "ES les refuse aussi (`[_score] unknown field [mode]`) ; à côté de `_doc` il les **accepte et les ignore**, ferrite comme lui"}
+            - {texte: "les trois paramètres ci-dessus en query string", note: "`?sort=` ne connaît que `champ:sens` chez ES comme ici"}
         conformance:
           erreurs:
             - "ne supporte pas \\[[a-z_]+\\] dans \\[sort\\]"
