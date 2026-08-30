@@ -19,6 +19,10 @@ unicode-segmentation = "1"
 # l'arbre via tantivy — l'y nommer ne coute pas un octet de plus.
 tantivy-fst = "0.5"
 time = { version = "0.3", features = ["formatting", "parsing", "macros", "large-dates"] }
+# `Content-Encoding: gzip` / `deflate` sur le corps d'une requete : ce que pose
+# tout client officiel a qui on demande de compresser. `rust_backend` (miniz_oxide)
+# plutot que zlib : pas de C a lier, donc le binaire musl statique reste statique.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 [dev-dependencies]
 # Les tests de concurrence pilotent le moteur directement.

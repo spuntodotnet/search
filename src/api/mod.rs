@@ -81,8 +81,73 @@ impl IntoResponse for Json {
 pub fn router(state: SharedState) -> Router {
     Router::new()
         .fallback_service(routes(state))
+        // La limite de taille porte sur ce qui **arrive**, donc sur le corps
+        // compresse — comme le `http.max_content_length` d'ES, que Netty
+        // applique avant de decompresser.
+        .layer(axum::middleware::from_fn(decompresser))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_CONTENT_LENGTH))
         .layer(axum::middleware::from_fn(elastic_headers))
+}
+
+/// `Content-Encoding: gzip` / `deflate` — ce que pose tout client officiel a qui
+/// on demande de compresser (`http_compress=True` en Python, `compression: true`
+/// en JavaScript, `CompressRequestBody` en Go).
+///
+/// Sans ca, ferrite recevait les octets compresses et les lisait comme du JSON :
+/// un client qui active la compression — ce que fait le client JavaScript **par
+/// defaut** vers Elastic Cloud — ne pouvait plus rien ecrire, sur un message
+/// (« le corps de [_bulk] doit etre de l'UTF-8 ») qui ne nommait pas la cause.
+///
+/// Les deux encodages sont ceux qu'un vrai ES 8.15 decompresse, mesure : `gzip`
+/// et `deflate` (enveloppe zlib) passent, `br` et un nom inconnu sont laisses
+/// tels quels — Netty n'a pas de decodeur pour eux et transmet le corps sans
+/// rien dire. Un flux illisible, lui, est refuse en nommant l'encodage plutot
+/// que rendu vide : le message d'ES sur ce cas (« request body is required »)
+/// designe la mauvaise cause.
+async fn decompresser(req: Request, next: Next) -> Response {
+    let encodage = req
+        .headers()
+        .get(header::CONTENT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim().to_ascii_lowercase());
+    let Some(encodage) = encodage else {
+        return next.run(req).await;
+    };
+    if !matches!(encodage.as_str(), "gzip" | "x-gzip" | "deflate") {
+        return next.run(req).await;
+    }
+
+    let (mut parts, body) = req.into_parts();
+    let compresse = match axum::body::to_bytes(body, MAX_CONTENT_LENGTH).await {
+        Ok(octets) => octets,
+        Err(e) => {
+            return EsError::parsing(format!("corps illisible : {e}")).into_response();
+        }
+    };
+    let mut clair = Vec::new();
+    let lu = if encodage == "deflate" {
+        std::io::Read::read_to_end(
+            &mut flate2::read::ZlibDecoder::new(&compresse[..]),
+            &mut clair,
+        )
+    } else {
+        std::io::Read::read_to_end(
+            &mut flate2::read::GzDecoder::new(&compresse[..]),
+            &mut clair,
+        )
+    };
+    if let Err(e) = lu {
+        return EsError::parsing(format!(
+            "corps annonce en [Content-Encoding: {encodage}] mais illisible : {e}"
+        ))
+        .into_response();
+    }
+    // `Content-Length` decrivait le corps compresse : le laisser ferait mentir
+    // tout ce qui le relit en aval.
+    parts.headers.remove(header::CONTENT_LENGTH);
+    parts.headers.remove(header::CONTENT_ENCODING);
+    next.run(Request::from_parts(parts, Body::from(clair)))
+        .await
 }
 
 fn routes(state: SharedState) -> Router {

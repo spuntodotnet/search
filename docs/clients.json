@@ -1,0 +1,2739 @@
+{
+ "go": {
+  "adaptation": null,
+  "client": {
+   "commit": "0ce9bb8fd976247d78da70ec56044f698812a18a",
+   "depot": "https://github.com/elastic/go-elasticsearch",
+   "langage": "Go",
+   "licence": "Apache-2.0",
+   "nom": "go-elasticsearch",
+   "pourquoi": "derniere revision dont la suite d'integration se pointe sur une URL : depuis la 8.14, elle demarre son propre conteneur Elasticsearch via testcontainers et ne peut plus viser ferrite",
+   "quoi": "les tests d'integration du client : transport (persistance, concurrence, transport remplace), client type, `esapi`, et le `BulkIndexer` d'`esutil` avec et sans compression du corps",
+   "suite": "go test -tags integration . ./esapi ./esutil",
+   "version": "v8.13.0"
+  },
+  "cycle": {
+   "details_es": {
+    "decouverte_version": "8.15.0",
+    "entete_produit": "Elasticsearch sur /, _search, _bulk",
+    "erreurs_typees": "404 found:false, 400 parsing_exception, 409 version_conflict_engine_exception",
+    "helpers_bulk_indexer": "1500 documents en 4 requetes, 0 echec",
+    "negociation_compression": "200 documents envoyes en gzip",
+    "scroll_deroule": "1500 documents deroules en 11 pages, sans doublon",
+    "sniffing": "sniffing tenu, le client a garde la main"
+   },
+   "details_ferrite": {
+    "decouverte_version": "8.15.0",
+    "entete_produit": "Elasticsearch sur /, _search, _bulk",
+    "erreurs_typees": "404 found:false, 400 parsing_exception, 409 version_conflict_engine_exception",
+    "helpers_bulk_indexer": "1500 documents en 4 requetes, 0 echec",
+    "negociation_compression": "200 documents envoyes en gzip",
+    "scroll_deroule": "1500 documents deroules en 11 pages, sans doublon",
+    "sniffing": "refuse proprement (discovery: get nodes: server error: 400 Bad Request: {\"error\":{\"type\":\"not_implemented_in_ferrite_exception\",\"reason\":\"f)"
+   },
+   "es": {
+    "decouverte_version": "PASS",
+    "entete_produit": "PASS",
+    "erreurs_typees": "PASS",
+    "helpers_bulk_indexer": "PASS",
+    "negociation_compression": "PASS",
+    "scroll_deroule": "PASS",
+    "sniffing": "PASS"
+   },
+   "ferrite": {
+    "decouverte_version": "PASS",
+    "entete_produit": "PASS",
+    "erreurs_typees": "PASS",
+    "helpers_bulk_indexer": "PASS",
+    "negociation_compression": "PASS",
+    "scroll_deroule": "PASS",
+    "sniffing": "PASS"
+   },
+   "ordre": [
+    "decouverte_version",
+    "entete_produit",
+    "negociation_compression",
+    "sniffing",
+    "erreurs_typees",
+    "helpers_bulk_indexer",
+    "scroll_deroule"
+   ],
+   "total": 7,
+   "verts": 7
+  },
+  "ecartes": [
+   {
+    "nom": "elastic/elasticsearch-clients-tests",
+    "raison": "Apache-2.0 (verifie), et c'est bien la source commune des clients recents — mais ce sont les **memes cas YAML** que `conformance_es.py` rejoue deja, sur deux sources. Les brancher ici mesurerait une troisieme fois la surface d'API, pas le client ; ce que cette carte ajoute est la couche que les cas YAML ne touchent pas"
+   },
+   {
+    "nom": "elasticsearch-py : test_rest_api_spec.py",
+    "raison": "la partie de la suite qui rejoue les cas YAML d'Elastic. Elle ne se collecte pas ici (elle telecharge les tests de la 8.x, dont la licence n'est plus Apache-2.0), et le meme corpus est deja joue par `conformance_es.py` sur sa derniere version Apache — donc la perdre ne perd rien"
+   },
+   {
+    "nom": "go-elasticsearch : `make test-api` (esapi/test)",
+    "raison": "des milliers de tests generes depuis les memes cas YAML que la suite de conformance, et generes a partir d'une version d'ES dont la licence n'est plus Apache-2.0"
+   },
+   {
+    "nom": "elasticsearch-js : test/integration/",
+    "raison": "`index.js` est le runner YAML d'Elastic (meme raison que les deux lignes ci-dessus). Et les quatre fichiers `helpers/*.test.js`, qui eux appartiennent bien au client, sont **casses dans son propre depot** : ils importent `waitCluster` de `test/utils`, qui ne l'exporte pas — verifie sur v8.0.0, v8.4.0, v8.8.0, v8.11.0 et v8.15.0. Mesure : aucun cas vert contre un vrai ES 8.15 comme contre ferrite, 22 lignes `not ok` des deux cotes. C'est l'etalonnage qui l'a montre, et c'est exactement ce a quoi il sert"
+   },
+   {
+    "nom": "go-elasticsearch >= 8.14",
+    "raison": "ses tests d'integration demarrent **leur propre** Elasticsearch par testcontainers (`internal/testing/e2e`) : ils ne peuvent plus viser un autre serveur sans modifier leur code, ce que la premiere condition interdit. La 8.13.0 est la derniere revision pointable sur une URL"
+   }
+  ],
+  "etalonne": true,
+  "intact": true,
+  "licence": {
+   "constat": "LICENSE porte « Apache License »",
+   "declaree": "Apache-2.0",
+   "verifiee": true
+  },
+  "refus": [
+   {
+    "api": "nodes.*",
+    "capacite": "hors.cluster_distribue",
+    "combien": 101,
+    "erreur": "no handler found for uri [/_nodes/stats/http] and method [GET]",
+    "exemple": null,
+    "genre": "refus",
+    "methode": "GET",
+    "statut": 400,
+    "verdict": "cout_perimetre"
+   },
+   {
+    "api": "bulk",
+    "capacite": "ingestion.bulk",
+    "combien": 24,
+    "erreur": "not_implemented_in_ferrite_exception: ferrite ne supporte pas la metadonnee [_bulk] [version] (ligne 1) ; cles acceptees : _index, _id",
+    "exemple": [
+     {
+      "index": {
+       "_id": "13",
+       "_index": "test-index-a",
+       "routing": "\"{required\": true}",
+       "version": 513,
+       "version_type": "external"
+      }
+     },
+     {
+      "body": "Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat."
+     },
+     {
+      "index": {
+       "_id": "14",
+       "_index": "test-index-a",
+       "routing": "\"{required\": true}",
+       "version": 514,
+       "version_type": "external"
+      }
+     },
+     "… et 55 lignes"
+    ],
+    "genre": "refus",
+    "methode": "POST",
+    "statut": 400,
+    "verdict": "cout_perimetre"
+   },
+   {
+    "api": "bulk",
+    "capacite": "ingestion.bulk",
+    "combien": 22,
+    "erreur": "not_implemented_in_ferrite_exception: ferrite ne supporte pas la metadonnee [_bulk] [require_alias] (ligne 1) ; cles acceptees : _index, _id",
+    "exemple": [
+     {
+      "index": {
+       "_id": "6",
+       "_index": "test-alias-a",
+       "require_alias": true
+      }
+     },
+     {
+      "body": "Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat."
+     },
+     {
+      "index": {
+       "_id": "7",
+       "_index": "test-alias-a",
+       "require_alias": true
+      }
+     },
+     "… et 5 lignes"
+    ],
+    "genre": "refus",
+    "methode": "POST",
+    "statut": 400,
+    "verdict": "cout_perimetre"
+   },
+   {
+    "api": "search",
+    "capacite": "recherche.route",
+    "combien": 1,
+    "erreur": "illegal_argument_exception: request [/_search] contains unrecognized parameter: [timeout]",
+    "exemple": null,
+    "genre": "refus",
+    "methode": "POST",
+    "statut": 400,
+    "verdict": "regression"
+   },
+   {
+    "api": "reindex",
+    "capacite": "ingestion.reecriture_en_masse",
+    "combien": 1,
+    "erreur": "not_implemented_in_ferrite_exception: ferrite n'implemente pas la route [/_reindex] dans cette version (voir docs/compat.md)",
+    "exemple": {
+     "dest": {
+      "index": "reindexed"
+     },
+     "source": {
+      "index": "test"
+     }
+    },
+    "genre": "refus",
+    "methode": "POST",
+    "statut": 400,
+    "verdict": "cout_perimetre"
+   },
+   {
+    "api": "search",
+    "capacite": "recherche.routing_filter_path",
+    "combien": 1,
+    "erreur": "illegal_argument_exception: request [/test-index/_search] contains unrecognized parameter: [typed_keys]",
+    "exemple": {
+     "query": {
+      "match": {
+       "name": {
+        "query": "Foo"
+       }
+      }
+     }
+    },
+    "genre": "refus",
+    "methode": "POST",
+    "statut": 400,
+    "verdict": "cout_perimetre"
+   },
+   {
+    "api": "nodes.*",
+    "capacite": "hors.cluster_distribue",
+    "combien": 1,
+    "erreur": "not_implemented_in_ferrite_exception: ferrite ne supporte pas [/_nodes/http] ; selecteurs acceptes : _all, _local, _master, ou l'identifiant du noeud",
+    "exemple": null,
+    "genre": "refus",
+    "methode": "GET",
+    "statut": 400,
+    "verdict": "cout_perimetre"
+   },
+   {
+    "api": "search",
+    "capacite": "dsl.non_supportees",
+    "combien": 1,
+    "erreur": "parsing_exception: unknown query [pas_une_clause] : ferrite supporte [match_all, match_none, match, multi_match, match_phrase, match_phrase_prefix, exists, ids, prefix, wildcard, regexp, fuzzy, term, terms, range, bool, constant_score, dis_max, nested, has_child, has_parent, parent_id]",
+    "exemple": {
+     "query": {
+      "pas_une_clause": {}
+     }
+    },
+    "genre": "refus",
+    "methode": "POST",
+    "statut": 400,
+    "verdict": "cout_perimetre"
+   },
+   {
+    "api": "index",
+    "capacite": null,
+    "combien": 1,
+    "erreur": "version_conflict_engine_exception: [conflit]: version conflict, required seqNo [99999], primary term [1]. current document has seqNo [201] and primary term [1]",
+    "exemple": {
+     "n": 2
+    },
+    "genre": "etat",
+    "methode": "PUT",
+    "statut": 409,
+    "verdict": "consequence_d_etat"
+   }
+  ],
+  "sans_suite": null,
+  "suites": {
+   "origine": {
+    "comparaison": [
+     {
+      "cas": "Concurrent",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "Configured",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "Customized",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "Headers",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "Index_&_Search",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "Index_and_search",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "Info",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "Manual",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "OpaqueID",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "Persistent",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "Replaced",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "Search",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "Sort_serialisation",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "Term_query_from_JSON",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "WithContext",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "With_body_compression_(BestSpeed)",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "With_body_compression_(BestSpeed)/Default",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "With_body_compression_(BestSpeed)/External_version",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "With_body_compression_(BestSpeed)/Index_alias",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "With_body_compression_(BestSpeed)/Multiple_indices",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "With_body_compression_(default)",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "With_body_compression_(default)/Default",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "With_body_compression_(default)/External_version",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "With_body_compression_(default)/Index_alias",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "With_body_compression_(default)/Multiple_indices",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "Without_body_compression",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "Without_body_compression/Default",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "Without_body_compression/External_version",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "Without_body_compression/Index_alias",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "Without_body_compression/Multiple_indices",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     }
+    ],
+    "executions": {
+     "es": {
+      "echecs": 2,
+      "ignores": 0,
+      "passes": 28,
+      "queue": "esponse received on idle HTTP channel starting with \"<!DOCTYPE HTML>\\n<html lang=\\\"en\\\">\\n    <head>\\n        <meta charset=\\\"utf-8\\\">\\n        <title>Error response</title>\\n    </head>\\n    <body>\\n        <h1>Error response</h1>\\n        <p>Error code: 400</p>\\n        <p>Message: Bad request syntax ('14').</p>\\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\\n    </body>\\n</html>\\n\"; err=<nil>\n2026/08/30 00:48:40 Unsolicited response received on idle HTTP channel starting with \"<!DOCTYPE HTML>\\n<html lang=\\\"en\\\">\\n    <head>\\n        <meta charset=\\\"utf-8\\\">\\n        <title>Error response</title>\\n    </head>\\n    <body>\\n        <h1>Error response</h1>\\n        <p>Error code: 400</p>\\n        <p>Message: Bad request syntax ('14').</p>\\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\\n    </body>\\n</html>\\n\"; err=<nil>\n    json_reader_integration_test.go:57: Error response: [502 Bad Gateway] timed out\n--- FAIL: TestJSONReaderIntegration (480.43s)\n    --- FAIL: TestJSONReaderIntegration/Index_and_search (480.43s)\nFAIL\nFAIL\tgithub.com/elastic/go-elasticsearch/v8/esutil\t487.841s\nFAIL\ngo: downloading github.com/elastic/elastic-transport-go/v8 v8.5.0\ngo: downloading go.opentelemetry.io/otel/trace v1.21.0\ngo: downloading go.opentelemetry.io/otel v1.21.0\ngo: downloading github.com/go-logr/logr v1.3.0\ngo: downloading go.opentelemetry.io/otel/metric v1.21.0\ngo: downloading github.com/go-logr/stdr v1.2.2\n",
+      "total": 30
+     },
+     "ferrite": {
+      "echecs": 15,
+      "ignores": 0,
+      "passes": 15,
+      "queue": "esponse received on idle HTTP channel starting with \"<!DOCTYPE HTML>\\n<html lang=\\\"en\\\">\\n    <head>\\n        <meta charset=\\\"utf-8\\\">\\n        <title>Error response</title>\\n    </head>\\n    <body>\\n        <h1>Error response</h1>\\n        <p>Error code: 400</p>\\n        <p>Message: Bad request syntax ('14').</p>\\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\\n    </body>\\n</html>\\n\"; err=<nil>\n2026/08/30 00:57:45 Unsolicited response received on idle HTTP channel starting with \"<!DOCTYPE HTML>\\n<html lang=\\\"en\\\">\\n    <head>\\n        <meta charset=\\\"utf-8\\\">\\n        <title>Error response</title>\\n    </head>\\n    <body>\\n        <h1>Error response</h1>\\n        <p>Error code: 400</p>\\n        <p>Message: Bad request syntax ('14').</p>\\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\\n    </body>\\n</html>\\n\"; err=<nil>\n    json_reader_integration_test.go:57: Error response: [502 Bad Gateway] timed out\n--- FAIL: TestJSONReaderIntegration (480.35s)\n    --- FAIL: TestJSONReaderIntegration/Index_and_search (480.35s)\nFAIL\nFAIL\tgithub.com/elastic/go-elasticsearch/v8/esutil\t488.610s\nFAIL\ngo: downloading github.com/elastic/elastic-transport-go/v8 v8.5.0\ngo: downloading go.opentelemetry.io/otel/trace v1.21.0\ngo: downloading go.opentelemetry.io/otel v1.21.0\ngo: downloading github.com/go-logr/logr v1.3.0\ngo: downloading go.opentelemetry.io/otel/metric v1.21.0\ngo: downloading github.com/go-logr/stdr v1.2.2\n",
+      "total": 30
+     }
+    }
+   }
+  },
+  "trafic": [
+   {
+    "api": "info",
+    "echecs": 0,
+    "exemple": null,
+    "requetes": 136,
+    "traits": [
+     "route:info"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "nodes.*",
+    "echecs": 102,
+    "exemple": null,
+    "requetes": 102,
+    "traits": [
+     "route:nodes.*"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": [
+     "route:nodes.*"
+    ]
+   },
+   {
+    "api": "bulk",
+    "echecs": 46,
+    "exemple": [
+     {
+      "index": {
+       "_id": "1"
+      }
+     },
+     {
+      "content": "ABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABCABC"
+     },
+     {
+      "index": {
+       "_id": "2"
+      }
+     },
+     "… et 1997 lignes"
+    ],
+    "requetes": 99,
+    "traits": [
+     "route:bulk"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "indices.delete",
+    "echecs": 0,
+    "exemple": null,
+    "requetes": 14,
+    "traits": [
+     "route:indices.delete"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "scroll",
+    "echecs": 0,
+    "exemple": null,
+    "requetes": 12,
+    "traits": [
+     "expr:all",
+     "route:scroll"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "indices.create",
+    "echecs": 0,
+    "exemple": {
+     "settings": {
+      "number_of_replicas": 0,
+      "number_of_shards": 1,
+      "refresh_interval": "5s"
+     }
+    },
+    "requetes": 11,
+    "traits": [
+     "route:indices.create",
+     "type:boolean",
+     "type:integer",
+     "type:keyword",
+     "type:text"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "index",
+    "echecs": 5,
+    "exemple": {
+     "alt": "",
+     "id": 1,
+     "name": "Foo",
+     "price": 10
+    },
+    "requetes": 9,
+    "traits": [
+     "route:index"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "search",
+    "echecs": 3,
+    "exemple": {
+     "query": {
+      "match": {
+       "name": {
+        "query": "Foo"
+       }
+      }
+     }
+    },
+    "requetes": 5,
+    "traits": [
+     "corps:query",
+     "dsl:match",
+     "dsl:match.query",
+     "dsl:pas_une_clause",
+     "dsl:term",
+     "expr:all",
+     "expr:joker",
+     "route:search"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": [
+     "dsl:pas_une_clause"
+    ]
+   },
+   {
+    "api": "indices.exists",
+    "echecs": 1,
+    "exemple": null,
+    "requetes": 4,
+    "traits": [
+     "route:indices.exists"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "get",
+    "echecs": 3,
+    "exemple": null,
+    "requetes": 4,
+    "traits": [
+     "route:get"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "aliases.*",
+    "echecs": 0,
+    "exemple": null,
+    "requetes": 3,
+    "traits": [
+     "route:aliases.*"
+    ],
+    "traits_indetermines": [
+     "route:aliases.*"
+    ],
+    "traits_refuses": []
+   },
+   {
+    "api": "update",
+    "echecs": 0,
+    "exemple": {
+     "doc": {
+      "alt": "alt_1",
+      "id": 1,
+      "name": "Foo",
+      "price": 10
+     }
+    },
+    "requetes": 3,
+    "traits": [
+     "route:update"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "cluster.health",
+    "echecs": 0,
+    "exemple": null,
+    "requetes": 1,
+    "traits": [
+     "route:cluster.health"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "reindex",
+    "echecs": 1,
+    "exemple": {
+     "dest": {
+      "index": "reindexed"
+     },
+     "source": {
+      "index": "test"
+     }
+    },
+    "requetes": 1,
+    "traits": [
+     "parreq:reindex.requests_per_second",
+     "parreq:reindex.wait_for_completion",
+     "route:reindex"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": [
+     "parreq:reindex.requests_per_second",
+     "parreq:reindex.wait_for_completion",
+     "route:reindex"
+    ]
+   },
+   {
+    "api": "mget",
+    "echecs": 0,
+    "exemple": {
+     "ids": [
+      "1",
+      "2"
+     ]
+    },
+    "requetes": 1,
+    "traits": [
+     "route:mget"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "count",
+    "echecs": 0,
+    "exemple": {
+     "query": {
+      "term": {
+       "flux": true
+      }
+     }
+    },
+    "requetes": 1,
+    "traits": [
+     "corps:query",
+     "dsl:term",
+     "route:count"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   }
+  ]
+ },
+ "javascript": {
+  "adaptation": null,
+  "client": {
+   "commit": "599d7e6e07023b0ce7fabec60f41a1497c8965ec",
+   "depot": "https://github.com/elastic/elasticsearch-js",
+   "langage": "JavaScript (Node.js)",
+   "licence": "Apache-2.0",
+   "nom": "elasticsearch-js",
+   "pourquoi": "l'autre bout du spectre : un client dont les helpers sont ecrits en flux (`datasource` + `onDocument`), et qui active la compression par defaut vers Elastic Cloud",
+   "quoi": "le cycle de vie du client, exerce par le paquet npm publie",
+   "suite": null,
+   "version": "v8.15.0"
+  },
+  "cycle": {
+   "details_es": {
+    "decouverte_version": "8.15.0",
+    "entete_produit": "Elasticsearch sur /, _search, _bulk",
+    "erreurs_typees": "ResponseError(404), ResponseError(400, parsing_exception), ResponseError(409, version_conflict_engine_exception), ignore:[404] rend le corps",
+    "helpers_bulk": "1500 documents indexes en 1500 operations, 0 jete",
+    "helpers_scroll": "1500 documents deroules en 11 pages, sans doublon",
+    "negociation_compression": "200 documents envoyes en gzip, relus",
+    "sniffing": "sniffing tenu, le client a garde la main"
+   },
+   "details_ferrite": {
+    "decouverte_version": "8.15.0",
+    "entete_produit": "Elasticsearch sur /, _search, _bulk",
+    "erreurs_typees": "ResponseError(404), ResponseError(400, parsing_exception), ResponseError(409, version_conflict_engine_exception), ignore:[404] rend le corps",
+    "helpers_bulk": "1500 documents indexes en 1500 operations, 0 jete",
+    "helpers_scroll": "1500 documents deroules en 11 pages, sans doublon",
+    "negociation_compression": "200 documents envoyes en gzip, relus",
+    "sniffing": "refuse proprement, client toujours utilisable (ResponseError: {\"error\":\"no handler found for uri [/_nodes/_all/http] and method [GET]\"})"
+   },
+   "es": {
+    "decouverte_version": "PASS",
+    "entete_produit": "PASS",
+    "erreurs_typees": "PASS",
+    "helpers_bulk": "PASS",
+    "helpers_scroll": "PASS",
+    "negociation_compression": "PASS",
+    "sniffing": "PASS"
+   },
+   "ferrite": {
+    "decouverte_version": "PASS",
+    "entete_produit": "PASS",
+    "erreurs_typees": "PASS",
+    "helpers_bulk": "PASS",
+    "helpers_scroll": "PASS",
+    "negociation_compression": "PASS",
+    "sniffing": "PASS"
+   },
+   "ordre": [
+    "decouverte_version",
+    "entete_produit",
+    "negociation_compression",
+    "sniffing",
+    "erreurs_typees",
+    "helpers_bulk",
+    "helpers_scroll"
+   ],
+   "total": 7,
+   "verts": 7
+  },
+  "ecartes": [
+   {
+    "nom": "elastic/elasticsearch-clients-tests",
+    "raison": "Apache-2.0 (verifie), et c'est bien la source commune des clients recents — mais ce sont les **memes cas YAML** que `conformance_es.py` rejoue deja, sur deux sources. Les brancher ici mesurerait une troisieme fois la surface d'API, pas le client ; ce que cette carte ajoute est la couche que les cas YAML ne touchent pas"
+   },
+   {
+    "nom": "elasticsearch-py : test_rest_api_spec.py",
+    "raison": "la partie de la suite qui rejoue les cas YAML d'Elastic. Elle ne se collecte pas ici (elle telecharge les tests de la 8.x, dont la licence n'est plus Apache-2.0), et le meme corpus est deja joue par `conformance_es.py` sur sa derniere version Apache — donc la perdre ne perd rien"
+   },
+   {
+    "nom": "go-elasticsearch : `make test-api` (esapi/test)",
+    "raison": "des milliers de tests generes depuis les memes cas YAML que la suite de conformance, et generes a partir d'une version d'ES dont la licence n'est plus Apache-2.0"
+   },
+   {
+    "nom": "elasticsearch-js : test/integration/",
+    "raison": "`index.js` est le runner YAML d'Elastic (meme raison que les deux lignes ci-dessus). Et les quatre fichiers `helpers/*.test.js`, qui eux appartiennent bien au client, sont **casses dans son propre depot** : ils importent `waitCluster` de `test/utils`, qui ne l'exporte pas — verifie sur v8.0.0, v8.4.0, v8.8.0, v8.11.0 et v8.15.0. Mesure : aucun cas vert contre un vrai ES 8.15 comme contre ferrite, 22 lignes `not ok` des deux cotes. C'est l'etalonnage qui l'a montre, et c'est exactement ce a quoi il sert"
+   },
+   {
+    "nom": "go-elasticsearch >= 8.14",
+    "raison": "ses tests d'integration demarrent **leur propre** Elasticsearch par testcontainers (`internal/testing/e2e`) : ils ne peuvent plus viser un autre serveur sans modifier leur code, ce que la premiere condition interdit. La 8.13.0 est la derniere revision pointable sur une URL"
+   }
+  ],
+  "etalonne": true,
+  "intact": true,
+  "licence": {
+   "constat": "LICENSE porte « Apache License »",
+   "declaree": "Apache-2.0",
+   "verifiee": true
+  },
+  "refus": [
+   {
+    "api": "nodes.*",
+    "capacite": "hors.cluster_distribue",
+    "combien": 1,
+    "erreur": "no handler found for uri [/_nodes/_all/http] and method [GET]",
+    "exemple": null,
+    "genre": "refus",
+    "methode": "GET",
+    "statut": 400,
+    "verdict": "cout_perimetre"
+   }
+  ],
+  "sans_suite": "les quatre tests d'integration des helpers (`test/integration/helpers/*.test.js`) importent `waitCluster` de `test/utils`, qui ne l'exporte pas — verifie sur v8.0.0, v8.4.0, v8.8.0, v8.11.0 et v8.15.0 : ils sont casses dans le depot du client depuis la reecriture de la 8.0, et ne tournent donc dans aucune CI. Mesure : **aucun cas vert** contre un vrai ES 8.15 comme contre ferrite (22 lignes `not ok` des deux cotes), donc rien a mesurer. Le reste de `test/integration/` est le runner YAML d'Elastic, deja joue par `conformance_es.py`",
+  "suites": {},
+  "trafic": [
+   {
+    "api": "scroll",
+    "echecs": 0,
+    "exemple": {
+     "scroll": "1m",
+     "scroll_id": "9TiLn54AhF2O-GcFNxeXbQ"
+    },
+    "requetes": 12,
+    "traits": [
+     "expr:all",
+     "route:scroll"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "search",
+    "echecs": 1,
+    "exemple": {
+     "size": 0
+    },
+    "requetes": 4,
+    "traits": [
+     "corps:query",
+     "corps:size",
+     "dsl:pas_une_clause",
+     "dsl:term",
+     "expr:all",
+     "expr:joker",
+     "route:search"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": [
+     "dsl:pas_une_clause"
+    ]
+   },
+   {
+    "api": "info",
+    "echecs": 0,
+    "exemple": null,
+    "requetes": 3,
+    "traits": [
+     "route:info"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "bulk",
+    "echecs": 0,
+    "exemple": [
+     {
+      "index": {
+       "_id": "entete",
+       "_index": "cycle-javascript"
+      }
+     },
+     {
+      "n": 1
+     }
+    ],
+    "requetes": 3,
+    "traits": [
+     "route:bulk"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "get",
+    "echecs": 2,
+    "exemple": null,
+    "requetes": 2,
+    "traits": [
+     "route:get"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "index",
+    "echecs": 1,
+    "exemple": {
+     "n": 1
+    },
+    "requetes": 2,
+    "traits": [
+     "route:index"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "indices.exists",
+    "echecs": 1,
+    "exemple": null,
+    "requetes": 1,
+    "traits": [
+     "route:indices.exists"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "indices.create",
+    "echecs": 0,
+    "exemple": {
+     "mappings": {
+      "properties": {
+       "flux": {
+        "type": "boolean"
+       },
+       "n": {
+        "type": "integer"
+       },
+       "rang": {
+        "type": "integer"
+       },
+       "texte": {
+        "type": "text"
+       }
+      }
+     }
+    },
+    "requetes": 1,
+    "traits": [
+     "route:indices.create",
+     "type:boolean",
+     "type:integer",
+     "type:text"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "nodes.*",
+    "echecs": 1,
+    "exemple": null,
+    "requetes": 1,
+    "traits": [
+     "route:nodes.*"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": [
+     "route:nodes.*"
+    ]
+   },
+   {
+    "api": "indices.refresh",
+    "echecs": 0,
+    "exemple": null,
+    "requetes": 1,
+    "traits": [
+     "route:indices.refresh"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "count",
+    "echecs": 0,
+    "exemple": {
+     "query": {
+      "term": {
+       "flux": true
+      }
+     }
+    },
+    "requetes": 1,
+    "traits": [
+     "corps:query",
+     "dsl:term",
+     "route:count"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "indices.delete",
+    "echecs": 0,
+    "exemple": null,
+    "requetes": 1,
+    "traits": [
+     "route:indices.delete"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   }
+  ]
+ },
+ "python": {
+  "adaptation": {
+   "extra": "-p nettoyage_compatible",
+   "nom": "nettoyage_compatible",
+   "quoi": "`wipe_cluster` de la suite est remplace par un nettoyage qui n'utilise que des routes servies par les deux serveurs : suppression des index, des templates des deux familles, remise a zero des reglages de cluster",
+   "routes_ecartees": [
+    "GET /_rollup/job/_all",
+    "GET /_slm/policy",
+    "GET /_cluster/state/metadata",
+    "GET /_snapshot/_all",
+    "DELETE /_data_stream/*",
+    "GET /_cat/templates?h=name",
+    "GET /_component_template",
+    "GET /_ilm/policy",
+    "GET /_ccr/auto_follow",
+    "GET /_tasks",
+    "GET /_nodes/shutdown",
+    "POST /_ml/calendars/*",
+    "GET /_ml/filters/*",
+    "GET /_ml/datafeeds/*",
+    "GET /_transform/*",
+    "GET /_cluster/pending_tasks",
+    "GET /_cat/tasks"
+   ]
+  },
+  "client": {
+   "commit": "4a0224927776568a579dcaed199f59aef9ba798e",
+   "depot": "https://github.com/elastic/elasticsearch-py",
+   "langage": "Python",
+   "licence": "Apache-2.0",
+   "nom": "elasticsearch-py",
+   "pourquoi": "le client de reference du projet — c'est lui que le harnais maison utilise, et c'est sa suite serveur qui exerce le plus de helpers",
+   "quoi": "la suite serveur du client : helpers (bulk, streaming_bulk, scan, reindex), formes de reponse, corps de _bulk, magasin vectoriel",
+   "suite": "pytest test_elasticsearch/test_server",
+   "version": "v8.15.0"
+  },
+  "cycle": {
+   "details_es": {
+    "decouverte_version": "8.15.0",
+    "entete_produit": "Elasticsearch sur /, _search, _bulk",
+    "erreurs_typees": "NotFoundError(404, found:false), BadRequestError(400, parsing_exception), ConflictError(409), ApiError(400, resource_already_exists_exception)",
+    "helpers_bulk": "1500 documents en 6 lots, et le rejet leve",
+    "helpers_parallel_bulk": "800 documents par 4 fils",
+    "helpers_scan": "600 documents deroules sans doublon, 2900 en ordre conserve",
+    "helpers_streaming_bulk": "600 resultats, un par document, dans l'ordre",
+    "negociation_compression": "200 documents envoyes en gzip, relus",
+    "sniffing": "sniffing tenu, le client a garde la main"
+   },
+   "details_ferrite": {
+    "decouverte_version": "8.15.0",
+    "entete_produit": "Elasticsearch sur /, _search, _bulk",
+    "erreurs_typees": "NotFoundError(404, found:false), BadRequestError(400, parsing_exception), ConflictError(409), ApiError(400, resource_already_exists_exception)",
+    "helpers_bulk": "1500 documents en 6 lots, et le rejet leve",
+    "helpers_parallel_bulk": "800 documents par 4 fils",
+    "helpers_scan": "600 documents deroules sans doublon, 2900 en ordre conserve",
+    "helpers_streaming_bulk": "600 resultats, un par document, dans l'ordre",
+    "negociation_compression": "200 documents envoyes en gzip, relus",
+    "sniffing": "refuse proprement (SniffingError: No viable nodes were discovered on the initial sniff attempt)"
+   },
+   "es": {
+    "decouverte_version": "PASS",
+    "entete_produit": "PASS",
+    "erreurs_typees": "PASS",
+    "helpers_bulk": "PASS",
+    "helpers_parallel_bulk": "PASS",
+    "helpers_scan": "PASS",
+    "helpers_streaming_bulk": "PASS",
+    "negociation_compression": "PASS",
+    "sniffing": "PASS"
+   },
+   "ferrite": {
+    "decouverte_version": "PASS",
+    "entete_produit": "PASS",
+    "erreurs_typees": "PASS",
+    "helpers_bulk": "PASS",
+    "helpers_parallel_bulk": "PASS",
+    "helpers_scan": "PASS",
+    "helpers_streaming_bulk": "PASS",
+    "negociation_compression": "PASS",
+    "sniffing": "PASS"
+   },
+   "ordre": [
+    "decouverte_version",
+    "entete_produit",
+    "negociation_compression",
+    "sniffing",
+    "erreurs_typees",
+    "helpers_bulk",
+    "helpers_streaming_bulk",
+    "helpers_parallel_bulk",
+    "helpers_scan"
+   ],
+   "total": 9,
+   "verts": 9
+  },
+  "ecartes": [
+   {
+    "nom": "elastic/elasticsearch-clients-tests",
+    "raison": "Apache-2.0 (verifie), et c'est bien la source commune des clients recents — mais ce sont les **memes cas YAML** que `conformance_es.py` rejoue deja, sur deux sources. Les brancher ici mesurerait une troisieme fois la surface d'API, pas le client ; ce que cette carte ajoute est la couche que les cas YAML ne touchent pas"
+   },
+   {
+    "nom": "elasticsearch-py : test_rest_api_spec.py",
+    "raison": "la partie de la suite qui rejoue les cas YAML d'Elastic. Elle ne se collecte pas ici (elle telecharge les tests de la 8.x, dont la licence n'est plus Apache-2.0), et le meme corpus est deja joue par `conformance_es.py` sur sa derniere version Apache — donc la perdre ne perd rien"
+   },
+   {
+    "nom": "go-elasticsearch : `make test-api` (esapi/test)",
+    "raison": "des milliers de tests generes depuis les memes cas YAML que la suite de conformance, et generes a partir d'une version d'ES dont la licence n'est plus Apache-2.0"
+   },
+   {
+    "nom": "elasticsearch-js : test/integration/",
+    "raison": "`index.js` est le runner YAML d'Elastic (meme raison que les deux lignes ci-dessus). Et les quatre fichiers `helpers/*.test.js`, qui eux appartiennent bien au client, sont **casses dans son propre depot** : ils importent `waitCluster` de `test/utils`, qui ne l'exporte pas — verifie sur v8.0.0, v8.4.0, v8.8.0, v8.11.0 et v8.15.0. Mesure : aucun cas vert contre un vrai ES 8.15 comme contre ferrite, 22 lignes `not ok` des deux cotes. C'est l'etalonnage qui l'a montre, et c'est exactement ce a quoi il sert"
+   },
+   {
+    "nom": "go-elasticsearch >= 8.14",
+    "raison": "ses tests d'integration demarrent **leur propre** Elasticsearch par testcontainers (`internal/testing/e2e`) : ils ne peuvent plus viser un autre serveur sans modifier leur code, ce que la premiere condition interdit. La 8.13.0 est la derniere revision pointable sur une URL"
+   }
+  ],
+  "etalonne": true,
+  "intact": true,
+  "licence": {
+   "constat": "LICENSE porte « Apache License »",
+   "declaree": "Apache-2.0",
+   "verifiee": true
+  },
+  "refus": [
+   {
+    "api": "ml.*",
+    "capacite": "hors.xpack",
+    "combien": 7,
+    "erreur": "no handler found for uri [/_ml/trained_models/sentence-transformers__all-minilm-l6-v2/_infer] and method [POST]",
+    "exemple": {
+     "docs": [
+      {
+       "text_field": "test if the model 'sentence-transformers__all-minilm-l6-v2' is deployed"
+      }
+     ]
+    },
+    "genre": "refus",
+    "methode": "POST",
+    "statut": 400,
+    "verdict": "cout_perimetre"
+   },
+   {
+    "api": "indices.get_data_stream",
+    "capacite": "hors.flux_de_donnees",
+    "combien": 3,
+    "erreur": "no handler found for uri [/_data_stream/prod_index?expand_wildcards=all] and method [GET]",
+    "exemple": null,
+    "genre": "refus",
+    "methode": "GET",
+    "statut": 400,
+    "verdict": "cout_perimetre"
+   },
+   {
+    "api": "indices.put_index_template",
+    "capacite": "hors.flux_de_donnees",
+    "combien": 3,
+    "erreur": "not_implemented_in_ferrite_exception: ferrite ne supporte pas les flux de donnees (`data_stream`)",
+    "exemple": {
+     "data_stream": {},
+     "index_patterns": [
+      "py-*-*"
+     ]
+    },
+    "genre": "refus",
+    "methode": "PUT",
+    "statut": 400,
+    "verdict": "cout_perimetre"
+   },
+   {
+    "api": "ml.*",
+    "capacite": "hors.xpack",
+    "combien": 2,
+    "erreur": "no handler found for uri [/_ml/trained_models/.elser_model_2/_infer] and method [POST]",
+    "exemple": {
+     "docs": [
+      {
+       "text_field": "test if the model '.elser_model_2' is deployed"
+      }
+     ]
+    },
+    "genre": "refus",
+    "methode": "POST",
+    "statut": 400,
+    "verdict": "cout_perimetre"
+   },
+   {
+    "api": "index",
+    "capacite": "recherche.routing_filter_path",
+    "combien": 1,
+    "erreur": "illegal_argument_exception: request [/test-index/_doc/47] contains unrecognized parameter: [routing]",
+    "exemple": {
+     "question_answer": {
+      "name": "answer",
+      "parent": 42
+     },
+     "some": "data"
+    },
+    "genre": "refus",
+    "methode": "PUT",
+    "statut": 400,
+    "verdict": "cout_perimetre"
+   },
+   {
+    "api": "cat.tasks",
+    "capacite": "hors.cat",
+    "combien": 1,
+    "erreur": "no handler found for uri [/_cat/tasks] and method [GET]",
+    "exemple": null,
+    "genre": "refus",
+    "methode": "GET",
+    "statut": 400,
+    "verdict": "cout_perimetre"
+   },
+   {
+    "api": "ingest.*",
+    "capacite": "ingestion.reecriture_en_masse",
+    "combien": 1,
+    "erreur": "no handler found for uri [/_ingest/pipeline/test_pipeline] and method [PUT]",
+    "exemple": {
+     "processors": [
+      {
+       "inference": {
+        "field_map": {
+         "query_field": "text_field"
+        },
+        "model_id": "sentence-transformers__all-minilm-l6-v2",
+        "target_field": "vector_query_field"
+       }
+      }
+     ]
+    },
+    "genre": "refus",
+    "methode": "PUT",
+    "statut": 400,
+    "verdict": "cout_perimetre"
+   },
+   {
+    "api": "ingest.*",
+    "capacite": "ingestion.reecriture_en_masse",
+    "combien": 1,
+    "erreur": "no handler found for uri [/_ingest/pipeline/.elser_model_2_sparse_embedding] and method [PUT]",
+    "exemple": {
+     "description": "Embedding pipeline for Python VectorStore",
+     "processors": [
+      {
+       "inference": {
+        "field_map": {
+         "text_field": "text_field"
+        },
+        "inference_config": {
+         "text_expansion": {
+          "results_field": "tokens"
+         }
+        },
+        "model_id": ".elser_model_2",
+        "target_field": "vector_field"
+       }
+      }
+     ]
+    },
+    "genre": "refus",
+    "methode": "PUT",
+    "statut": 400,
+    "verdict": "cout_perimetre"
+   },
+   {
+    "api": "ml.*",
+    "capacite": "hors.xpack",
+    "combien": 1,
+    "erreur": "no handler found for uri [/_ml/trained_models/non-existing%20model%20ID/_infer] and method [POST]",
+    "exemple": {
+     "docs": [
+      {
+       "text_field": "test if the model 'non-existing model ID' is deployed"
+      }
+     ]
+    },
+    "genre": "refus",
+    "methode": "POST",
+    "statut": 400,
+    "verdict": "cout_perimetre"
+   },
+   {
+    "api": "nodes.*",
+    "capacite": "hors.cluster_distribue",
+    "combien": 1,
+    "erreur": "no handler found for uri [/_nodes/_all/http] and method [GET]",
+    "exemple": null,
+    "genre": "refus",
+    "methode": "GET",
+    "statut": 400,
+    "verdict": "cout_perimetre"
+   }
+  ],
+  "sans_suite": null,
+  "suites": {
+   "adapte": {
+    "comparaison": [
+     {
+      "cas": "test_elasticsearch/test_server/test_clients.py::test_bulk_works_with_bytestring_body",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_clients.py::test_bulk_works_with_string_body",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_clients.py::test_indices_analyze_unicode[kwargs0]",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_clients.py::test_indices_analyze_unicode[kwargs1]",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_all_documents_are_read",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_all_documents_get_inserted",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_all_documents_get_moved",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_bulk_actions_remain_unchanged",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_bulk_all_documents_get_inserted",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_bulk_all_errors_from_chunk_are_raised_on_failure",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_bulk_different_op_types",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_bulk_rejected_documents_are_retried",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_bulk_rejected_documents_are_retried_at_most_max_retries_times",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_bulk_rejected_documents_are_retried_when_bytes_or_string[False]",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_bulk_rejected_documents_are_retried_when_bytes_or_string[True]",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_bulk_transport_error_can_becaught",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_bulk_transport_error_is_raised_with_max_retries",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_bulk_works_with_single_item",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_children_are_reindexed_correctly",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_clear_scroll",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_error_is_raised",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_errors_are_collected_properly",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_errors_are_reported_correctly",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_ignore_error_if_raised",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_initial_search_error",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_log_warning_on_shard_failures",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_no_scroll_id_fast_route",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_order_can_be_preserved",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_reindex_accepts_a_query",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_reindex_index_datastream[None]",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_reindex_index_datastream[create]",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_reindex_index_datastream_op_type_index",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_reindex_passes_kwargs_to_scan_and_bulk",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_scan_auth_kwargs_favor_scroll_kwargs_option",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_scan_auth_kwargs_forwarded[kwargs0]",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_scan_auth_kwargs_forwarded[kwargs1]",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_scan_auth_kwargs_forwarded[kwargs2]",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_scan_auth_kwargs_forwarded[kwargs3]",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_scan_auth_kwargs_forwarded[kwargs4]",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_scan_from_keyword_is_aliased[scan_kwargs0]",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_scan_from_keyword_is_aliased[scan_kwargs1]",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_scan_from_keyword_is_aliased[scan_kwargs2]",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_scan_from_keyword_is_aliased[scan_kwargs3]",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_scan_from_keyword_is_aliased[scan_kwargs4]",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_scan_from_keyword_is_aliased[scan_kwargs5]",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_scroll_error",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_shards_no_skipped_field",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_stats_only_reports_numbers",
+      "es": "PASS",
+      "etat": "identique",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_mapbox_vector_tile.py::test_mapbox_vector_tile_error",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_mapbox_vector_tile.py::test_mapbox_vector_tile_response",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_otel.py::test_otel_end_to_end",
+      "es": "SKIP",
+      "etat": "identique",
+      "ferrite": "SKIP"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_responses.py::test_exists_response",
+      "es": "FAIL",
+      "etat": "inverse",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_responses.py::test_object_response",
+      "es": "FAIL",
+      "etat": "inverse",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_responses.py::test_text_response",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_rest_api_spec.py::test_rest_api_spec[NOTSET]",
+      "es": "SKIP",
+      "etat": "identique",
+      "ferrite": "SKIP"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_embedding_service.py::test_elasticsearch_embedding_documents",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_embedding_service.py::test_elasticsearch_embedding_query",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_embedding_service.py::test_user_agent_default",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_add_vectors",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_bulk_args",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_custom_index_settings",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_custom_index_settings_with_collision",
+      "es": "FAIL",
+      "etat": "inverse",
+      "ferrite": "PASS"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_delete",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_deployed_model_check_fails_semantic",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_indexing_exception_error",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_max_marginal_relevance_search",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_max_marginal_relevance_search_errors",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_metadata_mapping",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_bm25",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_bm25_with_filter",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_knn_with_custom_query_fn",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_knn_with_hybrid_search",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_knn_with_hybrid_search_rrf",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_script_score",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_script_score_distance_dot_product",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_script_score_with_filter",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_with_filter",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_with_knn_infer_instack",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_with_metadata",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_with_sparse_infer_instack",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_without_metadata",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_without_metadata_async",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_user_agent_custom",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_user_agent_default",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     }
+    ],
+    "executions": {
+     "es": {
+      "echecs": 37,
+      "ignores": 2,
+      "passes": 45,
+      "queue": "rstore/test_vectorstore.py::TestVectorStore::test_search_bm25\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_bm25_with_filter\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_delete\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_indexing_exception_error\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_user_agent_default\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_user_agent_custom\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_bulk_args\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_max_marginal_relevance_search_errors\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_max_marginal_relevance_search\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_metadata_mapping\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_custom_index_settings\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_custom_index_settings_with_collision\n== 6 failed, 66 passed, 6 skipped, 1 warning, 40 errors in 153.41s (0:02:33) ===\n[nettoyage_compatible] repose sur 3 modules\n",
+      "total": 84
+     },
+     "ferrite": {
+      "echecs": 39,
+      "ignores": 2,
+      "passes": 43,
+      "queue": "t_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_user_agent_default\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_user_agent_custom\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_bulk_args\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_max_marginal_relevance_search_errors\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_max_marginal_relevance_search\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_metadata_mapping\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_custom_index_settings\nERROR test_elasticsearch/test_server/test_helpers.py::test_children_are_reindexed_correctly\nERROR test_elasticsearch/test_server/test_helpers.py::test_reindex_index_datastream[None]\nERROR test_elasticsearch/test_server/test_helpers.py::test_reindex_index_datastream[create]\nERROR test_elasticsearch/test_server/test_helpers.py::test_reindex_index_datastream_op_type_index\nERROR test_elasticsearch/test_server/test_mapbox_vector_tile.py::test_mapbox_vector_tile_error\nERROR test_elasticsearch/test_server/test_mapbox_vector_tile.py::test_mapbox_vector_tile_response\n======== 33 failed, 43 passed, 2 skipped, 1 warning, 6 errors in 24.67s ========\n[nettoyage_compatible] repose sur 3 modules\n",
+      "total": 84
+     }
+    }
+   },
+   "origine": {
+    "comparaison": [
+     {
+      "cas": "test_elasticsearch/test_server/test_clients.py::test_bulk_works_with_bytestring_body",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_clients.py::test_bulk_works_with_string_body",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_clients.py::test_indices_analyze_unicode[kwargs0]",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_clients.py::test_indices_analyze_unicode[kwargs1]",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_all_documents_are_read",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_all_documents_get_inserted",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_all_documents_get_moved",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_bulk_actions_remain_unchanged",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_bulk_all_documents_get_inserted",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_bulk_all_errors_from_chunk_are_raised_on_failure",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_bulk_different_op_types",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_bulk_rejected_documents_are_retried",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_bulk_rejected_documents_are_retried_at_most_max_retries_times",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_bulk_rejected_documents_are_retried_when_bytes_or_string[False]",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_bulk_rejected_documents_are_retried_when_bytes_or_string[True]",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_bulk_transport_error_can_becaught",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_bulk_transport_error_is_raised_with_max_retries",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_bulk_works_with_single_item",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_children_are_reindexed_correctly",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_clear_scroll",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_error_is_raised",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_errors_are_collected_properly",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_errors_are_reported_correctly",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_ignore_error_if_raised",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_initial_search_error",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_log_warning_on_shard_failures",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_no_scroll_id_fast_route",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_order_can_be_preserved",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_reindex_accepts_a_query",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_reindex_index_datastream[None]",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_reindex_index_datastream[create]",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_reindex_index_datastream_op_type_index",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_reindex_passes_kwargs_to_scan_and_bulk",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_scan_auth_kwargs_favor_scroll_kwargs_option",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_scan_auth_kwargs_forwarded[kwargs0]",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_scan_auth_kwargs_forwarded[kwargs1]",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_scan_auth_kwargs_forwarded[kwargs2]",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_scan_auth_kwargs_forwarded[kwargs3]",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_scan_auth_kwargs_forwarded[kwargs4]",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_scan_from_keyword_is_aliased[scan_kwargs0]",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_scan_from_keyword_is_aliased[scan_kwargs1]",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_scan_from_keyword_is_aliased[scan_kwargs2]",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_scan_from_keyword_is_aliased[scan_kwargs3]",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_scan_from_keyword_is_aliased[scan_kwargs4]",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_scan_from_keyword_is_aliased[scan_kwargs5]",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_scroll_error",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_shards_no_skipped_field",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_helpers.py::test_stats_only_reports_numbers",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_mapbox_vector_tile.py::test_mapbox_vector_tile_error",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_mapbox_vector_tile.py::test_mapbox_vector_tile_response",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_otel.py::test_otel_end_to_end",
+      "es": "SKIP",
+      "etat": "identique",
+      "ferrite": "SKIP"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_responses.py::test_exists_response",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_responses.py::test_object_response",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_responses.py::test_text_response",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_rest_api_spec.py::test_rest_api_spec[NOTSET]",
+      "es": "SKIP",
+      "etat": "identique",
+      "ferrite": "SKIP"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_embedding_service.py::test_elasticsearch_embedding_documents",
+      "es": "SKIP",
+      "etat": "different",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_embedding_service.py::test_elasticsearch_embedding_query",
+      "es": "SKIP",
+      "etat": "different",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_embedding_service.py::test_user_agent_default",
+      "es": "SKIP",
+      "etat": "different",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_add_vectors",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_bulk_args",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_custom_index_settings",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_custom_index_settings_with_collision",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_delete",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_deployed_model_check_fails_semantic",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_indexing_exception_error",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_max_marginal_relevance_search",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_max_marginal_relevance_search_errors",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_metadata_mapping",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_bm25",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_bm25_with_filter",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_knn_with_custom_query_fn",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_knn_with_hybrid_search",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_knn_with_hybrid_search_rrf",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_script_score",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_script_score_distance_dot_product",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_script_score_with_filter",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_with_filter",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_with_knn_infer_instack",
+      "es": "SKIP",
+      "etat": "different",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_with_metadata",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_with_sparse_infer_instack",
+      "es": "SKIP",
+      "etat": "different",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_without_metadata",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_without_metadata_async",
+      "es": "FAIL",
+      "etat": "identique",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_user_agent_custom",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     },
+     {
+      "cas": "test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_user_agent_default",
+      "es": "PASS",
+      "etat": "ecart",
+      "ferrite": "FAIL"
+     }
+    ],
+    "executions": {
+     "es": {
+      "echecs": 6,
+      "ignores": 7,
+      "passes": 71,
+      "queue": "'-vv' to show\n/src/test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py:949: AssertionError: assert {'type': 'den...'cosine', ...} == {'type': 'den...ty': 'cosine'}\n=============================== warnings summary ===============================\ntest_elasticsearch/test_server/test_rest_api_spec.py:637\n  /src/test_elasticsearch/test_server/test_rest_api_spec.py:637: UserWarning: Could not load REST API tests: TLS options require scheme to be 'https'\n    warnings.warn(f\"Could not load REST API tests: {str(e)}\")\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n=========================== short test summary info ============================\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_without_metadata\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_without_metadata_async\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_add_vectors\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_knn_with_hybrid_search\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_knn_with_hybrid_search_rrf\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_metadata_mapping\n======== 6 failed, 71 passed, 7 skipped, 1 warning in 803.84s (0:13:23) ========\n",
+      "total": 84
+     },
+     "ferrite": {
+      "echecs": 82,
+      "ignores": 2,
+      "passes": 0,
+      "queue": "OR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_bm25\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_bm25_with_filter\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_delete\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_indexing_exception_error\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_user_agent_default\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_user_agent_custom\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_bulk_args\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_max_marginal_relevance_search_errors\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_max_marginal_relevance_search\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_metadata_mapping\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_custom_index_settings\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_custom_index_settings_with_collision\n=================== 2 skipped, 1 warning, 82 errors in 0.53s ===================\n",
+      "total": 84
+     }
+    }
+   }
+  },
+  "trafic": [
+   {
+    "api": "scroll",
+    "echecs": 0,
+    "exemple": {
+     "scroll": "5m",
+     "scroll_id": "YG4t2muMdh8cA593wpI6wT"
+    },
+    "requetes": 141,
+    "traits": [
+     "expr:all",
+     "route:scroll"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "cat.indices",
+    "echecs": 0,
+    "exemple": null,
+    "requetes": 88,
+    "traits": [
+     "route:cat.indices"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "indices.get_index_template",
+    "echecs": 0,
+    "exemple": null,
+    "requetes": 88,
+    "traits": [
+     "route:indices.get_index_template"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "template",
+    "echecs": 0,
+    "exemple": null,
+    "requetes": 88,
+    "traits": [
+     "route:template"
+    ],
+    "traits_indetermines": [
+     "route:template"
+    ],
+    "traits_refuses": []
+   },
+   {
+    "api": "cluster.settings",
+    "echecs": 0,
+    "exemple": null,
+    "requetes": 88,
+    "traits": [
+     "route:cluster.settings"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": [
+     "route:cluster.settings"
+    ]
+   },
+   {
+    "api": "bulk",
+    "echecs": 0,
+    "exemple": [
+     {
+      "index": {
+       "_id": "1",
+       "_index": "bulk_test_index"
+      }
+     },
+     {
+      "answer": 42
+     }
+    ],
+    "requetes": 64,
+    "traits": [
+     "route:bulk"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "indices.create",
+    "echecs": 26,
+    "exemple": {
+     "mappings": {
+      "properties": {
+       "a": {
+        "type": "integer"
+       }
+      }
+     },
+     "settings": {
+      "number_of_replicas": 0,
+      "number_of_shards": 1
+     }
+    },
+    "requetes": 33,
+    "traits": [
+     "analyse:analyzer",
+     "analyse:tokenizer",
+     "analyzer:custom_analyzer",
+     "champ:analyzer",
+     "champ:dims",
+     "champ:index",
+     "champ:index=false",
+     "champ:relations",
+     "champ:similarity",
+     "route:indices.create",
+     "type:boolean",
+     "type:dense_vector",
+     "type:geo_point",
+     "type:integer",
+     "type:join",
+     "type:keyword",
+     "type:long",
+     "type:object",
+     "type:text"
+    ],
+    "traits_indetermines": [
+     "analyzer:custom_analyzer"
+    ],
+    "traits_refuses": [
+     "champ:dims",
+     "champ:index=false",
+     "champ:relations",
+     "champ:similarity",
+     "type:dense_vector",
+     "type:geo_point"
+    ]
+   },
+   {
+    "api": "indices.delete",
+    "echecs": 0,
+    "exemple": null,
+    "requetes": 31,
+    "traits": [
+     "route:indices.delete"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "indices.exists",
+    "echecs": 26,
+    "exemple": null,
+    "requetes": 26,
+    "traits": [
+     "route:indices.exists"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "search",
+    "echecs": 1,
+    "exemple": {
+     "size": 1000,
+     "sort": "answer"
+    },
+    "requetes": 19,
+    "traits": [
+     "corps:query",
+     "corps:size",
+     "corps:sort",
+     "dsl:match_all",
+     "dsl:pas_une_clause",
+     "dsl:term",
+     "expr:all",
+     "expr:joker",
+     "route:search"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": [
+     "dsl:pas_une_clause"
+    ]
+   },
+   {
+    "api": "ml.*",
+    "echecs": 10,
+    "exemple": {
+     "docs": [
+      {
+       "text_field": "test if the model 'sentence-transformers__all-minilm-l6-v2' is deployed"
+      }
+     ]
+    },
+    "requetes": 10,
+    "traits": [
+     "route:ml.*"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": [
+     "route:ml.*"
+    ]
+   },
+   {
+    "api": "index",
+    "echecs": 3,
+    "exemple": {},
+    "requetes": 7,
+    "traits": [
+     "route:index"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "get",
+    "echecs": 1,
+    "exemple": null,
+    "requetes": 6,
+    "traits": [
+     "route:get"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "count",
+    "echecs": 0,
+    "exemple": {
+     "query": {
+      "range": {
+       "rang": {
+        "gte": 0
+       }
+      }
+     }
+    },
+    "requetes": 5,
+    "traits": [
+     "corps:query",
+     "dsl:range",
+     "dsl:range.gte",
+     "route:count"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "indices.refresh",
+    "echecs": 0,
+    "exemple": null,
+    "requetes": 5,
+    "traits": [
+     "route:indices.refresh"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "info",
+    "echecs": 0,
+    "exemple": null,
+    "requetes": 4,
+    "traits": [
+     "route:info"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "indices.get_data_stream",
+    "echecs": 3,
+    "exemple": null,
+    "requetes": 3,
+    "traits": [
+     "route:indices.get_data_stream"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": [
+     "route:indices.get_data_stream"
+    ]
+   },
+   {
+    "api": "indices.put_index_template",
+    "echecs": 3,
+    "exemple": {
+     "data_stream": {},
+     "index_patterns": [
+      "py-*-*"
+     ]
+    },
+    "requetes": 3,
+    "traits": [
+     "route:indices.put_index_template"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "cluster.health",
+    "echecs": 0,
+    "exemple": null,
+    "requetes": 2,
+    "traits": [
+     "route:cluster.health"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "indices.analyze",
+    "echecs": 0,
+    "exemple": {
+     "text": "привет"
+    },
+    "requetes": 2,
+    "traits": [
+     "route:indices.analyze"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": []
+   },
+   {
+    "api": "ingest.*",
+    "echecs": 2,
+    "exemple": {
+     "processors": [
+      {
+       "inference": {
+        "field_map": {
+         "query_field": "text_field"
+        },
+        "model_id": "sentence-transformers__all-minilm-l6-v2",
+        "target_field": "vector_query_field"
+       }
+      }
+     ]
+    },
+    "requetes": 2,
+    "traits": [
+     "route:ingest.*"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": [
+     "route:ingest.*"
+    ]
+   },
+   {
+    "api": "cat.tasks",
+    "echecs": 1,
+    "exemple": null,
+    "requetes": 1,
+    "traits": [
+     "route:cat.tasks"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": [
+     "route:cat.tasks"
+    ]
+   },
+   {
+    "api": "nodes.*",
+    "echecs": 1,
+    "exemple": null,
+    "requetes": 1,
+    "traits": [
+     "route:nodes.*"
+    ],
+    "traits_indetermines": [],
+    "traits_refuses": [
+     "route:nodes.*"
+    ]
+   }
+  ]
+ }
+}

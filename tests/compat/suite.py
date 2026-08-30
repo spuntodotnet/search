@@ -177,6 +177,43 @@ def recherche_sans_index_valide_son_corps(es):
                 contains="intervals")
 
 
+@scenario
+def inventaire_des_templates_sur_un_serveur_neuf(es):
+    """Lister *tous* les templates n'est pas les chercher par motif.
+
+    ES rend `200` sur `GET /_template` et `GET /_index_template` meme quand il
+    n'en a aucun, et `404` des qu'un nom — motif compris — est donne et ne
+    correspond a rien. Mesure faite sur un ES 8.15 demarre sans ses propres
+    templates (`stack.templates.enabled=false`,
+    `xpack.monitoring.templates.enabled=false`).
+
+    ferrite confondait les deux : il rendait `404` avec le bon corps sur
+    l'inventaire vide. Un statut faux sous un corps juste ne se voit pas dans
+    un `curl`, mais tout client qui leve sur 404 casse — c'est le premier appel
+    du menage inter-cas de la suite du client Python. Ce scenario est place ici
+    parce qu'il exige un serveur **sans** template, comme le precedent exige un
+    serveur sans index."""
+    for nom in es.indices.get_index_template().get("index_templates", []):
+        es.indices.delete_index_template(name=nom["name"])
+    for nom in list(es.indices.get_template()):
+        es.indices.delete_template(name=nom)
+
+    assert es.indices.get_index_template().body == {"index_templates": []}
+    assert es.indices.get_template().body == {}
+    # Un nom, litteral ou a joker, qui ne correspond a rien : 404 des deux
+    # cotes, et deux corps differents — ES est ainsi.
+    refused(lambda: es.indices.get_index_template(name="ferrite-aucun"),
+            status=404, contains="ferrite-aucun")
+    for appel in (lambda: es.indices.get_index_template(name="ferrite-aucun-*"),
+                  lambda: es.indices.get_template(name="ferrite-aucun-*"),
+                  lambda: es.indices.get_template(name="ferrite-aucun")):
+        try:
+            appel()
+            raise AssertionError("un motif sans correspondance doit rendre 404")
+        except ApiError as exc:
+            assert exc.meta.status == 404, exc.meta.status
+
+
 # ---------------------------------------------------------------------------
 # Index et mapping
 # ---------------------------------------------------------------------------
@@ -1573,6 +1610,96 @@ def bulk_metadonnee_inconnue(es):
     refused(lambda: es.bulk(operations=[
         {"delete": {"_index": INDEX, "_id": "1", "_routing": "x"}},
     ]), contains="_routing")
+
+
+@scenario
+def bulk_identifiant_non_chaine(es):
+    """`{"_id": 42}` est un identifiant, pas une absence d'identifiant.
+
+    ES lit **toute valeur simple** et la rend en texte : `42` devient `"42"`,
+    `true` devient `"true"`. Ne lire que les chaines faisait tomber la
+    metadonnee dans le cas « pas d'`_id` » — donc un identifiant tire au sort,
+    en `201`, sans un mot, et le `get` suivant rendait 404.
+
+    Personne n'ecrit ca a la main, mais `helpers.bulk` du client officiel
+    transmet l'`_id` tel que l'appelant le donne : une cle primaire entiere
+    suffit. C'est la suite serveur du client Python qui l'a trouve
+    (`test_bulk_all_documents_get_inserted`, qui indexe `_id` de 0 a 99), pas
+    un test ecrit ici."""
+    es.options(ignore_status=404).indices.delete(index="bulk_id")
+    resp = es.bulk(operations=[
+        {"index": {"_index": "bulk_id", "_id": 42}}, {"n": 42},
+        {"index": {"_index": "bulk_id", "_id": True}}, {"n": 1},
+        {"index": {"_index": "bulk_id", "_id": 4.5}}, {"n": 2},
+        # `null` vaut « absent » : identifiant genere, comme chez ES.
+        {"index": {"_index": "bulk_id", "_id": None}}, {"n": 3},
+    ], refresh=True)
+    assert resp["errors"] is False, resp["items"]
+    rendus = [list(item.values())[0]["_id"] for item in resp["items"]]
+    assert rendus[:3] == ["42", "true", "4.5"], rendus
+    assert len(rendus[3]) > 5, rendus[3]
+    assert es.get(index="bulk_id", id="42")["_source"] == {"n": 42}
+    assert es.get(index="bulk_id", id="true")["_source"] == {"n": 1}
+
+    # Un objet ou un tableau n'est pas une valeur simple : ES le refuse en le
+    # nommant, et ferrite reprend son message mot pour mot.
+    refused(lambda: es.bulk(operations=[
+        {"index": {"_index": "bulk_id", "_id": {"a": 1}}}, {"n": 1},
+    ]), contains="expected a simple value for field [_id] but found [START_OBJECT]")
+    refused(lambda: es.bulk(operations=[
+        {"index": {"_index": "bulk_id", "_id": ["a"]}}, {"n": 1},
+    ]), contains="but found [START_ARRAY]")
+    es.indices.delete(index="bulk_id")
+
+
+@scenario
+def corps_compresse(es):
+    """`http_compress=True` : le corps part gzippe, et le serveur doit le lire.
+
+    C'est l'option que les trois clients officiels exposent — et que le client
+    JavaScript active **par defaut** vers Elastic Cloud. Tant que ferrite lisait
+    les octets compresses comme du JSON, un client qui l'activait ne pouvait
+    plus rien ecrire, sur un message (« le corps de [_bulk] doit etre de
+    l'UTF-8 ») qui ne nommait pas la cause.
+
+    Les deux encodages sont ceux qu'un vrai ES decompresse, mesure ; `br` et un
+    nom inconnu sont transmis tels quels, chez lui comme ici."""
+    import gzip
+    import zlib
+
+    with Elasticsearch(URL, http_compress=True, request_timeout=30) as gz:
+        gz.options(ignore_status=404).indices.delete(index="compresse")
+        operations = []
+        for i in range(500):
+            operations.append({"index": {"_index": "compresse", "_id": str(i)}})
+            operations.append({"titre": f"document {i}", "corps": "vergogne " * 40})
+        assert gz.bulk(operations=operations, refresh=True)["errors"] is False
+        assert gz.count(index="compresse")["count"] == 500
+        assert gz.search(index="compresse", query={"match": {"corps": "vergogne"}},
+                         size=0)["hits"]["total"]["value"] == 500
+
+    corps = b'{"titre":"deflate"}'
+    for encodage, charge in (("gzip", gzip.compress(corps)),
+                             ("deflate", zlib.compress(corps)),
+                             # Netty n'a pas de decodeur pour ceux-la : ES les
+                             # transmet tels quels, donc ferrite aussi.
+                             ("br", corps),
+                             ("pas-un-encodage", corps)):
+        r = es.perform_request(
+            "PUT", f"/compresse/_doc/{encodage}?refresh=true",
+            headers={"content-type": "application/json",
+                     "content-encoding": encodage},
+            body=charge)
+        assert r.meta.status in (200, 201), (encodage, r.meta.status)
+    assert es.get(index="compresse", id="gzip")["_source"] == {"titre": "deflate"}
+
+    # Un flux annonce compresse et illisible est refuse en nommant l'encodage.
+    refused(lambda: es.perform_request(
+        "PUT", "/compresse/_doc/casse",
+        headers={"content-type": "application/json", "content-encoding": "gzip"},
+        body=b"pas du gzip du tout"),
+        contains="Content-Encoding: gzip")
+    es.indices.delete(index="compresse")
 
 
 @scenario

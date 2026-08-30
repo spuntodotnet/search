@@ -33,9 +33,9 @@ d'Elasticsearch. Rendre des résultats faux parce qu'on a ignoré un
 `minimum_should_match` est le pire résultat possible de ce projet — pire que de
 ne pas supporter la clause du tout.
 
-## La méthode, en neuf gestes
+## La méthode, en dix gestes
 
-Ces neuf gestes ont chacun trouvé quelque chose qu'un raisonnement n'aurait pas
+Ces dix gestes ont chacun trouvé quelque chose qu'un raisonnement n'aurait pas
 trouvé. Ils ne sont pas décoratifs.
 
 ### 1. Mesurer contre un vrai Elasticsearch, jamais contre son idée d'Elasticsearch
@@ -209,7 +209,7 @@ aux deux serveurs à 500 000 puis 2 000 000 de documents. Ce que ça change :
 
 ### 9. Brancher un logiciel que personne ici n'a écrit
 
-Les gestes précédents mesurent des **surfaces d'API** et un prix, avec quatre
+Les gestes 1 à 8 mesurent des **surfaces d'API** et un prix, avec quatre
 dénominateurs différents. Aucun ne répondait à la question dont dépend le
 produit : *un logiciel écrit par quelqu'un d'autre démarre-t-il ?*
 `tests/compat/appli_reelle.py` clone une vraie application à une révision figée,
@@ -225,6 +225,45 @@ avant et après, 356 échecs avant et après). Une application ne commence pas p
 une recherche, elle commence par créer son index — et un corpus fait de corps de
 requêtes ne pèse presque rien sur ce geste-là. Voir
 [`docs/application.md`](docs/application.md).
+
+### 10. Lancer les tests du client, pas seulement passer par le client
+
+Les neuf gestes précédents passent **par** un client officiel — c'est la règle
+du projet — mais c'est nous qui écrivons ce qu'on lui demande. Le geste qui
+manquait est de lancer **la suite du client, par son propre lanceur, dans son
+langage** : `tests/compat/tests_clients.py`. Elle exerce une couche que rien
+d'autre ne touche, parce qu'elle est sous le DSL — la poignée de main, l'en-tête
+de produit, la négociation de compression, le sniffing, la carte statut →
+exception, les helpers.
+
+Ce que ça a trouvé du premier coup, tout silencieux : un `_id` **numérique**
+dans un `_bulk` (l'écriture que produit `helpers.bulk` dès que la clé primaire
+est un entier) était lu comme un `_id` **absent**, donc un document indexé sous
+un identifiant tiré au sort, en 201 ; `GET /_index_template` sans nom rendait
+404 avec le bon corps ; et la compression du corps n'était pas lue du tout, donc
+un client qui active `http_compress` ne pouvait plus rien écrire.
+
+Trois règles en sortent, et la troisième est la plus coûteuse :
+
+- **une suite de client suppose un cluster complet.** Celle du client Python
+  nettoie entre chaque cas par seize routes x-pack que ferrite refuse : telle
+  quelle, elle rend 0 cas vert et 82 erreurs, toutes dans la même fixture. Les
+  **deux** colonnes sont donc publiées — la suite d'origine, et la même avec un
+  nettoyage de remplacement injecté par un plugin externe, les seize routes
+  écartées nommées une par une. Une adaptation qu'on ne compte pas est une
+  adaptation qui grandit ;
+- **une suite peut être cassée chez son auteur.** Les tests d'intégration des
+  helpers du client JavaScript importent une fonction que leur propre
+  `test/utils` n'exporte pas, depuis la 8.0 : zéro cas vert contre un vrai ES
+  **comme** contre ferrite. Sans l'étalonnage, ce zéro se lisait « ferrite ne
+  sert pas les helpers JavaScript » ;
+- **une suite peut refuser d'être pointée ailleurs.** Depuis la 8.14, le client
+  go démarre son propre Elasticsearch par testcontainers : sa suite ne peut plus
+  viser un autre serveur sans qu'on modifie son code, ce que la première
+  condition interdit. La 8.13.0 est donc la dernière révision mesurable, et
+  c'est une mesure, pas une préférence.
+
+Voir [`docs/clients.md`](docs/clients.md).
 
 ## Les outils, et ce que chacun répond
 
@@ -251,6 +290,7 @@ développement, pas de CI).
 | `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **3 500 cas, 154 520 requêtes, 2 divergences ouvertes** (deux ordres que BM25 sépare et qu'ES rend ex æquo, déclarés), sur quatorze plages de graines dont **trois** n'ont jamais servi à corriger — celle sur laquelle on itère ne mesure plus rien, et le générateur ayant changé, les plages du passage précédent ne mesurent plus les mêmes cas. 21 défauts silencieux trouvés au premier passage, 27 de plus depuis — dont **dix-sept** sur le seul surlignage, tous invisibles aux 233 questions écrites à la main. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (60 cas, 2 523 requêtes, 0) |
 | `tests/compat/sonde_fuzz.py` | les écarts trouvés par le fuzzing, **figés** hors d'une graine (80/80, plus 12 refus assumés) |
 | `tests/compat/appli_reelle.py` | **un logiciel écrit par d'autres démarre-t-il ?** Clone une vraie application à une révision figée, vérifie que rien n'y a bougé, lance sa **propre** suite d'intégration contre un vrai ES puis contre ferrite, et relève tout le trafic HTTP au passage. Gitea v1.27.2 : **34/34 des deux côtés**. Wagtail v7.1 : **83/83 des deux côtés**, et plus un seul refus que ferrite prononce là où ES répond. Voir [`docs/application.md`](docs/application.md) |
+| `tests/compat/tests_clients.py` | **la suite de tests du client officiel passe-t-elle ?** Pas « un client se connecte » : les cas que l'équipe du client a écrits, joués par **son** lanceur, dans **son** langage. Trois clients, licence Apache-2.0 vérifiée **dans le clone**, révision figée, arbre vérifié intact. `go-elasticsearch` v8.13.0 : 28/30 contre un vrai ES, 15/30 contre ferrite, chaque écart rattaché à une capacité. `elasticsearch-py` v8.15.0 : 71/84 *(origine)* · 45/84 *(adapté)* / 43/84 avec le nettoyage de remplacement, **0/84 telle quelle** — sa fixture nettoie par seize routes x-pack, et les deux chiffres sont publiés. Et le **cycle de vie du client**, joué par le client publié : 9/9 en Python, 7/7 en Go, 7/7 en JavaScript, des deux côtés. Voir [`docs/clients.md`](docs/clients.md) |
 | `tests/compat/genere_compat.py` | le périmètre déclaré et la doc disent-ils la **même chose** ? [`compat.yaml`](compat.yaml) est la source (une entrée par capacité : état, paramètres, motif du refus, poids d'usage) ; [`docs/compat.md`](docs/compat.md) et [`docs/compat.json`](docs/compat.json) en sont **générés**, et la CI échoue s'ils divergent |
 | `tests/compat/perimetre.py` | ce cas qui échoue, il porte sur quoi ? Il rattache un échec de conformance à une capacité déclarée : **régression** si elle est annoncée supportée, **coût de périmètre** si elle est annoncée refusée |
 | `tests/compat/recolte_usage.py` | à quoi ressemblent les requêtes que les gens envoient **vraiment** ? Constitue le corpus ([`tests/compat/usage/corpus.jsonl`](tests/compat/usage/corpus.jsonl), 5 311 requêtes) depuis quatre sources citables : doc de référence 8.15, tracks Rally, clients officiels, code open source. Chaque requête porte l'URL d'où elle vient |
@@ -710,6 +750,27 @@ bouger**, pas après.
   terme par position, les deux lectures se confondaient ; un filtre à n-grammes
   en pose vingt, et un budget par terme développe vingt fois plus de préfixes —
   donc rend plus de documents qu'ES, en 200.
+- **Un identifiant numérique n'est pas un identifiant absent.** `_bulk` ne
+  lisait `_id` que si c'était une chaîne : `{"_id": 42}` — ce que produit
+  `helpers.bulk` du client officiel dès que la clé primaire de l'appelant est un
+  entier — tombait donc dans le cas « pas d'identifiant », et le document
+  partait sous un identifiant **tiré au sort**, en 201, sans un mot. ES lit
+  toute **valeur simple** et la rend en texte (`42` → `"42"`, `true` →
+  `"true"`), et refuse un objet ou un tableau en le nommant. Deux choses à
+  retenir : le même piège était **déjà corrigé une fonction plus loin**, sur
+  `_mget`, commentaire d'explication compris — corriger un lecteur ne corrige
+  pas ses voisins ; et c'est la suite du client Python qui l'a trouvé
+  (`test_bulk_all_documents_get_inserted`, qui indexe des `_id` de 0 à 99), pas
+  un cas écrit ici, parce qu'on écrit ses identifiants entre guillemets sans y
+  penser.
+- **Lister n'est pas chercher, et un corps juste sous un statut faux ne se voit
+  pas.** `GET /_index_template` et `GET /_template` **sans nom** rendaient 404
+  sur un serveur neuf, avec le bon corps. ES sépare les deux : sans nom → 200
+  même vide, avec un nom ou un motif sans correspondance → 404. Un `curl` ne
+  montre rien (le corps est le bon) ; un client qui lève sur 404, si. La mesure
+  a demandé un ES démarré **sans ses propres templates** — et elle n'est
+  possible que sur la famille `_template`, parce qu'un ES 8.15 réinstalle ses
+  templates APM quoi qu'on fasse. Ce qui ne se mesure pas se dit.
 - **Un chiffre annoncé que rien n'exerce n'est qu'une phrase.** `GET /_nodes`
   publiait `http.max_content_length_in_bytes: 104857600` — la valeur que les
   clients officiels lisent pour dimensionner leurs lots — pendant que la couche
