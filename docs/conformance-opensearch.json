@@ -1,11 +1,11 @@
 {
   "schema": 3,
   "mesure": {
-    "date": "2026-08-30T01:25:26Z",
-    "ferrite_sha": "7075d95af52c9361352f40b67a0d5b826c70db3f",
+    "date": "2026-08-30T09:00:03Z",
+    "ferrite_sha": "5e6bf60decb7108759f1be898fb0bbf8bc36cbe4",
     "ferrite_arbre_modifie": false,
     "cible": {
-      "url": "http://localhost:9200",
+      "url": "http://127.0.0.1:9200",
       "moteur": "ferrite",
       "version_annoncee": "8.15.0",
       "build_hash": "ferrite-0.7.0"
@@ -151,36 +151,36 @@
   },
   "totaux": {
     "cas": 1434,
-    "reussis": 182,
-    "refuses": 693,
+    "reussis": 188,
+    "refuses": 690,
     "sautes": 209,
-    "echecs": 350
+    "echecs": 347
   },
   "taux": {
     "fidelite_perimetre": {
-      "valeur": 0.3421,
-      "numerateur": 182,
-      "denominateur": 532,
+      "valeur": 0.3514,
+      "numerateur": 188,
+      "denominateur": 535,
       "definition": "reussis / (reussis + echecs) — la part des cas que ferrite n'a ni refuses ni fait sauter qui repond comme Elasticsearch. Un pis-aller : une partie des echecs sont des refus dont le type d'erreur imite celui d'ES au lieu de porter le marqueur, donc ils gonflent le denominateur alors qu'ils sont hors perimetre. Voir [fidelite_perimetre_declare]"
     },
     "couverture_brute": {
-      "valeur": 0.1269,
-      "numerateur": 182,
+      "valeur": 0.1311,
+      "numerateur": 188,
       "denominateur": 1434,
       "definition": "reussis / total — la part de la suite d'Elastic qui passe, perimetre non declare compris"
     },
     "fidelite_perimetre_declare": {
-      "valeur": 0.8349,
-      "numerateur": 182,
-      "denominateur": 218,
+      "valeur": 0.8545,
+      "numerateur": 188,
+      "denominateur": 220,
       "definition": "reussis / (reussis + regressions + indetermines) — le taux precedent, mais en sortant du denominateur les echecs qui portent sur une capacite declaree refusee dans compat.yaml (le cout du perimetre), et ceux qu'un vrai moteur de reference echoue lui aussi (divergence_moteurs, mesuree — voir [divergences]). Les cas qu'aucune capacite ne reclame restent dedans"
     }
   },
   "perimetre": {
-    "regressions": 36,
+    "regressions": 32,
     "couts_perimetre": 222,
     "indetermines": 0,
-    "divergences_moteurs": 92,
+    "divergences_moteurs": 93,
     "echecs_hors_reference": 0,
     "par_capacite": {
       "hors.cycle_de_vie": 54,
@@ -200,7 +200,6 @@
       "ingestion.update": 5,
       "ingestion.index_doc": 4,
       "ingestion.reecriture_en_masse": 4,
-      "alias.put": 2,
       "alias.suppression_par_alias": 2,
       "cluster.cat_indices": 2,
       "hors.scripts": 2,
@@ -209,7 +208,6 @@
       "ingestion.get": 2,
       "recherche.msearch": 2,
       "reglages.route": 2,
-      "alias.aliases": 1,
       "alias.remove_index_et_add": 1,
       "index.creation": 1,
       "index.mapping_ecriture": 1,
@@ -217,7 +215,6 @@
       "ingestion.exists": 1,
       "recherche.non_supportes": 1,
       "recherche.reglages_de_shards": 1,
-      "recherche.route": 1,
       "recherche.routing_filter_path": 1
     },
     "source": "compat.yaml"
@@ -637,10 +634,10 @@
       "cas": 8
     },
     "indices.put_alias": {
-      "reussis": 10,
-      "refuses": 7,
+      "reussis": 13,
+      "refuses": 6,
       "sautes": 0,
-      "echecs": 2,
+      "echecs": 0,
       "cas": 19
     },
     "indices.put_index_template": {
@@ -756,8 +753,8 @@
       "cas": 58
     },
     "indices.update_aliases": {
-      "reussis": 1,
-      "refuses": 12,
+      "reussis": 4,
+      "refuses": 9,
       "sautes": 0,
       "echecs": 2,
       "cas": 15
@@ -876,9 +873,9 @@
     },
     "search": {
       "reussis": 22,
-      "refuses": 109,
+      "refuses": 110,
       "sautes": 96,
-      "echecs": 51,
+      "echecs": 50,
       "cas": 278
     },
     "search.aggregation": {
@@ -5364,15 +5361,8 @@
       "suite": "indices.put_alias",
       "fichier": "10_basic.yml",
       "cas": "Basic test for put alias",
-      "categorie": "echec",
-      "raison": "[indices.put_alias] 405 : Incorrect HTTP method for uri [/test_index/_alias] and method [PUT], allowed: [GET, HEAD]",
-      "api": "indices.put_alias",
-      "perimetre": "regression",
-      "capacite": "alias.put",
-      "reference": {
-        "categorie": "reussi",
-        "raison": ""
-      }
+      "categorie": "reussi",
+      "raison": ""
     },
     {
       "suite": "indices.put_alias",
@@ -5434,22 +5424,15 @@
       "suite": "indices.put_alias",
       "fichier": "10_basic.yml",
       "cas": "Index and alias in request body can override path parameters",
-      "categorie": "refus",
-      "raison": "ferrite ne supporte pas [index] dans la declaration d'un alias (dans [_alias]) ; cles acceptees : is_write_index"
+      "categorie": "reussi",
+      "raison": ""
     },
     {
       "suite": "indices.put_alias",
       "fichier": "10_basic.yml",
       "cas": "Index parameter supports multiple values",
-      "categorie": "echec",
-      "raison": "[indices.put_alias] 405 : Incorrect HTTP method for uri [/_alias] and method [PUT], allowed: [GET, HEAD]",
-      "api": "indices.put_alias",
-      "perimetre": "regression",
-      "capacite": "alias.put",
-      "reference": {
-        "categorie": "reussi",
-        "raison": ""
-      }
+      "categorie": "reussi",
+      "raison": ""
     },
     {
       "suite": "indices.put_alias",
@@ -6882,7 +6865,7 @@
       "fichier": "30_remove_index_and_replace_with_alias.yml",
       "cas": "Remove an index and replace it with an alias",
       "categorie": "echec",
-      "raison": "[indices.update_aliases] 400 : an index or data stream exists with the same name as the alias [test]",
+      "raison": "[indices.update_aliases] 400 : Invalid alias name [test]: an index or data stream exists with the same name as the alias",
       "api": "indices.update_aliases",
       "perimetre": "cout_perimetre",
       "capacite": "alias.remove_index_et_add",
@@ -6895,36 +6878,35 @@
       "suite": "indices.update_aliases",
       "fichier": "40_remove_with_must_exist.yml",
       "cas": "Remove silently when all of the specified aliases are non-existing and must_exist is false",
-      "categorie": "refus",
-      "raison": "ferrite ne supporte pas [must_exist] dans [_aliases.actions.remove]"
-    },
-    {
-      "suite": "indices.update_aliases",
-      "fichier": "40_remove_with_must_exist.yml",
-      "cas": "Remove successfully when some specified aliases are non-existing",
-      "categorie": "refus",
-      "raison": "ferrite ne supporte pas [must_exist] dans [_aliases.actions.remove]"
-    },
-    {
-      "suite": "indices.update_aliases",
-      "fichier": "40_remove_with_must_exist.yml",
-      "cas": "Throw aliases missing exception when all of the specified aliases are non-existing",
       "categorie": "echec",
-      "raison": "[indices.update_aliases] devait echouer sur /aliases \\[test\\_alias\\*\\] missing/, a rendu 400",
+      "raison": "[indices.update_aliases] 404 : aliases [test_alias, test_alias1, test_alias2] missing",
       "api": "indices.update_aliases",
-      "perimetre": "regression",
-      "capacite": "alias.aliases",
+      "perimetre": "divergence_moteurs",
       "reference": {
-        "categorie": "reussi",
-        "raison": ""
+        "categorie": "echec",
+        "raison": "[indices.update_aliases] 404 : aliases [test_alias, test_alias1, test_alias2] missing"
       }
     },
     {
       "suite": "indices.update_aliases",
       "fichier": "40_remove_with_must_exist.yml",
+      "cas": "Remove successfully when some specified aliases are non-existing",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.update_aliases",
+      "fichier": "40_remove_with_must_exist.yml",
+      "cas": "Throw aliases missing exception when all of the specified aliases are non-existing",
+      "categorie": "reussi",
+      "raison": ""
+    },
+    {
+      "suite": "indices.update_aliases",
+      "fichier": "40_remove_with_must_exist.yml",
       "cas": "Throw aliases missing exception when removing non-existing alias with setting must_exist to true",
-      "categorie": "refus",
-      "raison": "ferrite ne supporte pas [must_exist] dans [_aliases.actions.remove]"
+      "categorie": "reussi",
+      "raison": ""
     },
     {
       "suite": "indices.upgrade",
@@ -9936,15 +9918,8 @@
       "suite": "search",
       "fichier": "350_matched_queries.yml",
       "cas": "matched queries with scores",
-      "categorie": "echec",
-      "raison": "[search] 400 : request [/test_1/_search] contains unrecognized parameter: [include_named_queries_score]",
-      "api": "search",
-      "perimetre": "regression",
-      "capacite": "recherche.route",
-      "reference": {
-        "categorie": "reussi",
-        "raison": ""
-      }
+      "categorie": "refus",
+      "raison": "ferrite ne supporte pas [include_named_queries_score] : il ne change que la forme de [matched_queries], que ferrite ne rend pas — nommer une clause (["
     },
     {
       "suite": "search",
@@ -13681,7 +13656,7 @@
       "date": "2026-08-29T19:43:57Z"
     },
     "definition": "un echec que la reference — un vrai moteur, joue sur la meme suite — echoue lui aussi. Le cas ne discrimine pas : il porte sur ce dont les deux moteurs ne conviennent plus, donc il ne peut rien dire de ferrite. Mesure, pas decidee",
-    "echecs_partages": 92,
+    "echecs_partages": 93,
     "cas_absents_de_la_reference": {
       "cas": 0,
       "exemples": [],
