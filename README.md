@@ -92,7 +92,8 @@ réel est la **couche de compatibilité** au-dessus.
 - **Recherche** : le noyau du Query DSL (`bool`, `match`, `multi_match` (avec
   `lenient` et les types `phrase` / `phrase_prefix`), `match_phrase`,
   `match_phrase_prefix`, `term(s)`, `range` avec le **date math** (`now`),
-  `exists`, `prefix`, `wildcard`, `regexp`, `nested`…), `sort`, `from`/`size`,
+  `exists`, `prefix`, `wildcard`, `regexp`, `nested`…), `sort` (avec `missing`,
+  `mode` et `unmapped_type`), `from`/`size`,
   `scroll` (donc `helpers.scan`), filtrage de `_source`.
 - **Agrégations** : métriques + `terms` / `date_histogram` / `range` /
   `histogram` / `filter`, avec sous-agrégations.
@@ -289,7 +290,7 @@ relevé de ce que ces applications envoient sont dans
 de tests tournent dessus.** « Le client officiel se branche » est une capture
 d'écran ; « la suite de tests du client officiel passe » est une preuve. Trois
 clients, licence Apache-2.0 vérifiée dans le clone, révision figée, arbre
-vérifié intact : `go-elasticsearch` v8.13.0 passe 15/30 de sa suite
+vérifié intact : `go-elasticsearch` v8.13.0 passe 16/30 de sa suite
 d'intégration contre ferrite là où un vrai Elasticsearch 8.15 en passe 28/30,
 chaque écart rattaché à une capacité déclarée. Et le **cycle de vie du client** —
 découverte de version, en-tête `X-elastic-product`, négociation de compression,
@@ -428,8 +429,8 @@ réelles** — la documentation de référence d'ES 8.15, les tracks Rally d'Ela
 les tests des clients officiels et le code de 184 dépôts open source — la
 question posée est « celle-ci passerait-elle **entièrement** ? », parce qu'une
 requête supportée à 90 % est une requête qui échoue. Réponse : **96,2 % des
-requêtes trouvées dans du code d'application**, 40,2 % des exemples de la
-documentation, 28,6 % des tracks de benchmark. L'écart entre ces trois nombres
+requêtes trouvées dans du code d'application**, 40,1 % des exemples de la
+documentation, 30,5 % des tracks de benchmark. L'écart entre ces trois nombres
 est le résultat ; la méthode, les sources et les biais sont dans
 [`docs/usage.md`](docs/usage.md), le corpus est publié avec.
 

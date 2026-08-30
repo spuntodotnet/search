@@ -81,19 +81,24 @@ mappings différents pour 1 756 recherches. Le même mapping est posé sur les d
 serveurs : une inférence de travers ne peut que sortir la requête du
 dénominateur, jamais flatter ferrite.
 
-**Les deux mesures sont d'accord sur 1 369 requêtes sur 1 381** (99,1 %). C'est
+**Les deux mesures sont d'accord sur 1 364 requêtes sur 1 381** (98,8 %). C'est
 ce qui rend le croisement utilisable là où le rejeu ne va pas — les routes, les
 mappings, tout ce qui n'est pas un corps de `_search`.
 
-Les onze désaccords sont tous dans le même sens — le croisement dit « servie »,
-le rejeu dit « refusée » — et ils sont **le vrai intérêt du rejeu** : ils
-nomment ce que le croisement ne sait pas modéliser. Trois d'entre eux sont
+Les dix-sept désaccords vont presque tous dans le même sens — le croisement dit
+« servie », le rejeu dit « refusée » — et ils sont **le vrai intérêt du rejeu** :
+ils nomment ce que le croisement ne sait pas modéliser. Trois d'entre eux sont
 apparus en livrant `stored_fields` : la requête n'était plus bloquée en amont,
 le rejeu l'a donc atteinte, et il a trouvé **autre chose** dessous — un
 `aggs: {}` vide qu'ES accepte et que ferrite refuse, un `multi_match` sans
-`fields` qu'ES résout sur son champ par défaut et que ferrite exige. Débloquer
-une capacité fait remonter les refus qui étaient cachés derrière elle ; c'est
-attendu, et c'est mesuré plutôt que supposé.
+`fields` qu'ES résout sur son champ par défaut et que ferrite exige. Cinq de
+plus sont apparus de la même façon en livrant les trois paramètres de `sort`
+(ils étaient de 11, ils sont de 17), et ils ne parlent pas de tri : un
+`require_field_match: false`, un `[query]` qui n'est pas un objet, un `size`
+écrit `"1000"`. Débloquer une capacité fait remonter les refus qui étaient
+cachés derrière elle ; c'est attendu, et c'est mesuré plutôt que supposé — le
+taux d'accord baisse quand la couverture monte, et ce n'est pas une
+régression.
 
 ## Le résultat : le taux dépend surtout de qui pose la question
 
@@ -101,9 +106,9 @@ attendu, et c'est mesuré plutôt que supposé.
 |---|---|---|
 | **`github` — du code d'application open source** | 338 | **96,2 %** |
 | `clients` — tests et exemples des clients officiels | 143 | 81,1 % |
-| `doc` — la documentation de référence | 3 969 | 40,2 % |
-| `rally` — les tracks de benchmark d'Elastic | 861 | 28,6 % |
-| **tout le corpus** | 5 311 | 42,9 % |
+| `doc` — la documentation de référence | 3 969 | 40,1 % |
+| `rally` — les tracks de benchmark d'Elastic | 861 | 30,5 % |
+| **tout le corpus** | 5 311 | 43,2 % |
 
 Ces quatre nombres ne se contredisent pas, ils mesurent quatre choses
 différentes, et l'écart entre eux **est** le résultat :
@@ -118,10 +123,11 @@ différentes, et l'écart entre eux **est** le résultat :
 - les tracks Rally sont des **bancs d'essai analytiques** : `date_histogram`
   avec `calendar_interval`, `runtime_mappings`, `fields`, `percentiles`. Et le
   track `elastic/logs` rejoue les requêtes de **Kibana**, qui pose
-  systématiquement des `runtime_mappings` et des `fields`. 28,6 % — c'était
+  systématiquement des `runtime_mappings` et des `fields`. 30,5 % — c'était
   17,4 % avant que `fields`, `docvalue_fields` et `stored_fields` ne soient
-  livrés — c'est le prix d'entrée pour servir un Kibana, pas celui d'une
-  application.
+  livrés, et 28,6 % avant les trois paramètres de `sort`, que ces tracks posent
+  plus que quiconque (79 de leurs requêtes citent `unmapped_type`) — c'est le
+  prix d'entrée pour servir un Kibana, pas celui d'une application.
 
 Le corpus n'est pas homogène et il ne prétend pas l'être : la documentation en
 fait 74,7 %, et le seul répertoire `elastic/logs` des tracks Rally 8,3 %.
@@ -249,6 +255,28 @@ débloque. Deux colonnes, parce qu'elles ne disent pas la même chose :
 > **contre** nous — c'est le garde-fou qui rend un dénominateur non choisi, et
 > il a servi ici.
 >
+> La **09** — `missing`, `mode`, `unmapped_type` sur un `sort` — a fait passer
+> le corpus de **42,9 % à 43,2 %** (2 277 → 2 297), et c'est encore le
+> sous-corpus qui parle : les tracks Rally passent de **28,6 % à 30,5 %**, parce
+> que 79 de leurs requêtes posent `unmapped_type` sur un tri (elles interrogent
+> plusieurs index dont tous ne mappent pas le champ trié — exactement la
+> situation que le paramètre existe pour couvrir). Le code d'application, lui,
+> ne bouge pas d'une requête : il trie sur ses propres champs, dans son propre
+> index.
+>
+> Et il y a une seconde moitié qui n'est pas un gain, mais une **honnêteté
+> retrouvée**, et c'est la plus instructive. Le chiffre d'avant, 42,9 %, était
+> flatté : `recherche.sort` ne déclarait **aucun** paramètre supporté, et
+> `ponderation.py` ne rend `indéterminé` un paramètre non déclaré que si la
+> capacité en déclare au moins un. Cinq paramètres de tri (`unit`,
+> `distance_type`, `pin.location`, `ignore_unmapped`, `type` — tous venus de
+> `_geo_distance` et de `_script`, deux clés que ferrite refuse) comptaient donc
+> **servis** par simple silence. Les déclarer coûte quatre requêtes, et les deux
+> mesures ci-dessus sont prises à déclaration corrigée des deux côtés : 2 277
+> avant, 2 297 après. Le garde-fou de la ligne précédente a une condition qu'on
+> ne lit pas dans son énoncé — il ne s'arme que sur une capacité qui a commencé
+> à se déclarer.
+>
 > Les **125** de la ligne 2 supposaient les cinq faits, `runtime_mappings` et
 > `script_fields` compris : ils demandent Painless, et la mesure a servi à
 > décider de ne pas les faire (voir plus bas). Les autres lignes n'ont pas été
@@ -260,7 +288,7 @@ débloque. Deux colonnes, parce qu'elles ne disent pas la même chose :
 | 2 | **18** — `fields`, `docvalue_fields`, `stored_fields` — **faite** (+ `runtime_mappings`, `script_fields`, mesurés puis écartés) | 504 | **125** | 4 |
 | 3 | **19** — `_delete_by_query`, `_update_by_query` | 77 | **75** | **10** |
 | 4 | **05** — `highlight` — **faite** | 102 | **13** | 0 |
-| 5 | **09** — `sort` : `missing`, `mode`, `unmapped_type` | 94 | 15 | 1 |
+| 5 | **09** — `sort` : `missing`, `mode`, `unmapped_type` — **faite** | 94 | **20** | 0 |
 | 6 | **12** — `terms` : `include`, `exclude`, ordre par sous-agrégation | 103 | 14 | 0 |
 | 7 | **21** — les analyzers de langue | 22 | 14 | 0 |
 | 8 | **13** — `date_histogram` : `calendar_interval`, `time_zone` | 259 | 11 | 2 |

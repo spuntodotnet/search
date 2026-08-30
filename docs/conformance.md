@@ -372,6 +372,17 @@ comme un échec : une suite figée en 7.10.2 **ne peut pas** voir un paramètre
 ajouté en 8.13. Sans la seconde source, ces quatre cas n'auraient jamais figuré
 dans un dénominateur.
 
+Et la seconde source a repayé une deuxième fois, sur une carte qui n'avait rien
+à voir avec les alias : les paramètres d'une clé de `sort` (`missing`, `mode`,
+`unmapped_type`). La suite d'OpenSearch porte **deux** cas que celle d'Elastic
+ne porte pas — `test sorting against long only fields` et `test sorting against
+double only fields`, tous deux posant un `mode` — et ses réussites passent de
+188 à **190** pendant que celle d'Elastic ne bouge toujours pas d'un cas (354
+échecs avant comme après). Deux cas, c'est peu ; mais c'est deux cas qu'aucun
+test écrit ici n'aurait comptés, et ils confirment la règle plutôt qu'ils ne
+l'illustrent : ce qu'une suite figée en 2020 ne pose pas, elle ne peut pas le
+mesurer.
+
 Trois choses en sont sorties qui ne se lisaient dans aucune documentation, et
 que la sonde [`sonde_ecriture_alias.py`](../tests/compat/sonde_ecriture_alias.py)
 fixe désormais (voir ses chiffres dans son en-tête ; le même fichier lancé contre

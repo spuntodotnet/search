@@ -110,10 +110,10 @@
     "exemple": [
      {
       "index": {
-       "_id": "0",
+       "_id": "38",
        "_index": "test-index-a",
        "routing": "\"{required\": true}",
-       "version": 500,
+       "version": 538,
        "version_type": "external"
       }
      },
@@ -122,14 +122,14 @@
      },
      {
       "index": {
-       "_id": "27",
+       "_id": "39",
        "_index": "test-index-a",
        "routing": "\"{required\": true}",
-       "version": 527,
+       "version": 539,
        "version_type": "external"
       }
      },
-     "… et 111 lignes"
+     "… et 65 lignes"
     ],
     "genre": "refus",
     "methode": "POST",
@@ -425,14 +425,14 @@
       "echecs": 2,
       "ignores": 0,
       "passes": 28,
-      "queue": "esponse received on idle HTTP channel starting with \"<!DOCTYPE HTML>\\n<html lang=\\\"en\\\">\\n    <head>\\n        <meta charset=\\\"utf-8\\\">\\n        <title>Error response</title>\\n    </head>\\n    <body>\\n        <h1>Error response</h1>\\n        <p>Error code: 400</p>\\n        <p>Message: Bad request syntax ('14').</p>\\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\\n    </body>\\n</html>\\n\"; err=<nil>\n2026/08/30 08:02:16 Unsolicited response received on idle HTTP channel starting with \"<!DOCTYPE HTML>\\n<html lang=\\\"en\\\">\\n    <head>\\n        <meta charset=\\\"utf-8\\\">\\n        <title>Error response</title>\\n    </head>\\n    <body>\\n        <h1>Error response</h1>\\n        <p>Error code: 400</p>\\n        <p>Message: Bad request syntax ('14').</p>\\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\\n    </body>\\n</html>\\n\"; err=<nil>\n    json_reader_integration_test.go:57: Error response: [502 Bad Gateway] timed out\n--- FAIL: TestJSONReaderIntegration (480.38s)\n    --- FAIL: TestJSONReaderIntegration/Index_and_search (480.38s)\nFAIL\nFAIL\tgithub.com/elastic/go-elasticsearch/v8/esutil\t487.705s\nFAIL\ngo: downloading github.com/elastic/elastic-transport-go/v8 v8.5.0\ngo: downloading go.opentelemetry.io/otel/trace v1.21.0\ngo: downloading go.opentelemetry.io/otel v1.21.0\ngo: downloading go.opentelemetry.io/otel/metric v1.21.0\ngo: downloading github.com/go-logr/logr v1.3.0\ngo: downloading github.com/go-logr/stdr v1.2.2\n",
+      "queue": "esponse received on idle HTTP channel starting with \"<!DOCTYPE HTML>\\n<html lang=\\\"en\\\">\\n    <head>\\n        <meta charset=\\\"utf-8\\\">\\n        <title>Error response</title>\\n    </head>\\n    <body>\\n        <h1>Error response</h1>\\n        <p>Error code: 400</p>\\n        <p>Message: Bad request syntax ('14').</p>\\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\\n    </body>\\n</html>\\n\"; err=<nil>\n2026/08/30 20:42:30 Unsolicited response received on idle HTTP channel starting with \"<!DOCTYPE HTML>\\n<html lang=\\\"en\\\">\\n    <head>\\n        <meta charset=\\\"utf-8\\\">\\n        <title>Error response</title>\\n    </head>\\n    <body>\\n        <h1>Error response</h1>\\n        <p>Error code: 400</p>\\n        <p>Message: Bad request syntax ('14').</p>\\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\\n    </body>\\n</html>\\n\"; err=<nil>\n    json_reader_integration_test.go:57: Error response: [502 Bad Gateway] timed out\n--- FAIL: TestJSONReaderIntegration (480.31s)\n    --- FAIL: TestJSONReaderIntegration/Index_and_search (480.31s)\nFAIL\nFAIL\tgithub.com/elastic/go-elasticsearch/v8/esutil\t488.816s\nFAIL\ngo: downloading github.com/elastic/elastic-transport-go/v8 v8.5.0\ngo: downloading go.opentelemetry.io/otel/trace v1.21.0\ngo: downloading go.opentelemetry.io/otel v1.21.0\ngo: downloading github.com/go-logr/logr v1.3.0\ngo: downloading go.opentelemetry.io/otel/metric v1.21.0\ngo: downloading github.com/go-logr/stdr v1.2.2\n",
       "total": 30
      },
      "ferrite": {
       "echecs": 14,
       "ignores": 0,
       "passes": 16,
-      "queue": "esponse received on idle HTTP channel starting with \"<!DOCTYPE HTML>\\n<html lang=\\\"en\\\">\\n    <head>\\n        <meta charset=\\\"utf-8\\\">\\n        <title>Error response</title>\\n    </head>\\n    <body>\\n        <h1>Error response</h1>\\n        <p>Error code: 400</p>\\n        <p>Message: Bad request syntax ('14').</p>\\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\\n    </body>\\n</html>\\n\"; err=<nil>\n2026/08/30 08:11:13 Unsolicited response received on idle HTTP channel starting with \"<!DOCTYPE HTML>\\n<html lang=\\\"en\\\">\\n    <head>\\n        <meta charset=\\\"utf-8\\\">\\n        <title>Error response</title>\\n    </head>\\n    <body>\\n        <h1>Error response</h1>\\n        <p>Error code: 400</p>\\n        <p>Message: Bad request syntax ('14').</p>\\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\\n    </body>\\n</html>\\n\"; err=<nil>\n    json_reader_integration_test.go:57: Error response: [502 Bad Gateway] timed out\n--- FAIL: TestJSONReaderIntegration (480.34s)\n    --- FAIL: TestJSONReaderIntegration/Index_and_search (480.34s)\nFAIL\nFAIL\tgithub.com/elastic/go-elasticsearch/v8/esutil\t488.736s\nFAIL\ngo: downloading github.com/elastic/elastic-transport-go/v8 v8.5.0\ngo: downloading go.opentelemetry.io/otel/trace v1.21.0\ngo: downloading go.opentelemetry.io/otel v1.21.0\ngo: downloading github.com/go-logr/logr v1.3.0\ngo: downloading go.opentelemetry.io/otel/metric v1.21.0\ngo: downloading github.com/go-logr/stdr v1.2.2\n",
+      "queue": "esponse received on idle HTTP channel starting with \"<!DOCTYPE HTML>\\n<html lang=\\\"en\\\">\\n    <head>\\n        <meta charset=\\\"utf-8\\\">\\n        <title>Error response</title>\\n    </head>\\n    <body>\\n        <h1>Error response</h1>\\n        <p>Error code: 400</p>\\n        <p>Message: Bad request syntax ('14').</p>\\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\\n    </body>\\n</html>\\n\"; err=<nil>\n2026/08/30 20:51:29 Unsolicited response received on idle HTTP channel starting with \"<!DOCTYPE HTML>\\n<html lang=\\\"en\\\">\\n    <head>\\n        <meta charset=\\\"utf-8\\\">\\n        <title>Error response</title>\\n    </head>\\n    <body>\\n        <h1>Error response</h1>\\n        <p>Error code: 400</p>\\n        <p>Message: Bad request syntax ('14').</p>\\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\\n    </body>\\n</html>\\n\"; err=<nil>\n    json_reader_integration_test.go:57: Error response: [502 Bad Gateway] timed out\n--- FAIL: TestJSONReaderIntegration (480.36s)\n    --- FAIL: TestJSONReaderIntegration/Index_and_search (480.36s)\nFAIL\nFAIL\tgithub.com/elastic/go-elasticsearch/v8/esutil\t489.165s\nFAIL\ngo: downloading github.com/elastic/elastic-transport-go/v8 v8.5.0\ngo: downloading go.opentelemetry.io/otel/trace v1.21.0\ngo: downloading go.opentelemetry.io/otel v1.21.0\ngo: downloading github.com/go-logr/logr v1.3.0\ngo: downloading go.opentelemetry.io/otel/metric v1.21.0\ngo: downloading github.com/go-logr/stdr v1.2.2\n",
       "total": 30
      }
     }
@@ -482,7 +482,7 @@
      },
      "… et 1997 lignes"
     ],
-    "requetes": 98,
+    "requetes": 100,
     "traits": [
      "route:bulk"
     ],
@@ -814,7 +814,7 @@
     "echecs": 0,
     "exemple": {
      "scroll": "1m",
-     "scroll_id": "9TiLn54AhF2O-GcFNxeXbQ"
+     "scroll_id": "gQG6dk4bmZPs8ucmj6EbaG"
     },
     "requetes": 12,
     "traits": [
@@ -1808,14 +1808,14 @@
       "echecs": 37,
       "ignores": 2,
       "passes": 45,
-      "queue": "rstore/test_vectorstore.py::TestVectorStore::test_search_bm25\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_bm25_with_filter\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_delete\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_indexing_exception_error\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_user_agent_default\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_user_agent_custom\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_bulk_args\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_max_marginal_relevance_search_errors\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_max_marginal_relevance_search\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_metadata_mapping\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_custom_index_settings\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_custom_index_settings_with_collision\n== 6 failed, 66 passed, 6 skipped, 1 warning, 40 errors in 153.41s (0:02:33) ===\n[nettoyage_compatible] repose sur 3 modules\n",
+      "queue": "rstore/test_vectorstore.py::TestVectorStore::test_search_bm25\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_bm25_with_filter\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_delete\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_indexing_exception_error\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_user_agent_default\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_user_agent_custom\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_bulk_args\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_max_marginal_relevance_search_errors\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_max_marginal_relevance_search\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_metadata_mapping\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_custom_index_settings\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_custom_index_settings_with_collision\n== 6 failed, 66 passed, 6 skipped, 1 warning, 40 errors in 185.53s (0:03:05) ===\n[nettoyage_compatible] repose sur 3 modules\n",
       "total": 84
      },
      "ferrite": {
       "echecs": 39,
       "ignores": 2,
       "passes": 43,
-      "queue": "t_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_user_agent_default\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_user_agent_custom\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_bulk_args\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_max_marginal_relevance_search_errors\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_max_marginal_relevance_search\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_metadata_mapping\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_custom_index_settings\nERROR test_elasticsearch/test_server/test_helpers.py::test_children_are_reindexed_correctly\nERROR test_elasticsearch/test_server/test_helpers.py::test_reindex_index_datastream[None]\nERROR test_elasticsearch/test_server/test_helpers.py::test_reindex_index_datastream[create]\nERROR test_elasticsearch/test_server/test_helpers.py::test_reindex_index_datastream_op_type_index\nERROR test_elasticsearch/test_server/test_mapbox_vector_tile.py::test_mapbox_vector_tile_error\nERROR test_elasticsearch/test_server/test_mapbox_vector_tile.py::test_mapbox_vector_tile_response\n======== 33 failed, 43 passed, 2 skipped, 1 warning, 6 errors in 24.67s ========\n[nettoyage_compatible] repose sur 3 modules\n",
+      "queue": "t_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_user_agent_default\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_user_agent_custom\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_bulk_args\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_max_marginal_relevance_search_errors\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_max_marginal_relevance_search\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_metadata_mapping\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_custom_index_settings\nERROR test_elasticsearch/test_server/test_helpers.py::test_children_are_reindexed_correctly\nERROR test_elasticsearch/test_server/test_helpers.py::test_reindex_index_datastream[None]\nERROR test_elasticsearch/test_server/test_helpers.py::test_reindex_index_datastream[create]\nERROR test_elasticsearch/test_server/test_helpers.py::test_reindex_index_datastream_op_type_index\nERROR test_elasticsearch/test_server/test_mapbox_vector_tile.py::test_mapbox_vector_tile_error\nERROR test_elasticsearch/test_server/test_mapbox_vector_tile.py::test_mapbox_vector_tile_response\n======== 33 failed, 43 passed, 2 skipped, 1 warning, 6 errors in 25.44s ========\n[nettoyage_compatible] repose sur 3 modules\n",
       "total": 84
      }
     }
@@ -2332,14 +2332,14 @@
       "echecs": 6,
       "ignores": 7,
       "passes": 71,
-      "queue": "'-vv' to show\n/src/test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py:949: AssertionError: assert {'type': 'den...'cosine', ...} == {'type': 'den...ty': 'cosine'}\n=============================== warnings summary ===============================\ntest_elasticsearch/test_server/test_rest_api_spec.py:637\n  /src/test_elasticsearch/test_server/test_rest_api_spec.py:637: UserWarning: Could not load REST API tests: TLS options require scheme to be 'https'\n    warnings.warn(f\"Could not load REST API tests: {str(e)}\")\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n=========================== short test summary info ============================\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_without_metadata\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_without_metadata_async\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_add_vectors\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_knn_with_hybrid_search\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_knn_with_hybrid_search_rrf\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_metadata_mapping\n======== 6 failed, 71 passed, 7 skipped, 1 warning in 803.84s (0:13:23) ========\n",
+      "queue": "'-vv' to show\n/src/test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py:949: AssertionError: assert {'type': 'den...'cosine', ...} == {'type': 'den...ty': 'cosine'}\n=============================== warnings summary ===============================\ntest_elasticsearch/test_server/test_rest_api_spec.py:637\n  /src/test_elasticsearch/test_server/test_rest_api_spec.py:637: UserWarning: Could not load REST API tests: TLS options require scheme to be 'https'\n    warnings.warn(f\"Could not load REST API tests: {str(e)}\")\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n=========================== short test summary info ============================\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_without_metadata\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_without_metadata_async\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_add_vectors\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_knn_with_hybrid_search\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_knn_with_hybrid_search_rrf\nFAILED test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_metadata_mapping\n======== 6 failed, 71 passed, 7 skipped, 1 warning in 882.14s (0:14:42) ========\n",
       "total": 84
      },
      "ferrite": {
       "echecs": 82,
       "ignores": 2,
       "passes": 0,
-      "queue": "OR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_bm25\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_bm25_with_filter\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_delete\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_indexing_exception_error\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_user_agent_default\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_user_agent_custom\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_bulk_args\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_max_marginal_relevance_search_errors\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_max_marginal_relevance_search\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_metadata_mapping\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_custom_index_settings\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_custom_index_settings_with_collision\n=================== 2 skipped, 1 warning, 82 errors in 0.53s ===================\n",
+      "queue": "OR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_bm25\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_search_bm25_with_filter\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_delete\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_indexing_exception_error\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_user_agent_default\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_user_agent_custom\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_bulk_args\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_max_marginal_relevance_search_errors\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_max_marginal_relevance_search\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_metadata_mapping\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_custom_index_settings\nERROR test_elasticsearch/test_server/test_vectorstore/test_vectorstore.py::TestVectorStore::test_custom_index_settings_with_collision\n=================== 2 skipped, 1 warning, 82 errors in 0.54s ===================\n",
       "total": 84
      }
     }
@@ -2351,7 +2351,7 @@
     "echecs": 0,
     "exemple": {
      "scroll": "5m",
-     "scroll_id": "YG4t2muMdh8cA593wpI6wT"
+     "scroll_id": "jobV94cCkh2jhXYxUuGHHr"
     },
     "requetes": 141,
     "traits": [

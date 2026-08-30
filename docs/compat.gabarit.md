@@ -399,6 +399,21 @@ récents. Deux comportements, tous deux mesurés sur un vrai ES :
   un `search_phase_execution_exception` « all shards failed », avec une
   `root_cause` par index — le format exact d'ES.
 
+  C'est là que sert `unmapped_type` : il dit sous quel type traiter le champ
+  dans les index qui l'ignorent, plutôt que de perdre leurs documents. Mais le
+  type choisi doit se **fusionner** avec celui des autres, et le garde-fou d'ES
+  n'a rien d'évident — deux index dont les clés de tri ne tombent pas dans la
+  même famille (`LONG` pour `byte` / `short` / `integer` / `long` / `date` /
+  `boolean`, `FLOAT`, `DOUBLE`, `STRING`) font échouer la recherche **entière** :
+  `Can't sort on field [x]; the field has incompatible sort types: [LONG] and
+  [STRING] across shards!`. `float` et `double` n'y sont pas ensemble, ce
+  qu'aucune documentation ne dit. Deux détails mesurés : l'erreur nomme le
+  champ tel que le **second** index le voit — donc `__anonymous_` quand c'est
+  lui qui porte l'`unmapped_type` — et elle ne tombe que si les deux index ont
+  **apporté un document** (un `size: 0`, ou une requête qui ne ramène rien d'un
+  côté, rendent 200 malgré le conflit). Sans ce contrôle, ferrite comparait un
+  entier à une chaîne en les déclarant ex æquo : un ordre faux, en 200.
+
 `tests/compat/diff_multi_index.py` mesure tout ça contre un vrai ES 8.15 :
 **87/87 appels identiques**, 0 divergence assumée, 0 écart. Le même fichier se
 lance contre **deux** Elasticsearch (`--calibrer`) pour vérifier que ses verdicts
@@ -1154,6 +1169,14 @@ pas pour être découverts en production.
     la somme reste finie, les deux moteurs rendent la même valeur, ordre des
     valeurs d'un document multivalué compris. C'est ce que la section suivante
     mesure.
+
+    Elle ne couvre pas non plus le tableau **`sort`**, qui a le même problème et
+    une autre réponse. Une valeur de tri absente sur un flottant *est*
+    `Infinity` chez ES, et une somme (`mode: sum`) qui déborde l'est aussi : les
+    deux y sortent en **chaîne**. ferrite les rend donc en chaîne, et pas `null`
+    — la valeur n'y est pas perdue avant d'arriver, contrairement à
+    l'accumulateur d'une agrégation, et un `sort` que le client renvoie tel quel
+    doit se relire.
 
 ### L'ordre dans lequel une agrégation lit les valeurs d'un document
 

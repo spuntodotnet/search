@@ -1862,15 +1862,23 @@
       "nom_texte": "sort",
       "etat": "partiel",
       "poids": 3.2,
-      "detail": "multi-clés, `asc` / `desc`, sur `keyword` / numérique / `date` / `boolean`, plus `_score` et `_doc`. Valeurs manquantes en dernier (`missing: _last`). Le tableau `sort` est rendu dans chaque hit. En multi-index, un champ non mappé par un des index donne un échec **de ce shard**, comme chez ES",
+      "detail": "multi-clés, `asc` / `desc`, sur `keyword` / numérique / `date` / `boolean`, plus `_score` et `_doc`. Le tableau `sort` est rendu dans chaque hit, et c'est là que se lisent les valeurs absentes : sur un entier, une date ou un `boolean` ES ne rend pas `null` mais une **vraie valeur** (`9223372036854775807` / `-9223372036854775808`, donc ex æquo avec un document qui la porte pour de bon), sur un flottant `\"Infinity\"` / `\"-Infinity\"` en **chaîne**, et seul un `keyword` rend `null`. En multi-index, un champ non mappé par un des index donne un échec **de ce shard** — sauf si `unmapped_type` fournit l'échappatoire. Deux index dont le tri ne tombe pas dans la même **famille** (`LONG` pour `byte`/`short`/`integer`/`long`/`date`/`boolean`, `FLOAT`, `DOUBLE`, `STRING`) ne se fusionnent pas : ES rend 400, et `float` et `double` n'y sont **pas** ensemble. Mesuré par [`sonde_tri.py`](../tests/compat/sonde_tri.py)",
       "parametres": {
-        "refuses": [
+        "supportes": [
           "missing",
           "mode",
+          "unmapped_type"
+        ],
+        "refuses": [
           "nested",
-          "unmapped_type",
-          "le tri par script",
-          "le tri sur un champ text"
+          "numeric_type",
+          "format",
+          "ignore_unmapped",
+          "le tri par script (_script, et son type)",
+          "le tri géographique (_geo_distance, et avec lui unit, distance_type, pin.location)",
+          "le tri sur un champ text",
+          "les trois paramètres ci-dessus à côté de _score",
+          "les trois paramètres ci-dessus en query string"
         ]
       }
     },

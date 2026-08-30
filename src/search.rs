@@ -11,7 +11,7 @@ use tantivy::{DocAddress, DocId, Score, Searcher, SegmentOrdinal, SegmentReader}
 
 use crate::engine::Generation;
 use crate::error::{EsError, EsResult};
-use crate::mapping::FieldKind;
+use crate::mapping::{FieldKind, FieldType};
 
 // ---------------------------------------------------------------------------
 // Tri
@@ -21,7 +21,28 @@ use crate::mapping::FieldKind;
 pub enum SortKey {
     Score,
     Doc,
-    Field { name: String, kind: FieldKind },
+    Field(Box<SortField>),
+}
+
+/// Une cle de tri sur un champ, **resolue dans le mapping d'un index**.
+///
+/// Deux index vises par la meme recherche n'en produisent donc pas la meme :
+/// l'un peut mapper le champ, l'autre ne le connaitre que par `unmapped_type`.
+#[derive(Debug, Clone)]
+pub struct SortField {
+    pub name: String,
+    /// Le type retenu pour ce tri : celui du mapping, ou celui d'`unmapped_type`
+    /// quand cet index-la ne connait pas le champ.
+    pub ty: FieldType,
+    /// Cet index mappe-t-il le champ ? Sinon, il n'a pas de colonne a lire et
+    /// **tous** ses documents portent la valeur de remplacement.
+    pub mappe: bool,
+    /// Le `mode` demande. `None` est le defaut d'ES : le minimum en ordre
+    /// croissant, le maximum en decroissant.
+    pub mode: Option<SortMode>,
+    /// Ce qu'un document sans valeur porte, deja typee selon le champ (voir
+    /// [`SortValue`]).
+    pub absente: SortValue,
 }
 
 #[derive(Debug, Clone)]
@@ -30,22 +51,79 @@ pub struct SortSpec {
     pub asc: bool,
 }
 
+/// Quelle valeur d'un champ multivalue sert au tri.
+///
+/// Le defaut d'ES n'est pas un mode mais une **regle** : le minimum en ordre
+/// croissant, le maximum en decroissant (mesure : `[5, 1, 9, 3]` se classe sur 1
+/// en `asc` et sur 9 en `desc`). Un `mode` explicite la remplace des deux cotes
+/// — `desc` avec `mode: min` classe bien sur le minimum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortMode {
+    Min,
+    Max,
+    Sum,
+    Avg,
+    Median,
+}
+
+impl SortMode {
+    /// `min` / `max` / `sum` / `avg` / `median`, insensible a la casse (mesure :
+    /// ES accepte `MIN`).
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.to_ascii_lowercase().as_str() {
+            "min" => Self::Min,
+            "max" => Self::Max,
+            "sum" => Self::Sum,
+            "avg" => Self::Avg,
+            "median" => Self::Median,
+            _ => return None,
+        })
+    }
+
+    /// `sum`, `avg` et `median` n'ont de sens que sur des nombres : ES refuse
+    /// les trois sur un `keyword`, avec cette phrase-la.
+    pub fn numerique_seulement(self) -> bool {
+        matches!(self, Self::Sum | Self::Avg | Self::Median)
+    }
+}
+
+/// La **famille** de tri d'un champ, telle qu'ES la nomme quand deux shards
+/// n'ont pas la meme.
+///
+/// Ce n'est pas le type du champ : `byte`, `short`, `integer`, `long`, `date` et
+/// `boolean` trient tous en `LONG`. Mais `float` et `double` ne trient **pas**
+/// dans la meme famille, ce qu'aucune documentation ne dit et qui se mesure :
+/// deux index dont l'un mappe `f` en `float` et l'autre en `double` font echouer
+/// la recherche entiere.
+pub fn famille_de_tri(ty: FieldType) -> &'static str {
+    match ty {
+        FieldType::Keyword | FieldType::Text => "STRING",
+        FieldType::Float => "FLOAT",
+        FieldType::Double => "DOUBLE",
+        _ => "LONG",
+    }
+}
+
+/// Une cle de tri, telle qu'elle se compare et telle qu'elle se rend.
+///
+/// Une seule variante n'est pas une valeur : [`SortValue::Absente`], qui n'existe
+/// que sur un `keyword`. ES n'y a pas de sentinelle de chaine — il pose un
+/// marqueur qui envoie le document en tete ou en queue **quel que soit le sens
+/// du tri**, et rend `null` dans le tableau `sort`.
+///
+/// Partout ailleurs, une valeur absente est une **vraie valeur** : `i64::MAX` /
+/// `i64::MIN` sur un entier, une date ou un booleen, `+inf` / `-inf` sur un
+/// flottant. Un document qui porte reellement `9223372036854775807` est donc ex
+/// aequo avec un document qui n'a rien, exactement comme chez ES — et une somme
+/// de flottants qui deborde rend `"Infinity"` comme une valeur manquante.
 #[derive(Debug, Clone, PartialEq)]
-enum SortValue {
-    /// Une valeur absente qui n'a **pas** de valeur de remplacement chez ES :
-    /// le document part en dernier, quel que soit le sens du tri, et son
-    /// tableau `sort` porte `rendu`.
-    ///
-    /// C'est le cas d'un `keyword` (`null`) et d'un flottant (`"Infinity"` /
-    /// `"-Infinity"` — des **chaines**, JSON n'ayant pas l'infini). Un entier,
-    /// un booleen et une date, eux, ne passent pas par la : ES leur substitue
-    /// une vraie valeur (`i64::MAX` en croissant, `i64::MIN` en decroissant),
-    /// donc ferrite en fait un `I64` — et un document qui porte *reellement*
-    /// `9223372036854775807` se retrouve alors ex aequo avec un document qui
-    /// n'a rien, exactement comme chez ES. Mesure par
-    /// `tests/compat/fuzz_vs_es.py`.
-    Missing(Value),
+pub enum SortValue {
+    Absente {
+        en_tete: bool,
+    },
     I64(i64),
+    /// Un flottant, y compris non fini : JSON n'ayant ni l'infini ni `NaN`, ES
+    /// les rend en **chaine** (`"Infinity"`, `"-Infinity"`, `"NaN"`).
     F64(f64),
     Str(String),
 }
@@ -62,25 +140,33 @@ impl SortValue {
 
     fn to_json(&self) -> Value {
         match self {
-            Self::Missing(rendu) => rendu.clone(),
+            Self::Absente { .. } => Value::Null,
             Self::I64(n) => json!(n),
-            Self::F64(n) => json!(n),
+            Self::F64(n) if n.is_finite() => json!(n),
+            Self::F64(n) if n.is_nan() => json!("NaN"),
+            Self::F64(n) => json!(if *n > 0.0 { "Infinity" } else { "-Infinity" }),
             Self::Str(s) => json!(s),
         }
     }
 }
 
-/// Ce qu'ES met a la place d'une valeur de tri absente, selon le type de la
-/// colonne et le sens du tri.
+/// Ce qu'ES met a la place d'une valeur de tri absente : le bout du tri ou le
+/// document doit partir.
 ///
-/// Sur un entier, un booleen ou une date, c'est une **vraie valeur** : le
-/// document se compare comme s'il la portait. Sur un `keyword` ou un flottant,
-/// c'est un rendu sans valeur : le document part en dernier.
-fn sentinelle(kind: FieldKind, asc: bool) -> SortValue {
-    match kind {
-        FieldKind::Keyword | FieldKind::Text => SortValue::Missing(Value::Null),
-        FieldKind::F64 => SortValue::Missing(json!(if asc { "Infinity" } else { "-Infinity" })),
-        _ => SortValue::I64(if asc { i64::MAX } else { i64::MIN }),
+/// `_last` est le defaut, et il ne depend pas du sens : en `asc` c'est la borne
+/// haute (`i64::MAX`, `+inf`), en `desc` la borne basse. `_first` est l'inverse.
+pub fn sentinelle(ty: FieldType, asc: bool, en_tete: bool) -> SortValue {
+    // La sentinelle est **haute** quand elle doit partir en queue d'un tri
+    // croissant ou en tete d'un tri decroissant.
+    let haute = asc != en_tete;
+    match ty {
+        FieldType::Keyword | FieldType::Text => SortValue::Absente { en_tete },
+        FieldType::Float | FieldType::Double => SortValue::F64(if haute {
+            f64::INFINITY
+        } else {
+            f64::NEG_INFINITY
+        }),
+        _ => SortValue::I64(if haute { i64::MAX } else { i64::MIN }),
     }
 }
 
@@ -96,6 +182,85 @@ fn extremum<T: PartialOrd>(valeurs: impl Iterator<Item = T>, asc: bool) -> Optio
         None => Some(v),
         Some(a) => Some(if (v < a) == asc { v } else { a }),
     })
+}
+
+/// `Math.round(double)` de Java, qui n'est ni `f64::round` ni `floor`.
+///
+/// Java arrondit **vers le haut** a la demie (`floor(x + 0.5)`), la ou Rust
+/// s'ecarte de zero : `-2,5` vaut `-2` chez Java et `-3` chez Rust. C'est
+/// exactement ce que fait `MultiValueMode.AVG` sur une colonne d'entiers, donc
+/// ce qui decide de l'ordre.
+///
+/// Le calcul ne passe **pas** par `x + 0.5` : cette addition arrondit, et fait
+/// franchir un entier a une valeur qui ne l'atteignait pas
+/// (`0.49999999999999994` y donnerait 1 au lieu de 0). C'est le defaut que le
+/// JDK corrige depuis sa 7. La partie fractionnaire, elle, se soustrait sans
+/// perte — elle tient dans la mantisse.
+fn arrondi_java(x: f64) -> i64 {
+    let plancher = x.floor();
+    let arrondi = if x - plancher >= 0.5 {
+        plancher + 1.0
+    } else {
+        plancher
+    };
+    // `as` sature aux bornes et rend 0 sur `NaN`, comme `Math.round`.
+    arrondi as i64
+}
+
+/// La somme d'une colonne d'entiers, **qui deborde en silence**.
+///
+/// C'est ce que fait ES, parce que c'est ce que fait `long` en Java :
+/// `[1, i64::MAX]` se classe sur `i64::MIN`. Saturer serait plus raisonnable et
+/// rendrait un autre ordre que le sien.
+fn somme_i64(vals: &[i64]) -> i64 {
+    vals.iter().fold(0i64, |a, v| a.wrapping_add(*v))
+}
+
+/// La valeur qu'un document multivalue porte, selon `mode`.
+///
+/// `vals` arrive dans l'ordre de la colonne, qui est **triee croissante**
+/// (voir [`crate::engine`] : `pose`) — comme les `SortedNumericDocValues` de
+/// Lucene, et c'est ce que `median` exige. `min` et `max` n'en dependent pas :
+/// ils balaient.
+fn choisir_i64(vals: &[i64], mode: SortMode) -> i64 {
+    let n = vals.len();
+    match mode {
+        SortMode::Min => vals.iter().copied().min().unwrap_or(0),
+        SortMode::Max => vals.iter().copied().max().unwrap_or(0),
+        SortMode::Sum => somme_i64(vals),
+        // `count > 1 ? Math.round(total / count) : total` : a une seule valeur,
+        // ES ne passe pas par le flottant, donc ne perd rien au-dela de 2^53.
+        SortMode::Avg if n == 1 => vals[0],
+        SortMode::Avg => arrondi_java(somme_i64(vals) as f64 / n as f64),
+        SortMode::Median => {
+            let i = (n - 1) / 2;
+            if n % 2 == 0 {
+                arrondi_java((vals[i] as f64 + vals[i + 1] as f64) / 2.0)
+            } else {
+                vals[i]
+            }
+        }
+    }
+}
+
+/// La meme chose sur une colonne de flottants — sans arrondi : `avg` y rend
+/// `8,5 / 3 = 2,8333333333333335`, mesure comprise.
+fn choisir_f64(vals: &[f64], mode: SortMode) -> f64 {
+    let n = vals.len();
+    match mode {
+        SortMode::Min => extremum(vals.iter().copied(), true).unwrap_or(0.0),
+        SortMode::Max => extremum(vals.iter().copied(), false).unwrap_or(0.0),
+        SortMode::Sum => vals.iter().sum(),
+        SortMode::Avg => vals.iter().sum::<f64>() / n as f64,
+        SortMode::Median => {
+            let i = (n - 1) / 2;
+            if n % 2 == 0 {
+                (vals[i] + vals[i + 1]) / 2.0
+            } else {
+                vals[i]
+            }
+        }
+    }
 }
 
 /// Un document candidat, avant la fusion entre index.
@@ -129,6 +294,9 @@ struct SortCollector {
 enum Accessor {
     Score,
     Doc,
+    /// Le champ n'est pas mappe par cet index : c'est l'echappatoire
+    /// `unmapped_type`, ou chaque document porte la valeur de remplacement.
+    Aucune,
     Str(Option<StrColumn>),
     I64(Column<i64>),
     F64(Column<f64>),
@@ -137,11 +305,12 @@ enum Accessor {
 }
 
 /// Un accesseur, plus ce qu'il faut pour lire un champ **multivalue** et pour
-/// rendre une valeur absente comme ES la rend : le sens du tri, et la
+/// rendre une valeur absente comme ES la rend : le sens du tri, le `mode`, et la
 /// sentinelle de son type.
 struct Cle {
     acc: Accessor,
     asc: bool,
+    mode: Option<SortMode>,
     absente: SortValue,
 }
 
@@ -151,6 +320,11 @@ struct SortSegmentCollector {
     accessors: Vec<Cle>,
     hits: Vec<Hit>,
     buf: Vec<u8>,
+    /// Les valeurs d'un document, relues telles que la colonne les porte quand
+    /// un `mode` en demande plus que le minimum ou le maximum. Reutilise d'un
+    /// document a l'autre : `sum`, `avg` et `median` n'allouent pas par hit.
+    nums: Vec<i64>,
+    reels: Vec<f64>,
 }
 
 impl Collector for SortCollector {
@@ -165,23 +339,29 @@ impl Collector for SortCollector {
         let ff = reader.fast_fields();
         let mut accessors = Vec::with_capacity(self.specs.len());
         for spec in self.specs.iter() {
-            let (acc, absente) = match &spec.key {
-                SortKey::Score => (Accessor::Score, SortValue::Missing(Value::Null)),
-                SortKey::Doc => (Accessor::Doc, SortValue::Missing(Value::Null)),
-                SortKey::Field { name, kind } => (
-                    match kind {
-                        FieldKind::Keyword | FieldKind::Text => Accessor::Str(ff.str(name)?),
-                        FieldKind::I64 => Accessor::I64(ff.i64(name)?),
-                        FieldKind::F64 => Accessor::F64(ff.f64(name)?),
-                        FieldKind::Bool => Accessor::Bool(ff.bool(name)?),
-                        FieldKind::Date => Accessor::Date(ff.date(name)?),
+            let (acc, mode, absente) = match &spec.key {
+                SortKey::Score => (Accessor::Score, None, SortValue::Absente { en_tete: false }),
+                SortKey::Doc => (Accessor::Doc, None, SortValue::Absente { en_tete: false }),
+                // Un `unmapped_type` sur un index qui ignore le champ : il n'y a
+                // pas de colonne a ouvrir, tous ses documents sont « sans
+                // valeur ».
+                SortKey::Field(f) if !f.mappe => (Accessor::Aucune, f.mode, f.absente.clone()),
+                SortKey::Field(f) => (
+                    match f.ty.kind() {
+                        FieldKind::Keyword | FieldKind::Text => Accessor::Str(ff.str(&f.name)?),
+                        FieldKind::I64 => Accessor::I64(ff.i64(&f.name)?),
+                        FieldKind::F64 => Accessor::F64(ff.f64(&f.name)?),
+                        FieldKind::Bool => Accessor::Bool(ff.bool(&f.name)?),
+                        FieldKind::Date => Accessor::Date(ff.date(&f.name)?),
                     },
-                    sentinelle(*kind, spec.asc),
+                    f.mode,
+                    f.absente.clone(),
                 ),
             };
             accessors.push(Cle {
                 acc,
                 asc: spec.asc,
+                mode,
                 absente,
             });
         }
@@ -191,6 +371,8 @@ impl Collector for SortCollector {
             accessors,
             hits: Vec::new(),
             buf: Vec::new(),
+            nums: Vec::new(),
+            reels: Vec::new(),
         })
     }
 
@@ -203,24 +385,59 @@ impl Collector for SortCollector {
     }
 }
 
+/// La cle de tri d'une colonne d'entiers — la meme fonction pour un `long`, une
+/// date et un booleen, qui se comparent tous les trois comme des entiers.
+///
+/// Sans `mode`, elle ne touche pas au tampon : le cas courant reste un simple
+/// balayage. Avec, elle le remplit une fois par document et le reutilise —
+/// `sum`, `avg` et `median` n'allouent donc pas par hit.
+fn cle_entiere<I: Iterator<Item = i64>>(
+    valeurs: I,
+    mode: Option<SortMode>,
+    asc: bool,
+    tampon: &mut Vec<i64>,
+) -> Option<SortValue> {
+    match mode {
+        None => extremum(valeurs, asc).map(SortValue::I64),
+        Some(m) => {
+            tampon.clear();
+            tampon.extend(valeurs);
+            (!tampon.is_empty()).then(|| SortValue::I64(choisir_i64(tampon, m)))
+        }
+    }
+}
+
 impl SegmentCollector for SortSegmentCollector {
     type Fruit = Vec<Hit>;
 
     fn collect(&mut self, doc: DocId, score: Score) {
         let mut keys = Vec::with_capacity(self.accessors.len());
         for cle in &self.accessors {
-            // Un champ multivalue se trie sur son minimum en croissant et sur
-            // son maximum en decroissant : c'est le `mode` par defaut d'ES.
+            // Sans `mode`, un champ multivalue se trie sur son minimum en
+            // croissant et sur son maximum en decroissant : c'est le defaut
+            // d'ES, et il depend donc du sens du tri. Avec, c'est le `mode` qui
+            // decide, et le sens n'entre plus en compte.
             let asc = cle.asc;
             let absente = || cle.absente.clone();
+            let nums = &mut self.nums;
+            let reels = &mut self.reels;
             keys.push(match &cle.acc {
                 Accessor::Score => SortValue::F64(f64::from(score)),
                 Accessor::Doc => SortValue::I64(i64::from(doc)),
+                Accessor::Aucune => absente(),
                 Accessor::Str(col) => match col {
                     // Les ordinaux d'un dictionnaire tantivy suivent l'ordre
                     // lexicographique : le plus petit ordinal est la plus
-                    // petite chaine.
-                    Some(c) => match extremum(c.term_ords(doc), asc) {
+                    // petite chaine. `sum`, `avg` et `median` ne viennent pas
+                    // jusqu'ici — ES les refuse sur un `keyword`.
+                    Some(c) => match extremum(
+                        c.term_ords(doc),
+                        match cle.mode {
+                            Some(SortMode::Max) => false,
+                            Some(SortMode::Min) => true,
+                            _ => asc,
+                        },
+                    ) {
                         Some(ord) => {
                             self.buf.clear();
                             if c.ord_to_bytes(ord, &mut self.buf).unwrap_or(false) {
@@ -234,21 +451,36 @@ impl SegmentCollector for SortSegmentCollector {
                     None => absente(),
                 },
                 Accessor::I64(c) => {
-                    extremum(c.values_for_doc(doc), asc).map_or_else(absente, SortValue::I64)
+                    cle_entiere(c.values_for_doc(doc), cle.mode, asc, nums).unwrap_or_else(absente)
                 }
-                Accessor::F64(c) => {
-                    extremum(c.values_for_doc(doc), asc).map_or_else(absente, SortValue::F64)
-                }
+                Accessor::F64(c) => match cle.mode {
+                    None => {
+                        extremum(c.values_for_doc(doc), asc).map_or_else(absente, SortValue::F64)
+                    }
+                    Some(m) => {
+                        reels.clear();
+                        reels.extend(c.values_for_doc(doc));
+                        if reels.is_empty() {
+                            absente()
+                        } else {
+                            SortValue::F64(choisir_f64(reels, m))
+                        }
+                    }
+                },
                 // ES rend un booleen de tri en entier (`1`, non `true`), et le
                 // compare a la sentinelle des entiers : il est donc un entier
-                // de bout en bout.
-                Accessor::Bool(c) => extremum(c.values_for_doc(doc), asc)
-                    .map_or_else(absente, |b| SortValue::I64(i64::from(b))),
-                Accessor::Date(c) => extremum(
+                // de bout en bout — `mode: sum` sur `[true, false]` vaut 1.
+                Accessor::Bool(c) => {
+                    cle_entiere(c.values_for_doc(doc).map(i64::from), cle.mode, asc, nums)
+                        .unwrap_or_else(absente)
+                }
+                Accessor::Date(c) => cle_entiere(
                     c.values_for_doc(doc).map(|d| d.into_timestamp_millis()),
+                    cle.mode,
                     asc,
+                    nums,
                 )
-                .map_or_else(absente, SortValue::I64),
+                .unwrap_or_else(absente),
             });
         }
         self.hits.push(Hit {
@@ -504,6 +736,7 @@ pub fn balayer(cibles: Vec<Cible>, req: &SearchRequest) -> EsResult<Balayage> {
     let mut total = 0usize;
     let mut max_score: Option<f32> = None;
     let mut candidats: Vec<Hit> = Vec::new();
+    let mut apporte = vec![false; cibles.len()];
     for (rang, (cible, searcher)) in cibles.iter().zip(&searchers).enumerate() {
         let collector = SortCollector {
             specs: Arc::new(cible.sort.clone()),
@@ -512,12 +745,18 @@ pub fn balayer(cibles: Vec<Cible>, req: &SearchRequest) -> EsResult<Balayage> {
         };
         let locaux = searcher.search(&cible.query, &collector)?;
         total += locaux.len();
+        apporte[rang] = !locaux.is_empty();
         if !trie {
             for h in &locaux {
                 max_score = Some(max_score.map_or(h.score, |m: f32| m.max(h.score)));
             }
         }
         candidats.extend(locaux);
+    }
+    if trie {
+        if let Some(e) = conflit_de_familles(&cibles, &apporte) {
+            return Err(e);
+        }
     }
     candidats.sort_by(|a, b| compare(&req.sort_asc, a, b));
 
@@ -647,6 +886,9 @@ pub fn execute(cibles: &[Cible], req: &SearchRequest) -> EsResult<SearchOutcome>
     let mut total = 0usize;
     let mut max_score: Option<f32> = None;
     let mut candidats: Vec<Hit> = Vec::new();
+    // Quels index ont **apporte un document** : c'est ce qui decide si un
+    // conflit de familles de tri se leve (voir [`conflit_de_familles`]).
+    let mut apporte = vec![false; cibles.len()];
 
     for (rang, (cible, searcher)) in cibles.iter().zip(&searchers).enumerate() {
         if trie {
@@ -660,6 +902,7 @@ pub fn execute(cibles: &[Cible], req: &SearchRequest) -> EsResult<SearchOutcome>
             total += locaux.len();
             locaux.sort_by(|a, b| compare(&req.sort_asc, a, b));
             locaux.truncate(fenetre);
+            apporte[rang] = !locaux.is_empty();
             candidats.extend(locaux);
         } else {
             total += searcher.search(&cible.query, &Count)?;
@@ -679,6 +922,12 @@ pub fn execute(cibles: &[Cible], req: &SearchRequest) -> EsResult<SearchOutcome>
                 seg: addr.segment_ord,
                 doc: addr.doc_id,
             }));
+        }
+    }
+
+    if trie {
+        if let Some(e) = conflit_de_familles(cibles, &apporte) {
+            return Err(e);
         }
     }
 
@@ -740,10 +989,12 @@ fn compare(sort_asc: &[bool], a: &Hit, b: &Hit) -> Ordering {
     for (i, asc) in sort_asc.iter().enumerate() {
         let (av, bv) = (&a.keys[i], &b.keys[i]);
         let ord = match (av, bv) {
-            (SortValue::Missing(_), SortValue::Missing(_)) => Ordering::Equal,
-            // `missing: _last` — le defaut d'ES, quel que soit le sens du tri.
-            (SortValue::Missing(_), _) => Ordering::Greater,
-            (_, SortValue::Missing(_)) => Ordering::Less,
+            // Sur un `keyword`, ES n'a pas de sentinelle de chaine : le
+            // document part en tete ou en queue **quel que soit le sens du
+            // tri** (`missing: _first` en `desc` le met bien en premier).
+            (SortValue::Absente { .. }, SortValue::Absente { .. }) => Ordering::Equal,
+            (SortValue::Absente { en_tete }, _) => bout(*en_tete),
+            (_, SortValue::Absente { en_tete }) => bout(*en_tete).reverse(),
             _ => {
                 let c = av.cmp_present(bv);
                 if *asc {
@@ -760,6 +1011,83 @@ fn compare(sort_asc: &[bool], a: &Hit, b: &Hit) -> Ordering {
     // Departage stable : l'index vise, puis l'ordre d'indexation, comme ES
     // departage par shard puis par document.
     (a.cible, a.seg, a.doc).cmp(&(b.cible, b.seg, b.doc))
+}
+
+fn bout(en_tete: bool) -> Ordering {
+    if en_tete {
+        Ordering::Less
+    } else {
+        Ordering::Greater
+    }
+}
+
+/// Deux index qui ne trient pas dans la **meme famille** ne se fusionnent pas.
+///
+/// C'est le garde-fou d'ES, et il n'a rien d'evident : `unmapped_type` est
+/// justement fait pour trier sur un champ qu'un index ne mappe pas, mais le type
+/// choisi doit se comparer a celui des autres. `unmapped_type: keyword` sur un
+/// champ ailleurs `long` rend donc 400, pas un ordre. Sans ce controle, ferrite
+/// comparait un `I64` a un `Str` en les declarant ex aequo : un ordre faux, en
+/// 200, exactement ce que ce projet refuse.
+///
+/// Deux details mesures contre ES 8.15, tous deux visibles dans le message :
+/// l'erreur nomme le champ tel que le **second** index le voit — donc
+/// `__anonymous_` quand c'est lui qui porte l'`unmapped_type` — et les deux
+/// familles sortent dans l'ordre des index. Et elle ne tombe que si les deux
+/// index **ont apporte un document** : une recherche qui n'en ramene aucun (ou
+/// un `size: 0`) rend 200 malgre le conflit.
+fn conflit_de_familles(cibles: &[Cible], apporte: &[bool]) -> Option<EsError> {
+    let nb_cles = cibles.first().map_or(0, |c| c.sort.len());
+    for j in 0..nb_cles {
+        let mut vue: Option<&SortField> = None;
+        for (rang, cible) in cibles.iter().enumerate() {
+            if !apporte.get(rang).copied().unwrap_or(false) {
+                continue;
+            }
+            let SortKey::Field(f) = &cible.sort[j].key else {
+                continue;
+            };
+            match vue {
+                None => vue = Some(f.as_ref()),
+                Some(premier) if famille_de_tri(premier.ty) != famille_de_tri(f.ty) => {
+                    return Some(tri_incompatible(premier, f.as_ref()));
+                }
+                Some(_) => {}
+            }
+        }
+    }
+    None
+}
+
+/// Le nom sous lequel ES designe le champ d'un `unmapped_type` : le mapper
+/// anonyme qu'il fabrique pour l'occasion n'a pas d'autre nom.
+const ANONYME: &str = "__anonymous_";
+
+fn tri_incompatible(premier: &SortField, second: &SortField) -> EsError {
+    let nom = if second.mappe {
+        second.name.as_str()
+    } else {
+        ANONYME
+    };
+    let cause = EsError::illegal_argument(format!(
+        "Can't sort on field [{nom}]; the field has incompatible sort types: [{}] and [{}] across \
+         shards!",
+        famille_de_tri(premier.ty),
+        famille_de_tri(second.ty)
+    ));
+    // L'enveloppe est celle d'ES, `root_cause` vide et `reason` vide comprises :
+    // c'est une erreur de la phase de fusion, pas d'un shard, et un client qui
+    // journalise le corps doit lire la meme chose des deux cotes.
+    EsError::new(
+        axum::http::StatusCode::BAD_REQUEST,
+        "search_phase_execution_exception",
+        "",
+    )
+    .with("phase", json!("rank-feature"))
+    .with("grouped", json!(true))
+    .with("failed_shards", json!([]))
+    .with("caused_by", cause.cause())
+    .avec_racines(Vec::new())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -896,7 +1224,7 @@ mod tests {
             doc: 0,
         };
         let missing = Hit {
-            keys: vec![SortValue::Missing(json!(i64::MIN))],
+            keys: vec![SortValue::Absente { en_tete: false }],
             score: 1.0,
             cible: 0,
             seg: 0,
@@ -910,22 +1238,23 @@ mod tests {
     /// sur un `keyword`. Mesure contre un ES 8.15 (`fuzz_vs_es.py`).
     #[test]
     fn sentinelles_des_valeurs_absentes() {
-        assert_eq!(sentinelle(FieldKind::I64, true).to_json(), json!(i64::MAX));
-        assert_eq!(sentinelle(FieldKind::I64, false).to_json(), json!(i64::MIN));
-        assert_eq!(sentinelle(FieldKind::Bool, true).to_json(), json!(i64::MAX));
-        assert_eq!(
-            sentinelle(FieldKind::Date, false).to_json(),
-            json!(i64::MIN)
-        );
-        assert_eq!(
-            sentinelle(FieldKind::F64, true).to_json(),
-            json!("Infinity")
-        );
-        assert_eq!(
-            sentinelle(FieldKind::F64, false).to_json(),
-            json!("-Infinity")
-        );
-        assert_eq!(sentinelle(FieldKind::Keyword, true).to_json(), Value::Null);
+        let last = |ty, asc| sentinelle(ty, asc, false).to_json();
+        assert_eq!(last(FieldType::Long, true), json!(i64::MAX));
+        assert_eq!(last(FieldType::Long, false), json!(i64::MIN));
+        assert_eq!(last(FieldType::Boolean, true), json!(i64::MAX));
+        assert_eq!(last(FieldType::Date, false), json!(i64::MIN));
+        assert_eq!(last(FieldType::Double, true), json!("Infinity"));
+        assert_eq!(last(FieldType::Double, false), json!("-Infinity"));
+        assert_eq!(last(FieldType::Keyword, true), Value::Null);
+
+        // `missing: _first` prend l'autre bout, et il ne se lit pas non plus
+        // dans le tableau `sort` d'un `keyword` : la meme cle `null` y sort en
+        // tete ou en queue selon ce qui a ete demande.
+        let first = |ty, asc| sentinelle(ty, asc, true);
+        assert_eq!(first(FieldType::Long, true).to_json(), json!(i64::MIN));
+        assert_eq!(first(FieldType::Long, false).to_json(), json!(i64::MAX));
+        assert_eq!(first(FieldType::Double, true).to_json(), json!("-Infinity"));
+        assert_eq!(first(FieldType::Keyword, false).to_json(), Value::Null);
 
         // Sur un entier, la sentinelle est une **vraie valeur** : un document
         // qui porte i64::MAX est ex aequo avec un document qui n'a rien, et
@@ -937,9 +1266,15 @@ mod tests {
             seg: 0,
             doc: id,
         };
-        let vide = cle_suivante(sentinelle(FieldKind::I64, true), 4);
+        let vide = cle_suivante(sentinelle(FieldType::Long, true, false), 4);
         let plein = cle_suivante(SortValue::I64(i64::MAX), 8);
         assert_eq!(compare(&[true, true], &vide, &plein), Ordering::Less);
+
+        // Sur un `keyword` en revanche, `_first` l'emporte sur le sens du tri :
+        // le marqueur part en tete meme en `desc` (mesure contre ES 8.15).
+        let absent = cle_suivante(SortValue::Absente { en_tete: true }, 1);
+        let mot = cle_suivante(SortValue::Str("zoulou".into()), 2);
+        assert_eq!(compare(&[false, false], &absent, &mot), Ordering::Less);
     }
 
     /// Le `mode` par defaut d'ES sur un champ multivalue : minimum en
@@ -949,6 +1284,88 @@ mod tests {
         assert_eq!(extremum([5i64, 1, 9].into_iter(), true), Some(1));
         assert_eq!(extremum([5i64, 1, 9].into_iter(), false), Some(9));
         assert_eq!(extremum(std::iter::empty::<i64>(), true), None);
+    }
+
+    /// Les bords de `mode`, tous mesures contre un ES 8.15 : ce sont ceux de
+    /// `MultiValueMode` de Lucene, et aucun n'etait devinable.
+    #[test]
+    fn modes_sur_une_colonne_d_entiers() {
+        let v = [1i64, 3, 5, 9];
+        assert_eq!(choisir_i64(&v, SortMode::Min), 1);
+        assert_eq!(choisir_i64(&v, SortMode::Max), 9);
+        assert_eq!(choisir_i64(&v, SortMode::Sum), 18);
+        // 18 / 4 = 4,5 : `Math.round` arrondit **vers le haut**, donc 5.
+        assert_eq!(choisir_i64(&v, SortMode::Avg), 5);
+        // Un nombre pair de valeurs moyenne les deux du milieu : (3 + 5) / 2.
+        assert_eq!(choisir_i64(&v, SortMode::Median), 4);
+        assert_eq!(choisir_i64(&[1i64, 2, 3, 4, 5], SortMode::Median), 3);
+        assert_eq!(choisir_i64(&[2i64, 3], SortMode::Median), 3);
+
+        // La somme **deborde**, comme un `long` de Java : c'est ce qui decide
+        // de l'ordre, et saturer rendrait un autre classement que celui d'ES.
+        assert_eq!(choisir_i64(&[1i64, i64::MAX], SortMode::Sum), i64::MIN);
+        assert_eq!(choisir_i64(&[i64::MIN, -1], SortMode::Sum), i64::MAX);
+        // Et `avg` part de cette somme debordee.
+        assert_eq!(
+            choisir_i64(&[1i64, i64::MAX], SortMode::Avg),
+            -4611686018427387904
+        );
+        // `median`, lui, passe par les flottants sans deborder.
+        assert_eq!(
+            choisir_i64(&[i64::MIN, -1], SortMode::Median),
+            -4611686018427387904
+        );
+        // A une seule valeur, ES ne passe pas par le flottant du tout.
+        assert_eq!(choisir_i64(&[i64::MAX], SortMode::Avg), i64::MAX);
+    }
+
+    #[test]
+    fn modes_sur_une_colonne_de_flottants() {
+        let v = [-1.0f64, 2.0, 7.5];
+        assert_eq!(choisir_f64(&v, SortMode::Sum), 8.5);
+        assert_eq!(choisir_f64(&v, SortMode::Avg), 2.833_333_333_333_333_5);
+        assert_eq!(choisir_f64(&v, SortMode::Median), 2.0);
+        assert_eq!(
+            choisir_f64(&[0.1f64, 0.2], SortMode::Median),
+            0.150_000_000_000_000_02
+        );
+        // Une somme qui deborde rend `Infinity`, et ES la rend en chaine —
+        // exactement comme une valeur absente.
+        assert_eq!(
+            SortValue::F64(choisir_f64(&[1e308f64, 1e308], SortMode::Sum)).to_json(),
+            json!("Infinity")
+        );
+    }
+
+    /// `Math.round(double)` de Java, qui n'est pas celui de Rust.
+    #[test]
+    fn arrondi_a_la_java() {
+        assert_eq!(arrondi_java(2.5), 3);
+        // Rust rendrait -3 : il s'ecarte de zero, Java arrondit vers le haut.
+        assert_eq!(arrondi_java(-2.5), -2);
+        assert_eq!(arrondi_java(2.4), 2);
+        // Le cas que le JDK corrige depuis sa 7 : `x + 0.5` franchit 1.
+        assert_eq!(arrondi_java(0.499_999_999_999_999_94), 0);
+    }
+
+    /// Les familles de tri d'ES : ni le type du champ, ni son `FieldKind`.
+    /// `float` et `double` n'y sont pas ensemble, et c'est ce qui fait echouer
+    /// une recherche sur deux index qui ne les mappent pas pareil.
+    #[test]
+    fn familles_de_tri() {
+        for ty in [
+            FieldType::Byte,
+            FieldType::Short,
+            FieldType::Integer,
+            FieldType::Long,
+            FieldType::Date,
+            FieldType::Boolean,
+        ] {
+            assert_eq!(famille_de_tri(ty), "LONG");
+        }
+        assert_eq!(famille_de_tri(FieldType::Float), "FLOAT");
+        assert_eq!(famille_de_tri(FieldType::Double), "DOUBLE");
+        assert_eq!(famille_de_tri(FieldType::Keyword), "STRING");
     }
 
     /// Sans cle de tri, deux documents de meme score sont departages par
