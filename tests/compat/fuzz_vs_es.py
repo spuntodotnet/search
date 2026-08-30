@@ -1785,6 +1785,41 @@ def _court_circuit(e, requete, ecarts=()):
 
 
 
+def _ordre_non_verifie_par_es(e, _requete=None, ecarts=()):
+    """ES ne verifie le chemin d'ordre d'un `terms` que s'il a **deux seaux** a
+    comparer.
+
+    C'est un court-circuit de la meme famille que le precedent, sur un autre
+    chemin de code, et il ne se lit dans aucune documentation. Le chemin
+    (`{"order": {"prix_moyen": "desc"}}`) n'est resolu qu'au moment de trier :
+    avec zero ou un seul seau, ES ne trie rien et **ne valide rien**. Mesure
+    contre ES 8.15, sur le meme index et la meme agregation :
+
+    | seaux | `order: {stats_nu: desc}` |
+    |---|---|
+    | 8 | 400 `Missing value key in [null]` |
+    | 2 | 400, le meme |
+    | 1 | **200** |
+    | 0 | **200** |
+
+    Et ce n'est pas propre a cette faute : une agregation d'ordre qui n'existe
+    pas, une agregation de seaux comme cle, une propriete que la metrique ne
+    rend pas — les quatre passent en 200 des qu'il ne reste qu'un seau.
+    `size: 1` ne suffit pas : ES collecte les huit seaux et ne tronque
+    qu'apres, donc il compare bien.
+
+    ferrite valide la demande **avant** de l'executer, comme partout ailleurs :
+    faire dependre la validation du nombre de documents trouves rendrait une
+    requete fautive tantot acceptee tantot refusee. Le predicat est donc pose
+    sur la phrase que ferrite prononce, et il ne peut pas s'elargir a autre
+    chose : les cinq refus de chemin d'ordre sont mesures **identiques a ceux
+    d'ES** par `sonde_facettes.py`, sur un corpus a huit seaux ou ES les
+    prononce tous."""
+    if e.get("chemin") != "statut" or "droite 200" not in e["texte"]:
+        return False
+    return "Invalid aggregation order path" in e["texte"]
+
+
 def _nested_et_score(e, requete):
     """L'ordre par `_score` sous un `nested`.
 
@@ -2168,6 +2203,8 @@ DIVERGENCES_ASSUMEES = [
     ("refus declare", _refus_declare),
     ("somme de dates, a la tolerance des nombres", _somme_de_dates),
     ("court-circuit d'ES", _court_circuit),
+    ("chemin d'ordre non verifie par ES (moins de deux seaux)",
+     _ordre_non_verifie_par_es),
     ("ordre par score sous un nested", _nested_et_score),
     ("exists sur un text sans terme", _exists_sur_text),
     ("ES 8.15 casse sur epoch_millis", _es_casse),

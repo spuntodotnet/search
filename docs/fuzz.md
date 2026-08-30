@@ -27,7 +27,7 @@ python3 tests/compat/fuzz_vs_es.py --couverture          # ce qu'il fuzze, et pa
 
 ## Le périmètre est lu, pas réécrit
 
-[`compat.yaml`](../compat.yaml) déclare 197 capacités avec leur état. Le
+[`compat.yaml`](../compat.yaml) déclare 200 capacités avec leur état. Le
 générateur ne redit pas cette liste : chaque **brique** (une clause du DSL, un
 type de champ, une agrégation, un paramètre du corps) cite l'identifiant de la
 capacité qu'elle exerce, et au démarrage le fuzzer
@@ -133,59 +133,67 @@ reconduits. Ce tableau est celui de ce passage, sur des plages jamais
 utilisées.
 
 ```
-graines 8100000+       250 cas, 11 638 requêtes, 1 divergence ouverte
-graines 8200000+       250 cas, 11 473 requêtes, 0 divergence réelle
-graines 8300000+       250 cas, 11 607 requêtes, 0 divergence réelle
-graines 8400000+       250 cas, 11 734 requêtes, 0 divergence réelle
+graines 7100000+       250 cas, 11 621 requêtes, 3 panics antérieurs
+graines 7200000+       250 cas, 11 475 requêtes, 6 panics antérieurs
+graines 7300000+       250 cas, 11 638 requêtes, 2 panics antérieurs
+graines 7400000+       250 cas, 11 593 requêtes, 0 divergence
                      ------------------------------------------------
-                     1 000 cas,  46 452 requêtes, 1 divergence ouverte
+                     1 000 cas,  46 327 requêtes, 0 divergence de la carte
+                                                 (11 panics antérieurs)
 
 les mêmes plages, contre le binaire d'AVANT la carte
-                     1 000 cas,  46 998 requêtes, 3 524 divergences
-                                 (894 + 891 + 874 + 865)
+                     1 000 cas,  46 377 requêtes, 892 divergences
+                                 (233 + 205 + 210 + 244)
 
-étalonnage ES vs ES     50 cas,   2 262 requêtes, 0 divergence réelle
+étalonnage ES vs ES     50 cas,   2 230 requêtes, 0 divergence réelle
 ```
 
 La ligne du milieu est celle qui compte, et c'est la seule qui dit que les
 briques mesurent quelque chose. **La règle du dépôt appliquée à un générateur :
 une brique qui ne fait pas rougir le binaire d'avant ne mesure rien.** Ici elle
 le fait bruyamment, et pour une raison qui rend le chiffre moins impressionnant
-qu'il n'en a l'air : les trois paramètres étaient **refusés** avant, donc chaque
-requête qui en porte un rendait 400 d'un côté et 200 de l'autre. Ce que ce
-3 524 mesure vraiment, c'est que les briques sont posées souvent — pas qu'elles
-ont trouvé 3 524 défauts. Le nombre de requêtes diffère un peu entre les deux
-colonnes (46 998 contre 46 452) parce que le générateur enchaîne selon ce que le
-serveur répond : un refus coupe les requêtes de suite d'un cas.
+qu'il n'en a l'air : les deux paramètres étaient **refusés** avant, donc chaque
+requête qui en porte un rendait 400 d'un côté et 200 de l'autre. Ce que ce 892
+mesure vraiment, c'est que les briques sont posées souvent — pas qu'elles ont
+trouvé 892 défauts. Le nombre de requêtes diffère un peu entre les deux colonnes
+(46 377 contre 46 327) parce que le générateur enchaîne selon ce que le serveur
+répond : un refus coupe les requêtes de suite d'un cas.
 
-La divergence ouverte n'est pas de la famille de la carte : c'est un fragment de
-surlignage sur un `match_phrase_prefix` posé sur un multi-field `.keyword`
-(graine 8100023) — ferrite marque `<b>silencieux compact modele</b>` là où ES ne
-marque rien. Elle sort **aussi** du binaire d'avant, mesuré sur la même graine :
-elle n'est pas un effet de ce passage.
+La colonne de droite se lit en deux temps, et le second est le vrai contenu de
+ce passage. Les **onze** signalements sont tous des `500` de ferrite sur du
+`range`, du `histogram` ou un `bool` à plusieurs niveaux — antérieurs à cette
+carte, rejoués graine par graine contre le binaire d'avant, et détaillés plus
+bas. La seule divergence que les facettes ont produite a été trouvée dans la
+plage 7400000, mesurée, déclarée, et c'est pour ça que cette ligne est à zéro :
+elle porte maintenant un prédicat écrit. **Un zéro obtenu en déclarant se lit
+autrement qu'un zéro obtenu en corrigeant** — la déclaration est la n° 23, et ce
+qu'elle contient est plus bas.
 
-### Ce que la brique « paramètres de tri » pose
+### Ce que la brique « facette » pose
 
-Trois briques, et ce sont les trois paramètres qu'une clé de `sort` accepte —
-`corps.sort_missing`, `corps.sort_mode`, `corps.sort_unmapped_type`. Elles
-citent toutes la même capacité (`recherche.sort`), pour une raison qui est le
-sujet même de cette page : **une capacité déclarée tenue dont rien n'exerce le
-bord n'est qu'une phrase.** `sort` était déclarée tenue depuis longtemps ; ses
-trois paramètres étaient refusés, et ce sont eux qui portent tous les bords.
+Deux briques, et ce sont les deux paramètres qui séparent un `terms` d'une
+facette de catalogue — `agg.terms_filtre` (`include` / `exclude`) et
+`agg.terms_ordre_sous_agg`. Elles citent toutes deux la même capacité
+(`agg.terms`), pour la raison qui est le sujet de cette page : **une capacité
+déclarée tenue dont rien n'exerce le bord n'est qu'une phrase.** `terms` était
+déclarée `partiel` depuis longtemps ; ces deux paramètres-là étaient refusés, et
+ce sont eux qui portent les bords.
 
 Ce que le tirage pose exprès, et pourquoi :
 
 | Ce qui est tiré | Pourquoi cette forme-là |
 |---|---|
-| `missing` : `_first` / `_last` deux fois sur trois, une valeur de substitution sinon | les deux mots-clés sont ce qu'un client écrit ; la substitution est ce qui a des bords (typage, arrondi, refus) |
-| une substitution **du mauvais type** une fois sur six (`"abc"`, `"_FIRST"`, `true`, `"7.9"`) | un refus qui ne tombe pas des deux côtés est une divergence comme une autre — et `"_FIRST"` sépare le mot-clé de la valeur |
-| `mode` sur un champ **non numérique** une fois sur cinq | `sum` / `avg` / `median` y sont refusés par ES ; sans ce tirage, le refus ne serait exercé nulle part |
-| `unmapped_type` sur un champ qu'**aucun** index ne mappe, une clé sur huit | c'est le seul cas que le fuzzer peut poser (il ne crée qu'un index) : tout le corpus y est « sans valeur », donc c'est la **sentinelle** qui se compare, dans le tableau `sort` |
+| le motif comme la liste sont bâtis sur des **valeurs vues dans le corpus** | un filtre qui ne retient rien mesure la forme de la réponse, pas la sélection — et c'est la sélection qui décide des deux compteurs |
+| un filtre sur un champ qui n'est **pas** une chaîne, une fois sur huit | c'est le seul refus de la famille qui coûte quelque chose : ES sert la liste exacte sur un `long`, une `date` et un `boolean`. Un refus qu'on n'exerce pas n'est qu'une phrase, lui aussi |
+| la forme **partitionnée**, une fois sur huit | même raison, et elle a sa propre réponse d'ES : elle est servie |
+| la métrique de la clé d'ordre est tirée **à part** du champ agrégé | sinon les seaux ont tous une valeur, et le bord — où se classe un seau dont la métrique est **vide** — n'est jamais visité. C'est exactement ce que la carte a trouvé de moins devinable |
+| une métrique à valeur unique écrite `m` cinq fois sur six, `m.value` sinon ; un `stats` écrit `m.avg` (ou une des cinq valeurs) cinq fois sur six, `m` nu sinon | les deux écritures sont valables chez ES pour l'une, et une seule pour l'autre : le tirage pose donc les deux fautes symétriques |
 
-Et ce qu'elles ne posent **pas**, parce que le fuzzer ne le peut pas : le
-conflit de familles de tri entre deux index, qui demande deux mappings
-divergents. Il est mesuré ailleurs, par
-[`sonde_tri.py`](../tests/compat/sonde_tri.py), qui crée trois index exprès.
+Et ce qu'elles ne posent **pas**, parce que le fuzzer ne le peut pas : un corpus
+assez grand pour que la troncature de `size` sépare deux ordres. Il tire 25
+documents ; c'est [`sonde_facettes.py`](../tests/compat/sonde_facettes.py) qui
+pose la question sur 800 catégories, et c'est là que
+`doc_count_error_upper_bound` bascule.
 
 Une note sur l'étalonnage, parce qu'il vaut mieux l'écrire que la laisser lire
 de travers : il rend **0 divergence réelle**, mais la ligne de verdict de
@@ -198,19 +206,66 @@ censé faire apparaître.
 
 ### Ce que ce passage a sorti
 
-**Rien de neuf, et c'est un résultat qu'il faut écrire plutôt que taire.** Les
-trois briques de ce passage n'ont sorti aucun défaut que
-[`sonde_tri.py`](../tests/compat/sonde_tri.py) n'avait déjà trouvé — la sonde
-étant écrite en mesurant chaque bord contre un vrai ES **avant** d'écrire le
-code, il ne restait pas grand-chose au tirage. Ce que le fuzzer apporte ici
-n'est donc pas une découverte mais une **garde** : les paramètres de tri sont
-maintenant posés au milieu de tout le reste (agrégations, `nested`, `copy_to`,
-pagination tronquante, `scroll`), c'est-à-dire dans les combinaisons que la
-sonde ne visite pas.
+**Une règle d'Elasticsearch que dix-sept mesures manuelles n'avaient pas vue**,
+et elle est arrivée par où ce genre de chose arrive toujours : une plage de
+graines jamais regardée, sur une combinaison que personne n'aurait écrite.
 
-Il a en revanche confirmé, une fois de plus, que la campagne mesure ce qu'on
-croit : les mêmes plages contre le binaire d'avant partent en centaines de
-refus, dont chacun est un `missing` ou un `mode` refusé.
+À la graine 7400156, un `terms` porte un `include` qui ne retient **qu'un seul
+terme** et un ordre `{"m": "desc"}` où `m` est un `stats` — c'est-à-dire une
+faute : un `stats` est multi-valué, son chemin d'ordre doit nommer la valeur
+voulue. ferrite refuse en 400, comme ES le fait sur les huit seaux du corpus de
+[`sonde_facettes.py`](../tests/compat/sonde_facettes.py). Ici ES rend **200**.
+
+La mesure qui a suivi tient en quatre lignes, sur le même index et la même
+agrégation, en faisant varier le seul nombre de seaux retenus :
+
+| seaux retenus | `order: {stats_sans_clé: "desc"}` |
+|---|---|
+| 8 | 400, `Missing value key in [null]` |
+| 2 | 400, le même |
+| 1 | **200** |
+| 0 | **200** |
+
+ES ne résout le chemin d'ordre qu'au moment de **comparer** deux seaux : avec un
+seul, il ne trie rien et ne valide rien. Ce n'est pas propre à cette faute-là —
+une agrégation d'ordre qui n'existe pas, une agrégation de seaux prise comme
+clé, une propriété qu'aucune métrique ne rend passent aussi en 200 dès qu'il ne
+reste qu'un seau. Et `size: 1` ne suffit pas : ES collecte tous les seaux et ne
+tronque qu'après, donc il compare bien et il refuse.
+
+ferrite valide la demande avant de l'exécuter, comme partout ailleurs : faire
+dépendre la validation du nombre de documents trouvés rendrait la même requête
+tantôt acceptée tantôt refusée, et un client qui teste sur un jeu vide
+découvrirait le refus en production. C'est la divergence assumée n° 23, elle a
+son prédicat, et les dix cas correspondants sont figés dans la sonde — dont les
+trois qui montrent qu'à **deux** seaux les deux serveurs refusent à l'identique,
+sans quoi le prédicat couvrirait aussi un refus de trop.
+
+Les deux briques n'ont rien sorti d'autre. C'est un résultat qu'il faut écrire
+plutôt que taire : la sonde ayant été écrite en mesurant chaque bord contre un
+vrai ES **avant** d'écrire le code, il ne restait au tirage que ce que la sonde
+ne pouvait pas atteindre — et il a trouvé exactement ça.
+
+### Trois panics que ce passage a rencontrés, et qui ne sont pas de cette carte
+
+Les onze autres signalements des quatre plages sont des **500 de ferrite**, et
+aucun ne touche aux facettes. Trois messages, trois familles :
+
+| Ce que ferrite rend | Sur quoi |
+|---|---|
+| `assertion failed: buckets[pos].range.contains(&val)` | une agrégation `range` ou `histogram` sur une colonne numérique (graines 7100188, 7200035, 7200221) |
+| `target (N) should be greater than or equal to doc (M)` | un `bool` à plusieurs niveaux de `must_not` (graines 7100201, 7200160, 7200249, 7300190, 7300216) |
+| `attempt to multiply with overflow` | un `histogram` d'intervalle 10 (graine 7100205) |
+
+Ils sont publiés ici parce qu'ils ont été **trouvés** ici, et ils sont écartés du
+compte de la carte pour une raison mesurée et pas supposée : chacun a été rejoué
+contre le **binaire d'avant**, graine par graine, et rend le même message. Ce ne
+sont pas des échecs silencieux — un 500 se voit — mais ce sont des défauts, et
+ils demandent leur propre carte.
+
+Le passage a par ailleurs confirmé, une fois de plus, que la campagne mesure ce
+qu'on croit : les mêmes plages contre le binaire d'avant partent en centaines de
+refus, dont chacun est un `include` ou un ordre par sous-agrégation refusé.
 
 ### Ce que le passage précédent a corrigé
 
@@ -501,16 +556,18 @@ rouge — et elle est le bon prix.
 > n'est pas une correction — les deux causes sont toujours là, déclarées dans
 > [`compat.md`](compat.md).
 
-### La divergence ouverte de ce passage
+### Ce que ce passage a laissé ouvert
 
-La campagne en a laissé **une**, et elle n'est pas de la famille de la carte.
+**Onze signalements, et aucun n'est de la famille de la carte** : ce sont les
+trois panics détaillés plus haut. La divergence BM25 que les deux passages
+précédents publiaient ouverte n'est pas reposée par ces plages-ci — le
+générateur a changé, donc les graines ne désignent plus les mêmes cas. Ce n'est
+pas une correction : sa cause est toujours là, déclarée dans
+[`compat.md`](compat.md).
 
-| Graine | Ce qui diffère | Ce que c'est |
-|---|---|---|
-| `7070099` | un ordre par `_score` sur un `dis_max: [multi_match, fuzzy, term boosté]` : ferrite place `d007` là où ES place `d002`, les deux à `2,4849067` dans le tableau `sort` | la **famille BM25 déjà déclarée**, publiée ouverte au passage précédent et à celui d'avant. Les deux documents ont chez ferrite le **même** score *et* la même clé de tri suivante, donc c'est le départage final qui les sépare — et le prédicat n'accepte une inversion que si ES donne deux scores **différents** aux documents échangés. L'élargir masquerait ce qu'il est écrit pour attraper. Elle sort **aussi** du binaire d'avant la carte, ce qui est la seule façon de dire qu'elle n'est pas une régression |
-
-Elle se rejoue (`--rejouer 7070099`) et elle n'est pas absorbée par un prédicat :
-une divergence qu'on n'a pas expliquée n'a pas à compter comme expliquée.
+Les onze se rejouent (`--rejouer <graine>`) et aucun n'est absorbé par un
+prédicat : un `500` qu'on n'a pas expliqué n'a pas à compter comme expliqué,
+même quand on a mesuré qu'il est antérieur.
 
 Deux autres écarts sont sortis de la campagne **contre le binaire d'avant** et
 n'appartiennent pas non plus à la famille de la carte ; ils sont écrits ici
@@ -572,6 +629,8 @@ La preuve : chaque nouvelle plage jamais regardée en a retrouvé.
 | 900001+ | deux des seize défauts du surlignage, dont la règle qui a changé la forme du code : ES ne marque que ce qui a fait correspondre **ce** document |
 | la campagne complète, onze plages | huit défauts de plus, tous sur des **bords** — et deux divergences ouvertes qui n'ont rien à voir avec le surlignage (ci-dessous) |
 | 6789000+, 4444000+, 7070000+, 1928000+ | **rien** — 0 divergence en 1 000 cas, contre le binaire corrigé **comme** contre celui d'avant. C'est ce zéro-là qui a fait ajouter une brique : le tirage uniforme ne posait pas le cas que la carte corrigeait. Repassées avec la brique, les mêmes plages sortent 4 défauts de cette famille contre le binaire d'avant, et 0 contre le corrigé |
+| 7400000+ | la règle qu'aucune mesure manuelle n'avait vue : **ES ne vérifie le chemin d'ordre d'un `terms` que s'il a deux seaux à comparer**. Il a fallu qu'un `include` tiré au sort ne retienne qu'un seul terme pour qu'elle se voie |
+| 7100000+, 7200000+, 7300000+ | trois familles de **`500` antérieurs** (`range` / `histogram`, un `bool` profond, un débordement d'entier) : le tirage les rencontre, ils sont mesurés identiques sur le binaire d'avant, et ils demandent leur propre carte |
 
 Et à chaque passage suivant, générateur changé, la règle a rejoué exactement
 pareil : la plage 1–400 — celle sur laquelle on avait itéré — a sorti le
@@ -669,7 +728,7 @@ comme un `keyword`, alors qu'ES en devine un `text` **plus** un sous-champ
 
 ## Ce qui reste, et pourquoi
 
-Six divergences sont **assumées et déclarées**. Chacune a son prédicat dans le
+Sept divergences sont **assumées et déclarées**. Chacune a son prédicat dans le
 fuzzer, écrit à partir d'une mesure :
 
 | Divergence | Pourquoi elle reste |
@@ -680,6 +739,7 @@ fuzzer, écrit à partir d'une mesure :
 | **ordre par `_score` sous un `nested`** | ferrite évalue la requête interne à plat, il n'a pas de score par élément |
 | **`exists` sur un `text` sans terme** | ES tient un `_field_names` ; ferrite lit l'index inversé, où `""` n'a rien laissé. Le corriger demanderait de stocker les valeurs de chaque champ `text` une seconde fois |
 | **court-circuit d'ES** | un `bool` dont une clause obligatoire est `match_none` ne rend rien : ES s'arrête là et ne voit jamais qu'une autre clause est malformée. ferrite valide la requête entière |
+| **chemin d'ordre non vérifié par ES** | le même court-circuit, sur un autre chemin de code, et c'est ce passage qui l'a trouvé. ES ne résout le chemin d'ordre d'un `terms` qu'au moment de comparer deux seaux : à zéro ou un seul seau, il ne trie rien et **ne valide rien** — il rend 200 sur une agrégation d'ordre qui n'existe pas, sur un `stats` sans clé, sur une propriété qu'aucune métrique ne rend. `size: 1` ne suffit pas (il collecte tous les seaux et ne tronque qu'après) : c'est bien le nombre de seaux **retenus** qui décide. ferrite valide avant d'exécuter — sinon la même requête serait tantôt acceptée tantôt refusée, selon le jeu de données. Voir la divergence assumée n° 23 |
 
 La ligne des divergences de pertinence est étroite **exprès** : elle n'accepte
 un ordre différent que si ES lui-même donne deux scores **différents** aux

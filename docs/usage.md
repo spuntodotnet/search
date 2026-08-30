@@ -154,7 +154,15 @@ source » compte autant que le total :
 | `hors.cycle_de_vie` — `_close`, `_open`, `_forcemerge`… | 3,4 % | 4,6 % | — | — |
 | `type.autres_parametres` — `null_value`, `doc_values`, `store`… | 3,0 % | 3,1 % | 3,8 % | — |
 | `type.autres` — `geo_point`, `ip`, `binary`… | 3,0 % | 3,2 % | 3,6 % | — |
-| `agg.terms` — `include`, `exclude`, ordre par sous-agrégation… | 2,0 % | 0,1 % | 11,7 % | 0,3 % |
+| `hors.snapshots` — `_snapshot/*` | 2,0 % | 2,4 % | 0,8 % | — |
+
+La ligne `agg.terms` (2,0 % du corpus, **11,7 % des tracks Rally**) **a disparu
+de ce tableau** à son tour : c'est la carte 12, faite. Il en reste 11 requêtes
+sur 5 311 — `collect_mode`, `execution_hint`, `script`, `min_doc_count`,
+`shard_min_doc_count`, `show_term_doc_count_error`, et **une seule** qui porte
+un chemin d'ordre à plusieurs niveaux. Une capacité `partiel` qui tombe de 104
+requêtes à 11 est le vrai résultat d'une carte de paramètres : ce n'est pas la
+capacité qui manquait, c'étaient ses bords.
 
 La ligne `index.templates` (3,9 % du corpus, 5,1 % de la documentation) **a
 disparu de ce tableau** : c'est la carte 20, faite. Ce qui reste de sa famille

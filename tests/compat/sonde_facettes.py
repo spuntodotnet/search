@@ -322,6 +322,23 @@ def cas_ordre():
       {"field": "cat", "order": {"pm": "haut"}}, AVG)
     out.append(("order : sans sous-agregation", PETIT,
                 {"c": {"terms": {"field": "cat", "order": {"pm": "desc"}}}}))
+
+    # ES ne **resout** le chemin d'ordre qu'au moment de trier : avec zero ou
+    # un seul seau, il ne trie rien et ne valide rien — les memes demandes
+    # fautives y passent en 200. `size: 1` ne suffit pas (il collecte les huit
+    # seaux et ne tronque qu'apres) ; c'est bien le nombre de seaux **retenus**
+    # qui decide. ferrite valide avant d'executer, comme partout ailleurs.
+    for libelle, filtre in [("un seul seau", ["alpha"]), ("aucun seau", ["rien"]),
+                            ("deux seaux", ["alpha", "beta"])]:
+        for cle, sous in [("stats nu", STATS), ("agregation inconnue", AVG),
+                          ("propriete inconnue", STATS)]:
+            chemin = {"stats nu": "s", "agregation inconnue": "zz",
+                      "propriete inconnue": "s.bogus"}[cle]
+            t(f"order {cle}, {libelle}",
+              {"field": "cat", "include": filtre, "order": {chemin: "desc"}},
+              sous)
+    t("order stats nu, size=1",
+      {"field": "cat", "size": 1, "order": {"s": "desc"}}, STATS)
     return out
 
 
@@ -375,6 +392,19 @@ REFUS_ASSUMES = {
         "terms] de la suite de conformance d'Elastic",
     "order : mono-seau .doc_count": "meme raison, chemin nomme",
 }
+
+# ES ne resout le chemin d'ordre qu'au moment de trier : a moins de deux seaux
+# il ne valide rien et rend 200, quelle que soit la faute. ferrite valide avant
+# d'executer — faire dependre la validation du nombre de documents trouves
+# rendrait la meme requete tantot acceptee tantot refusee. Les memes cinq refus
+# sont mesures **identiques a ceux d'ES** partout ou il reste deux seaux : ce
+# sont les lignes `order : ...` ci-dessus.
+for _libelle in ("stats nu", "agregation inconnue", "propriete inconnue"):
+    for _combien in ("un seul seau", "aucun seau"):
+        REFUS_ASSUMES[f"order {_libelle}, {_combien}"] = (
+            "ES ne resout le chemin d'ordre qu'au moment de trier : a moins de "
+            "deux seaux il ne trie rien et ne valide rien, donc il rend 200 sur "
+            "la meme demande fautive. ferrite valide avant d'executer")
 
 
 def interroge(base, index, aggs):

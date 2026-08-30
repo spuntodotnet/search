@@ -735,7 +735,7 @@ Comparées champ par champ à un vrai ES 8.15 sur 73 requêtes
 `terms` d'une **facette** — `include` / `exclude` et l'ordre par
 sous-agrégation — a en plus sa propre sonde,
 [`sonde_facettes.py`](../tests/compat/sonde_facettes.py), qui compare le bloc
-`terms` entier sur 158 questions.
+`terms` entier sur 170 questions.
 
 <!-- table:aggs -->
 
@@ -1181,6 +1181,32 @@ pas pour être découverts en production.
     — la valeur n'y est pas perdue avant d'arriver, contrairement à
     l'accumulateur d'une agrégation, et un `sort` que le client renvoie tel quel
     doit se relire.
+
+23. **Le chemin d'ordre d'un `terms` est vérifié même quand il n'y a rien à
+    trier.** ES ne le résout qu'au moment de comparer deux seaux : avec zéro ou
+    un seul seau, il ne trie rien et **ne valide rien**. Mesuré contre ES 8.15
+    sur le même index et la même agrégation, en faisant varier le seul nombre de
+    seaux retenus par un `include` :
+
+    | seaux retenus | `order: {stats_sans_clé: "desc"}` |
+    |---|---|
+    | 8 | 400, `Missing value key in [null]` |
+    | 2 | 400, le même |
+    | 1 | **200** |
+    | 0 | **200** |
+
+    Ce n'est pas propre à cette faute-là : une agrégation d'ordre qui n'existe
+    pas, une agrégation de seaux prise comme clé, une propriété que la métrique
+    ne rend pas — les trois passent aussi en 200 dès qu'il ne reste qu'un seau.
+    Et `size: 1` ne suffit pas : ES collecte les huit seaux et ne tronque
+    qu'après, donc il compare bien et il refuse.
+
+    ferrite valide la demande **avant** de l'exécuter, comme partout ailleurs.
+    Faire dépendre la validation du nombre de documents trouvés rendrait la même
+    requête tantôt acceptée tantôt refusée, et un client qui teste sur un jeu
+    vide découvrirait le refus en production. Partout où ES a deux seaux à
+    comparer, les cinq refus de chemin d'ordre sont mesurés **identiques aux
+    siens** ([`sonde_facettes.py`](../tests/compat/sonde_facettes.py)).
 
 ### L'ordre dans lequel une agrégation lit les valeurs d'un document
 

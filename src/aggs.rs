@@ -587,10 +587,13 @@ const METRIQUES_SIMPLES: &[&str] = &["min", "max", "sum", "avg", "value_count"];
 /// Un chemin d'ordre qui n'est ni `_count` ni `_key` designe une
 /// sous-agregation metrique de **ce** `terms`.
 ///
-/// Les quatre refus reproduisent ceux d'un vrai ES 8.15, mesures un par un
+/// Quatre des refus reproduisent ceux d'un vrai ES 8.15, mesures un par un
 /// (`Invalid aggregation order path [...]`) : une agregation absente, une
-/// agregation de seaux, une metrique multi-valuee sans propriete, et une
-/// propriete que la metrique ne rend pas.
+/// agregation de **seaux**, une metrique multi-valuee sans propriete, et une
+/// propriete que la metrique ne rend pas. Les deux autres — le chemin a
+/// plusieurs niveaux et l'agregation **mono-seau** — sont des couts de
+/// perimetre : ES les sert. Ils portent donc l'autre type d'erreur, et c'est
+/// lui que le rapport de conformance lit.
 fn lire_ordre_sous_agg(
     chemin: &str,
     asc: bool,

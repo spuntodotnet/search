@@ -2461,7 +2461,13 @@ tables:
                 nomme ou non ; la seule agrégation mono-seau que ferrite serve
                 est déjà refusée sous une agrégation de seaux, donc le chemin ne
                 mène nulle part
-            - {texte: "l'ordre par une agrégation de **seaux**, ou par une clé que la métrique ne rend pas", note: "ES refuse aussi, avec le même statut"}
+            - texte: "l'ordre par une agrégation de **seaux**, ou par une clé que la métrique ne rend pas"
+              note: >-
+                ES refuse aussi, avec le même statut — mais seulement quand il a
+                **deux seaux à comparer** : le chemin n'est résolu qu'au moment
+                de trier, donc à zéro ou un seau il rend 200 sur la même demande
+                fautive. ferrite valide avant d'exécuter : voir la divergence
+                assumée n° 23
             - {nom: "collect_mode"}
             - {nom: "execution_hint"}
             - {nom: "script"}
