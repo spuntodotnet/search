@@ -2321,7 +2321,18 @@ tables:
         poids: 3.6
         detail: >-
           `field`, `missing`. Sur un champ `date`, la valeur est en millisecondes
-          et le `*_as_string` est rendu comme chez ES
+          et le `*_as_string` est rendu comme chez ES. Les trois qui accumulent
+          (`sum`, `avg`, `stats`) le font en `double` avec la compensation de
+          Kahan, **comme ES**, et lisent les valeurs d'un document multivalué
+          dans le même ordre que lui (croissant) — sans quoi le résultat diffère
+          au-delà de 2^53 : voir la divergence n° 22 pour le seul cas qui reste
+        parametres:
+          refuses:
+            - texte: "une somme qui n'est pas **finie**"
+              note: >-
+                au-delà de 1,8 × 10³⁰⁸ une somme de `double` déborde ; ES rend
+                alors la chaîne JSON `\"Infinity\"`, ferrite rend `null` — voir
+                la divergence assumée n° 22
 
       - id: agg.terms
         nom: "`terms`"

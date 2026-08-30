@@ -125,47 +125,56 @@ avec sa raison, et `--tout` les imprime.
 
 ## La mesure du jour
 
-Le générateur a changé — une brique de plus (l'**écriture d'un alias**) — donc
-**toutes les graines ont changé de sens** : la campagne précédente ne mesurait
-plus les mêmes cas, et ses chiffres ne sont pas reconduits. Ce tableau est celui
-de ce passage, refait en entier, sur des plages jamais utilisées.
+Le générateur a changé — une brique de plus, les **valeurs numériques extrêmes
+posées dans le désordre** — donc **toutes les graines ont changé de sens** : la
+campagne précédente ne mesurait plus les mêmes cas, et ses chiffres ne sont pas
+reconduits. Ce tableau est celui de ce passage, sur des plages jamais utilisées.
 
 ```
-graines 8613000+       250 cas, 11 625 requêtes, 0 divergence réelle
-graines 5927000+       250 cas, 11 597 requêtes, 0 divergence réelle
-graines 3308000+       250 cas, 11 540 requêtes, 0 divergence réelle
-graines 7451000+       250 cas, 11 590 requêtes, 1 divergence ouverte
-graines 2196000+       250 cas, 11 456 requêtes, 1 divergence ouverte
-graines 6042000+       250 cas, 11 558 requêtes, 0 divergence réelle
-graines 4783000+       250 cas, 11 620 requêtes, 1 divergence ouverte
-graines 9165000+       250 cas, 11 588 requêtes, 0 divergence réelle
-graines 2054000+       250 cas, 11 551 requêtes, 0 divergence réelle
-graines 7629000+       250 cas, 11 457 requêtes, 0 divergence réelle
-graines 3897000+       250 cas, 11 624 requêtes, 0 divergence réelle
-graines 5310000+       250 cas, 11 678 requêtes, 0 divergence réelle
-graines 6174000+       250 cas, 11 598 requêtes, 0 divergence réelle   (contrôle)
-graines 8452000+       250 cas, 11 640 requêtes, 0 divergence réelle   (contrôle)
+graines 6789000+       250 cas, 11 539 requêtes, 0 divergence réelle
+graines 4444000+       250 cas, 11 477 requêtes, 0 divergence réelle
+graines 7070000+       250 cas, 11 679 requêtes, 1 divergence ouverte
+graines 1928000+       250 cas, 11 650 requêtes, 0 divergence réelle
                      ------------------------------------------------
-                     3 500 cas, 162 122 requêtes, 3 divergences ouvertes
+                     1 000 cas,  46 345 requêtes, 1 divergence ouverte
 
-étalonnage ES vs ES     60 cas,   2 664 requêtes, 0 divergence réelle
+les mêmes plages, contre le binaire d'AVANT la carte
+                     1 000 cas,  46 345 requêtes, 5 divergences
+                                 dont 4 de la famille corrigée ici
+
+étalonnage ES vs ES     50 cas,   2 271 requêtes, 0 divergence réelle
 ```
 
-Ce passage a une particularité qu'il faut dire plutôt que taire : **aucune de
-ces plages n'a servi à corriger.** La brique d'alias est passée verte au premier
-tirage contre le binaire de la carte — et rouge **22 fois en 60 cas** contre
-celui d'avant, ce qui est la seule chose qui prouve qu'elle mesure quelque
-chose. Les deux dernières plages restent étiquetées « contrôle » par continuité :
-elles ont été lancées une fois tout figé, doc comprise.
+La ligne du milieu est celle qui compte, et c'est la seule qui dit que la brique
+mesure quelque chose. **La règle du dépôt appliquée à un générateur : une brique
+qui ne fait pas rougir le binaire d'avant ne mesure rien.** Elle a coûté deux
+campagnes de plus, dans cet ordre :
 
-Ce n'est donc pas un passage qui trouve, c'est un passage qui **verrouille** : la
-brique existe pour que les sept URL d'écriture d'alias et les deux règles de 404
-ne se défassent pas en silence, pas parce qu'elle a sorti un défaut de plus.
+1. la brique posée « au naturel » — un tirage uniforme dans les bornes du type,
+   qui existait déjà — a rendu **0 divergence en 1 000 cas contre le binaire
+   d'avant**, exactement comme contre le corrigé. Autrement dit : le fuzzer
+   tirait bien `i64::MAX` et `i64::MIN`, mais quasiment jamais **dans le même
+   document et dans le désordre**, qui est la seule forme où le défaut se voit.
+   Une correction que le fuzzer cesse d'exercer se défait en silence, et la
+   carte demandait explicitement le contraire ;
+2. la brique posée **exprès** — une fois sur deux, un champ `long` multivalué
+   reçoit `[i64::MAX, i64::MIN, -1, ±1]` mélangés — sort 4 défauts de cette
+   famille en 1 000 cas contre le binaire d'avant, dont un sous un bucket de
+   `terms`, et 0 contre le corrigé.
 
-**Les trois divergences ouvertes ne portent pas sur les alias**, et aucune n'est
-un défaut que cette carte a introduit : ce sont des défauts antérieurs que le
-nouveau tirage pose pour la première fois. Elles sont décrites plus bas, avec
-leur graine.
+Ce qui n'y est **pas**, et c'est une mesure aussi : la même brique appliquée aux
+`double` a été essayée puis retirée. Une somme de `double` finis ne dépend pas
+de l'ordre — la compensation de Kahan y suffit, et aucune permutation de
+`[1e300, 1, -1e300]` ne sépare les deux moteurs. Le seul `double` qui les sépare
+est celui qui **déborde**, et ce qu'on mesurerait alors n'est plus l'ordre mais
+la divergence n° 22 de [`compat.md`](compat.md) (`"Infinity"` chez ES, `null`
+ici). Une brique qui pose une divergence déjà déclarée fait du bruit, pas de la
+mesure.
+
+La divergence ouverte restante n'est pas de la famille de la carte : c'est un
+ordre par `_score` que ferrite sépare et qu'ES rend ex æquo — la famille BM25
+déjà publiée ouverte deux passages de suite. Elle est décrite plus bas, avec sa
+graine, et elle sort **aussi** du binaire d'avant.
 
 Une note sur l'étalonnage, parce qu'il vaut mieux l'écrire que la laisser lire
 de travers : il rend **0 divergence réelle**, mais la ligne de verdict de
@@ -174,8 +183,35 @@ l'outil n'est pas verte pour autant — elle compte aussi les divergences
 `copy_to` dépose dans sa cible. Cette divergence-là est par construction une
 non-détermination **entre deux Elasticsearch** (c'est l'ordre d'un `HashSet` de
 Java), donc c'est exactement le genre de chose qu'un étalonnage ES contre ES est
-censé faire apparaître. Vérifié plutôt que supposé : le fuzzer **d'avant cette
-carte**, lancé sur la même plage, la pose aussi.
+censé faire apparaître.
+
+### Ce que ce passage a corrigé
+
+Les **deux** divergences que les passages précédents laissaient ouvertes sont
+fermées, et une troisième est sortie de la campagne elle-même. Toutes les trois
+rendaient un résultat faux en 200.
+
+| Ce qui différait | Ce que c'est devenu |
+|---|---|
+| **`sum` / `avg` / `stats` sur un champ multivalué aux extrêmes de l'i64.** Sur un document dont `v` vaut `[i64::MAX, -1, i64::MIN, -1]`, ES rend `sum: 0.0` et ferrite rendait `-1.0` (graines 900119 et 7451084) | **corrigé**, et la cause n'était pas celle qui était écrite ici. Les deux moteurs accumulent en `double` avec la **même** compensation de Kahan — mesuré sur treize corpus mono-valués, dont `[MIN, MAX, -1, 1]` : identiques des deux côtés, ordre des documents compris. Ce qui les séparait était l'**ordre des valeurs d'un document** : Lucene stocke une colonne numérique multivaluée **triée** (`SortedNumericDocValues`), tantivy la garde dans l'ordre du document. La colonne est donc triée à l'indexation. Décision, valeurs mesurées et contreparties : [`compat.md`](compat.md) |
+| **Un `highlight` sous une clause `nested`.** ferrite ne rendait **aucun** fragment là où ES rend `{"e.y": ["<em>tiret-bas</em>"]}` (graine 2196237) | **corrigé**. Le surlignage garde la forme booléenne de la requête et la tranche sur le `_source` **à plat** — mais sous un `nested` ce `_source` mélange les éléments : un `must_not` vrai pour *un* élément faisait taire ce qu'un *autre* élément avait fait correspondre. C'était le pendant manquant de la règle « dans le doute, marquer de trop » : ici le doute faisait taire. La clause interne d'une jointure est maintenant un nœud à part (`Noeud::Jointure`), dont **aucun** verdict ne coupe — si le document est un hit, c'est qu'un élément a satisfait la clause, le `_source` à plat ne dit simplement pas lequel |
+| **Un `float` hors des bornes d'un flottant 32 bits était accepté.** `{"f": 1e308}` sur un champ `float` : **201** chez ferrite, **400** chez ES | **corrigé**. Les bornes des types **entiers** (`byte`, `short`, `integer`) étaient vérifiées depuis longtemps, celle du `float` manquait — donc un `_mapping` qui annonce `float` et une valeur qu'aucun float ne représente, rendue telle quelle. Trouvé en posant au fuzzer des valeurs numériques extrêmes, c'est-à-dire par la brique de cette carte, sur un champ qu'elle ne visait pas |
+
+Et une quatrième chose, qui n'est pas un défaut de ferrite mais un défaut de
+**structure** que la correction a révélé : trier la colonne réordonnait aussi ce
+que `stored_fields` rend, parce que ferrite écrivait la colonne et le champ
+stocké dans un seul champ tantivy. Chez Lucene ce sont deux structures
+distinctes, et c'est le cas **déjà figé** dans
+[`sonde_fuzz.py`](../tests/compat/sonde_fuzz.py) (`[3, 1, 1]` qui devenait
+`[1, 1, 3]`) qui l'a dit, au premier essai. Un champ numérique `store: true` a
+donc désormais un champ jumeau.
+
+Les quatre sont figées dans `sonde_fuzz.py`, qui passe de 83 à 95 cas. Sept des
+douze nouveaux cas échouent contre le binaire d'avant ; les cinq autres sont
+leurs **contreparties** — l'ordre que `fields` doit *garder*, l'appariement
+`nested` que le tri ne doit pas rompre, le surlignage d'un `nested` sans
+`must_not` — et elles sont là précisément pour qu'une correction trop large ne
+passe pas au vert.
 
 ### Ce que la brique « surlignage » a sorti
 
@@ -388,20 +424,19 @@ qu'on n'a jamais regardée.
 |---|---|
 | **Sous un `nested`, un `minimum_should_match` explicite qui retombe à zéro jetait le `should` entier.** `"50%"` d'une seule clause vaut `0` (la troncature vers zéro d'ES), et ferrite en concluait « pas de minimum, donc pas de clause ». Un document dont un élément satisfaisait seulement le `must_not` remontait, là où ES n'en rend aucun | **corrigé**. Lucene exige au moins une clause positive quand aucune clause obligatoire n'est là, quel que soit le minimum demandé : la règle s'applique **après** la résolution du paramètre, pas à sa place. La correction précédente ne portait que sur la valeur **par défaut** du paramètre — corriger le défaut d'un paramètre ne corrige pas le paramètre. Figé dans `sonde_msm.py`, qui passe de 47 à 53 cas |
 
-### Ce que la graine 900119 montrait vraiment, et qui reste ouvert
+### Ce que la graine 900119 montrait vraiment — corrigé, et pas pour la raison écrite
 
 | Ce qui diffère | Ce que c'est |
 |---|---|
-| **`sum` d'entiers hors du domaine exact d'un `double`.** Sur un corpus qui contient `-9223372036854775808`, `9223372036854775807`, `-1` et `1`, ES rend `0.0` et ferrite `-1.0` | ES accumule sa somme en **double** — `-2^63 + 2^63` y vaut exactement `0`, puis `-1`, puis `0` ; tantivy accumule en `i64`, donc exactement : `-1`, `-2`, `-1`. Les deux sont défendables, et celle de ferrite est arithmétiquement juste ; mais ce n'est pas celle d'ES. L'écart n'existe qu'au-delà de 2^53, là où un `double` ne représente plus tous les entiers |
+| ~~**`sum` d'entiers hors du domaine exact d'un `double`.** Sur un corpus qui contient `-9223372036854775808`, `9223372036854775807`, `-1` et `1`, ES rend `0.0` et ferrite `-1.0`~~ | **corrigé.** Ce qui était écrit ici — « ES accumule en `double`, tantivy en `i64` » — était **faux**, et l'a été pendant trois passages : tantivy accumule lui aussi en `double`, avec la même compensation de Kahan qu'ES. Ce qui séparait les deux moteurs était l'**ordre de lecture des valeurs d'un document**, et la mesure l'a montré en trois lignes : le même contenu écrit trié s'accordait déjà des deux côtés. Détail et valeurs : [`compat.md`](compat.md) |
 
-Elle est **ouverte** : elle ne se corrige pas dans la couche de mise en forme
-(la somme est faite par le collecteur de tantivy), et elle n'est pas de la
-famille traitée par cette carte. Elle est publiée ici pour la même raison que
-les deux précédentes — c'est le seul usage honnête de cet outil.
-
-> Elle **ne sort plus** du passage courant : le tirage a changé, et aucune des
-> dix plages ne la repose. Elle reste écrite ici parce qu'une divergence qu'un
-> tirage cesse de poser n'est pas une divergence corrigée.
+La leçon de méthode vaut plus que la correction, et elle est la même que celle
+que ce fichier tirait déjà de cette graine-là : **une explication plausible
+écrite à côté d'une mesure finit par être lue comme la mesure.** « i64 contre
+double » expliquait parfaitement le chiffre observé, se vérifiait en lisant les
+deux implémentations de loin, et était fausse — trois lignes de mesure (poser le
+même document dans deux ordres différents) l'ont retournée. Il a fallu qu'une
+carte reprenne la ligne pour que quelqu'un la mesure.
 
 ### La divergence ouverte du passage précédent : un ordre que BM25 sépare
 
@@ -439,13 +474,31 @@ rouge — et elle est le bon prix.
 > n'est pas une correction — les deux causes sont toujours là, déclarées dans
 > [`compat.md`](compat.md).
 
-### Les trois divergences ouvertes de ce passage, et ce qu'elles ne sont pas
+### La divergence ouverte de ce passage
 
-La campagne en a laissé trois, et **aucune ne porte sur les alias** — c'est-à-dire
-sur ce que la carte a livré. Ce sont trois défauts **antérieurs**, que ce
-tirage-ci pose pour la première fois ; la troisième est même une famille déjà
-publiée ouverte au passage précédent, reposée par une autre graine. Elles sont
-publiées ouvertes plutôt que tues, avec leur graine.
+La campagne en a laissé **une**, et elle n'est pas de la famille de la carte.
+
+| Graine | Ce qui diffère | Ce que c'est |
+|---|---|---|
+| `7070099` | un ordre par `_score` sur un `dis_max: [multi_match, fuzzy, term boosté]` : ferrite place `d007` là où ES place `d002`, les deux à `2,4849067` dans le tableau `sort` | la **famille BM25 déjà déclarée**, publiée ouverte au passage précédent et à celui d'avant. Les deux documents ont chez ferrite le **même** score *et* la même clé de tri suivante, donc c'est le départage final qui les sépare — et le prédicat n'accepte une inversion que si ES donne deux scores **différents** aux documents échangés. L'élargir masquerait ce qu'il est écrit pour attraper. Elle sort **aussi** du binaire d'avant la carte, ce qui est la seule façon de dire qu'elle n'est pas une régression |
+
+Elle se rejoue (`--rejouer 7070099`) et elle n'est pas absorbée par un prédicat :
+une divergence qu'on n'a pas expliquée n'a pas à compter comme expliquée.
+
+Deux autres écarts sont sortis de la campagne **contre le binaire d'avant** et
+n'appartiennent pas non plus à la famille de la carte ; ils sont écrits ici
+parce que le tirage les pose et qu'ils resteront après elle : un `highlight`
+qu'un `multi_match` `phrase_prefix` marque sur un sous-champ `keyword` là où ES
+ne marque pas (graine `1928055` de la campagne au tirage précédent), et le
+**mapping dynamique qui survit à un document refusé** — `{"x": [1, "abc"]}` sur
+un index vide rend 400 des deux côtés, mais ferrite garde `x: long` dans son
+mapping et ES ne garde rien. Le second est mesuré, reproductible en deux appels,
+et n'a rien à voir avec les flottants : il demande sa carte.
+
+### Les trois divergences ouvertes du passage précédent, et ce qu'elles ne sont pas
+
+La campagne d'alors en avait laissé trois. Les deux premières sont corrigées par
+cette carte-ci (voir plus haut) ; la troisième est la famille BM25 ci-dessus.
 
 | Graine | Ce qui diffère | Ce que c'est |
 |---|---|---|
@@ -454,10 +507,11 @@ publiées ouvertes plutôt que tues, avec leur graine.
 | `4783223` | un ordre par `_score` sur un `dis_max: [exists, term c=true^2, term sur une date]` : ferrite note douze documents `1,4144…`, ES les note tous `1,0` | la **famille déjà déclarée** et déjà publiée ouverte : une branche du `dis_max` est un `term` sur un **booléen**, et ce sont deux constantes de BM25 — chez ES le `term` boosté reste **sous** le `1,0` de l'`exists` voisin, chez ferrite il passe au-dessus, donc le maximum change de branche. Le prédicat n'absorbe pas cette inversion, parce qu'ES rend aux douze documents des scores **égaux** et que c'est ferrite qui les sépare : l'élargir masquerait ce qu'il est écrit pour attraper |
 
 Les trois se rejouent (`--rejouer 7451084`, `--rejouer 2196237`,
-`--rejouer 4783223`) et aucune n'est absorbée par un prédicat : une divergence
-qu'on n'a pas expliquée n'a pas à compter comme expliquée. Aucune ne se corrige
-ici — elles demandent chacune leur carte, et les publier ouvertes est ce qui rend
-le zéro des onze autres plages lisible.
+`--rejouer 4783223`) et aucune n'était absorbée par un prédicat : une divergence
+qu'on n'a pas expliquée n'a pas à compter comme expliquée. **Les deux premières
+sont corrigées** par la carte suivante — celle-ci —, la troisième reste ouverte.
+Les avoir publiées ouvertes est ce qui a permis de les reprendre : une divergence
+tue n'a pas de carte.
 
 Le détail machine est dans [`fuzz.json`](fuzz.json) : les divergences réelles y
 sont écrites entières, les assumées résumées par famille avec trois exemples.
@@ -490,6 +544,7 @@ La preuve : chaque nouvelle plage jamais regardée en a retrouvé.
 | 2626000+ | rien de neuf — la deuxième plage de contrôle qui n'ajoute rien |
 | 900001+ | deux des seize défauts du surlignage, dont la règle qui a changé la forme du code : ES ne marque que ce qui a fait correspondre **ce** document |
 | la campagne complète, onze plages | huit défauts de plus, tous sur des **bords** — et deux divergences ouvertes qui n'ont rien à voir avec le surlignage (ci-dessous) |
+| 6789000+, 4444000+, 7070000+, 1928000+ | **rien** — 0 divergence en 1 000 cas, contre le binaire corrigé **comme** contre celui d'avant. C'est ce zéro-là qui a fait ajouter une brique : le tirage uniforme ne posait pas le cas que la carte corrigeait. Repassées avec la brique, les mêmes plages sortent 4 défauts de cette famille contre le binaire d'avant, et 0 contre le corrigé |
 
 Et à chaque passage suivant, générateur changé, la règle a rejoué exactement
 pareil : la plage 1–400 — celle sur laquelle on avait itéré — a sorti le

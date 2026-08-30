@@ -609,8 +609,9 @@ const METADONNEES: &[&str] = &[
 ///
 /// ES les accepte ; ferrite les refuse **explicitement**, avec sa raison. Un
 /// nom qui n'y est pas ne peut pas entrer en collision : les colonnes internes
-/// sont `_elem.{chemin}`, `_nelem.{chemin}` et `_join_parent`.
-const INTERNES: &[&str] = &["_elem", "_nelem", "_join_parent"];
+/// sont `_elem.{chemin}`, `_nelem.{chemin}`, `_store.{chemin}` et
+/// `_join_parent`.
+const INTERNES: &[&str] = &["_elem", "_nelem", "_join_parent", "_store"];
 
 /// Refuse un nom de champ reserve — par ES, ou par ferrite.
 pub fn nom_reserve(chemin: &str) -> EsResult<()> {
@@ -1237,6 +1238,11 @@ pub struct MappedField {
     /// indexee ici, de quel element du tableau elle vient. Meme arite, par
     /// construction — elle est alimentee dans la meme boucle.
     pub elem: Option<Field>,
+    /// Pour un champ **numerique** declare `store: true` : le champ jumeau qui
+    /// garde la valeur dans l'ordre du document, la colonne etant triee. Voir
+    /// [`stocke_seul`]. `None` pour un champ textuel, dont l'ordre ne bouge
+    /// pas — c'est alors `field` lui-meme qui porte le stockage.
+    pub stocke: Option<Field>,
 }
 
 /// Prefixe des colonnes internes qui portent l'indice d'element d'un `nested`.
@@ -1246,6 +1252,9 @@ pub const P_ELEM: &str = "_elem.";
 pub const P_NELEM: &str = "_nelem.";
 /// La colonne qui porte l'identifiant du parent, pour un document enfant.
 pub const F_JOIN_PARENT: &str = "_join_parent";
+/// Prefixe des champs jumeaux qui gardent un numerique `store: true` dans
+/// l'ordre du document.
+pub const P_STORE: &str = "_store.";
 
 /// Les handles tantivy resolus une fois pour toutes a l'ouverture de l'index.
 #[derive(Debug, Clone)]
@@ -1361,6 +1370,7 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
                 search_analyzer: Analyzer::default(),
                 store: false,
                 elem: None,
+                stocke: None,
             },
         );
         join_name = Some(f);
@@ -1401,8 +1411,21 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
             // au moment de rendre.
             let sous_nested = mapping.nested.iter().any(|r| est_sous_chemin(&chemin, r));
             let store = decl.store && !sous_nested;
+            // Un numerique stocke prend un champ jumeau : sa colonne est triee,
+            // sa valeur stockee ne l'est pas. `field` ne porte donc plus le
+            // stockage dans ce cas-la.
+            let stocke = store
+                .then(|| stocke_seul(&mut b, &chemin, decl.ty))
+                .flatten();
             let entry = MappedField {
-                field: add_field(&mut b, &chemin, decl.ty, decl.analyzer(), store),
+                field: add_field(
+                    &mut b,
+                    &chemin,
+                    decl.ty,
+                    decl.analyzer(),
+                    store && stocke.is_none(),
+                ),
+                stocke,
                 ty: decl.ty,
                 ignore_above: decl.ignore_above,
                 analyzer: decl.analyzer(),
@@ -1515,6 +1538,32 @@ fn add_field(
     }
 }
 
+/// Le champ jumeau qui garde un numerique **dans l'ordre du document**.
+///
+/// Chez Lucene, un champ `store: true` et sa colonne sont deux structures
+/// distinctes : la colonne est triee par document
+/// (`SortedNumericDocValues`), le champ stocke garde l'ordre d'ecriture. ferrite
+/// les confondait dans un seul champ tantivy, ce qui n'a rien coute tant que
+/// l'ordre de la colonne etait celui du document — il ne l'est plus (voir
+/// `crate::engine::pose`). Un champ numerique declare `store: true` a donc deux
+/// champs : `{chemin}` porte la colonne triee, `_store.{chemin}` la valeur
+/// stockee, non indexee et sans colonne.
+///
+/// Les champs textuels n'en ont pas besoin : rien ne reordonne leurs valeurs.
+fn stocke_seul(b: &mut SchemaBuilder, name: &str, ty: FieldType) -> Option<Field> {
+    let nom = format!("{P_STORE}{name}");
+    Some(match ty.kind() {
+        FieldKind::Text | FieldKind::Keyword => return None,
+        FieldKind::I64 => b.add_i64_field(&nom, NumericOptions::from(STORED)),
+        FieldKind::F64 => b.add_f64_field(&nom, NumericOptions::from(STORED)),
+        FieldKind::Bool => b.add_bool_field(&nom, NumericOptions::from(STORED)),
+        FieldKind::Date => b.add_date_field(
+            &nom,
+            DateOptions::from(STORED).set_precision(DateTimePrecision::Milliseconds),
+        ),
+    })
+}
+
 /// Les options d'une colonne numerique, avec ou sans stockage a part.
 fn numerique(store: bool) -> NumericOptions {
     let opts = NumericOptions::from(INDEXED | FAST);
@@ -1618,6 +1667,19 @@ pub fn coerce_avec(
                 Value::Bool(b) => f64::from(u8::from(*b)),
                 _ => return Err(bad("un nombre")),
             };
+            // Un `float` d'ES tient sur 32 bits : `1e308` y deborde, et ES
+            // refuse le document en 400. ferrite l'acceptait en 201 et le
+            // gardait en `f64` — donc un `_mapping` qui annonce `float` et une
+            // valeur qu'aucun float ne represente, rendue telle quelle. Les
+            // bornes des types **entiers** etaient deja verifiees juste
+            // au-dessus ; celle-ci manquait. Trouvee en posant au fuzzer des
+            // valeurs numeriques extremes.
+            if ty == FieldType::Float && f.is_finite() && (f as f32).is_infinite() {
+                return Err(EsError::mapper_parsing(format!(
+                    "failed to parse field [{field}] of type [float] : {f} est hors des bornes \
+                     d'un flottant 32 bits"
+                )));
+            }
             Ok(TypedValue::F64(f))
         }
         FieldKind::Bool => {
