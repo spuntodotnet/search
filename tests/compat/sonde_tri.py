@@ -228,7 +228,7 @@ def cas_multi_avec_query():
          {"term": {"k": "aa"}}, 10),
         ("a,c : i asc, size=0", f"{A},{C}", [{"i": "asc"}], None, 0),
         ("a,c : i asc, size=1", f"{A},{C}", [{"i": "asc"}], None, 1),
-        ("a,b : i asc ut=keyword, query ne vise que a", f"{A},{C}",
+        ("a,c : i asc ut=keyword, query ne vise que a", f"{A},{C}",
          [{"i": {"order": "asc", "unmapped_type": "keyword"}}],
          {"term": {"k": "aa"}}, 10),
     ]
@@ -312,7 +312,10 @@ def refuse(vu):
 
 
 def assume(libelle, reps):
-    """Le cas est-il un ecart assume, et lequel ?"""
+    """Le cas est-il un ecart assume, et lequel ?
+
+    `reps[0]` est la cible de gauche, donc ferrite hors `--calibrer` : c'est
+    bien **son** refus que la classe `perimetre` exige de voir."""
     classe = REFUS_ASSUMES.get(libelle, (None, None))[0]
     if classe == "type":
         return len({sans_le_type(vu) for _, vu in reps}) == 1
