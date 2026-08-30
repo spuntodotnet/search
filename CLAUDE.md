@@ -293,6 +293,7 @@ développement, pas de CI).
 | `tests/compat/diff_motifs.py` | les mêmes documents sur un **motif** — `regexp`, `wildcard`, `prefix`, `match_phrase_prefix` ? (101/101) |
 | `tests/compat/diff_multi_index.py` | `index=["a","b"]`, `logs-*`, les alias : **les mêmes index visés, fusionnés pareil** ? (87/87, 0 écart, plus aucune divergence assumée ; `--calibrer` : 87/87 contre deux ES) |
 | `tests/compat/sonde_msm.py` | les mêmes documents sur un **`minimum_should_match`** — entier, pourcentage, formes négatives, conditions `3<90%`, et sous un `nested` ? (53/53) |
+| `tests/compat/sonde_tri.py` | les mêmes documents **dans le même ordre** sur un `missing`, un `mode` ou un `unmapped_type` — et la même chose dans le tableau `sort` de chaque hit ? (224 questions, **220 identiques, 4 refus assumés, 0 écart** ; `--calibrer` : 224/224 contre deux ES). Le même fichier lancé contre le ferrite d'avant rend **17/224** |
 | `tests/compat/releve_mots_vides.py` | quelle est **vraiment** la liste de mots vides d'un analyzer d'ES ? |
 | `tests/compat/sonde_fields.py` | **ce que la réponse transporte** — `fields`, `docvalue_fields`, `stored_fields`. Compare le **hit entier** (bloc `fields` clé par clé, présence de `_source`, présence de `_id`) : 103/110 identiques, 3 refus assumés écrits, 4 différences d'ordre assumées, 0 écart. Refuse de tourner si elle ne trouve pas les deux serveurs |
 | `tests/compat/sonde_par_requete.py` | **modifier ou purger par requête** — `_delete_by_query`, `_update_by_query`. Compare les compteurs de la réponse **et l'état laissé derrière** (documents restants, `_version`, `_source`) : 62/74 identiques, 12 refus assumés écrits, 0 écart. Les conflits sont provoqués pour de vrai, par une écriture non rafraîchie. Refuse de tourner sans ses deux cibles |
@@ -519,6 +520,39 @@ bouger**, pas après.
   rend la clé `0` là où ES rend `"0"` ; sur un booléen il ne sait pas la poser.
   ferrite convertit donc la valeur au type du champ avant de la passer, et
   refuse explicitement les deux types que tantivy ne sait pas servir.
+- **Une valeur de tri absente n'est presque jamais `null`.** Les trois
+  paramètres d'une clé de `sort` ([`src/search.rs`](src/search.rs)) n'ont
+  qu'un bord devinable entre eux, et ce n'est pas celui qu'on croit. `missing`
+  ne pose une sentinelle *marqueur* que sur un `keyword` — là, le document part
+  en tête ou en queue **quel que soit le sens du tri**, et le tableau `sort`
+  rend `null`. Partout ailleurs c'est une **vraie valeur** (`i64::MAX`,
+  `±inf`), donc ex æquo avec un document qui la porte. `_first` et `_last` sont
+  **sensibles à la casse** : `_FIRST` est une valeur de substitution, qui rend
+  400 sur un `long`. Une substitution se lit **au type du champ** — une date par
+  un nombre de millisecondes (`"2020-03-01"` rend 400), un booléen par `0`/`1`
+  (`true` rend 400) — et une chaîne suit `Long.parseLong` / `Double.parseDouble`
+  (donc `"+7"` passe, `"7.9"` et `" 7"` non) alors qu'un nombre JSON se
+  **tronque** (`7.9` vaut 7). `mode`, lui, remplace une **règle** et pas un
+  défaut : sans lui, ES trie sur le minimum en croissant et sur le maximum en
+  décroissant. Et ses trois modes arithmétiques copient Java sans le dire —
+  `sum` **déborde en silence** (`[1, i64::MAX]` se classe sur `i64::MIN`), `avg`
+  arrondit par `Math.round` (vers le haut à la demie, donc `-2,5` vaut `-2`, ce
+  que `f64::round` de Rust ne fait pas), et `median` moyenne les deux valeurs du
+  milieu. La carte 44 paie ici : la colonne étant déjà triée à l'indexation des
+  deux côtés, `median` se lit sans rien retrier.
+- **`unmapped_type` a un garde-fou, et c'est lui le vrai contenu du paramètre.**
+  Il sert à trier sur un champ qu'un des index ne mappe pas sans perdre ses
+  documents — mais le type choisi doit se **fusionner** avec celui des autres.
+  Deux index dont les clés ne tombent pas dans la même **famille** (`LONG` pour
+  `byte`/`short`/`integer`/`long`/`date`/`boolean`, `FLOAT`, `DOUBLE`, `STRING`)
+  font échouer la recherche entière, et `float` et `double` n'y sont **pas**
+  ensemble. Ce n'est pas une subtilité gratuite : sans ce contrôle, ferrite
+  comparait un entier à une chaîne en les déclarant ex æquo, donc rendait un
+  ordre faux en 200 — sur un mapping hétérogène qu'aucun `unmapped_type`
+  n'était nécessaire pour créer. Deux détails que seule la mesure donne :
+  l'erreur nomme le champ tel que le **second** index le voit (donc
+  `__anonymous_`, le mapper anonyme d'ES), et elle ne tombe que si les deux
+  index ont **apporté un document** — un `size: 0` rend 200 malgré le conflit.
 - **`minimum_should_match` se calcule, il ne s'approxime pas**
   ([`src/msm.rs`](src/msm.rs)). Ses quatre notations (entier, pourcentage, les
   deux en négatif, et les conditions `3<90%`) tiennent en une trentaine de
@@ -674,6 +708,17 @@ bouger**, pas après.
   `cargo build`, vérifier que le processus qu'on interroge est bien celui qu'on
   vient d'écrire (`ferrite.log` porte l'erreur `AddrInUse`, encore faut-il le
   lire).
+
+  Et une troisième fois, avec une variante qui rend le réflexe inutile : le
+  binaire de comparaison avait été copié sous le nom `ferrite-avant`, donc
+  `pkill -x ferrite` ne le tuait pas. Le neuf a échoué à se lier, l'ancien a
+  répondu, et **huit mesures d'affilée** ont porté sur lui — dont un
+  « 119/119 » et un « 87/87 » parfaitement verts, qui ne mesuraient que le
+  binaire d'avant. Ce qui l'a sorti est le fuzzer, qui a signalé des refus sur
+  des paramètres tout juste livrés. La leçon n'est pas « faire attention » :
+  c'est que la vérification doit porter sur le **comportement neuf**, pas sur
+  un `curl /` qui répond 200 des deux côtés — une requête qui n'existait pas
+  avant, et dont on lit la réponse.
 - **Deux outils qui visent le même port se marchent dessus, en silence.**
   `run.sh` écoute par défaut sur 9200 ; lancé pendant qu'un ferrite y tournait
   déjà, son `bind` a échoué sans bruit et il a exercé **ce** serveur-là — index,
@@ -986,6 +1031,16 @@ par `index.max_ngram_diff` — travaillent à l'**indexation**, et
 `search_analyzer` fait chercher le **mot entier** par-dessus. Les deux moitiés
 comptent autant : sans la seconde, `elan` rend tout ce qui commence par `e`, et
 c'est ce que fait ES aussi tant qu'on ne le lui dit pas.
+
+**Trier sur un champ optionnel ou multivalué** ne demande plus de contourner :
+`missing` place les documents incomplets au bout qu'on veut (ou leur donne une
+valeur de substitution), `mode` dit **quelle** valeur d'un champ multivalué sert
+au tri (`min` / `max` / `sum` / `avg` / `median`), et `unmapped_type` fait
+participer un index qui ne mappe pas le champ au lieu de faire échouer son
+shard. Les trois sont mesurés bord par bord par
+[`sonde_tri.py`](tests/compat/sonde_tri.py), et le troisième a apporté avec lui
+une correction que personne n'avait demandée : deux index dont le tri n'a pas la
+même famille rendaient un ordre faux en 200.
 
 **Se refaire un `_all`** est possible : `copy_to` recopie la valeur brute d'un
 champ dans une ou plusieurs cibles à l'indexation, la cible se crée toute seule

@@ -92,7 +92,8 @@ réel est la **couche de compatibilité** au-dessus.
 - **Recherche** : le noyau du Query DSL (`bool`, `match`, `multi_match` (avec
   `lenient` et les types `phrase` / `phrase_prefix`), `match_phrase`,
   `match_phrase_prefix`, `term(s)`, `range` avec le **date math** (`now`),
-  `exists`, `prefix`, `wildcard`, `regexp`, `nested`…), `sort`, `from`/`size`,
+  `exists`, `prefix`, `wildcard`, `regexp`, `nested`…), `sort` (avec `missing`,
+  `mode` et `unmapped_type`), `from`/`size`,
   `scroll` (donc `helpers.scan`), filtrage de `_source`.
 - **Agrégations** : métriques + `terms` / `date_histogram` / `range` /
   `histogram` / `filter`, avec sous-agrégations.

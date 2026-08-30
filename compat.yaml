@@ -1848,18 +1848,37 @@ tables:
         poids: 3.2
         detail: >-
           multi-clés, `asc` / `desc`, sur `keyword` / numérique / `date` /
-          `boolean`, plus `_score` et `_doc`. Valeurs manquantes en dernier
-          (`missing: _last`). Le tableau `sort` est rendu dans chaque hit. En
-          multi-index, un champ non mappé par un des index donne un échec **de ce
-          shard**, comme chez ES
+          `boolean`, plus `_score` et `_doc`. Le tableau `sort` est rendu dans
+          chaque hit, et c'est là que se lisent les valeurs absentes : sur un
+          entier, une date ou un `boolean` ES ne rend pas `null` mais une
+          **vraie valeur** (`9223372036854775807` / `-9223372036854775808`,
+          donc ex æquo avec un document qui la porte pour de bon), sur un
+          flottant `"Infinity"` / `"-Infinity"` en **chaîne**, et seul un
+          `keyword` rend `null`. En multi-index, un champ non mappé par un des
+          index donne un échec **de ce shard** — sauf si `unmapped_type` fournit
+          l'échappatoire. Deux index dont le tri ne tombe pas dans la même
+          **famille** (`LONG` pour `byte`/`short`/`integer`/`long`/`date`/`boolean`,
+          `FLOAT`, `DOUBLE`, `STRING`) ne se fusionnent pas : ES rend 400, et
+          `float` et `double` n'y sont **pas** ensemble. Mesuré par
+          [`sonde_tri.py`](../tests/compat/sonde_tri.py)
         parametres:
+          supportes:
+            - {nom: "missing", note: "`_last` (le défaut), `_first`, ou une valeur de substitution. Les deux mots-clés sont **sensibles à la casse** — `_FIRST` est une valeur, pas un mot-clé. La substitution est lue **au type du champ** : une chaîne suit `Long.parseLong` / `Double.parseDouble` (donc `\"+7\"` passe et `\"7.9\"` non), un nombre JSON se tronque (`7.9` vaut 7, `1e300` sature). Une **date** se substitue par un nombre de millisecondes et un `boolean` par `0` / `1` : `\"2020-03-01\"` et `true` y rendent 400, comme chez ES"}
+            - {nom: "mode", note: "`min` / `max` / `sum` / `avg` / `median`, insensible à la casse. Le défaut n'est pas un mode mais une règle : le **minimum** en ordre croissant, le **maximum** en décroissant. `sum` sur des entiers **déborde en silence** comme un `long` de Java (`[1, i64::MAX]` se classe sur `i64::MIN`), `avg` arrondit par le `Math.round` de Java (donc vers le haut à la demie), et `median` moyenne les deux valeurs du milieu quand elles sont en nombre pair — la colonne étant triée à l'indexation des deux côtés"}
+            - {nom: "unmapped_type", note: "le type sous lequel traiter un champ que **cet** index ne mappe pas, plutôt que de faire échouer son shard. Tous ses documents y sont « sans valeur ». Ignoré quand l'index mappe le champ, et refusé en le nommant sur un type que ferrite ne mappe pas (`ip`, `binary`, ...) ou qui n'est pas une feuille (`object`, `nested`)"}
           refuses:
-            - {nom: "missing"}
-            - {nom: "mode"}
             - {nom: "nested"}
-            - {nom: "unmapped_type"}
+            - {nom: "numeric_type"}
+            - {nom: "format", note: "sur une clé de tri `date`"}
             - {texte: "le tri par script"}
-            - {texte: "le tri sur un champ `text`"}
+            - {texte: "le tri sur un champ `text`", note: "y compris via `unmapped_type: text` — ES fait échouer le shard (« Fielddata is disabled »), ferrite aussi"}
+            - {texte: "`missing`, `mode` et `unmapped_type` à côté de `_score`", note: "ES les refuse aussi (`[_score] unknown field [mode]`) ; à côté de `_doc` il les **accepte et les ignore**, ferrite comme lui"}
+            - {texte: "`missing` / `mode` / `unmapped_type` en query string", note: "`?sort=` ne connaît que `champ:sens` chez ES comme ici"}
+        conformance:
+          erreurs:
+            - "ne supporte pas \\[[a-z_]+\\] dans \\[sort\\]"
+            - "ne supporte pas le type de champ \\[[a-z_]+\\] \\(\\[sort.unmapped_type\\]\\)"
+            - "ne trie pas sur un champ \\[text\\]"
 
       - id: recherche.source
         nom: "`_source`"

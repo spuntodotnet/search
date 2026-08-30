@@ -15,8 +15,8 @@ use crate::fetch::{self, Demande, Stored};
 use crate::mapping::FieldKind;
 use crate::scroll;
 use crate::search::{
-    balayer, execute, rendre_page, round_score, Cible, Rendu, SearchRequest, SortKey, SortSpec,
-    SourceFilter,
+    balayer, execute, rendre_page, round_score, Cible, Rendu, SearchRequest, SortKey, SortMode,
+    SortSpec, SourceFilter,
 };
 use crate::selection::resoudre;
 use crate::MAX_RESULT_WINDOW;
@@ -259,7 +259,12 @@ pub async fn search(
             // les documents des autres. Ecarter l'index en silence rendrait le
             // meme total qu'ES mais sans dire qu'il manque quelque chose ; le
             // faire echouer entierement rendrait moins de documents qu'ES.
-            Err(e) if e.champ_inconnu.is_some() => {
+            //
+            // Meme regle pour ce que le tri ne sait pas resoudre **sur ce
+            // mapping-la** : un `missing` qui n'a pas le type du champ, un
+            // `mode: sum` sur un `keyword`, un `unmapped_type` illisible. Tous
+            // sont des echecs de shard chez ES, donc les autres index repondent.
+            Err(e) if e.champ_inconnu.is_some() || e.de_shard => {
                 echecs.push(echec_de_shard(&nom, &uuid, &e, &st.catalog.cluster_uuid));
                 continue;
             }
@@ -558,7 +563,12 @@ fn sans_verdict_de_mapping<T>(r: EsResult<T>) -> EsResult<()> {
         Ok(_) => Ok(()),
         // `query_shard_exception` est precisement le type qu'ES reserve a ce
         // qu'un shard decide : sans shard, il n'y a pas de verdict a rendre.
-        Err(e) if e.ty == "query_shard_exception" || e.champ_inconnu.is_some() => Ok(()),
+        // Un echec de shard explicite non plus — mesure : sur un cluster vide,
+        // `{"sort": [{"i": {"missing": "abc"}}]}` et `unmapped_type: nawak`
+        // rendent 200, alors que `mode: nawak` rend 400.
+        Err(e) if e.ty == "query_shard_exception" || e.champ_inconnu.is_some() || e.de_shard => {
+            Ok(())
+        }
         Err(e) => Err(e),
     }
 }
@@ -1046,17 +1056,29 @@ fn parse_sort_body(v: &Value, champs: &crate::mapping::Fields) -> EsResult<Vec<S
     let mut specs = Vec::new();
     for entry in entries {
         match entry {
-            Value::String(s) => specs.push(sort_spec(s, None, champs)?),
+            Value::String(s) => specs.push(sort_spec(s, &Options::default(), champs)?),
             Value::Object(o) => {
                 for (field, spec) in o {
-                    let order = match spec {
-                        Value::String(s) => Some(s.clone()),
+                    let opts = match spec {
+                        Value::String(s) => Options {
+                            order: Some(s.clone()),
+                            ..Options::default()
+                        },
                         Value::Object(inner) => {
-                            expect_only(inner, &["order"], "sort")?;
-                            inner
-                                .get("order")
-                                .and_then(Value::as_str)
-                                .map(str::to_string)
+                            expect_only(
+                                inner,
+                                &["order", "missing", "mode", "unmapped_type"],
+                                "sort",
+                            )?;
+                            Options {
+                                order: inner
+                                    .get("order")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_string),
+                                missing: inner.get("missing").cloned(),
+                                mode: inner.get("mode").cloned(),
+                                unmapped_type: inner.get("unmapped_type").cloned(),
+                            }
                         }
                         _ => {
                             return Err(EsError::illegal_argument(
@@ -1064,7 +1086,7 @@ fn parse_sort_body(v: &Value, champs: &crate::mapping::Fields) -> EsResult<Vec<S
                             ))
                         }
                     };
-                    specs.push(sort_spec(field, order.as_deref(), champs)?);
+                    specs.push(sort_spec(field, &opts, champs)?);
                 }
             }
             _ => return Err(EsError::illegal_argument("[sort] : entree invalide")),
@@ -1073,21 +1095,39 @@ fn parse_sort_body(v: &Value, champs: &crate::mapping::Fields) -> EsResult<Vec<S
     Ok(specs)
 }
 
+/// Ce qu'une entree de `sort` peut porter a cote du champ. Les trois derniers
+/// ne se lisent que dans la forme objet : `?sort=` en query string ne connait
+/// que `champ:sens`, chez ES comme ici.
+#[derive(Default)]
+struct Options {
+    order: Option<String>,
+    missing: Option<Value>,
+    mode: Option<Value>,
+    unmapped_type: Option<Value>,
+}
+
 /// `?sort=annee:desc,titre`
 fn parse_sort_params(list: &[String], champs: &crate::mapping::Fields) -> EsResult<Vec<SortSpec>> {
     list.iter()
-        .map(|entry| match entry.split_once(':') {
-            Some((field, order)) => sort_spec(field, Some(order), champs),
-            None => sort_spec(entry, None, champs),
+        .map(|entry| {
+            let (field, order) = match entry.split_once(':') {
+                Some((field, order)) => (field, Some(order.to_string())),
+                None => (entry.as_str(), None),
+            };
+            sort_spec(
+                field,
+                &Options {
+                    order,
+                    ..Options::default()
+                },
+                champs,
+            )
         })
         .collect()
 }
 
-fn sort_spec(
-    field: &str,
-    order: Option<&str>,
-    champs: &crate::mapping::Fields,
-) -> EsResult<SortSpec> {
+fn sort_spec(field: &str, opts: &Options, champs: &crate::mapping::Fields) -> EsResult<SortSpec> {
+    let order = opts.order.as_deref();
     // L'ordre se lit **avant** le champ : c'est une faute de corps, pas un
     // verdict de mapping, et ES la rend en premier lui aussi. Le lire apres
     // laissait `{"sort": [{"absent": {"order": "nawak"}}]}` passer en silence
@@ -1103,8 +1143,48 @@ fn sort_spec(
             )))
         }
     };
+    // Le `mode` se lit avant le champ, pour la meme raison que l'ordre : c'est
+    // une faute de corps, qu'ES rend meme sans index vise.
+    let mode = match &opts.mode {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => Some(SortMode::parse(s).ok_or_else(|| {
+            EsError::new(
+                axum::http::StatusCode::BAD_REQUEST,
+                "x_content_parse_exception",
+                format!(
+                    "[field_sort] failed to parse field [mode] : Unknown SortMode [{s}] \
+                     (min|max|sum|avg|median)"
+                ),
+            )
+        })?),
+        Some(v) => {
+            return Err(EsError::new(
+                axum::http::StatusCode::BAD_REQUEST,
+                "x_content_parse_exception",
+                format!("[field_sort] failed to parse field [mode] : chaine attendue, recu {v}"),
+            ))
+        }
+    };
     let key = match field {
-        "_score" => SortKey::Score,
+        // ES ne lit ni `missing`, ni `mode`, ni `unmapped_type` a cote de
+        // `_score` : il les refuse comme des cles inconnues, sans index vise
+        // compris. `_doc`, lui, les **accepte et les ignore** (mesure).
+        "_score" => {
+            for (nom, val) in [
+                ("missing", &opts.missing),
+                ("mode", &opts.mode),
+                ("unmapped_type", &opts.unmapped_type),
+            ] {
+                if val.is_some() {
+                    return Err(EsError::new(
+                        axum::http::StatusCode::BAD_REQUEST,
+                        "x_content_parse_exception",
+                        format!("[_score] unknown field [{nom}]"),
+                    ));
+                }
+            }
+            SortKey::Score
+        }
         "_doc" => SortKey::Doc,
         name => {
             // Un sous-champ de `nested` trie a plat trierait sur autre chose
@@ -1122,29 +1202,232 @@ fn sort_spec(
                     ),
                 ));
             }
-            let mapped = champs.get(name).ok_or_else(|| {
-                // Le type d'ES, et le marqueur qui permet a une recherche
-                // multi-index de n'echouer que sur **cet** index.
-                EsError::new(
+            // Le champ, ou l'echappatoire : `unmapped_type` dit de quel type
+            // traiter un champ que **cet** index ne mappe pas, plutot que de
+            // faire echouer son shard. Quand l'index le mappe, il est ignore
+            // (mesure : ES ne s'en sert meme pas pour verifier le type).
+            let (ty, mappe) = match champs.get(name) {
+                Some(mapped) => (mapped.ty, true),
+                None => match &opts.unmapped_type {
+                    Some(v) => (type_non_mappe(v)?, false),
+                    None => {
+                        // Le type d'ES, et le marqueur qui permet a une
+                        // recherche multi-index de n'echouer que sur **cet**
+                        // index.
+                        return Err(EsError::new(
+                            axum::http::StatusCode::BAD_REQUEST,
+                            "query_shard_exception",
+                            format!("No mapping found for [{name}] in order to sort on"),
+                        )
+                        .sur_champ_inconnu(name));
+                    }
+                },
+            };
+            // Le nom que porte le refus : ES fabrique un mapper **anonyme**
+            // pour un `unmapped_type`, et c'est ce nom-la qu'il rend.
+            let dit = if mappe { name } else { "__anonymous_" };
+            if ty.kind() == FieldKind::Text {
+                return Err(EsError::illegal_argument(format!(
+                    "Fielddata is disabled on [{dit}] : ferrite ne trie pas sur un champ [text] \
+                     ; utilise un champ [keyword]"
+                ))
+                .sur_un_shard());
+            }
+            // `sum`, `avg` et `median` sur autre chose qu'un nombre : ES le
+            // refuse par shard, avec cette phrase.
+            if mode.is_some_and(SortMode::numerique_seulement) && ty.kind() == FieldKind::Keyword {
+                return Err(EsError::new(
                     axum::http::StatusCode::BAD_REQUEST,
                     "query_shard_exception",
-                    format!("No mapping found for [{name}] in order to sort on"),
+                    "we only support AVG, MEDIAN and SUM on number based fields",
                 )
-                .sur_champ_inconnu(name)
-            })?;
-            if mapped.ty.kind() == FieldKind::Text {
-                return Err(EsError::illegal_argument(format!(
-                    "Fielddata is disabled on [{name}] : ferrite ne trie pas sur un champ [text] \
-                     ; utilise un champ [keyword]"
-                )));
+                .sur_un_shard());
             }
-            SortKey::Field {
+            let asc = ordre.unwrap_or(true);
+            SortKey::Field(Box::new(crate::search::SortField {
                 name: name.to_string(),
-                kind: mapped.ty.kind(),
-            }
+                ty,
+                mappe,
+                mode,
+                absente: valeur_absente(ty, asc, opts.missing.as_ref())?,
+            }))
         }
     };
     // Defaut d'ES : `desc` sur `_score`, `asc` partout ailleurs.
     let asc = ordre.unwrap_or(!matches!(key, SortKey::Score));
     Ok(SortSpec { key, asc })
+}
+
+/// Le type qu'`unmapped_type` demande, resolu comme ES resout un mapper.
+///
+/// Deux refus portent **sa** phrase, parce que ce sont les siens : `object` et
+/// `nested` ne sont pas des feuilles, et un nom inconnu n'est aucun mapper. Le
+/// troisieme est celui de ferrite : un type qu'ES sait mapper et pas lui
+/// (`ip`, `binary`, `scaled_float`...) doit se dire, pas se deguiser en « type
+/// inconnu ».
+fn type_non_mappe(v: &Value) -> EsResult<crate::mapping::FieldType> {
+    let s = v.as_str().ok_or_else(|| {
+        EsError::illegal_argument(format!(
+            "[sort] : [unmapped_type] attend une chaine, recu {v}"
+        ))
+    })?;
+    if let Some(ty) = crate::mapping::FieldType::parse(s) {
+        return Ok(ty);
+    }
+    let e = match s {
+        "object" | "nested" => {
+            EsError::illegal_argument(format!("Mapper for type [{s}] must be a leaf field"))
+        }
+        _ => EsError::unsupported(format!(
+            "ferrite ne supporte pas le type de champ [{s}] ([sort.unmapped_type]) ; types \
+             supportes : text, keyword, byte, short, integer, long, float, double, boolean, date"
+        )),
+    };
+    Err(e.sur_un_shard())
+}
+
+/// Ce qu'un document sans valeur porte comme cle de tri : `_last` (le defaut),
+/// `_first`, ou une valeur de substitution **typee selon le champ**.
+///
+/// Trois regles mesurees contre ES 8.15, dont aucune ne se lit dans sa doc :
+///
+/// - `_first` et `_last` sont **sensibles a la casse**. `_FIRST` n'est pas un
+///   mot-cle mais une valeur de substitution — donc `"_FIRST"` sur un `long`
+///   rend 400, la ou `"_first"` trie ;
+/// - la substitution d'une **date** est un nombre de millisecondes, pas une
+///   date : `missing: "2020-03-01"` sur un champ `date` rend 400. Un booleen se
+///   substitue de meme par `0` ou `1`, jamais par `true` ;
+/// - une chaine se lit strictement (`Long.parseLong` / `Double.parseDouble`),
+///   un nombre JSON se **tronque** : `missing: 7.9` vaut 7 sur un `long`, mais
+///   `missing: "7.9"` y rend 400.
+fn valeur_absente(
+    ty: crate::mapping::FieldType,
+    asc: bool,
+    missing: Option<&Value>,
+) -> EsResult<crate::search::SortValue> {
+    use crate::search::{sentinelle, SortValue};
+    let v = match missing {
+        None | Some(Value::Null) => return Ok(sentinelle(ty, asc, false)),
+        Some(Value::String(s)) if s == "_first" => return Ok(sentinelle(ty, asc, true)),
+        Some(Value::String(s)) if s == "_last" => return Ok(sentinelle(ty, asc, false)),
+        Some(v @ (Value::Array(_) | Value::Object(_))) => {
+            return Err(EsError::new(
+                axum::http::StatusCode::BAD_REQUEST,
+                "x_content_parse_exception",
+                format!(
+                    "[field_sort] missing doesn't support values of type: {}",
+                    if v.is_array() {
+                        "START_ARRAY"
+                    } else {
+                        "START_OBJECT"
+                    }
+                ),
+            ))
+        }
+        Some(v) => v,
+    };
+    match ty.kind() {
+        // Toute valeur simple devient sa forme texte : `42` rend la cle `"42"`,
+        // `true` rend `"true"`.
+        FieldKind::Keyword | FieldKind::Text => Ok(SortValue::Str(match v {
+            Value::String(s) => s.clone(),
+            autre => autre.to_string(),
+        })),
+        FieldKind::F64 => Ok(SortValue::F64(lit_double(v)?)),
+        // Une date et un booleen se comparent comme des entiers, donc se
+        // substituent comme eux.
+        _ => Ok(SortValue::I64(lit_long(v)?)),
+    }
+}
+
+/// L'erreur qu'ES rend sur une substitution illisible, jusqu'a la mise entre
+/// guillemets de la valeur : c'est `NumberFormatException` qui remonte telle
+/// quelle, et elle fait echouer le shard.
+fn nombre_illisible(texte: &str) -> EsError {
+    EsError::new(
+        axum::http::StatusCode::BAD_REQUEST,
+        "number_format_exception",
+        format!("For input string: \"{texte}\""),
+    )
+    .sur_un_shard()
+}
+
+/// `Long.parseLong` sur une chaine, `.longValue()` sur un nombre.
+fn lit_long(v: &Value) -> EsResult<i64> {
+    match v {
+        Value::String(s) => java_long(s).ok_or_else(|| nombre_illisible(s)),
+        Value::Bool(b) => Err(nombre_illisible(if *b { "true" } else { "false" })),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                return Ok(i);
+            }
+            // `(long) 7.9` vaut 7 et `(long) 1e300` sature a `i64::MAX` : c'est
+            // la conversion de Java, que `as` reproduit en Rust.
+            #[allow(clippy::cast_possible_truncation)]
+            Ok(n.as_f64().map_or(0, |f| f as i64))
+        }
+        autre => Err(nombre_illisible(&autre.to_string())),
+    }
+}
+
+/// `Double.parseDouble` sur une chaine, la valeur elle-meme sur un nombre.
+fn lit_double(v: &Value) -> EsResult<f64> {
+    match v {
+        Value::String(s) => java_double(s).ok_or_else(|| nombre_illisible(s)),
+        Value::Bool(b) => Err(nombre_illisible(if *b { "true" } else { "false" })),
+        Value::Number(n) => Ok(n.as_f64().unwrap_or(0.0)),
+        autre => Err(nombre_illisible(&autre.to_string())),
+    }
+}
+
+/// La grammaire de `Long.parseLong` : un signe optionnel, puis **des chiffres
+/// et rien d'autre**, dans les bornes d'un `long`.
+///
+/// Elle est plus stricte que celle de Rust sur un point qui se mesure : ES
+/// refuse `" 7"`, `"7 "`, `"7.9"` et `"1e3"` sur un `long`, et accepte `"+7"`.
+fn java_long(s: &str) -> Option<i64> {
+    let corps = s.strip_prefix(['+', '-']).unwrap_or(s);
+    if corps.is_empty() || !corps.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    s.strip_prefix('+').unwrap_or(s).parse::<i64>().ok()
+}
+
+/// La grammaire de `Double.parseDouble`, restreinte a ce qu'un client ecrit :
+/// un signe optionnel, puis `NaN`, `Infinity`, ou un nombre decimal.
+///
+/// Le detour par une verification plutot que par le parseur de Rust n'est pas
+/// une precaution de style : Rust accepte `"inf"` et `"infinity"` que Java
+/// refuse, donc ferrite classerait un document la ou ES rend 400.
+fn java_double(s: &str) -> Option<f64> {
+    let corps = s.strip_prefix(['+', '-']).unwrap_or(s);
+    let negatif = s.starts_with('-');
+    if corps == "NaN" {
+        return Some(f64::NAN);
+    }
+    if corps == "Infinity" {
+        return Some(if negatif {
+            f64::NEG_INFINITY
+        } else {
+            f64::INFINITY
+        });
+    }
+    // Un suffixe de type (`1.5f`, `2d`) fait partie de la grammaire de Java.
+    let corps = corps.strip_suffix(['f', 'F', 'd', 'D']).unwrap_or(corps);
+    let (mantisse, exposant) = match corps.split_once(['e', 'E']) {
+        Some((m, e)) => (m, Some(e)),
+        None => (corps, None),
+    };
+    let chiffres = |t: &str| !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit());
+    let mantisse_ok = match mantisse.split_once('.') {
+        Some(("", b)) => chiffres(b),
+        Some((a, "")) => chiffres(a),
+        Some((a, b)) => chiffres(a) && chiffres(b),
+        None => chiffres(mantisse),
+    };
+    let exposant_ok = exposant.is_none_or(|e| chiffres(e.strip_prefix(['+', '-']).unwrap_or(e)));
+    if !mantisse_ok || !exposant_ok {
+        return None;
+    }
+    s.parse::<f64>().ok()
 }

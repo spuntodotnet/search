@@ -249,6 +249,12 @@ BRIQUES = {
     "corps.query": "recherche.query",
     "corps.from_size": "recherche.from_size",
     "corps.sort": "recherche.sort",
+    # Les trois parametres de la cle de tri. Chacun a sa brique : une capacite
+    # declaree tenue dont rien n'exerce le **bord** n'est qu'une phrase, et ces
+    # trois-la sont silencieux quand ils sont faux.
+    "corps.sort_missing": "recherche.sort",
+    "corps.sort_mode": "recherche.sort",
+    "corps.sort_unmapped_type": "recherche.sort",
     "corps.source": "recherche.source",
     "corps.fields": "recherche.fields",
     "corps.docvalue_fields": "recherche.docvalue_fields",
@@ -1158,6 +1164,49 @@ class Generateur:
 
     # -- corps de la recherche ---------------------------------------------
 
+    def _decorer_tri(self, spec, ty, sans_mode=False):
+        """Ajoute `missing` et/ou `mode` a une cle de tri deja tiree.
+
+        Les deux sont **silencieux** quand ils sont faux : un `mode` qui prend
+        la premiere valeur au lieu du minimum, une sentinelle posee au mauvais
+        bout, changent l'ordre sans changer le total ni le statut. Le tirage
+        pose donc aussi les combinaisons qu'ES **refuse** (`mode: sum` sur un
+        `keyword`, une substitution illisible), parce qu'un refus qui ne tombe
+        pas des deux cotes est une divergence comme une autre."""
+        rng = self.rng
+        if rng.random() < 0.35 and self.brique("corps.sort_missing"):
+            spec["missing"] = rng.choice(
+                ["_first", "_last", "_first", "_last", self._substitution(ty)])
+        if not sans_mode and rng.random() < 0.35 and self.brique("corps.sort_mode"):
+            # `sum`, `avg` et `median` n'ont de sens que sur des nombres, et ES
+            # les refuse ailleurs : le tirage les pose quand meme une fois sur
+            # cinq, pour que le refus soit exerce des deux cotes.
+            numerique = ty in NUMERIQUES or ty in ("date", "boolean")
+            if numerique or rng.random() < 0.2:
+                spec["mode"] = rng.choice(["min", "max", "sum", "avg", "median"])
+            else:
+                spec["mode"] = rng.choice(["min", "max"])
+
+    def _substitution(self, ty):
+        """Une valeur de remplacement du bon type — ou pas.
+
+        Une date se substitue par un **nombre de millisecondes** et un booleen
+        par `0` / `1` : leur donner une date ISO ou `true` rend 400 chez ES, ce
+        que le tirage pose exprès une fois sur six."""
+        rng = self.rng
+        if rng.random() < 1 / 6:
+            return rng.choice(["abc", "_FIRST", True, "7.9"])
+        if ty == "keyword":
+            return rng.choice(MOTS)
+        if ty in ("float", "double"):
+            return rng.choice([0.5, -1.5, 1e3])
+        if ty == "boolean":
+            return rng.choice([0, 1])
+        if ty == "date":
+            return rng.choice([0, 1580000000000, 1900000000000])
+        lo, hi = BORNES[ty]
+        return rng.choice([0, 1, -1, lo, hi])
+
     def corps(self, champs, docs, nb_docs):
         """Le corps complet d'un `_search` : query, tri, pagination, _source, aggs."""
         rng = self.rng
@@ -1173,8 +1222,13 @@ class Generateur:
         tri = None
         if triables and rng.random() < 0.5 and self.brique("corps.sort"):
             n = min(len(triables), rng.randint(1, 2))
-            tri = [{c.chemin: {"order": rng.choice(["asc", "desc"])}}
-                   for c in rng.sample(triables, n)]
+            tri = []
+            for c in rng.sample(triables, n):
+                spec = {"order": rng.choice(["asc", "desc"])}
+                # Les trois parametres de la cle, poses **sur la cle du champ**
+                # et pas sur le tiebreak (qui doit rester un ordre total).
+                self._decorer_tri(spec, c.ty)
+                tri.append({c.chemin: spec})
             # Une fois sur douze, la cle de tri est un sous-champ de `nested`
             # pris depuis la racine. ES refuse (« it is mandatory to set the
             # [nested] context ») ; ferrite triait sur les valeurs a plat et
@@ -1185,6 +1239,18 @@ class Generateur:
             if feuilles and rng.random() < 1 / 12:
                 c = rng.choice(feuilles)
                 tri.insert(0, {c.chemin: {"order": rng.choice(["asc", "desc"])}})
+            # `unmapped_type` : une cle sur un champ qu'**aucun** index ne
+            # mappe. Sans lui, ES fait echouer le shard ; avec, tout le corpus
+            # y est « sans valeur », et c'est la sentinelle qui se compare.
+            if rng.random() < 1 / 8 and self.brique("corps.sort_unmapped_type"):
+                spec = {"order": rng.choice(["asc", "desc"]),
+                        "unmapped_type": rng.choice(
+                            ["long", "keyword", "double", "date", "boolean"])}
+                self._decorer_tri(spec, {"long": "long", "keyword": "keyword",
+                                         "double": "double", "date": "date",
+                                         "boolean": "boolean"}[spec["unmapped_type"]],
+                                  sans_mode=True)
+                tri.insert(0, {"fuzz_jamais_mappe": spec})
             if rng.random() < 0.3:
                 tri.insert(0, "_score")
             # La cle unique en dernier : le tri devient **total**, donc une

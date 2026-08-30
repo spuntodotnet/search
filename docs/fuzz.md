@@ -125,56 +125,58 @@ avec sa raison, et `--tout` les imprime.
 
 ## La mesure du jour
 
-Le générateur a changé — une brique de plus, les **valeurs numériques extrêmes
-posées dans le désordre** — donc **toutes les graines ont changé de sens** : la
-campagne précédente ne mesurait plus les mêmes cas, et ses chiffres ne sont pas
-reconduits. Ce tableau est celui de ce passage, sur des plages jamais utilisées.
+Le générateur a changé — trois briques de plus, les **paramètres d'une clé de
+tri** (`missing`, `mode`, `unmapped_type`) — donc **toutes les graines ont
+changé de sens** : la campagne précédente ne mesurait plus les mêmes cas, et ses
+chiffres ne sont pas reconduits. Ce tableau est celui de ce passage, sur des
+plages jamais utilisées.
 
 ```
-graines 6789000+       250 cas, 11 539 requêtes, 0 divergence réelle
-graines 4444000+       250 cas, 11 477 requêtes, 0 divergence réelle
-graines 7070000+       250 cas, 11 679 requêtes, 1 divergence ouverte
-graines 1928000+       250 cas, 11 650 requêtes, 0 divergence réelle
+graines 8100000+       250 cas, 11 638 requêtes, 1 divergence ouverte
+graines 8200000+       250 cas, 11 473 requêtes, 0 divergence réelle
+graines 8300000+       250 cas, 11 607 requêtes, 0 divergence réelle
+graines 8400000+       250 cas, 11 734 requêtes, 0 divergence réelle
                      ------------------------------------------------
-                     1 000 cas,  46 345 requêtes, 1 divergence ouverte
+                     1 000 cas,  46 452 requêtes, 1 divergence ouverte
 
 les mêmes plages, contre le binaire d'AVANT la carte
-                     1 000 cas,  46 345 requêtes, 5 divergences
-                                 dont 4 de la famille corrigée ici
+                     1 000 cas,  46 452 requêtes, VOIR-CI-DESSOUS
 
-étalonnage ES vs ES     50 cas,   2 271 requêtes, 0 divergence réelle
+étalonnage ES vs ES     50 cas,   2 262 requêtes, 0 divergence réelle
 ```
 
-La ligne du milieu est celle qui compte, et c'est la seule qui dit que la brique
-mesure quelque chose. **La règle du dépôt appliquée à un générateur : une brique
-qui ne fait pas rougir le binaire d'avant ne mesure rien.** Elle a coûté deux
-campagnes de plus, dans cet ordre :
+La ligne du milieu est celle qui compte, et c'est la seule qui dit que les
+briques mesurent quelque chose. **La règle du dépôt appliquée à un générateur :
+une brique qui ne fait pas rougir le binaire d'avant ne mesure rien.**
 
-1. la brique posée « au naturel » — un tirage uniforme dans les bornes du type,
-   qui existait déjà — a rendu **0 divergence en 1 000 cas contre le binaire
-   d'avant**, exactement comme contre le corrigé. Autrement dit : le fuzzer
-   tirait bien `i64::MAX` et `i64::MIN`, mais quasiment jamais **dans le même
-   document et dans le désordre**, qui est la seule forme où le défaut se voit.
-   Une correction que le fuzzer cesse d'exercer se défait en silence, et la
-   carte demandait explicitement le contraire ;
-2. la brique posée **exprès** — une fois sur deux, un champ `long` multivalué
-   reçoit `[i64::MAX, i64::MIN, -1, ±1]` mélangés — sort 4 défauts de cette
-   famille en 1 000 cas contre le binaire d'avant, dont un sous un bucket de
-   `terms`, et 0 contre le corrigé.
+La divergence ouverte n'est pas de la famille de la carte : c'est un fragment de
+surlignage sur un `match_phrase_prefix` posé sur un multi-field `.keyword`
+(graine 8100023) — ferrite marque `<b>silencieux compact modele</b>` là où ES ne
+marque rien. Elle sort **aussi** du binaire d'avant, mesuré sur la même graine :
+elle n'est pas un effet de ce passage.
 
-Ce qui n'y est **pas**, et c'est une mesure aussi : la même brique appliquée aux
-`double` a été essayée puis retirée. Une somme de `double` finis ne dépend pas
-de l'ordre — la compensation de Kahan y suffit, et aucune permutation de
-`[1e300, 1, -1e300]` ne sépare les deux moteurs. Le seul `double` qui les sépare
-est celui qui **déborde**, et ce qu'on mesurerait alors n'est plus l'ordre mais
-la divergence n° 22 de [`compat.md`](compat.md) (`"Infinity"` chez ES, `null`
-ici). Une brique qui pose une divergence déjà déclarée fait du bruit, pas de la
-mesure.
+### Ce que la brique « paramètres de tri » pose
 
-La divergence ouverte restante n'est pas de la famille de la carte : c'est un
-ordre par `_score` que ferrite sépare et qu'ES rend ex æquo — la famille BM25
-déjà publiée ouverte deux passages de suite. Elle est décrite plus bas, avec sa
-graine, et elle sort **aussi** du binaire d'avant.
+Trois briques, et ce sont les trois paramètres qu'une clé de `sort` accepte —
+`corps.sort_missing`, `corps.sort_mode`, `corps.sort_unmapped_type`. Elles
+citent toutes la même capacité (`recherche.sort`), pour une raison qui est le
+sujet même de cette page : **une capacité déclarée tenue dont rien n'exerce le
+bord n'est qu'une phrase.** `sort` était déclarée tenue depuis longtemps ; ses
+trois paramètres étaient refusés, et ce sont eux qui portent tous les bords.
+
+Ce que le tirage pose exprès, et pourquoi :
+
+| Ce qui est tiré | Pourquoi cette forme-là |
+|---|---|
+| `missing` : `_first` / `_last` deux fois sur trois, une valeur de substitution sinon | les deux mots-clés sont ce qu'un client écrit ; la substitution est ce qui a des bords (typage, arrondi, refus) |
+| une substitution **du mauvais type** une fois sur six (`"abc"`, `"_FIRST"`, `true`, `"7.9"`) | un refus qui ne tombe pas des deux côtés est une divergence comme une autre — et `"_FIRST"` sépare le mot-clé de la valeur |
+| `mode` sur un champ **non numérique** une fois sur cinq | `sum` / `avg` / `median` y sont refusés par ES ; sans ce tirage, le refus ne serait exercé nulle part |
+| `unmapped_type` sur un champ qu'**aucun** index ne mappe, une clé sur huit | c'est le seul cas que le fuzzer peut poser (il ne crée qu'un index) : tout le corpus y est « sans valeur », donc c'est la **sentinelle** qui se compare, dans le tableau `sort` |
+
+Et ce qu'elles ne posent **pas**, parce que le fuzzer ne le peut pas : le
+conflit de familles de tri entre deux index, qui demande deux mappings
+divergents. Il est mesuré ailleurs, par
+[`sonde_tri.py`](../tests/compat/sonde_tri.py), qui crée trois index exprès.
 
 Une note sur l'étalonnage, parce qu'il vaut mieux l'écrire que la laisser lire
 de travers : il rend **0 divergence réelle**, mais la ligne de verdict de
@@ -185,11 +187,27 @@ non-détermination **entre deux Elasticsearch** (c'est l'ordre d'un `HashSet` de
 Java), donc c'est exactement le genre de chose qu'un étalonnage ES contre ES est
 censé faire apparaître.
 
-### Ce que ce passage a corrigé
+### Ce que ce passage a sorti
 
-Les **deux** divergences que les passages précédents laissaient ouvertes sont
-fermées, et une troisième est sortie de la campagne elle-même. Toutes les trois
-rendaient un résultat faux en 200.
+**Rien de neuf, et c'est un résultat qu'il faut écrire plutôt que taire.** Les
+trois briques de ce passage n'ont sorti aucun défaut que
+[`sonde_tri.py`](../tests/compat/sonde_tri.py) n'avait déjà trouvé — la sonde
+étant écrite en mesurant chaque bord contre un vrai ES **avant** d'écrire le
+code, il ne restait pas grand-chose au tirage. Ce que le fuzzer apporte ici
+n'est donc pas une découverte mais une **garde** : les paramètres de tri sont
+maintenant posés au milieu de tout le reste (agrégations, `nested`, `copy_to`,
+pagination tronquante, `scroll`), c'est-à-dire dans les combinaisons que la
+sonde ne visite pas.
+
+Il a en revanche confirmé, une fois de plus, que la campagne mesure ce qu'on
+croit : les mêmes plages contre le binaire d'avant partent en centaines de
+refus, dont chacun est un `missing` ou un `mode` refusé.
+
+### Ce que le passage précédent a corrigé
+
+Les **deux** divergences que les passages d'avant laissaient ouvertes ont été
+fermées là, et une troisième est sortie de la campagne elle-même. Toutes les
+trois rendaient un résultat faux en 200.
 
 | Ce qui différait | Ce que c'est devenu |
 |---|---|
