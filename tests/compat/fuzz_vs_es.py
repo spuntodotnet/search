@@ -267,6 +267,13 @@ BRIQUES = {
     # agregations
     "agg.metriques": "agg.metriques",
     "agg.terms": "agg.terms",
+    # Les deux parametres qui separent un `terms` d'une facette, chacun avec sa
+    # brique — comme les trois de la cle de tri, et pour la meme raison : ils
+    # sont silencieux quand ils sont faux. Un `include` non applique rend plus
+    # de seaux que demande, et un ordre par sous-agregation faux garde
+    # exactement les memes seaux dans un autre ordre.
+    "agg.terms_filtre": "agg.terms",
+    "agg.terms_ordre_sous_agg": "agg.terms",
     "agg.range": "agg.range",
     "agg.histogram": "agg.histogram",
     "agg.date_histogram": "agg.date_histogram",
@@ -361,6 +368,16 @@ def descendre(noeud, parts):
     if isinstance(noeud, dict):
         return descendre(noeud[parts[0]], parts[1:]) if parts and parts[0] in noeud else []
     return [noeud]
+
+
+def echappe_lucene(s):
+    """Une chaine litterale dans la syntaxe d'expression reguliere de Lucene.
+
+    `re.escape` de Python n'est pas utilisable : il echappe des caracteres que
+    Lucene lit autrement (`~`, `&`, `#`) et en laisse d'autres. Tout ce qui
+    n'est pas alphanumerique ASCII est donc precede d'un `\\`, ce que Lucene lit
+    comme un litteral dans tous les cas."""
+    return "".join(c if c.isascii() and c.isalnum() else "\\" + c for c in s)
 
 
 def feuilles_de_nested(champs):
@@ -1470,7 +1487,11 @@ class Generateur:
             if rng.random() < 0.3:
                 q["order"] = {rng.choice(["_count", "_key"]):
                               rng.choice(["asc", "desc"])}
-            return self._peut_etre_sous(q, "terms", champs, docs, prof)
+            filtre = self._filtre_de_termes(c, docs)
+            if filtre:
+                q.update(filtre)
+            agg = self._peut_etre_sous(q, "terms", champs, docs, prof)
+            return self._peut_etre_ordonne_par_sous_agg(agg, champs, docs, prof)
         if quoi == "range" and self.brique("agg.range"):
             # Sur un champ date, une borne de `range` est une **date**, ecrite
             # au format du champ : tantivy compte en nanosecondes, donc c'est
@@ -1523,6 +1544,78 @@ class Generateur:
         if prof < 1 and self.rng.random() < 0.3 and self.brique("agg.sous"):
             return {nom: q, "aggs": self.aggs(champs, docs, prof + 1)}
         return {nom: q}
+
+    def _filtre_de_termes(self, champ, docs):
+        """`include` / `exclude` sur un `terms`, dans les deux formes d'ES.
+
+        Le motif comme la liste sont bati**s sur des valeurs qui existent**
+        (voir [`_termes`]) : un filtre qui ne retient rien mesure la forme de
+        la reponse, pas la selection. Les trois formes du filtre sont posees,
+        y compris celles que ferrite refuse — la partition, et le filtre sur un
+        champ qui n'est pas une chaine — puisqu'un refus qui n'est pas exerce
+        n'est qu'une phrase."""
+        rng = self.rng
+        if not self.brique("agg.terms_filtre") or rng.random() >= 0.3:
+            return None
+        param = rng.choice(["include", "exclude"])
+        if rng.random() < 0.12:
+            # La forme partitionnee : refusee, et le refus doit se voir.
+            return {param: {"partition": rng.randrange(3), "num_partitions": 3}}
+        if champ.ty != "keyword" or rng.random() < 0.12:
+            # Un champ qui n'est pas une chaine : ES sert la liste exacte et
+            # refuse l'expression reguliere. tantivy, lui, ecarterait la
+            # colonne entiere — d'ou le refus de ferrite, exerce ici.
+            vus = [v for v in self._termes(champ, docs) if v is not None]
+            if not vus:
+                return None
+            return {param: [rng.choice(vus)]}
+        vus = [v for v in self._termes(champ, docs) if isinstance(v, str)]
+        if not vus:
+            return None
+        if rng.random() < 0.5:
+            liste = [rng.choice(vus) for _ in range(rng.randint(1, 3))]
+            return {param: liste}
+        # Un motif ancre sur le terme entier, bati autour d'une valeur vue :
+        # son prefixe suivi de `.*`, ou la valeur elle-meme, ou une alternative.
+        v = rng.choice(vus)
+        motif = rng.choice([
+            echappe_lucene(v[:1]) + ".*" if v else ".*",
+            echappe_lucene(v),
+            "(" + "|".join(echappe_lucene(x) for x in {v, rng.choice(vus)}) + ")",
+            ".*" + echappe_lucene(v[-1:]) if v else ".*",
+            "[^a-z].*",
+        ])
+        return {param: motif}
+
+    def _peut_etre_ordonne_par_sous_agg(self, agg, champs, docs, prof):
+        """`order` par une sous-agregation metrique.
+
+        C'est la seule forme d'ordre qui demande de calculer les
+        sous-agregations **avant** de trier les seaux, et son bord n'est pas
+        celui qu'on croit : un seau dont la metrique n'a aucune valeur se
+        classe comme `NaN` sous un `avg`, comme `+inf` sous un `min` et comme
+        `-inf` sous un `max`. La metrique est donc posee sur un champ **tire a
+        part** du champ agrege, pour que des seaux vides existent pour de bon."""
+        rng = self.rng
+        if not self.brique("agg.terms_ordre_sous_agg") or rng.random() >= 0.3:
+            return agg
+        corps = agg.get("terms")
+        if corps is None:
+            return agg
+        mesurables = [c for c in champs if c.ty in NUMERIQUES]
+        if not mesurables:
+            return agg
+        c = rng.choice(mesurables)
+        nom = rng.choice(["min", "max", "sum", "avg", "value_count", "stats"])
+        chemin = "m" if nom != "stats" else "m." + rng.choice(
+            ["count", "min", "max", "avg", "sum"])
+        if rng.random() < 0.15:
+            chemin = "m.value" if nom != "stats" else "m"
+        sous = agg.get("aggs") or {}
+        sous["m"] = {nom: {"field": c.chemin}}
+        agg["aggs"] = sous
+        corps["order"] = {chemin: rng.choice(["asc", "desc"])}
+        return agg
 
 
 # ---------------------------------------------------------------------------
@@ -2055,6 +2148,15 @@ def _refus_declare(e, _requete=None, ecarts=()):
         # `edge_ngram`) : Lucene y construit une `MultiPhraseQuery`, tantivy
         # n'en a pas. Un mot seul passe.
         "plusieurs termes a la meme position",
+        # `include` / `exclude` sur un `terms` : les trois refus de la facette.
+        # Le premier est le seul qui coute vraiment quelque chose — ES sert la
+        # liste exacte sur un numerique, une date et un booleen. Les trois
+        # phrases sont prises au **debut** du message : le texte d'un ecart de
+        # statut est coupe a 160 caracteres, et un nom de champ un peu long
+        # suffisait a faire sortir la phrase de la fenetre.
+        "ne filtre les termes d'un [terms] que sur un champ de chaines",
+        "la forme partitionnee de",
+        "et [missing] sur la meme agregation [terms]",
     ))
 
 

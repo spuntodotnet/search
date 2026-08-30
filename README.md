@@ -96,7 +96,10 @@ réel est la **couche de compatibilité** au-dessus.
   `mode` et `unmapped_type`), `from`/`size`,
   `scroll` (donc `helpers.scan`), filtrage de `_source`.
 - **Agrégations** : métriques + `terms` / `date_histogram` / `range` /
-  `histogram` / `filter`, avec sous-agrégations.
+  `histogram` / `filter`, avec sous-agrégations. `terms` filtre ses termes
+  (`include` / `exclude`, par expression régulière ou liste exacte) et classe
+  ses seaux sur une sous-agrégation (`{"order": {"panier_moyen": "desc"}}`) :
+  de quoi faire une vraie facette de catalogue.
 - **Mono-nœud assumé** : les routes de cluster (`_cluster/health`, `_cat/*`,
   `_nodes`) répondent de façon crédible et constante — un shard, zéro réplique,
   toujours `green`.
@@ -315,8 +318,13 @@ supportés : on peut rejouer le mapping d'un Elasticsearch existant, ou indexer
 sans rien déclarer.
 
 Les **agrégations** sont là aussi : métriques, `terms`, `range`, `histogram`,
-`date_histogram`, et sous-agrégations — de quoi construire des facettes. Y
-compris sur les buckets **rares**, ce qui n'a pas toujours été vrai : au-delà de
+`date_histogram`, et sous-agrégations — de quoi construire des facettes. Une
+facette de catalogue, pas seulement un comptage : `terms` filtre ses termes
+(`include` / `exclude`, par expression régulière de Lucene ou par liste exacte)
+et classe ses seaux sur ce qu'ils contiennent — « les dix catégories au panier
+moyen le plus élevé » s'écrit `{"order": {"panier_moyen": "desc"}}`, et c'est la
+seule forme d'ordre qui demande de calculer les sous-agrégations avant de trier.
+Y compris sur les buckets **rares**, ce qui n'a pas toujours été vrai : au-delà de
 2 048 documents par segment, une sous-agrégation sous un `terms` ou un `range`
 perdait leurs documents, en 200 et avec le bon `doc_count` à côté. ferrite
 épingle le correctif d'amont de tantivy pour ça — ce qu'il contient et comment
@@ -430,7 +438,7 @@ les tests des clients officiels et le code de 184 dépôts open source — la
 question posée est « celle-ci passerait-elle **entièrement** ? », parce qu'une
 requête supportée à 90 % est une requête qui échoue. Réponse : **96,2 % des
 requêtes trouvées dans du code d'application**, 40,1 % des exemples de la
-documentation, 30,5 % des tracks de benchmark. L'écart entre ces trois nombres
+documentation, 32,8 % des tracks de benchmark. L'écart entre ces trois nombres
 est le résultat ; la méthode, les sources et les biais sont dans
 [`docs/usage.md`](docs/usage.md), le corpus est publié avec.
 

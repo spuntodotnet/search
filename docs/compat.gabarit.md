@@ -730,8 +730,12 @@ empilement.
 
 ## Agrégations
 
-Comparées champ par champ à un vrai ES 8.15 sur 53 requêtes
-(`tests/compat/diff_aggs.py`), clés de réponse comprises.
+Comparées champ par champ à un vrai ES 8.15 sur 73 requêtes
+(`tests/compat/diff_aggs.py`), clés de réponse comprises. Ce qui sépare un
+`terms` d'une **facette** — `include` / `exclude` et l'ordre par
+sous-agrégation — a en plus sa propre sonde,
+[`sonde_facettes.py`](../tests/compat/sonde_facettes.py), qui compare le bloc
+`terms` entier sur 158 questions.
 
 <!-- table:aggs -->
 

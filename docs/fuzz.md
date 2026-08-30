@@ -125,11 +125,12 @@ avec sa raison, et `--tout` les imprime.
 
 ## La mesure du jour
 
-Le générateur a changé — trois briques de plus, les **paramètres d'une clé de
-tri** (`missing`, `mode`, `unmapped_type`) — donc **toutes les graines ont
-changé de sens** : la campagne précédente ne mesurait plus les mêmes cas, et ses
-chiffres ne sont pas reconduits. Ce tableau est celui de ce passage, sur des
-plages jamais utilisées.
+Le générateur a changé — deux briques de plus, **le filtre de termes d'un
+`terms`** (`include` / `exclude`, dans les trois formes d'ES) et **l'ordre par
+sous-agrégation** — donc **toutes les graines ont changé de sens** : la campagne
+précédente ne mesurait plus les mêmes cas, et ses chiffres ne sont pas
+reconduits. Ce tableau est celui de ce passage, sur des plages jamais
+utilisées.
 
 ```
 graines 8100000+       250 cas, 11 638 requêtes, 1 divergence ouverte

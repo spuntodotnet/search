@@ -356,12 +356,30 @@ def traits_aggs(noeud, sous_bucket=False):
             if isinstance(params, dict):
                 for p in params:
                     vus.add(f"agg:{nom}.{p}")
-                if nom == "terms" and isinstance(params.get("order"), (dict, list)):
-                    ordres = params["order"] if isinstance(params["order"], list) else [params["order"]]
-                    for ordre in ordres:
-                        if isinstance(ordre, dict) and any(c not in ("_count", "_key", "_term")
-                                                           for c in ordre):
-                            vus.add("agg:terms.order=sous_agregation")
+                if nom == "terms":
+                    if isinstance(params.get("order"), (dict, list)):
+                        ordres = (params["order"]
+                                  if isinstance(params["order"], list)
+                                  else [params["order"]])
+                        for ordre in ordres:
+                            if not isinstance(ordre, dict):
+                                continue
+                            # L'ordre par une sous-agregation metrique est
+                            # servi ; le chemin **a plusieurs niveaux**, qui
+                            # traverse une agregation mono-seau, ne l'est pas.
+                            if any(">" in c for c in ordre):
+                                vus.add("agg:terms.order=chemin_multi")
+                    for p in ("include", "exclude"):
+                        v = params.get(p)
+                        if v is None:
+                            continue
+                        # La forme partitionnee, et la cohabitation avec
+                        # `missing` : deux refus declares qu'aucun nom de
+                        # parametre ne porte.
+                        if isinstance(v, dict):
+                            vus.add("agg:terms.filtre=partition")
+                        if "missing" in params:
+                            vus.add("agg:terms.filtre_et_missing")
                 if nom == "filter":
                     vus |= traits_requete(params)
         for clef in CORPS_AGGS:
@@ -540,7 +558,12 @@ ANALYSE = {"analyse:analyzer": "analyse.custom", "analyse:tokenizer": "analyse.t
 # declare que seule une regle peut reconnaitre.
 TRAITS_REFUSES = {
     "dsl:terms.lookup": "dsl.terms",            # « les *terms lookup* »
-    "agg:terms.order=sous_agregation": "agg.terms",  # « l'ordre par sous-agregation »
+    # L'ordre par une sous-agregation metrique est servi depuis qu'il est
+    # mesure ; ce qui reste refuse est le chemin a plusieurs niveaux, la forme
+    # partitionnee d'un filtre, et un filtre pose en meme temps qu'un `missing`.
+    "agg:terms.order=chemin_multi": "agg.terms",
+    "agg:terms.filtre=partition": "agg.terms",
+    "agg:terms.filtre_et_missing": "agg.terms",
     "tri:script": "recherche.sort",             # « le tri par script »
     "tri:geo": "recherche.sort",
     "dsl:multi_match.type=cross_fields": "libre.cross_fields",

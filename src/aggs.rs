@@ -78,12 +78,25 @@ impl Info {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Ordre {
     CountDesc,
     CountAsc,
     KeyAsc,
     KeyDesc,
+    /// Classer les seaux par la valeur d'une **sous-agregation** metrique.
+    ///
+    /// `prop` est vide pour une metrique a valeur unique (`avg`, `sum`,
+    /// `value_count`...) et nomme la valeur voulue pour une metrique
+    /// multi-valuee (`prix.avg` sur un `stats`). `metrique` est le type de la
+    /// sous-agregation : c'est lui qui dit ou classer un seau dont la metrique
+    /// n'a **aucune** valeur (voir [`valeur_absente`]).
+    SousAgg {
+        agg: String,
+        prop: String,
+        metrique: String,
+        asc: bool,
+    },
 }
 
 /// Marge de buckets demandes a tantivy en plus de la `size` voulue.
@@ -113,6 +126,8 @@ fn allowed(agg: &str) -> Option<&'static [&'static str]> {
             "min_doc_count",
             "order",
             "missing",
+            "include",
+            "exclude",
         ],
         "range" => &["field", "ranges", "keyed"],
         "histogram" => &[
@@ -307,11 +322,35 @@ fn validate_une(
 
     if type_agg == "terms" {
         if let Some(order) = corps_agg.get("order") {
-            lire_ordre(order, nom)?;
+            lire_ordre(order, nom, sous)?;
         }
+        let champ = corps_agg.get("field").and_then(Value::as_str).unwrap_or("");
         if let Some(v) = corps_agg.get("missing") {
-            let champ = corps_agg.get("field").and_then(Value::as_str).unwrap_or("");
             verifier_missing(nom, champ, v, champs)?;
+        }
+        for param in ["include", "exclude"] {
+            if let Some(v) = corps_agg.get(param) {
+                verifier_filtre_termes(nom, param, champ, v, champs)?;
+                // Le seau de remplissage de `missing` disparait des que
+                // l'agregation de tantivy filtre les termes : son identifiant
+                // de terme n'est pas dans le dictionnaire, donc il n'est dans
+                // aucun des ensembles autorises que `include` / `exclude`
+                // construisent. Chez ES, ce seau est un terme comme un autre —
+                // il reste sous un `exclude` qui ne le vise pas, et il sort
+                // sous un `include` qui le nomme (mesure : `include:
+                // ["alpha", "(vide)"]` rend deux seaux chez ES, un seul ici).
+                // Perdre en silence les documents sans valeur est exactement ce
+                // qu'une facette ne doit pas faire.
+                if corps_agg.get("missing").is_some() {
+                    return Err(EsError::unsupported(format!(
+                        "ferrite ne supporte pas [{param}] et [missing] sur la meme agregation \
+                         [terms] (agregation [{nom}]) : l'agregation de tantivy filtre les termes \
+                         par leur identifiant dans le dictionnaire, que le seau de remplissage \
+                         n'a pas — il disparaitrait de la reponse, en 200, alors qu'Elasticsearch \
+                         le traite comme un terme ordinaire (voir docs/compat.md)"
+                    )));
+                }
+            }
         }
         // `min_doc_count: 0` demande un bucket pour les valeurs que la
         // recherche n'a **pas** trouvees. tantivy ne le rend pas de facon
@@ -495,12 +534,19 @@ fn verifier_ranges(
     Ok(())
 }
 
-/// L'ordre d'un `terms`.
+/// L'ordre d'un `terms` : `_count`, `_key`, ou le chemin d'une **sous-agregation**
+/// metrique.
 ///
-/// Seuls `_count` et `_key` sont acceptes. Ordonner par une sous-agregation est
-/// possible chez ES, mais sa regle de departage entre ex aequo n'a pas ete
-/// verifiee ici : plutot que de rendre un ordre peut-etre different, on refuse.
-fn lire_ordre(order: &Value, nom: &str) -> EsResult<Ordre> {
+/// Le sens se lit sans egard a la casse : ES accepte `"DESC"` autant que
+/// `"desc"` (mesure contre ES 8.15), la sienne etant lue par un
+/// `equalsIgnoreCase`.
+///
+/// `sous` porte les sous-agregations declarees sous ce `terms` : c'est la que
+/// se resout un chemin comme `prix_moyen` ou `stats_prix.avg`, et c'est la
+/// seule facon de distinguer une metrique a valeur unique d'une metrique
+/// multi-valuee — ES les traite differemment et refuse chacune sous la forme de
+/// l'autre.
+fn lire_ordre(order: &Value, nom: &str, sous: Option<&Value>) -> EsResult<Ordre> {
     let obj = order.as_object().ok_or_else(|| {
         EsError::illegal_argument(format!("[aggs.{nom}.order] doit etre un objet"))
     })?;
@@ -511,14 +557,14 @@ fn lire_ordre(order: &Value, nom: &str) -> EsResult<Ordre> {
     }
     let (cle, sens) = obj.iter().next().unwrap();
     let sens = sens.as_str().unwrap_or("");
-    let asc = match sens {
-        "asc" => true,
-        "desc" => false,
-        autre => {
-            return Err(EsError::illegal_argument(format!(
-                "[aggs.{nom}.order] : sens [{autre}] invalide (asc|desc)"
-            )))
-        }
+    let asc = if sens.eq_ignore_ascii_case("asc") {
+        true
+    } else if sens.eq_ignore_ascii_case("desc") {
+        false
+    } else {
+        return Err(EsError::illegal_argument(format!(
+            "[aggs.{nom}.order] : sens [{sens}] invalide (asc|desc)"
+        )));
     };
     match cle.as_str() {
         "_count" => Ok(if asc {
@@ -527,10 +573,292 @@ fn lire_ordre(order: &Value, nom: &str) -> EsResult<Ordre> {
             Ordre::CountDesc
         }),
         "_key" => Ok(if asc { Ordre::KeyAsc } else { Ordre::KeyDesc }),
-        autre => Err(EsError::unsupported(format!(
-            "ferrite ne supporte pas l'ordre [{autre}] dans [aggs.{nom}.order] ; cles \
-             acceptees : _count, _key (ordonner par une sous-agregation n'est pas supporte)"
+        chemin => lire_ordre_sous_agg(chemin, asc, nom, sous),
+    }
+}
+
+/// Les proprietes qu'ES accepte au bout du chemin d'un `stats` — les cinq
+/// valeurs qu'il rend, et rien d'autre : `s.variance` echoue en 400 (mesure).
+const PROPRIETES_STATS: &[&str] = &["count", "min", "max", "avg", "sum"];
+
+/// Les metriques a **valeur unique** : leur chemin d'ordre est leur nom nu.
+const METRIQUES_SIMPLES: &[&str] = &["min", "max", "sum", "avg", "value_count"];
+
+/// Un chemin d'ordre qui n'est ni `_count` ni `_key` designe une
+/// sous-agregation metrique de **ce** `terms`.
+///
+/// Les quatre refus reproduisent ceux d'un vrai ES 8.15, mesures un par un
+/// (`Invalid aggregation order path [...]`) : une agregation absente, une
+/// agregation de seaux, une metrique multi-valuee sans propriete, et une
+/// propriete que la metrique ne rend pas.
+fn lire_ordre_sous_agg(
+    chemin: &str,
+    asc: bool,
+    nom: &str,
+    sous: Option<&Value>,
+) -> EsResult<Ordre> {
+    // ES sait descendre a travers une agregation mono-seau (`filtre>prix`).
+    // ferrite n'a pas d'agregation mono-seau sous un `terms` — `filter` y est
+    // deja refusee — donc le chemin ne mene nulle part : le dire vaut mieux que
+    // de le lire comme un nom d'agregation qui n'existe pas.
+    if chemin.contains(SEP) {
+        return Err(EsError::unsupported(format!(
+            "ferrite ne supporte pas un chemin d'ordre a plusieurs niveaux [{chemin}] dans \
+             [aggs.{nom}.order] : il traverserait une agregation mono-seau, et la seule \
+             d'Elasticsearch que ferrite serve ([filter]) est deja refusee sous une agregation \
+             de seaux (voir docs/compat.md)"
+        )));
+    }
+    let (agg, prop) = chemin.split_once('.').unwrap_or((chemin, ""));
+    let corps = sous
+        .and_then(Value::as_object)
+        .and_then(|o| o.get(agg))
+        .ok_or_else(|| {
+            EsError::illegal_argument(format!(
+                "Invalid aggregation order path [{chemin}]. Cannot find aggregation named [{agg}] \
+                 (dans [aggs.{nom}])"
+            ))
+        })?;
+    let type_sous = type_de(corps).unwrap_or("");
+    if METRIQUES_SIMPLES.contains(&type_sous) {
+        // Une metrique a valeur unique accepte `value` — le nom de la seule
+        // valeur qu'elle rende — et rien d'autre (mesure : `pm.value` passe,
+        // `pm.count` echoue en 400).
+        if !prop.is_empty() && prop != "value" {
+            return Err(EsError::illegal_argument(format!(
+                "Invalid aggregation order path [{chemin}]. Unknown value key [{prop}] for \
+                 single-value metric aggregation [{agg}]. Either use [value] as key or drop the \
+                 key all together (dans [aggs.{nom}])"
+            )));
+        }
+    } else if type_sous == "stats" {
+        if prop.is_empty() {
+            return Err(EsError::illegal_argument(format!(
+                "Invalid aggregation order path [{chemin}]. Missing value key in [null] which \
+                 refers to a multi-value metric aggregation (dans [aggs.{nom}])"
+            )));
+        }
+        if !PROPRIETES_STATS.contains(&prop) {
+            return Err(EsError::illegal_argument(format!(
+                "Invalid aggregation order path [{chemin}]. [{prop}] n'est pas une valeur de \
+                 [stats] ; valeurs rendues : {PROPRIETES_STATS:?} (dans [aggs.{nom}])"
+            )));
+        }
+    } else if type_sous == "filter" {
+        // Une agregation **mono-seau** est une cle d'ordre valable chez ES : il
+        // classe alors sur son `doc_count`, que le chemin le nomme (`h.doc_count`)
+        // ou non (`h`) — mesure contre ES 8.15. La seule que ferrite serve,
+        // `filter`, est deja refusee sous une agregation de seaux : le chemin
+        // ne mene donc nulle part, et c'est un cout de perimetre, pas une
+        // demande invalide. Les deux se distinguent par le type de l'erreur,
+        // et c'est lui que le rapport de conformance lit.
+        return Err(EsError::unsupported(format!(
+            "ferrite ne supporte pas l'ordre par l'agregation [filter] [{agg}] (dans \
+             [aggs.{nom}.order]) : Elasticsearch classe alors les seaux sur son [doc_count], \
+             mais ferrite refuse deja [filter] sous une agregation de seaux — il faudrait \
+             rejouer sa requete seau par seau (voir docs/compat.md)"
+        )));
+    } else {
+        // Une agregation de **seaux** n'est pas une cle d'ordre : ES refuse
+        // aussi, avec le meme statut.
+        return Err(EsError::illegal_argument(format!(
+            "Invalid aggregation order path [{chemin}]. Can't sort a [{type_sous}] aggregation \
+             [{agg}] (dans [aggs.{nom}])"
+        )));
+    }
+    Ok(Ordre::SousAgg {
+        agg: agg.to_string(),
+        prop: prop.to_string(),
+        metrique: type_sous.to_string(),
+        asc,
+    })
+}
+
+/// Ou se classe un seau dont la metrique n'a **aucune** valeur.
+///
+/// Il n'y a pas de reponse unique, et ce n'est pas devinable : ES ne compare
+/// pas ce qu'il **affiche** (`null` partout) mais ce que sa metrique rend en
+/// interne quand elle est vide. Mesure contre ES 8.15, sur un corpus ou la
+/// plupart des categories n'ont aucun prix :
+///
+/// | metrique | vide vaut | ou elle se classe |
+/// |---|---|---|
+/// | `avg`, `stats.avg` | `NaN` (`0/0`) | en tete d'un `desc`, en queue d'un `asc` |
+/// | `min`, `stats.min` | `+Infinity` | comme ci-dessus |
+/// | `max`, `stats.max` | `-Infinity` | **l'inverse** : en queue d'un `desc` |
+/// | `sum`, `value_count`, `stats.count`, `stats.sum` | `0` | avec les autres zeros |
+///
+/// Le `Double.compare` de Java classe `NaN` **au-dessus** de tout, `+Infinity`
+/// compris ; le `total_cmp` de Rust fait de meme pour un `NaN` positif. Prendre
+/// `null` pour un seul et meme « absent » rendait les seaux vides en tete d'un
+/// `order: {stats.max: desc}` la ou ES les met en queue.
+fn valeur_absente(metrique: &str, prop: &str) -> f64 {
+    // Une metrique a valeur unique s'ecrit `pm` ou `pm.value` : les deux
+    // designent la meme valeur, donc le meme « absent ».
+    let prop = if METRIQUES_SIMPLES.contains(&metrique) {
+        ""
+    } else {
+        prop
+    };
+    match (metrique, prop) {
+        ("min", "") | ("stats", "min") => f64::INFINITY,
+        ("max", "") | ("stats", "max") => f64::NEG_INFINITY,
+        _ => f64::NAN,
+    }
+}
+
+/// L'ordre, reecrit tel que tantivy le lit.
+///
+/// Deux raisons de ne pas transmettre celui du client tel quel : il accepte
+/// `"DESC"` comme ES et tantivy non, et c'est le seul endroit ou la forme
+/// envoyee est certaine d'avoir ete validee.
+fn ordre_pour_tantivy(ordre: &Ordre) -> Value {
+    let (cible, sens) = match ordre {
+        Ordre::CountDesc => ("_count".to_string(), "desc"),
+        Ordre::CountAsc => ("_count".to_string(), "asc"),
+        Ordre::KeyAsc => ("_key".to_string(), "asc"),
+        Ordre::KeyDesc => ("_key".to_string(), "desc"),
+        Ordre::SousAgg { agg, prop, asc, .. } => (
+            if prop.is_empty() {
+                agg.clone()
+            } else {
+                format!("{agg}.{prop}")
+            },
+            if *asc { "asc" } else { "desc" },
+        ),
+    };
+    json!({ cible: sens })
+}
+
+/// `include` / `exclude` sur un `terms` : ne garder (ou ecarter) que les termes
+/// qui correspondent a une expression reguliere ou qui figurent dans une liste
+/// exacte. C'est ce qui separe une agregation `terms` d'une vraie facette de
+/// catalogue.
+///
+/// Trois formes chez ES, et les trois ne se valent pas ici :
+///
+/// - **une expression reguliere** (une chaine), dans la syntaxe de Lucene et
+///   ancree sur le terme entier (mesure : `include: "a"` ne rend rien sur un
+///   terme `alpha`, `^alpha$` non plus puisque `^` et `$` y sont des
+///   litteraux). Elle est traduite par [`crate::regexp`], comme celle d'une
+///   requete `regexp` — donc avec les memes quatre operateurs refuses
+///   (`~`, `&`, `<n-m>`, `#`). ES la refuse sur un champ qui n'est pas textuel,
+///   et ferrite reprend son message ;
+/// - **une liste exacte de valeurs**. Sur un `keyword`, tantivy la sert ;
+/// - **une partition** (`{"partition": n, "num_partitions": m}`), refusee : voir
+///   ci-dessous.
+///
+/// Le refus qui compte est celui du champ **non textuel** : l'agregation de
+/// tantivy n'applique `include` / `exclude` qu'a une colonne de chaines, et
+/// **ecarte la colonne entiere** quand elle ne l'est pas (`continue` dans
+/// `agg_data.rs`). Un `include: [1, 3]` sur un `long` rendrait donc zero seau
+/// la ou ES en rend deux — un resultat faux, en 200, sur une demande qu'ES
+/// sert.
+fn verifier_filtre_termes(
+    nom: &str,
+    param: &str,
+    champ: &str,
+    v: &Value,
+    champs: Option<&Fields>,
+) -> EsResult<()> {
+    // `None` quand la recherche ne vise aucun index : la **forme** se verifie
+    // quand meme, seul le type du champ reste indecidable.
+    let kind = champs.and_then(|c| c.get(champ)).map(|m| m.ty.kind());
+    let textuel = kind.is_none_or(|k| k == FieldKind::Keyword);
+    match v {
+        Value::String(motif) => {
+            if !textuel {
+                // Le message d'ES, mot pour mot : c'est lui qui dit au client
+                // quelle forme employer a la place.
+                return Err(EsError::illegal_argument(format!(
+                    "Aggregation [{nom}] cannot support regular expression style include/exclude \
+                     settings as they can only be applied to string fields. Use an array of \
+                     numeric values for include/exclude clauses used to filter numeric fields"
+                )));
+            }
+            // Traduit ici pour que les operateurs refuses le soient au meme
+            // endroit que dans une requete `regexp`, et avant toute execution.
+            // Le type de l'erreur est conserve : un `~` reste un refus declare,
+            // pas un argument illegal.
+            crate::regexp::vers_regex(motif, crate::regexp::Flags::default(), false).map_err(
+                |mut e| {
+                    e.reason = format!("[aggs.{nom}.terms.{param}] : {}", e.reason);
+                    e
+                },
+            )?;
+            Ok(())
+        }
+        Value::Array(valeurs) => {
+            for x in valeurs {
+                if !matches!(x, Value::String(_) | Value::Number(_) | Value::Bool(_)) {
+                    return Err(EsError::illegal_argument(format!(
+                        "[aggs.{nom}.terms.{param}] : [{x}] n'est pas une valeur simple ; une \
+                         liste d'inclusion ne contient que des valeurs de terme"
+                    )));
+                }
+            }
+            if !textuel {
+                let ty = champs
+                    .and_then(|c| c.get(champ))
+                    .map_or("?", |m| m.ty.name());
+                return Err(EsError::unsupported(format!(
+                    "ferrite ne filtre les termes d'un [terms] que sur un champ de chaines : \
+                     [{param}] est ici pose sur [{champ}], de type [{ty}] (agregation [{nom}]). \
+                     L'agregation de tantivy **ecarte la colonne entiere** des qu'elle n'est pas \
+                     textuelle — elle rendrait zero seau la ou Elasticsearch en rend, en 200 et \
+                     sans un mot (voir docs/compat.md)"
+                )));
+            }
+            Ok(())
+        }
+        Value::Object(o) => {
+            if o.contains_key("partition") || o.contains_key("num_partitions") {
+                Err(EsError::unsupported(format!(
+                    "ferrite ne supporte pas la forme partitionnee de [{param}] (agregation \
+                     [{nom}]) : elle retient un terme selon un **hachage** de sa valeur \
+                     (murmur3 x86_32, graine 31, mesure contre ES 8.15 et stable a son \
+                     redemarrage). Ni le filtre par expression reguliere de tantivy ni sa liste \
+                     exacte ne savent l'exprimer : il faudrait enumerer tout le dictionnaire de \
+                     termes pour en dresser la liste, ce qui defait la raison meme du parametre \
+                     (voir docs/compat.md)"
+                )))
+            } else {
+                Err(EsError::illegal_argument(format!(
+                    "[aggs.{nom}.terms.{param}] : un objet n'est accepte que sous la forme \
+                     partitionnee ([partition], [num_partitions])"
+                )))
+            }
+        }
+        autre => Err(EsError::illegal_argument(format!(
+            "[aggs.{nom}.terms.{param}] : [{autre}] illisible ; attendu une expression \
+             reguliere, une liste de valeurs, ou une partition"
         ))),
+    }
+}
+
+/// `include` / `exclude` sous la forme que tantivy lit : une chaine est un
+/// motif traduit en syntaxe `regex`, une liste devient une liste de chaines.
+///
+/// ES lit chaque element d'une liste **comme du texte** : `include: [1, 2]`
+/// cherche les termes `"1"` et `"2"` (mesure). La conversion est donc faite
+/// ici, sans quoi tantivy refuserait le nombre a la deserialisation.
+fn filtre_pour_tantivy(v: &Value) -> Option<Value> {
+    match v {
+        Value::String(motif) => {
+            crate::regexp::vers_regex(motif, crate::regexp::Flags::default(), false)
+                .ok()
+                .map(Value::String)
+        }
+        Value::Array(valeurs) => Some(Value::Array(
+            valeurs
+                .iter()
+                .map(|x| match x {
+                    Value::String(s) => json!(s),
+                    autre => json!(autre.to_string()),
+                })
+                .collect(),
+        )),
+        _ => None,
     }
 }
 
@@ -1079,9 +1407,12 @@ fn preparer(
                 .and_then(|c| gen.fields.get(c))
                 .is_some_and(|m| m.ty.kind() == FieldKind::F64);
             let format = champ.and_then(|c| gen.fields.format_de(c)).cloned();
+            let sous_aggs = corps_obj
+                .get("aggs")
+                .or_else(|| corps_obj.get("aggregations"));
             let ordre = valeur
                 .get("order")
-                .and_then(|o| lire_ordre(o, nom).ok())
+                .and_then(|o| lire_ordre(o, nom, sous_aggs).ok())
                 .unwrap_or(Ordre::CountDesc);
             let size = valeur
                 .get("size")
@@ -1094,7 +1425,30 @@ fn preparer(
                 // On demande plus large pour pouvoir appliquer l'ordre d'ES.
                 if let Some(o) = corps_agg.as_object_mut() {
                     let voulu = size.unwrap_or(10) as u64;
-                    o.insert("size".into(), json!(voulu + MARGE_TERMS));
+                    if matches!(ordre, Ordre::SousAgg { .. }) {
+                        // Un ordre par sous-agregation ne se delegue pas a
+                        // moitie. tantivy classe une metrique **absente** a
+                        // `f64::MIN` ; ES la classe comme un `NaN` de Java,
+                        // c'est-a-dire la plus **grande** de toutes (mesure :
+                        // un `avg` nul part en tete en `desc` et en queue en
+                        // `asc`, dans les deux cas la ou tantivy le met a
+                        // l'oppose). Les deux troncatures ne gardent donc pas
+                        // les memes seaux, et une marge n'y change rien.
+                        //
+                        // tantivy ne coupe deja plus au niveau du segment quand
+                        // l'ordre vise une sous-agregation (`cut_off_buckets`
+                        // n'est pas appele) : tous les termes remontent de
+                        // toute facon. On lui demande donc de n'en ecarter
+                        // aucun, et c'est ferrite qui choisit — sur l'ensemble
+                        // des seaux, avec le comparateur d'ES.
+                        o.insert("size".into(), json!(MAX_BUCKETS));
+                        o.remove("shard_size");
+                    } else {
+                        o.insert("size".into(), json!(voulu + MARGE_TERMS));
+                    }
+                    if o.contains_key("order") {
+                        o.insert("order".into(), ordre_pour_tantivy(&ordre));
+                    }
                     // `missing` est pose **au type du champ**, comme le fait ES
                     // : `missing: 0` sur un `keyword` y devient la cle `"0"`.
                     // tantivy, lui, poserait la valeur telle quelle et rendrait
@@ -1104,6 +1458,13 @@ fn preparer(
                             if let Some(norme) = normaliser_missing(t.ty, &m) {
                                 o.insert("missing".into(), norme);
                             }
+                        }
+                    }
+                    // `include` / `exclude` : un motif de Lucene devient un
+                    // motif `regex`, une liste devient une liste de chaines.
+                    for param in ["include", "exclude"] {
+                        if let Some(v) = o.get(param).and_then(filtre_pour_tantivy) {
+                            o.insert(param.to_string(), v);
                         }
                     }
                 }
@@ -1316,16 +1677,28 @@ fn mise_en_forme_une(valeur: &Value, chemin: &str, info: &Info, forme: &Forme<'_
 /// `terms`.
 ///
 /// Elle vaut `-1` — « je ne sais pas la borner » — quand deux conditions sont
-/// reunies : l'ordre demande est `_count` **croissant**, et le nombre de termes
+/// reunies : l'ordre demande **ne classe pas les seaux par compte decroissant**
+/// (donc `_count` croissant, ou une sous-agregation), et le nombre de termes
 /// distincts **atteint** ce que le shard collecte (`shard_size`, par defaut
-/// `size * 1.5 + 10`). Elle vaut `0` partout ailleurs. Mesure contre un ES 8.15,
-/// `size: 3` donc `shard_size` de 14 : `0` a 13 termes distincts, `-1` a 14 ;
-/// et `0` en `_count desc` comme en `_key`, quel qu'en soit le nombre.
+/// `size * 1.5 + 10`). Elle vaut `0` partout ailleurs — `_key` compris, dans les
+/// deux sens.
+///
+/// Mesure contre un ES 8.15, `size: 3` donc `shard_size` de 14 : `0` a 13 termes
+/// distincts, `-1` a 14. Et sur 800 termes distincts : `-1` en `_count asc`
+/// comme en `order: {prix: desc}` a `size: 5` (`shard_size` de 17), `0` des que
+/// `shard_size` passe au-dessus de 800 — la borne est bien celle du
+/// `shard_size`, pas celle de l'ordre.
+///
+/// C'est la seconde moitie de ce chiffre qui a demande la mesure : l'ordre par
+/// sous-agregation rendait `0` sur un petit index (8 termes, `shard_size` de
+/// 14) et `-1` des que l'index en portait plus que le shard n'en collecte. Lire
+/// le premier seul aurait fige la mauvaise regle.
 fn erreur_de_comptage(info: &Info, distincts: usize) -> i64 {
     let size = info.size.unwrap_or(10);
     let defaut = (size as f64 * 1.5 + 10.0) as usize;
     let shard_size = info.shard_size.unwrap_or(defaut);
-    if info.ordre == Ordre::CountAsc && distincts >= shard_size {
+    let borne_inconnue = matches!(info.ordre, Ordre::CountAsc | Ordre::SousAgg { .. });
+    if borne_inconnue && distincts >= shard_size {
         -1
     } else {
         0
@@ -1348,7 +1721,7 @@ fn mise_en_forme_buckets(
                 .collect();
             let mut ecartes = 0u64;
             if info.type_agg == "terms" {
-                trier_terms(&mut liste, info.ordre);
+                trier_terms(&mut liste, &info.ordre);
                 if let Some(size) = info.size {
                     ecartes = liste
                         .iter()
@@ -1444,9 +1817,25 @@ fn cle_keyed(bucket: Value, info: &Info) -> (String, Value) {
 /// L'ordre d'ES : le critere demande, puis **la cle croissante** pour
 /// departager les ex aequo. tantivy ne departage pas, d'ou des selections
 /// differentes au bord de la troncature.
-fn trier_terms(buckets: &mut [Value], ordre: Ordre) {
+///
+/// La cle croissante departage dans **les deux sens**, y compris sur un ordre
+/// `desc` — mesure contre ES 8.15 : trois categories de meme moyenne (20,5)
+/// sortent d'un `order: {prix: desc}` dans l'ordre `Epsilon`, `alpha`, `delta`,
+/// c'est-a-dire par octets croissants.
+///
+/// Une metrique **absente** (`avg` d'un seau ou le champ n'est nulle part) vaut
+/// `NaN`, et le `Double.compare` de Java le classe **au-dessus** de tout : en
+/// tete d'un `desc`, en queue d'un `asc` (mesure). Le `total_cmp` de Rust range
+/// le `NaN` positif exactement au meme endroit.
+fn trier_terms(buckets: &mut [Value], ordre: &Ordre) {
     fn compte(b: &Value) -> u64 {
         b.get("doc_count").and_then(Value::as_u64).unwrap_or(0)
+    }
+    fn lire_metrique(b: &Value, agg: &str, prop: &str, absente: f64) -> f64 {
+        b.get(agg)
+            .and_then(|m| m.get(if prop.is_empty() { "value" } else { prop }))
+            .and_then(Value::as_f64)
+            .unwrap_or(absente)
     }
     fn cle(b: &Value) -> (u8, f64, String) {
         match b.get("key") {
@@ -1466,6 +1855,22 @@ fn trier_terms(buckets: &mut [Value], ordre: Ordre) {
         Ordre::CountAsc => compte(a).cmp(&compte(b)).then(cmp_cle(a, b)),
         Ordre::KeyAsc => cmp_cle(a, b),
         Ordre::KeyDesc => cmp_cle(b, a),
+        Ordre::SousAgg {
+            agg,
+            prop,
+            metrique,
+            asc,
+        } => {
+            let absente = valeur_absente(metrique, prop);
+            let va = lire_metrique(a, agg, prop, absente);
+            let vb = lire_metrique(b, agg, prop, absente);
+            if *asc {
+                va.total_cmp(&vb)
+            } else {
+                vb.total_cmp(&va)
+            }
+            .then(cmp_cle(a, b))
+        }
     });
 }
 

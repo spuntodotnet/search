@@ -81,7 +81,7 @@ mappings différents pour 1 756 recherches. Le même mapping est posé sur les d
 serveurs : une inférence de travers ne peut que sortir la requête du
 dénominateur, jamais flatter ferrite.
 
-**Les deux mesures sont d'accord sur 1 364 requêtes sur 1 381** (98,8 %). C'est
+**Les deux mesures sont d'accord sur 1 363 requêtes sur 1 381** (98,7 %). C'est
 ce qui rend le croisement utilisable là où le rejeu ne va pas — les routes, les
 mappings, tout ce qui n'est pas un corps de `_search`.
 
@@ -107,8 +107,8 @@ régression.
 | **`github` — du code d'application open source** | 338 | **96,2 %** |
 | `clients` — tests et exemples des clients officiels | 143 | 81,1 % |
 | `doc` — la documentation de référence | 3 969 | 40,1 % |
-| `rally` — les tracks de benchmark d'Elastic | 861 | 30,5 % |
-| **tout le corpus** | 5 311 | 43,2 % |
+| `rally` — les tracks de benchmark d'Elastic | 861 | 32,8 % |
+| **tout le corpus** | 5 311 | 43,6 % |
 
 Ces quatre nombres ne se contredisent pas, ils mesurent quatre choses
 différentes, et l'écart entre eux **est** le résultat :
@@ -123,11 +123,13 @@ différentes, et l'écart entre eux **est** le résultat :
 - les tracks Rally sont des **bancs d'essai analytiques** : `date_histogram`
   avec `calendar_interval`, `runtime_mappings`, `fields`, `percentiles`. Et le
   track `elastic/logs` rejoue les requêtes de **Kibana**, qui pose
-  systématiquement des `runtime_mappings` et des `fields`. 30,5 % — c'était
+  systématiquement des `runtime_mappings` et des `fields`. 32,8 % — c'était
   17,4 % avant que `fields`, `docvalue_fields` et `stored_fields` ne soient
-  livrés, et 28,6 % avant les trois paramètres de `sort`, que ces tracks posent
-  plus que quiconque (79 de leurs requêtes citent `unmapped_type`) — c'est le
-  prix d'entrée pour servir un Kibana, pas celui d'une application.
+  livrés, 28,6 % avant les trois paramètres de `sort`, et 30,5 % avant que
+  `terms` ne sache filtrer ses termes et classer ses seaux sur une
+  sous-agrégation (ces tracks posent cet ordre-là plus que quiconque : 106
+  requêtes du corpus le citent) — c'est le prix d'entrée pour servir un Kibana,
+  pas celui d'une application.
 
 Le corpus n'est pas homogène et il ne prétend pas l'être : la documentation en
 fait 74,7 %, et le seul répertoire `elastic/logs` des tracks Rally 8,3 %.
@@ -277,6 +279,16 @@ débloque. Deux colonnes, parce qu'elles ne disent pas la même chose :
 > ne lit pas dans son énoncé — il ne s'arme que sur une capacité qui a commencé
 > à se déclarer.
 >
+> La **12** — `include` / `exclude` et l'ordre par sous-agrégation sur un
+> `terms` — a fait passer le corpus de **43,2 % à 43,6 %** (2 297 → 2 316), et
+> les tracks Rally de **30,5 % à 32,8 %**. La ligne du tableau annonçait 14 ;
+> la mesure en donne 19, et l'écart s'explique de la même façon que plus haut :
+> la ligne avait été calculée en supposant l'ordre par sous-agrégation servi
+> **entièrement**, alors que ce qui reste refusé (le chemin à plusieurs
+> niveaux, la forme partitionnée, un filtre posé en même temps qu'un `missing`)
+> est plus étroit que ce que la carte prévoyait. Une prévision de déblocage se
+> vérifie après coup, elle ne se recopie pas.
+>
 > Les **125** de la ligne 2 supposaient les cinq faits, `runtime_mappings` et
 > `script_fields` compris : ils demandent Painless, et la mesure a servi à
 > décider de ne pas les faire (voir plus bas). Les autres lignes n'ont pas été
@@ -289,7 +301,7 @@ débloque. Deux colonnes, parce qu'elles ne disent pas la même chose :
 | 3 | **19** — `_delete_by_query`, `_update_by_query` | 77 | **75** | **10** |
 | 4 | **05** — `highlight` — **faite** | 102 | **13** | 0 |
 | 5 | **09** — `sort` : `missing`, `mode`, `unmapped_type` — **faite** | 94 | **20** | 0 |
-| 6 | **12** — `terms` : `include`, `exclude`, ordre par sous-agrégation | 103 | 14 | 0 |
+| 6 | **12** — `terms` : `include`, `exclude`, ordre par sous-agrégation — **faite** | 103 | **19** | 0 |
 | 7 | **21** — les analyzers de langue | 22 | 14 | 0 |
 | 8 | **13** — `date_histogram` : `calendar_interval`, `time_zone` | 259 | 11 | 2 |
 | 9 | **15** — `function_score`, `boosting` | 45 | 7 | 0 |

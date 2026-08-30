@@ -58,6 +58,72 @@ def aggregations():
                                                   "order": {"_key": "asc"}}}}),
         ("terms order _count asc", {"f": {"terms": {"field": "marque",
                                                     "order": {"_count": "asc"}}}}),
+        # --- ce qui separe un `terms` d'une facette : filtrer les termes, et
+        # les classer sur une sous-agregation.
+        #
+        # Les deux compteurs sont **dans** la comparaison, et c'est le point :
+        # ES les calcule apres filtrage, donc un `sum_other_doc_count` qui
+        # ignorerait l'`exclude` resterait plausible. Les bords sont mesures
+        # cas par cas par `sonde_facettes.py` ; ce qui est verrouille ici, ce
+        # sont les cles de la reponse.
+        ("terms include regexp", {"f": {"terms": {"field": "marque",
+                                                  "include": "S.*"}}}),
+        ("terms exclude regexp", {"f": {"terms": {"field": "marque",
+                                                  "exclude": "S.*"}}}),
+        ("terms include liste", {"f": {"terms": {"field": "categorie",
+                                                 "include": ["audio", "ecran"]}}}),
+        ("terms exclude liste", {"f": {"terms": {"field": "categorie",
+                                                 "exclude": ["audio"]}}}),
+        ("terms include + exclude", {"f": {"terms": {
+            "field": "marque", "include": ".*e.*", "exclude": ["Dell"]}}}),
+        ("terms include + size", {"f": {"terms": {
+            "field": "marque", "size": 2, "include": ".*e.*"}}}),
+        ("terms exclude + size", {"f": {"terms": {
+            "field": "marque", "size": 2, "exclude": ["Sony"]}}}),
+        ("terms exclude + count asc", {"f": {"terms": {
+            "field": "marque", "size": 2, "shard_size": 4,
+            "exclude": ["Sony"], "order": {"_count": "asc"}}}}),
+        ("terms order avg desc", {"f": {"terms": {
+            "field": "marque", "size": 3, "order": {"pm": "desc"}},
+            "aggs": {"pm": {"avg": {"field": "prix"}}}}}),
+        ("terms order avg asc", {"f": {"terms": {
+            "field": "marque", "size": 3, "order": {"pm": "asc"}},
+            "aggs": {"pm": {"avg": {"field": "prix"}}}}}),
+        ("terms order sum desc", {"f": {"terms": {
+            "field": "categorie", "order": {"pm": "desc"}},
+            "aggs": {"pm": {"sum": {"field": "prix"}}}}}),
+        ("terms order value_count asc", {"f": {"terms": {
+            "field": "categorie", "order": {"vc": "asc"}},
+            "aggs": {"vc": {"value_count": {"field": "prix"}}}}}),
+        ("terms order stats.avg desc", {"f": {"terms": {
+            "field": "marque", "size": 3, "order": {"s.avg": "desc"}},
+            "aggs": {"s": {"stats": {"field": "prix"}}}}}),
+        ("terms order stats.count asc", {"f": {"terms": {
+            "field": "marque", "size": 3, "order": {"s.count": "asc"}},
+            "aggs": {"s": {"stats": {"field": "prix"}}}}}),
+        # `note` n'est pas renseigne partout : ces trois-la portent donc des
+        # seaux dont la metrique n'a **aucune** valeur, et c'est le seul
+        # endroit ou `min`, `max` et `avg` cessent de se classer pareil.
+        ("terms order avg desc, metrique vide", {"f": {"terms": {
+            "field": "marque", "size": 4, "order": {"pm": "desc"}},
+            "aggs": {"pm": {"avg": {"field": "note"}}}}}),
+        ("terms order min asc, metrique vide", {"f": {"terms": {
+            "field": "marque", "size": 4, "order": {"pm": "asc"}},
+            "aggs": {"pm": {"min": {"field": "note"}}}}}),
+        ("terms order max desc, metrique vide", {"f": {"terms": {
+            "field": "marque", "size": 4, "order": {"pm": "desc"}},
+            "aggs": {"pm": {"max": {"field": "note"}}}}}),
+        ("terms order stats.max desc, metrique vide", {"f": {"terms": {
+            "field": "marque", "size": 4, "order": {"s.max": "desc"}},
+            "aggs": {"s": {"stats": {"field": "note"}}}}}),
+        ("terms include + order avg desc", {"f": {"terms": {
+            "field": "marque", "size": 2, "include": ".*e.*",
+            "order": {"pm": "desc"}},
+            "aggs": {"pm": {"avg": {"field": "prix"}}}}}),
+        ("terms order avg desc + sous-agg de seaux", {"f": {"terms": {
+            "field": "categorie", "size": 2, "order": {"pm": "desc"}},
+            "aggs": {"pm": {"avg": {"field": "prix"}},
+                     "g": {"terms": {"field": "marque", "size": 2}}}}}),
         # --- range
         ("range prix", {"r": {"range": {"field": "prix", "ranges": [
             {"to": 100}, {"from": 100, "to": 500}, {"from": 500}]}}}),
