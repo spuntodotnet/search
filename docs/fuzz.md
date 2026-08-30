@@ -140,14 +140,22 @@ graines 8400000+       250 cas, 11 734 requêtes, 0 divergence réelle
                      1 000 cas,  46 452 requêtes, 1 divergence ouverte
 
 les mêmes plages, contre le binaire d'AVANT la carte
-                     1 000 cas,  46 452 requêtes, VOIR-CI-DESSOUS
+                     1 000 cas,  46 998 requêtes, 3 524 divergences
+                                 (894 + 891 + 874 + 865)
 
 étalonnage ES vs ES     50 cas,   2 262 requêtes, 0 divergence réelle
 ```
 
 La ligne du milieu est celle qui compte, et c'est la seule qui dit que les
 briques mesurent quelque chose. **La règle du dépôt appliquée à un générateur :
-une brique qui ne fait pas rougir le binaire d'avant ne mesure rien.**
+une brique qui ne fait pas rougir le binaire d'avant ne mesure rien.** Ici elle
+le fait bruyamment, et pour une raison qui rend le chiffre moins impressionnant
+qu'il n'en a l'air : les trois paramètres étaient **refusés** avant, donc chaque
+requête qui en porte un rendait 400 d'un côté et 200 de l'autre. Ce que ce
+3 524 mesure vraiment, c'est que les briques sont posées souvent — pas qu'elles
+ont trouvé 3 524 défauts. Le nombre de requêtes diffère un peu entre les deux
+colonnes (46 998 contre 46 452) parce que le générateur enchaîne selon ce que le
+serveur répond : un refus coupe les requêtes de suite d'un cas.
 
 La divergence ouverte n'est pas de la famille de la carte : c'est un fragment de
 surlignage sur un `match_phrase_prefix` posé sur un multi-field `.keyword`

@@ -385,6 +385,28 @@ impl Collector for SortCollector {
     }
 }
 
+/// La cle de tri d'une colonne d'entiers — la meme fonction pour un `long`, une
+/// date et un booleen, qui se comparent tous les trois comme des entiers.
+///
+/// Sans `mode`, elle ne touche pas au tampon : le cas courant reste un simple
+/// balayage. Avec, elle le remplit une fois par document et le reutilise —
+/// `sum`, `avg` et `median` n'allouent donc pas par hit.
+fn cle_entiere<I: Iterator<Item = i64>>(
+    valeurs: I,
+    mode: Option<SortMode>,
+    asc: bool,
+    tampon: &mut Vec<i64>,
+) -> Option<SortValue> {
+    match mode {
+        None => extremum(valeurs, asc).map(SortValue::I64),
+        Some(m) => {
+            tampon.clear();
+            tampon.extend(valeurs);
+            (!tampon.is_empty()).then(|| SortValue::I64(choisir_i64(tampon, m)))
+        }
+    }
+}
+
 impl SegmentCollector for SortSegmentCollector {
     type Fruit = Vec<Hit>;
 
@@ -399,14 +421,6 @@ impl SegmentCollector for SortSegmentCollector {
             let absente = || cle.absente.clone();
             let nums = &mut self.nums;
             let reels = &mut self.reels;
-            let entier = |vals: &mut Vec<i64>, it: &mut dyn Iterator<Item = i64>| match cle.mode {
-                None => extremum(it, asc).map(SortValue::I64),
-                Some(m) => {
-                    vals.clear();
-                    vals.extend(it);
-                    (!vals.is_empty()).then(|| SortValue::I64(choisir_i64(vals, m)))
-                }
-            };
             keys.push(match &cle.acc {
                 Accessor::Score => SortValue::F64(f64::from(score)),
                 Accessor::Doc => SortValue::I64(i64::from(doc)),
@@ -437,7 +451,7 @@ impl SegmentCollector for SortSegmentCollector {
                     None => absente(),
                 },
                 Accessor::I64(c) => {
-                    entier(nums, &mut c.values_for_doc(doc)).unwrap_or_else(absente)
+                    cle_entiere(c.values_for_doc(doc), cle.mode, asc, nums).unwrap_or_else(absente)
                 }
                 Accessor::F64(c) => match cle.mode {
                     None => {
@@ -457,11 +471,14 @@ impl SegmentCollector for SortSegmentCollector {
                 // compare a la sentinelle des entiers : il est donc un entier
                 // de bout en bout — `mode: sum` sur `[true, false]` vaut 1.
                 Accessor::Bool(c) => {
-                    entier(nums, &mut c.values_for_doc(doc).map(i64::from)).unwrap_or_else(absente)
+                    cle_entiere(c.values_for_doc(doc).map(i64::from), cle.mode, asc, nums)
+                        .unwrap_or_else(absente)
                 }
-                Accessor::Date(c) => entier(
+                Accessor::Date(c) => cle_entiere(
+                    c.values_for_doc(doc).map(|d| d.into_timestamp_millis()),
+                    cle.mode,
+                    asc,
                     nums,
-                    &mut c.values_for_doc(doc).map(|d| d.into_timestamp_millis()),
                 )
                 .unwrap_or_else(absente),
             });
