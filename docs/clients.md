@@ -182,6 +182,25 @@ fait nommer une par une les métadonnées de `_bulk` refusées dans
 métadonnées », une phrase que le rattachement ne sait pas lire, donc six écarts
 remontaient en **régression** faute d'être écrits.
 
+### Les trois campagnes rejouées, et les deux qui ne bougent pas
+
+Combler `?timeout=` fait passer la suite go de **15/30 à 16/30** contre ferrite,
+et surtout la vide de sa seule ligne `regression` : `TestAPI/Search` passe, et
+les deux autres cas de la même famille (`Headers`, `OpaqueID`) échouent désormais
+sur `_reindex` et sur une forme de sortie, tous deux rattachés à une capacité
+déclarée refusée.
+
+Les deux autres clients ont été **rejoués aussi**, et ils ne bougent pas d'un
+cas : JavaScript garde son cycle de vie 7/7 des deux côtés et son unique refus
+`hors.cluster_distribue`, Python ses **71/84** *(origine, ES)* · **0/84**
+*(origine, ferrite)* · **45/84** *(adapté, ES)* · **43/84** *(adapté, ferrite)* et
+son cycle 9/9. Le rapport commité n'en porte aucune trace, et c'est voulu : ses
+seuls écarts entre les deux campagnes sont des durées d'exécution et un
+`_scroll_id`. Ce n'est pas la même chose que de ne pas mesurer — la raison pour
+laquelle rien ne pouvait bouger (leur trafic relevé ne contient ni écriture
+d'alias ni `timeout` refusé) était une lecture du rapport ; le zéro, lui, est une
+mesure.
+
 ## Ce que coûte la suite du client Python : deux colonnes, pas une
 
 `test_elasticsearch/test_server` appelle `wipe_cluster` **entre chaque cas**.
