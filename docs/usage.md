@@ -99,11 +99,11 @@ attendu, et c'est mesuré plutôt que supposé.
 
 | Sous-corpus | Requêtes | Servies entièrement |
 |---|---|---|
-| **`github` — du code d'application open source** | 338 | **93,8 %** |
+| **`github` — du code d'application open source** | 338 | **96,2 %** |
 | `clients` — tests et exemples des clients officiels | 143 | 81,1 % |
-| `doc` — la documentation de référence | 3 969 | 40,1 % |
+| `doc` — la documentation de référence | 3 969 | 40,2 % |
 | `rally` — les tracks de benchmark d'Elastic | 861 | 28,6 % |
-| **tout le corpus** | 5 311 | 42,8 % |
+| **tout le corpus** | 5 311 | 42,9 % |
 
 Ces quatre nombres ne se contredisent pas, ils mesurent quatre choses
 différentes, et l'écart entre eux **est** le résultat :
@@ -233,6 +233,21 @@ débloque. Deux colonnes, parce qu'elles ne disent pas la même chose :
 > lecture, un `type: fvh` aurait compté « servi », et le dénominateur aurait
 > été plus flatteur que la vérité. C'est le même geste que pour la ligne 3, un
 > cran plus bas.
+>
+> La **38** — les manques que seule la suite d'OpenSearch voit — n'a fait bouger
+> le total que de **42,8 % à 42,9 %** (2 272 → 2 281), et c'est le sous-corpus
+> qui est intéressant : le code d'application open source passe de **93,8 % à
+> 96,2 %**, soit huit requêtes sur les vingt-et-une qu'il refusait encore. Les
+> neuf débloquées le sont toutes par le même paramètre, `?timeout=` sur
+> `_search` — accepté et sans objet, comme `preference`. Deux remarques valent
+> plus que le chiffre. D'abord, il ne venait d'aucune des deux suites de
+> conformance mais de la **suite de tests du client go** : un corpus de corps de
+> requêtes le voyait (94 requêtes le posent), sans qu'aucune source ne le
+> désigne comme le prochain manque à combler. Ensuite, `timeout` sortait de
+> `recherche.non_supportes` : sans le rattacher à sa nouvelle capacité, les 94
+> requêtes seraient tombées dans « aucune capacité ne les réclame », qui compte
+> **contre** nous — c'est le garde-fou qui rend un dénominateur non choisi, et
+> il a servi ici.
 >
 > Les **125** de la ligne 2 supposaient les cinq faits, `runtime_mappings` et
 > `script_fields` compris : ils demandent Painless, et la mesure a servi à

@@ -469,6 +469,11 @@ CORPS = {
     "stored_fields": "recherche.stored_fields",
     "script_fields": "recherche.script_fields",
     "runtime_mappings": "recherche.script_fields",
+    # Sa capacite est `partiel` — accepte, verifie, sans objet — donc elle est
+    # nommee ici et non laissee dans `recherche.non_supportes`. La quitter sans
+    # la rattacher l'aurait fait tomber dans « aucune capacite ne la reclame »,
+    # qui compte contre nous : 94 requetes du corpus la posent.
+    "timeout": "recherche.timeout",
 }
 # La liste des clefs refusees n'est pas recopiee ici : elle se lit dans le
 # `nom` de la capacite `recherche.non_supportes`, qui les cite entre accents

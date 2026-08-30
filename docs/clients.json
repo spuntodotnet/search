@@ -110,10 +110,10 @@
     "exemple": [
      {
       "index": {
-       "_id": "13",
+       "_id": "0",
        "_index": "test-index-a",
        "routing": "\"{required\": true}",
-       "version": 513,
+       "version": 500,
        "version_type": "external"
       }
      },
@@ -122,14 +122,14 @@
      },
      {
       "index": {
-       "_id": "14",
+       "_id": "27",
        "_index": "test-index-a",
        "routing": "\"{required\": true}",
-       "version": 514,
+       "version": 527,
        "version_type": "external"
       }
      },
-     "… et 55 lignes"
+     "… et 111 lignes"
     ],
     "genre": "refus",
     "methode": "POST",
@@ -144,38 +144,19 @@
     "exemple": [
      {
       "index": {
-       "_id": "6",
+       "_id": "2",
        "_index": "test-alias-a",
        "require_alias": true
       }
      },
      {
       "body": "Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat."
-     },
-     {
-      "index": {
-       "_id": "7",
-       "_index": "test-alias-a",
-       "require_alias": true
-      }
-     },
-     "… et 5 lignes"
+     }
     ],
     "genre": "refus",
     "methode": "POST",
     "statut": 400,
     "verdict": "cout_perimetre"
-   },
-   {
-    "api": "search",
-    "capacite": "recherche.route",
-    "combien": 1,
-    "erreur": "illegal_argument_exception: request [/_search] contains unrecognized parameter: [timeout]",
-    "exemple": null,
-    "genre": "refus",
-    "methode": "POST",
-    "statut": 400,
-    "verdict": "regression"
    },
    {
     "api": "reindex",
@@ -327,8 +308,8 @@
      {
       "cas": "Search",
       "es": "PASS",
-      "etat": "ecart",
-      "ferrite": "FAIL"
+      "etat": "identique",
+      "ferrite": "PASS"
      },
      {
       "cas": "Sort_serialisation",
@@ -444,14 +425,14 @@
       "echecs": 2,
       "ignores": 0,
       "passes": 28,
-      "queue": "esponse received on idle HTTP channel starting with \"<!DOCTYPE HTML>\\n<html lang=\\\"en\\\">\\n    <head>\\n        <meta charset=\\\"utf-8\\\">\\n        <title>Error response</title>\\n    </head>\\n    <body>\\n        <h1>Error response</h1>\\n        <p>Error code: 400</p>\\n        <p>Message: Bad request syntax ('14').</p>\\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\\n    </body>\\n</html>\\n\"; err=<nil>\n2026/08/30 00:48:40 Unsolicited response received on idle HTTP channel starting with \"<!DOCTYPE HTML>\\n<html lang=\\\"en\\\">\\n    <head>\\n        <meta charset=\\\"utf-8\\\">\\n        <title>Error response</title>\\n    </head>\\n    <body>\\n        <h1>Error response</h1>\\n        <p>Error code: 400</p>\\n        <p>Message: Bad request syntax ('14').</p>\\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\\n    </body>\\n</html>\\n\"; err=<nil>\n    json_reader_integration_test.go:57: Error response: [502 Bad Gateway] timed out\n--- FAIL: TestJSONReaderIntegration (480.43s)\n    --- FAIL: TestJSONReaderIntegration/Index_and_search (480.43s)\nFAIL\nFAIL\tgithub.com/elastic/go-elasticsearch/v8/esutil\t487.841s\nFAIL\ngo: downloading github.com/elastic/elastic-transport-go/v8 v8.5.0\ngo: downloading go.opentelemetry.io/otel/trace v1.21.0\ngo: downloading go.opentelemetry.io/otel v1.21.0\ngo: downloading github.com/go-logr/logr v1.3.0\ngo: downloading go.opentelemetry.io/otel/metric v1.21.0\ngo: downloading github.com/go-logr/stdr v1.2.2\n",
+      "queue": "esponse received on idle HTTP channel starting with \"<!DOCTYPE HTML>\\n<html lang=\\\"en\\\">\\n    <head>\\n        <meta charset=\\\"utf-8\\\">\\n        <title>Error response</title>\\n    </head>\\n    <body>\\n        <h1>Error response</h1>\\n        <p>Error code: 400</p>\\n        <p>Message: Bad request syntax ('14').</p>\\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\\n    </body>\\n</html>\\n\"; err=<nil>\n2026/08/30 08:02:16 Unsolicited response received on idle HTTP channel starting with \"<!DOCTYPE HTML>\\n<html lang=\\\"en\\\">\\n    <head>\\n        <meta charset=\\\"utf-8\\\">\\n        <title>Error response</title>\\n    </head>\\n    <body>\\n        <h1>Error response</h1>\\n        <p>Error code: 400</p>\\n        <p>Message: Bad request syntax ('14').</p>\\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\\n    </body>\\n</html>\\n\"; err=<nil>\n    json_reader_integration_test.go:57: Error response: [502 Bad Gateway] timed out\n--- FAIL: TestJSONReaderIntegration (480.38s)\n    --- FAIL: TestJSONReaderIntegration/Index_and_search (480.38s)\nFAIL\nFAIL\tgithub.com/elastic/go-elasticsearch/v8/esutil\t487.705s\nFAIL\ngo: downloading github.com/elastic/elastic-transport-go/v8 v8.5.0\ngo: downloading go.opentelemetry.io/otel/trace v1.21.0\ngo: downloading go.opentelemetry.io/otel v1.21.0\ngo: downloading go.opentelemetry.io/otel/metric v1.21.0\ngo: downloading github.com/go-logr/logr v1.3.0\ngo: downloading github.com/go-logr/stdr v1.2.2\n",
       "total": 30
      },
      "ferrite": {
-      "echecs": 15,
+      "echecs": 14,
       "ignores": 0,
-      "passes": 15,
-      "queue": "esponse received on idle HTTP channel starting with \"<!DOCTYPE HTML>\\n<html lang=\\\"en\\\">\\n    <head>\\n        <meta charset=\\\"utf-8\\\">\\n        <title>Error response</title>\\n    </head>\\n    <body>\\n        <h1>Error response</h1>\\n        <p>Error code: 400</p>\\n        <p>Message: Bad request syntax ('14').</p>\\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\\n    </body>\\n</html>\\n\"; err=<nil>\n2026/08/30 00:57:45 Unsolicited response received on idle HTTP channel starting with \"<!DOCTYPE HTML>\\n<html lang=\\\"en\\\">\\n    <head>\\n        <meta charset=\\\"utf-8\\\">\\n        <title>Error response</title>\\n    </head>\\n    <body>\\n        <h1>Error response</h1>\\n        <p>Error code: 400</p>\\n        <p>Message: Bad request syntax ('14').</p>\\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\\n    </body>\\n</html>\\n\"; err=<nil>\n    json_reader_integration_test.go:57: Error response: [502 Bad Gateway] timed out\n--- FAIL: TestJSONReaderIntegration (480.35s)\n    --- FAIL: TestJSONReaderIntegration/Index_and_search (480.35s)\nFAIL\nFAIL\tgithub.com/elastic/go-elasticsearch/v8/esutil\t488.610s\nFAIL\ngo: downloading github.com/elastic/elastic-transport-go/v8 v8.5.0\ngo: downloading go.opentelemetry.io/otel/trace v1.21.0\ngo: downloading go.opentelemetry.io/otel v1.21.0\ngo: downloading github.com/go-logr/logr v1.3.0\ngo: downloading go.opentelemetry.io/otel/metric v1.21.0\ngo: downloading github.com/go-logr/stdr v1.2.2\n",
+      "passes": 16,
+      "queue": "esponse received on idle HTTP channel starting with \"<!DOCTYPE HTML>\\n<html lang=\\\"en\\\">\\n    <head>\\n        <meta charset=\\\"utf-8\\\">\\n        <title>Error response</title>\\n    </head>\\n    <body>\\n        <h1>Error response</h1>\\n        <p>Error code: 400</p>\\n        <p>Message: Bad request syntax ('14').</p>\\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\\n    </body>\\n</html>\\n\"; err=<nil>\n2026/08/30 08:11:13 Unsolicited response received on idle HTTP channel starting with \"<!DOCTYPE HTML>\\n<html lang=\\\"en\\\">\\n    <head>\\n        <meta charset=\\\"utf-8\\\">\\n        <title>Error response</title>\\n    </head>\\n    <body>\\n        <h1>Error response</h1>\\n        <p>Error code: 400</p>\\n        <p>Message: Bad request syntax ('14').</p>\\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\\n    </body>\\n</html>\\n\"; err=<nil>\n    json_reader_integration_test.go:57: Error response: [502 Bad Gateway] timed out\n--- FAIL: TestJSONReaderIntegration (480.34s)\n    --- FAIL: TestJSONReaderIntegration/Index_and_search (480.34s)\nFAIL\nFAIL\tgithub.com/elastic/go-elasticsearch/v8/esutil\t488.736s\nFAIL\ngo: downloading github.com/elastic/elastic-transport-go/v8 v8.5.0\ngo: downloading go.opentelemetry.io/otel/trace v1.21.0\ngo: downloading go.opentelemetry.io/otel v1.21.0\ngo: downloading github.com/go-logr/logr v1.3.0\ngo: downloading go.opentelemetry.io/otel/metric v1.21.0\ngo: downloading github.com/go-logr/stdr v1.2.2\n",
       "total": 30
      }
     }
@@ -501,7 +482,7 @@
      },
      "… et 1997 lignes"
     ],
-    "requetes": 99,
+    "requetes": 98,
     "traits": [
      "route:bulk"
     ],
@@ -570,7 +551,7 @@
    },
    {
     "api": "search",
-    "echecs": 3,
+    "echecs": 2,
     "exemple": {
      "query": {
       "match": {

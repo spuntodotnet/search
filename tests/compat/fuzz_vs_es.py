@@ -286,6 +286,12 @@ BRIQUES = {
     # compare, et ce qu'elles laissent derriere elles est compare a son tour.
     "route.delete_by_query": "ingestion.delete_by_query",
     "route.update_by_query": "ingestion.update_by_query",
+    # Ecrire un alias : les sept URL de `put_alias` (le nom de l'alias, celui
+    # de l'index, ou les deux, peuvent venir du corps) et le `remove` de
+    # `POST /_aliases` avec son `must_exist`. Elles ecrivent, comme les deux
+    # lignes precedentes, mais dans le registre d'alias et pas dans le corpus.
+    "route.put_alias": "alias.put",
+    "route.update_aliases": "alias.aliases",
 }
 
 # Les analyzers integres, cites par leur propre capacite : un `analyzer` tire au
@@ -2289,12 +2295,114 @@ class Cas:
         if rng.random() < 0.35:
             self.scroll(champs, docs)
 
+        # 6 bis. les alias de l'index. Ils n'ecrivent pas dans le corpus, mais
+        #    dans un registre a part : la comparaison porte sur le statut et sur
+        #    **quel index porte quel alias** apres coup.
+        if rng.random() < 0.35:
+            self.aliaser()
+
         # 7. et enfin, la seule etape qui **ecrit**. Elle vient en dernier parce
         #    qu'elle change le corpus : tout ce qui precede l'aurait alors
         #    compare sur deux etats differents.
         if rng.random() < 0.35:
             self.par_requete(champs, docs)
         return self.nettoyer()
+
+    def aliaser(self):
+        """Poser puis retirer un alias — par une des sept URL, avec `must_exist`.
+
+        `PUT /{index}/_alias/{nom}` n'est qu'une des sept ecritures d'alias
+        d'ES : le nom de l'alias, celui de l'index, ou les deux, peuvent venir
+        du **corps**, et le corps remplace alors le chemin. Le retrait, lui, a
+        deux regles differentes qu'un raisonnement confond volontiers :
+        `must_exist: true` se verifie **par index visé**, tandis que le 404 par
+        defaut est **global** — il ne tombe que si toute la requete finit sans
+        rien faire.
+
+        Ce qui se compare est le statut **et l'etat laisse derriere** : une
+        commande qui rend 200 en posant l'alias sur un autre index serait verte
+        sur le statut seul. Le **motif** d'un refus n'est pas compare, comme
+        partout ailleurs ici : ferrite nomme ses refus avec ses propres mots.
+        """
+        gen, rng = self.gen, self.gen.rng
+        if not gen.brique("route.put_alias"):
+            return
+        noms = ["fz_alias_1", "fz_alias_2"]
+
+        def etat(base):
+            """Quels alias porte l'index — ce qu'un statut seul ne dit pas."""
+            corps = http(base, "GET", f"/{INDEX}/_alias")[1]
+            return sorted((corps.get(INDEX) or {}).get("aliases", {}))
+
+        # 1. la pose. Les sept formes d'URL, tirees au sort — dont celles ou le
+        #    chemin nomme un index qui n'existe pas et ou le corps le remplace.
+        for alias in noms:
+            forme = rng.randrange(7)
+            corps = {}
+            if forme == 0:
+                methode, chemin = rng.choice(["PUT", "POST"]), f"/{INDEX}/_alias/{alias}"
+            elif forme == 1:
+                methode, chemin = rng.choice(["PUT", "POST"]), f"/{INDEX}/_aliases/{alias}"
+            elif forme == 2:
+                methode, chemin, corps = "PUT", f"/{INDEX}/_alias", {"alias": alias}
+            elif forme == 3:
+                methode, chemin, corps = "PUT", f"/{INDEX}/_aliases", {"alias": alias}
+            elif forme == 4:
+                methode, chemin = rng.choice(["PUT", "POST"]), f"/_alias/{alias}"
+                corps = {"index": INDEX}
+            elif forme == 5:
+                methode, chemin = rng.choice(["PUT", "POST"]), f"/_aliases/{alias}"
+                corps = {"index": INDEX}
+            else:
+                methode, chemin = "PUT", "/_alias"
+                corps = {"index": INDEX, "alias": alias}
+            if "index" in corps and rng.random() < 0.4:
+                # Le corps l'emporte sur le chemin, meme quand le chemin nomme
+                # un index qui n'existe pas — c'est la seule facon de le voir.
+                chemin = "/fz_index_absent" + chemin
+            if rng.random() < 0.3:
+                corps["is_write_index"] = rng.random() < 0.5
+            reps = [http(b, methode, chemin, corps or None) for b in self.serveurs]
+            self.requetes += 2
+            etats = [etat(b) for b in self.serveurs]
+            if reps[0][0] != reps[1][0] or etats[0] != etats[1]:
+                self.divergence("ecart", "alias.pose",
+                                [f"{methode} {chemin} : {self.noms[0]} "
+                                 f"{reps[0][0]} {etats[0]} / {self.noms[1]} "
+                                 f"{reps[1][0]} {etats[1]}"],
+                                {methode + " " + chemin: corps})
+                return
+
+        # 2. le retrait. Une expression tiree au sort — un nom exact, un motif,
+        #    `_all`, ou un nom qui n'existe pas — et `must_exist` dans ses trois
+        #    valeurs.
+        if not gen.brique("route.update_aliases"):
+            return
+        expr = rng.choice([noms[0], "fz_alias*", "_all", "fz_absent",
+                           f"{noms[0]},fz_absent", "fz_neant*"])
+        par_url = rng.random() < 0.35
+        if par_url:
+            methode, chemin, corps = "DELETE", f"/{INDEX}/_alias/{expr}", None
+        else:
+            action = {"index": rng.choice([INDEX, "fuzz*"]),
+                      "aliases": expr.split(",")}
+            if rng.random() < 0.6:
+                action["must_exist"] = rng.random() < 0.5
+            actions = [{"remove": action}]
+            if rng.random() < 0.25:
+                # Un `add` qui aboutit suffit a annuler le 404 global — et ne
+                # change rien a `must_exist`, qui ne regarde que son action.
+                actions.append({"add": {"index": INDEX, "alias": "fz_alias_3"}})
+            methode, chemin, corps = "POST", "/_aliases", {"actions": actions}
+        reps = [http(b, methode, chemin, corps) for b in self.serveurs]
+        self.requetes += 2
+        etats = [etat(b) for b in self.serveurs]
+        if reps[0][0] != reps[1][0] or etats[0] != etats[1]:
+            self.divergence("ecart", "alias.retrait",
+                            [f"{methode} {chemin} : {self.noms[0]} "
+                             f"{reps[0][0]} {etats[0]} / {self.noms[1]} "
+                             f"{reps[1][0]} {etats[1]}"],
+                            {methode + " " + chemin: corps})
 
     def par_requete(self, champs, docs):
         """`_delete_by_query` / `_update_by_query` : les compteurs **et** l'etat.

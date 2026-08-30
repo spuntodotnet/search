@@ -48,6 +48,7 @@ porte un prédicat écrit sur ce qui n'est **pas** comparé :
 | `_field_caps` sur le mapping tiré au sort | le type, `searchable`, `aggregatable`, la liste `indices`, champ par champ | les champs de **métadonnées** (`_id`, `_index`, `_seq_no`…) : ferrite ne les expose pas, et c'est déclaré — il ne sait pas les interroger |
 | `_validate/query` sur chaque requête générée | le verdict `valid` | l'`explanation` : celle d'ES est la chaîne Lucene, celle de ferrite le rendu de sa requête tantivy. Et un `valid: false` là où ES dit `true` n'est un écart **de cette route** que si ferrite accepte pourtant la requête en recherche — sinon c'est le refus que la comparaison de recherche vient de mesurer, vu d'ailleurs |
 | `_stats` | `docs.count` | `store.size_in_bytes` : deux moteurs de stockage. Et `docs.count` lui-même diverge dès qu'il y a du `nested` — Lucene compte ses sous-documents, ferrite n'en a pas. Le prédicat le **mesure** : il exige que le compte de ferrite égale ce que la recherche rend des deux côtés, et que celui d'ES lui soit strictement supérieur |
+| l'**écriture d'un alias** (`alias.put`, `alias.aliases`) | le statut **et quel index porte quel alias** après coup — sur les sept URL de `put_alias` tirées au sort, puis un `remove` dont l'expression (nom exact, motif, `_all`, nom absent) et le `must_exist` (absent, `true`, `false`) sont tirés au sort eux aussi | le **motif** d'un refus, comme partout ici : ferrite nomme ses refus avec ses propres mots. Une brique qui ne comparerait que le statut serait verte sur une commande qui pose l'alias sur le mauvais index |
 
 Une brique de plus ne pose pas de requête : une fois sur quatre, le mapping
 n'est pas posé sur l'index mais dans un **template**, et l'index naît de
@@ -124,46 +125,57 @@ avec sa raison, et `--tout` les imprime.
 
 ## La mesure du jour
 
-Le générateur a changé — une brique de plus (`highlight`) — donc **toutes les
-graines ont changé de sens** : la campagne précédente ne mesurait plus les mêmes
-cas, et ses chiffres ne sont pas reconduits. Ce tableau est celui de ce passage,
-refait en entier.
+Le générateur a changé — une brique de plus (l'**écriture d'un alias**) — donc
+**toutes les graines ont changé de sens** : la campagne précédente ne mesurait
+plus les mêmes cas, et ses chiffres ne sont pas reconduits. Ce tableau est celui
+de ce passage, refait en entier, sur des plages jamais utilisées.
 
 ```
-graines 5150000+       250 cas, 10 965 requêtes, 0 divergence réelle
-graines 6260000+       250 cas, 11 035 requêtes, 0 divergence réelle
-graines 7370000+       250 cas, 11 000 requêtes, 0 divergence réelle
-graines 3535000+       250 cas, 11 016 requêtes, 0 divergence réelle
-graines 9494000+       250 cas, 10 995 requêtes, 0 divergence réelle
-graines 4242000+       250 cas, 11 023 requêtes, 1 divergence ouverte
-graines 1717000+       250 cas, 10 987 requêtes, 0 divergence réelle
-graines 2626000+       250 cas, 11 060 requêtes, 0 divergence réelle
-graines 5500000+       250 cas, 11 026 requêtes, 1 divergence ouverte
-graines 8080000+       250 cas, 11 078 requêtes, 0 divergence réelle
-graines 1234500+       250 cas, 11 061 requêtes, 0 divergence réelle
-graines 3141590+       250 cas, 11 059 requêtes, 0 divergence réelle   (contrôle)
-graines 2718280+       250 cas, 11 060 requêtes, 0 divergence réelle   (contrôle)
-graines 1414210+       250 cas, 11 155 requêtes, 0 divergence réelle   (contrôle)
+graines 8613000+       250 cas, 11 625 requêtes, 0 divergence réelle
+graines 5927000+       250 cas, 11 597 requêtes, 0 divergence réelle
+graines 3308000+       250 cas, 11 540 requêtes, 0 divergence réelle
+graines 7451000+       250 cas, 11 590 requêtes, 1 divergence ouverte
+graines 2196000+       250 cas, 11 456 requêtes, 1 divergence ouverte
+graines 6042000+       250 cas, 11 558 requêtes, 0 divergence réelle
+graines 4783000+       250 cas, 11 620 requêtes, 1 divergence ouverte
+graines 9165000+       250 cas, 11 588 requêtes, 0 divergence réelle
+graines 2054000+       250 cas, 11 551 requêtes, 0 divergence réelle
+graines 7629000+       250 cas, 11 457 requêtes, 0 divergence réelle
+graines 3897000+       250 cas, 11 624 requêtes, 0 divergence réelle
+graines 5310000+       250 cas, 11 678 requêtes, 0 divergence réelle
+graines 6174000+       250 cas, 11 598 requêtes, 0 divergence réelle   (contrôle)
+graines 8452000+       250 cas, 11 640 requêtes, 0 divergence réelle   (contrôle)
                      ------------------------------------------------
-                     3 500 cas, 154 520 requêtes, 2 divergences ouvertes
+                     3 500 cas, 162 122 requêtes, 3 divergences ouvertes
 
-étalonnage ES vs ES     60 cas,  2 523 requêtes, 0 divergence
+étalonnage ES vs ES     60 cas,   2 664 requêtes, 0 divergence réelle
 ```
 
-Onze de ces plages ont servi à corriger, et elles ont sorti **dix-sept** défauts
-du surlignage à elles seules (le détail plus bas). Les **trois dernières** sont
-des plages de contrôle : elles n'ont servi à rien corriger, et elles sont
-vertes. Le rapport machine publié est celui de la dernière,
-[`fuzz.json`](fuzz.json).
+Ce passage a une particularité qu'il faut dire plutôt que taire : **aucune de
+ces plages n'a servi à corriger.** La brique d'alias est passée verte au premier
+tirage contre le binaire de la carte — et rouge **22 fois en 60 cas** contre
+celui d'avant, ce qui est la seule chose qui prouve qu'elle mesure quelque
+chose. Les deux dernières plages restent étiquetées « contrôle » par continuité :
+elles ont été lancées une fois tout figé, doc comprise.
 
-C'est la première fois qu'une plage de contrôle ne sort rien — et ça se lit
-exactement pour ce que c'est : **onze plages avaient été passées avant elles**,
-sur une seule fonctionnalité. Le tirage n'a plus rien de neuf à dire sur ce
-morceau-là ; il en aura sur le prochain.
+Ce n'est donc pas un passage qui trouve, c'est un passage qui **verrouille** : la
+brique existe pour que les sept URL d'écriture d'alias et les deux règles de 404
+ne se défassent pas en silence, pas parce qu'elle a sorti un défaut de plus.
 
-**Les deux divergences sont ouvertes, et aucune ne porte sur le surlignage** :
-ni l'une ni l'autre n'a de bloc `highlight` dans sa requête. Elles sont
-décrites plus bas, avec leur graine.
+**Les trois divergences ouvertes ne portent pas sur les alias**, et aucune n'est
+un défaut que cette carte a introduit : ce sont des défauts antérieurs que le
+nouveau tirage pose pour la première fois. Elles sont décrites plus bas, avec
+leur graine.
+
+Une note sur l'étalonnage, parce qu'il vaut mieux l'écrire que la laisser lire
+de travers : il rend **0 divergence réelle**, mais la ligne de verdict de
+l'outil n'est pas verte pour autant — elle compte aussi les divergences
+**assumées**, et le tirage de ce passage en pose une, l'ordre des valeurs qu'un
+`copy_to` dépose dans sa cible. Cette divergence-là est par construction une
+non-détermination **entre deux Elasticsearch** (c'est l'ordre d'un `HashSet` de
+Java), donc c'est exactement le genre de chose qu'un étalonnage ES contre ES est
+censé faire apparaître. Vérifié plutôt que supposé : le fuzzer **d'avant cette
+carte**, lancé sur la même plage, la pose aussi.
 
 ### Ce que la brique « surlignage » a sorti
 
@@ -213,6 +225,32 @@ lancement de la campagne a signalé un écart de `mapping` et de `field_caps`
 **dès la première graine**. Rejoué seul, le cas était vert — c'étaient trois
 index laissés par des sondes précédentes sur le conteneur de référence. Un
 résultat rouge au démarrage est presque toujours un défaut d'instrument.
+
+### Ce que la brique « écriture d'alias » verrouille
+
+Elle est la troisième à **écrire** (après les deux commandes par requête), mais
+elle n'écrit pas dans le corpus : elle pose et retire des alias sur l'index du
+cas, et compare le statut **et quel index porte quel alias** après coup. Une
+brique qui ne comparerait que le statut serait verte sur une commande qui pose
+l'alias au bon endroit une fois sur deux.
+
+Elle tire au sort deux choses, et ce sont exactement les deux qui n'étaient pas
+devinables :
+
+- **la forme de l'URL**, parmi les sept d'ES — `/{index}/_alias/{nom}`,
+  `/{index}/_alias`, `/_alias/{nom}`, `/_alias`, et `_aliases` pour chacune. Une
+  fois sur deux et demie, le chemin nomme un index qui **n'existe pas** et c'est
+  le corps qui le remplace, ce qui est la seule façon de voir que le corps
+  l'emporte ;
+- **l'expression du retrait** (nom exact, motif, `_all`, nom absent) et
+  `must_exist` dans ses trois valeurs, parce que le 404 par défaut et le 404 de
+  `must_exist` n'obéissent pas à la même règle : le premier est **global**, le
+  second se vérifie **par index visé**.
+
+Elle n'a rien sorti sur les plages de ce passage — 0 divergence en 1 500 cas —
+et ce zéro n'a de sens que comparé à son opposé : la même brique, lancée contre
+le binaire **d'avant** la carte, rend **22 divergences en 60 cas**. C'est la
+même mesure que le 14/65 de `sonde_ecriture_alias.py` contre ce même binaire.
 
 ### Ce que la brique « n-grammes » a sorti, en un passage
 
@@ -389,20 +427,37 @@ rouge — et elle est le bon prix.
 > plutôt que sur ceux qui ont le champ — est toujours là, déclarée dans
 > [`compat.md`](compat.md), et un autre tirage la reposera.
 
-### Les deux divergences ouvertes de ce passage, et ce qu'elles ne sont pas
-
-La campagne complète en a laissé deux, et **aucune des deux ne porte sur le
-surlignage** : leurs requêtes n'ont pas de bloc `highlight` du tout. Elles sont
-publiées ouvertes plutôt que tues, avec leur graine.
+### Les deux divergences ouvertes du passage précédent
 
 | Graine | Ce qui diffère | Ce que c'est |
 |---|---|---|
 | `5500180` | `total` 9 chez ferrite, 8 chez ES, sur un `bool` fait de deux `must_not` dont un `exists` | la divergence **déjà déclarée** sur `exists` appliqué à un champ `text` dont l'analyzer (`stop`) ne laisse aucun terme — vue ici sous une négation, donc dans le sens qui rend **plus** de documents. Le prédicat qui couvre cette famille ne reconnaît pas cette imbrication-là (`dis_max` d'un `bool` à deux `must_not`), et l'élargir masquerait ce qu'il est écrit pour attraper |
-| `4242241` | un ordre par `_score` : ferrite place `d014` là où ES place `d020`, les deux à `1.0` dans le tableau `sort` | la **même famille** que la divergence ouverte du passage précédent : un `dis_max` dont une branche est un `term` sur un `boolean`. ES le note sous `1.0` (le `match_all` voisin l'emporte), ferrite au-dessus — ce sont deux constantes de BM25, et le prédicat n'accepte une inversion que si ES donne aux deux documents des scores **différents**. Ici il les rend ex æquo, et c'est ferrite qui les sépare |
+| `4242241` | un ordre par `_score` : ferrite place `d014` là où ES place `d020`, les deux à `1.0` dans le tableau `sort` | la **même famille** que la divergence ouverte du passage d'avant : un `dis_max` dont une branche est un `term` sur un `boolean`. ES le note sous `1.0` (le `match_all` voisin l'emporte), ferrite au-dessus — ce sont deux constantes de BM25, et le prédicat n'accepte une inversion que si ES donne aux deux documents des scores **différents**. Ici il les rend ex æquo, et c'est ferrite qui les sépare |
 
-Les deux se rejouent (`--rejouer 5500180`, `--rejouer 4242241`) et aucune n'est
-absorbée par un prédicat : une divergence qu'on n'a pas expliquée n'a pas à
-compter comme expliquée.
+> Elles **ne sortent plus** du passage courant, et pour la raison désormais
+> habituelle : le générateur a changé, donc aucune des plages ne les repose. Ce
+> n'est pas une correction — les deux causes sont toujours là, déclarées dans
+> [`compat.md`](compat.md).
+
+### Les trois divergences ouvertes de ce passage, et ce qu'elles ne sont pas
+
+La campagne en a laissé trois, et **aucune ne porte sur les alias** — c'est-à-dire
+sur ce que la carte a livré. Ce sont trois défauts **antérieurs**, que ce
+tirage-ci pose pour la première fois ; la troisième est même une famille déjà
+publiée ouverte au passage précédent, reposée par une autre graine. Elles sont
+publiées ouvertes plutôt que tues, avec leur graine.
+
+| Graine | Ce qui diffère | Ce que c'est |
+|---|---|---|
+| `7451084` | un `avg` sur un champ `long` : `-0,1666…` chez ferrite, `0,0` chez ES, sur des documents dont les valeurs sont `i64::MAX`, `i64::MIN` et quelques `-1` | une **somme de flottants** dont l'ordre décide du résultat. Lucene convertit chaque `long` en `double` avant de sommer, et à 9,2 × 10¹⁸ un `-1` disparaît dans l'arrondi ; tantivy n'y perd pas les mêmes bits. Aucun des deux n'a tort au sens de l'IEEE 754, et c'est précisément pour ça que ce n'est pas absorbable par la tolérance relative de 1e-9 qui couvre les agrégations : les deux valeurs ne sont pas proches, elles sont incomparables. Ça se corrige en sommant comme Lucene, pas en élargissant un prédicat |
+| `2196237` | un `highlight` sous une clause `nested` : ferrite ne rend **aucun** fragment là où ES rend `{"e.y": ["<em>tiret-bas</em>"]}` | le surlignage garde la forme booléenne de la requête et l'évalue document par document ; une clause `nested` n'y est pas tranchée, et le `bool` qu'elle porte est donc traité comme s'il ne marquait rien. C'est le **pendant manquant** de la règle « dans le doute, marquer de trop » : ici le doute fait taire |
+| `4783223` | un ordre par `_score` sur un `dis_max: [exists, term c=true^2, term sur une date]` : ferrite note douze documents `1,4144…`, ES les note tous `1,0` | la **famille déjà déclarée** et déjà publiée ouverte : une branche du `dis_max` est un `term` sur un **booléen**, et ce sont deux constantes de BM25 — chez ES le `term` boosté reste **sous** le `1,0` de l'`exists` voisin, chez ferrite il passe au-dessus, donc le maximum change de branche. Le prédicat n'absorbe pas cette inversion, parce qu'ES rend aux douze documents des scores **égaux** et que c'est ferrite qui les sépare : l'élargir masquerait ce qu'il est écrit pour attraper |
+
+Les trois se rejouent (`--rejouer 7451084`, `--rejouer 2196237`,
+`--rejouer 4783223`) et aucune n'est absorbée par un prédicat : une divergence
+qu'on n'a pas expliquée n'a pas à compter comme expliquée. Aucune ne se corrige
+ici — elles demandent chacune leur carte, et les publier ouvertes est ce qui rend
+le zéro des onze autres plages lisible.
 
 Le détail machine est dans [`fuzz.json`](fuzz.json) : les divergences réelles y
 sont écrites entières, les assumées résumées par famille avec trois exemples.

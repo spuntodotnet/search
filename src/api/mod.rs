@@ -338,12 +338,30 @@ fn routes(state: SharedState) -> Router {
         .route("/_msearch", post(unsupported_route).get(unsupported_route))
         // Les alias : un nom stable au-dessus d'index qui changent.
         .route("/_aliases", post(aliases::actions))
-        .route("/_alias", get(aliases::lister_tout))
+        // Les sept URL de `put_alias` : le nom de l'alias et celui de l'index
+        // peuvent venir du corps plutot que du chemin. Elles sont posterieures
+        // a la suite de conformance d'Elastic (figee en 7.10.2), qui ne pouvait
+        // donc pas les exercer — c'est celle d'OpenSearch qui les a sorties.
+        .route(
+            "/_alias",
+            get(aliases::lister_tout).put(aliases::poser_par_le_corps),
+        )
         .route(
             "/_alias/{nom}",
-            get(aliases::lister_par_alias).head(aliases::exister),
+            get(aliases::lister_par_alias)
+                .head(aliases::exister)
+                .put(aliases::poser_sans_index)
+                .post(aliases::poser_sans_index),
         )
-        .route("/{index}/_alias", get(aliases::lister_par_index))
+        .route(
+            "/_aliases/{nom}",
+            put(aliases::poser_sans_index).post(aliases::poser_sans_index),
+        )
+        .route(
+            "/{index}/_alias",
+            get(aliases::lister_par_index).put(aliases::poser_sans_nom),
+        )
+        .route("/{index}/_aliases", put(aliases::poser_sans_nom))
         .route(
             "/{index}/_alias/{nom}",
             put(aliases::poser)

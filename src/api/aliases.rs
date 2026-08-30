@@ -40,13 +40,19 @@ pub async fn actions(State(st): State<SharedState>, uri: Uri, body: Bytes) -> Es
         .and_then(Value::as_array)
         .ok_or_else(|| EsError::parsing("[_aliases] : [actions] est une liste obligatoire"))?;
     if liste.is_empty() {
-        return Err(EsError::illegal_argument(
-            "[_aliases] : [actions] ne peut pas etre vide",
-        ));
+        // La phrase est celle d'ES : un client qui teste ses erreurs la lit.
+        return Err(EsError::illegal_argument("No action specified"));
     }
 
     let mut modifications: Vec<ActionAlias> = Vec::new();
     let mut a_supprimer: Vec<String> = Vec::new();
+    // Tout ce que la requete a **ecrit** comme nom d'alias, dans l'ordre : c'est
+    // ce que nomme le 404 global quand elle finit sans rien faire.
+    let mut alias_ecrits: Vec<String> = Vec::new();
+    // Le registre tel qu'il etait **avant** la requete : c'est contre lui qu'ES
+    // resout les `remove`, pas contre l'etat qu'une action precedente laisse.
+    // Lu une seule fois, et seulement si un `remove` le demande.
+    let mut registre: Option<crate::alias::Registre> = None;
 
     for action in liste {
         let o = action
@@ -67,12 +73,7 @@ pub async fn actions(State(st): State<SharedState>, uri: Uri, body: Bytes) -> Es
                 let quoi = format!("_aliases.actions.{verbe}");
                 let index = noms(corps, "index", "indices", &quoi)?;
                 let alias = noms(corps, "alias", "aliases", &quoi)?;
-                if index.is_empty() || alias.is_empty() {
-                    return Err(EsError::illegal_argument(format!(
-                        "[{quoi}] : [index] et [alias] sont obligatoires"
-                    )));
-                }
-                let attache = if verbe == "add" {
+                let (attache, must_exist) = if verbe == "add" {
                     let reste: Map<String, Value> = corps
                         .iter()
                         .filter(|(k, _)| {
@@ -80,40 +81,83 @@ pub async fn actions(State(st): State<SharedState>, uri: Uri, body: Bytes) -> Es
                         })
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect();
-                    lire_attache(&Value::Object(reste), &quoi)?
+                    (lire_attache(&Value::Object(reste), &quoi)?, None)
                 } else {
-                    for cle in corps.keys() {
-                        if !matches!(cle.as_str(), "index" | "indices" | "alias" | "aliases") {
-                            return Err(EsError::unsupported(format!(
-                                "ferrite ne supporte pas [{cle}] dans [{quoi}]"
-                            )));
+                    let mut must_exist = None;
+                    for (cle, v) in corps {
+                        match cle.as_str() {
+                            "index" | "indices" | "alias" | "aliases" => {}
+                            "must_exist" => {
+                                must_exist = Some(v.as_bool().ok_or_else(|| {
+                                    EsError::illegal_argument(format!(
+                                        "[{quoi}.must_exist] : Failed to parse value [{v}] as \
+                                         only [true] or [false] are allowed."
+                                    ))
+                                })?)
+                            }
+                            autre => {
+                                return Err(EsError::unsupported(format!(
+                                    "ferrite ne supporte pas [{autre}] dans [{quoi}]"
+                                )))
+                            }
                         }
                     }
-                    Attache::default()
+                    (Attache::default(), must_exist)
                 };
-
                 for a in &alias {
-                    valider_nom(a)?;
+                    alias_ecrits.push(a.clone());
                 }
+
                 // Un motif d'index est developpe ici : `add` sur `audits-*`
                 // pose l'alias sur tout ce qui existe deja.
+                let mut vises = Vec::new();
                 for expr in &index {
-                    let vises = resoudre(&st.catalog, expr, &Options::default())?;
-                    if vises.is_empty() {
+                    let trouves = resoudre(&st.catalog, expr, &Options::default())?;
+                    if trouves.is_empty() {
                         return Err(EsError::index_not_found(expr));
                     }
-                    for idx in vises {
+                    vises.extend(trouves.into_iter().map(|i| i.name.clone()));
+                }
+
+                if verbe == "add" {
+                    for a in &alias {
+                        valider_nom(a)?;
+                    }
+                    for idx in &vises {
                         for a in &alias {
-                            modifications.push(match verbe.as_str() {
-                                "add" => ActionAlias::Ajouter {
-                                    index: idx.name.clone(),
-                                    alias: a.clone(),
-                                    attache: attache.clone(),
-                                },
-                                _ => ActionAlias::Retirer {
-                                    index: idx.name.clone(),
-                                    alias: a.clone(),
-                                },
+                            modifications.push(ActionAlias::Ajouter {
+                                index: idx.clone(),
+                                alias: a.clone(),
+                                attache: attache.clone(),
+                            });
+                        }
+                    }
+                } else {
+                    // Un `remove` ne nomme pas des alias, il les **designe** :
+                    // `test_alias*` et `_all` y sont des motifs, et un nom qui
+                    // ne correspond a rien n'est pas une erreur en soi. Les
+                    // valider comme des noms d'alias rendait 400 sur le joker
+                    // que la suite d'OpenSearch pose.
+                    let registre = registre.get_or_insert_with(|| st.catalog.aliases());
+                    for idx in &vises {
+                        let trouves = alias_de_l_index(registre, idx, &alias);
+                        // `must_exist: true` se verifie **par index visé**, pas
+                        // par requete : mesure contre ES 8.15, ou
+                        // `remove {index: "wz*", alias: "ex1"}` rend 404 des
+                        // qu'un seul des index ne porte pas l'alias, meme si un
+                        // autre le porte. Le 404 par defaut, lui, est global —
+                        // voir plus bas.
+                        // ES ne nomme alors que la **premiere** expression
+                        // ecrite, pas toutes : `[ab1, ab2]` rend
+                        // « aliases [ab1] missing » et `[ab2, ab1] `
+                        // « aliases [ab2] missing ». Releve, pas deduit.
+                        if trouves.is_empty() && must_exist == Some(true) {
+                            return Err(aliases_manquants(&alias[..1.min(alias.len())]));
+                        }
+                        for a in trouves {
+                            modifications.push(ActionAlias::Retirer {
+                                index: idx.clone(),
+                                alias: a,
                             });
                         }
                     }
@@ -143,6 +187,19 @@ pub async fn actions(State(st): State<SharedState>, uri: Uri, body: Bytes) -> Es
         }
     }
 
+    // Une requete qui n'a rien a faire est une requete dont tous les `remove`
+    // ont porte a cote : ES la refuse en 404, en nommant les alias ecrits — et
+    // ce verdict est **global**, pas par action. `remove` d'un alias absent
+    // **plus** un `add` valide rend 200 chez lui (mesure), parce que le second
+    // a produit quelque chose.
+    if modifications.is_empty() && a_supprimer.is_empty() {
+        let mut vus = std::collections::BTreeSet::new();
+        let noms: Vec<String> = alias_ecrits
+            .into_iter()
+            .filter(|a| vus.insert(a.clone()))
+            .collect();
+        return Err(aliases_manquants(&noms));
+    }
     if !modifications.is_empty() {
         st.catalog.modifier_alias(&modifications)?;
     }
@@ -152,7 +209,54 @@ pub async fn actions(State(st): State<SharedState>, uri: Uri, body: Bytes) -> Es
     Ok(Json::ok(json!({"acknowledged": true, "errors": false})))
 }
 
+/// Le 404 d'ES quand un `remove` ne designe aucun alias existant.
+///
+/// Le corps porte `resource.type` et `resource.id` — une **chaine** quand il n'y
+/// a qu'un nom, une **liste** au-dela. C'est la forme d'ES 8.15, relevee.
+fn aliases_manquants(noms: &[String]) -> EsError {
+    let id = match noms {
+        [seul] => json!(seul),
+        plusieurs => json!(plusieurs),
+    };
+    EsError::new(
+        StatusCode::NOT_FOUND,
+        "aliases_not_found_exception",
+        format!("aliases [{}] missing", noms.join(", ")),
+    )
+    .with("resource.type", json!("aliases"))
+    .with("resource.id", id)
+}
+
+/// Les alias attaches a `index` que designe une des expressions `exprs`.
+///
+/// `_all` et `*` y designent tous les alias de l'index, comme chez ES ; les
+/// autres termes sont des motifs (`test_alias*`).
+fn alias_de_l_index(
+    registre: &crate::alias::Registre,
+    index: &str,
+    exprs: &[String],
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for (alias, cibles) in registre {
+        if !cibles.contains_key(index) {
+            continue;
+        }
+        if exprs
+            .iter()
+            .any(|e| e == "_all" || e == "*" || glob_match(e, alias))
+        {
+            out.push(alias.clone());
+        }
+    }
+    out
+}
+
 /// Lit une valeur qui peut s'ecrire au singulier (chaine) ou au pluriel (liste).
+///
+/// Les messages sont ceux d'ES 8.15, mesures un par un : ils distinguent la cle
+/// **absente** (« One of [alias] or [aliases] is required ») de la cle
+/// **vide** (« [aliases] can't be empty », « [alias] can't be empty string »).
+/// La suite d'OpenSearch grep le deuxieme.
 fn noms(
     corps: &Map<String, Value>,
     singulier: &str,
@@ -160,16 +264,31 @@ fn noms(
     quoi: &str,
 ) -> EsResult<Vec<String>> {
     let mut out = Vec::new();
+    let mut ecrit = false;
     for cle in [singulier, pluriel] {
         match corps.get(cle) {
             None | Some(Value::Null) => {}
-            Some(Value::String(s)) => out.extend(
-                s.split(',')
-                    .map(str::trim)
-                    .filter(|x| !x.is_empty())
-                    .map(str::to_string),
-            ),
+            Some(Value::String(s)) => {
+                ecrit = true;
+                if s.trim().is_empty() {
+                    return Err(EsError::illegal_argument(format!(
+                        "[{quoi}] : [{cle}] can't be empty string"
+                    )));
+                }
+                out.extend(
+                    s.split(',')
+                        .map(str::trim)
+                        .filter(|x| !x.is_empty())
+                        .map(str::to_string),
+                );
+            }
             Some(Value::Array(a)) => {
+                ecrit = true;
+                if a.is_empty() {
+                    return Err(EsError::illegal_argument(format!(
+                        "[{quoi}] : [{cle}] can't be empty"
+                    )));
+                }
                 for v in a {
                     let s = v.as_str().ok_or_else(|| {
                         EsError::illegal_argument(format!("[{quoi}.{cle}] : chaines attendues"))
@@ -184,6 +303,11 @@ fn noms(
             }
         }
     }
+    if !ecrit || out.is_empty() {
+        return Err(EsError::illegal_argument(format!(
+            "[{quoi}] : One of [{singulier}] or [{pluriel}] is required"
+        )));
+    }
     Ok(out)
 }
 
@@ -194,18 +318,123 @@ pub async fn poser(
     uri: Uri,
     body: Bytes,
 ) -> EsResult<Json> {
+    poser_impl(st, Some(index), Some(nom), uri, body).await
+}
+
+/// `PUT /{index}/_alias` — le nom de l'alias est dans le corps.
+pub async fn poser_sans_nom(
+    State(st): State<SharedState>,
+    Path(index): Path<String>,
+    uri: Uri,
+    body: Bytes,
+) -> EsResult<Json> {
+    poser_impl(st, Some(index), None, uri, body).await
+}
+
+/// `PUT|POST /_alias/{nom}` — l'index est dans le corps.
+pub async fn poser_sans_index(
+    State(st): State<SharedState>,
+    Path(nom): Path<String>,
+    uri: Uri,
+    body: Bytes,
+) -> EsResult<Json> {
+    poser_impl(st, None, Some(nom), uri, body).await
+}
+
+/// `PUT /_alias` — les deux sont dans le corps.
+pub async fn poser_par_le_corps(
+    State(st): State<SharedState>,
+    uri: Uri,
+    body: Bytes,
+) -> EsResult<Json> {
+    poser_impl(st, None, None, uri, body).await
+}
+
+/// Les sept URL de `put_alias`, ramenees a une seule lecture.
+///
+/// Le corps peut porter `index` et `alias`, et il **remplace** alors ce que
+/// l'URL dit (mesure : `PUT /inconnu/_alias/a` avec `{"index": "reel"}` pose
+/// l'alias sur `reel` et rend 200). C'est ce qui rend les formes sans nom
+/// d'alias dans l'URL utilisables — et ce sont elles que la suite de conformance
+/// d'OpenSearch exerce, la suite d'Elastic etant figee avant leur arrivee.
+///
+/// Deux ecarts assumes, tous deux du cote du refus :
+///
+/// - ES ne lit dans ce corps que `index` et `alias` au **singulier** — un
+///   `indices`/`aliases` y est ignore, et sort en « [indices] can't be empty ».
+///   ferrite les refuse en les nommant plutot que de laisser croire qu'ils ont
+///   servi ;
+/// - une **liste** JSON (`{"index": ["a", "b"]}`) n'en garde chez ES que le
+///   dernier element, en 200. Recopier ca poserait l'alias ailleurs que la ou le
+///   corps le demande, sans un mot : c'est refuse.
+async fn poser_impl(
+    st: SharedState,
+    index_url: Option<String>,
+    nom_url: Option<String>,
+    uri: Uri,
+    body: Bytes,
+) -> EsResult<Json> {
     let mut p = Params::parse(&uri);
     p.opt("timeout");
     p.opt("master_timeout");
     p.done()?;
 
-    let attache = lire_attache(&parse_body(&body)?, "_alias")?;
+    let corps = parse_body(&body)?;
+    let obj = match &corps {
+        Value::Null => Map::new(),
+        Value::Object(o) => o.clone(),
+        _ => {
+            return Err(EsError::parsing(
+                "[_alias] : la declaration d'un alias doit etre un objet",
+            ))
+        }
+    };
+    for pluriel in ["indices", "aliases"] {
+        if obj.contains_key(pluriel) {
+            return Err(EsError::unsupported(format!(
+                "ferrite ne supporte pas [{pluriel}] dans le corps de [_alias] : ES n'y lit que \
+                 [index] et [alias] au singulier, et rend [indices] can't be empty sans le dire"
+            )));
+        }
+    }
+    let du_corps = |cle: &str| -> EsResult<Option<String>> {
+        match obj.get(cle) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(s)) => Ok(Some(s.clone())),
+            Some(_) => Err(EsError::unsupported(format!(
+                "ferrite ne supporte pas une liste dans [{cle}] du corps de [_alias] : ES n'en \
+                 garde que le dernier element, en 200"
+            ))),
+        }
+    };
+
+    // `index` est une **liste** d'expressions separees par des virgules, dans
+    // l'URL comme dans le corps ; `alias` est un nom, et un seul — une virgule y
+    // rend « Invalid alias name » chez ES, aussi bien depuis l'URL que depuis le
+    // corps (mesure).
+    let index = du_corps("index")?.or(index_url).unwrap_or_default();
+    let index = decouper(&index);
+    if index.is_empty() {
+        return Err(EsError::illegal_argument("[indices] can't be empty"));
+    }
+    let alias = du_corps("alias")?.or(nom_url).unwrap_or_default();
+    if alias.trim().is_empty() {
+        return Err(EsError::illegal_argument("[alias] can't be empty string"));
+    }
+    valider_nom(&alias)?;
+
+    let reste: Map<String, Value> = obj
+        .iter()
+        .filter(|(k, _)| !matches!(k.as_str(), "index" | "alias"))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let attache = lire_attache(&Value::Object(reste), "_alias")?;
+
     let mut modifications = Vec::new();
-    for alias in decouper(&nom) {
-        valider_nom(&alias)?;
-        let vises = resoudre(&st.catalog, &index, &Options::default())?;
+    for expr in &index {
+        let vises = resoudre(&st.catalog, expr, &Options::default())?;
         if vises.is_empty() {
-            return Err(EsError::index_not_found(&index));
+            return Err(EsError::index_not_found(expr));
         }
         for idx in vises {
             modifications.push(ActionAlias::Ajouter {
@@ -230,30 +459,25 @@ pub async fn retirer(
     p.opt("master_timeout");
     p.done()?;
 
+    // `{nom}` est ici une **liste** de motifs (`ex1,absent`, `e*`, `_all`) —
+    // c'est ce que dit la spec d'ES, et c'est ce qui separe cette route de
+    // `PUT`, ou le meme `{nom}` est un nom unique.
+    let exprs = decouper(&nom);
     let registre = st.catalog.aliases();
     let mut modifications = Vec::new();
-    for expr in decouper(&nom) {
-        // Le nom d'alias accepte un motif ici, comme chez ES.
-        let vises: Vec<String> = registre
-            .keys()
-            .filter(|a| glob_match(&expr, a))
-            .cloned()
-            .collect();
-        if vises.is_empty() {
-            return Err(EsError::new(
-                StatusCode::NOT_FOUND,
-                "aliases_not_found_exception",
-                format!("aliases [{expr}] missing"),
-            ));
+    for idx in resoudre(&st.catalog, &index, &Options::default())? {
+        for alias in alias_de_l_index(&registre, &idx.name, &exprs) {
+            modifications.push(ActionAlias::Retirer {
+                index: idx.name.clone(),
+                alias,
+            });
         }
-        for idx in resoudre(&st.catalog, &index, &Options::default())? {
-            for alias in &vises {
-                modifications.push(ActionAlias::Retirer {
-                    index: idx.name.clone(),
-                    alias: alias.clone(),
-                });
-            }
-        }
+    }
+    // Meme regle globale que `POST /_aliases` : le 404 tombe quand la commande
+    // n'a rien a faire, pas quand un terme porte a cote. `DELETE
+    // /a,b/_alias/x` rend 200 des que `a` porte `x` (mesure).
+    if modifications.is_empty() {
+        return Err(aliases_manquants(&exprs));
     }
     st.catalog.modifier_alias(&modifications)?;
     Ok(Json::ok(json!({"acknowledged": true, "errors": false})))

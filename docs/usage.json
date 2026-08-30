@@ -60,10 +60,10 @@
  },
  "totaux": {
   "requetes": 5311,
-  "servies": 2272,
-  "refusees": 3022,
+  "servies": 2281,
+  "refusees": 3013,
   "indeterminees": 17,
-  "taux_servies": 42.8
+  "taux_servies": 42.9
  },
  "par_source": {
   "clients": {
@@ -73,17 +73,17 @@
    "taux_servies": 81.1
   },
   "doc": {
-   "servie": 1593,
+   "servie": 1594,
    "total": 3969,
-   "refusee": 2361,
+   "refusee": 2360,
    "indeterminee": 15,
-   "taux_servies": 40.1
+   "taux_servies": 40.2
   },
   "github": {
-   "refusee": 21,
+   "refusee": 13,
    "total": 338,
-   "servie": 317,
-   "taux_servies": 93.8
+   "servie": 325,
+   "taux_servies": 96.2
   },
   "rally": {
    "refusee": 613,
@@ -172,9 +172,9 @@
  ],
  "par_api": {
   "search": {
-   "refusee": 1037,
+   "refusee": 1028,
    "total": 1801,
-   "servie": 763,
+   "servie": 772,
    "indeterminee": 1
   },
   "indices.create": {
@@ -8118,6 +8118,7 @@
   "analyzer.whitespace": 0.0,
   "cluster.cat_health": 0.0,
   "cluster.cat_indices": 0.1,
+  "cluster.compression": null,
   "cluster.health": 0.2,
   "cluster.nodes": 0.4,
   "cluster.ping": 0.0,
@@ -8163,7 +8164,8 @@
   "hors.autres_recherches": 0.6,
   "hors.cat": 1.1,
   "hors.cluster_distribue": 1.8,
-  "hors.cycle_de_vie": 3.4,
+  "hors.cycle_de_vie": 2.6,
+  "hors.flux_de_donnees": 0.9,
   "hors.scripts": 0.9,
   "hors.snapshots": 2.0,
   "hors.xpack": 18.9,
@@ -8232,7 +8234,7 @@
   "recherche.from_size": 16.3,
   "recherche.highlight": 1.9,
   "recherche.msearch": 0.1,
-  "recherche.non_supportes": 4.8,
+  "recherche.non_supportes": 3.1,
   "recherche.preference": null,
   "recherche.query": 25.3,
   "recherche.reglages_de_shards": null,
@@ -8245,6 +8247,7 @@
   "recherche.sort": 3.2,
   "recherche.source": 3.7,
   "recherche.stored_fields": 6.6,
+  "recherche.timeout": 1.8,
   "recherche.track_total_hits": 0.4,
   "recherche.validate_query": 0.1,
   "reglages.destructive_requires_name": null,
@@ -10924,34 +10927,30 @@
   },
   {
    "capacite": "recherche.non_supportes",
-   "nom": "search_after, pit, collapse, knn, explain, seq_no_primary_term, post_filter, min_score, suggest, rescore, track_scores, q, timeout, terminate_after, version, indices_boost, profile, slice, stats, ext, retriever",
+   "nom": "search_after, pit, collapse, knn, explain, seq_no_primary_term, post_filter, min_score, suggest, rescore, track_scores, q, terminate_after, version, indices_boost, profile, slice, stats, ext, retriever",
    "etat": "refuse",
    "motif": "pas_encore",
-   "requetes": 254,
-   "part": 4.8,
+   "requetes": 162,
+   "part": 3.1,
    "par_source": {
     "clients": {
      "requetes": 18,
      "part": 12.6
     },
     "doc": {
-     "requetes": 81,
+     "requetes": 80,
      "part": 2.0
     },
     "github": {
-     "requetes": 12,
-     "part": 3.6
+     "requetes": 4,
+     "part": 1.2
     },
     "rally": {
-     "requetes": 143,
-     "part": 16.6
+     "requetes": 60,
+     "part": 7.0
     }
    },
    "traits": [
-    {
-     "trait": "corps:timeout",
-     "requetes": 94
-    },
     {
      "trait": "corps:version",
      "requetes": 56
@@ -11014,142 +11013,6 @@
     },
     {
      "trait": "corps:track_scores",
-     "requetes": 1
-    }
-   ]
-  },
-  {
-   "capacite": "hors.cycle_de_vie",
-   "nom": "Cycle de vie d'un index — _close, _open, _forcemerge, _shrink, _split, _clone, _rollover, _recovery, _segments, _flush, _upgrade, _cache/clear, _shard_stores, _resolve/index",
-   "etat": "refuse",
-   "motif": "pas_encore",
-   "requetes": 183,
-   "part": 3.4,
-   "par_source": {
-    "doc": {
-     "requetes": 183,
-     "part": 4.6
-    }
-   },
-   "traits": [
-    {
-     "trait": "route:indices.delete_data_stream",
-     "requetes": 30
-    },
-    {
-     "trait": "route:indices.rollover",
-     "requetes": 21
-    },
-    {
-     "trait": "route:indices.create_data_stream",
-     "requetes": 17
-    },
-    {
-     "trait": "route:indices.close",
-     "requetes": 13
-    },
-    {
-     "trait": "route:indices.clear_cache",
-     "requetes": 10
-    },
-    {
-     "trait": "route:indices.forcemerge",
-     "requetes": 8
-    },
-    {
-     "trait": "route:indices.get_data_stream",
-     "requetes": 8
-    },
-    {
-     "trait": "route:indices.open",
-     "requetes": 7
-    },
-    {
-     "trait": "route:indices.add_block",
-     "requetes": 6
-    },
-    {
-     "trait": "route:indices.data_streams_stats",
-     "requetes": 6
-    },
-    {
-     "trait": "route:indices.put_data_lifecycle",
-     "requetes": 6
-    },
-    {
-     "trait": "route:indices.recovery",
-     "requetes": 5
-    },
-    {
-     "trait": "route:indices.shard_stores",
-     "requetes": 5
-    },
-    {
-     "trait": "route:indices.delete_data_lifecycle",
-     "requetes": 4
-    },
-    {
-     "trait": "route:indices.flush",
-     "requetes": 4
-    },
-    {
-     "trait": "route:indices.segments",
-     "requetes": 4
-    },
-    {
-     "trait": "route:indices.shrink",
-     "requetes": 4
-    },
-    {
-     "trait": "route:indices.clone",
-     "requetes": 3
-    },
-    {
-     "trait": "route:indices.resolve_cluster",
-     "requetes": 3
-    },
-    {
-     "trait": "route:indices.resolve_index",
-     "requetes": 3
-    },
-    {
-     "trait": "route:indices.split",
-     "requetes": 3
-    },
-    {
-     "trait": "route:indices.downsample",
-     "requetes": 2
-    },
-    {
-     "trait": "route:indices.get_data_lifecycle",
-     "requetes": 2
-    },
-    {
-     "trait": "route:indices.migrate_to_data_stream",
-     "requetes": 2
-    },
-    {
-     "trait": "route:indices.modify_data_stream",
-     "requetes": 2
-    },
-    {
-     "trait": "route:indices.disk_usage",
-     "requetes": 1
-    },
-    {
-     "trait": "route:indices.field_usage_stats",
-     "requetes": 1
-    },
-    {
-     "trait": "route:indices.promote_data_stream",
-     "requetes": 1
-    },
-    {
-     "trait": "route:indices.reload_search_analyzers",
-     "requetes": 1
-    },
-    {
-     "trait": "route:indices.unfreeze",
      "requetes": 1
     }
    ]
@@ -11530,6 +11393,122 @@
     },
     {
      "trait": "champ:search_quote_analyzer",
+     "requetes": 1
+    }
+   ]
+  },
+  {
+   "capacite": "hors.cycle_de_vie",
+   "nom": "Cycle de vie d'un index — _close, _open, _forcemerge, _shrink, _split, _clone, _rollover, _recovery, _segments, _flush, _upgrade, _cache/clear, _shard_stores, _resolve/index",
+   "etat": "refuse",
+   "motif": "pas_encore",
+   "requetes": 136,
+   "part": 2.6,
+   "par_source": {
+    "doc": {
+     "requetes": 136,
+     "part": 3.4
+    }
+   },
+   "traits": [
+    {
+     "trait": "route:indices.rollover",
+     "requetes": 21
+    },
+    {
+     "trait": "route:indices.create_data_stream",
+     "requetes": 17
+    },
+    {
+     "trait": "route:indices.close",
+     "requetes": 13
+    },
+    {
+     "trait": "route:indices.clear_cache",
+     "requetes": 10
+    },
+    {
+     "trait": "route:indices.forcemerge",
+     "requetes": 8
+    },
+    {
+     "trait": "route:indices.open",
+     "requetes": 7
+    },
+    {
+     "trait": "route:indices.add_block",
+     "requetes": 6
+    },
+    {
+     "trait": "route:indices.put_data_lifecycle",
+     "requetes": 6
+    },
+    {
+     "trait": "route:indices.recovery",
+     "requetes": 5
+    },
+    {
+     "trait": "route:indices.shard_stores",
+     "requetes": 5
+    },
+    {
+     "trait": "route:indices.delete_data_lifecycle",
+     "requetes": 4
+    },
+    {
+     "trait": "route:indices.flush",
+     "requetes": 4
+    },
+    {
+     "trait": "route:indices.segments",
+     "requetes": 4
+    },
+    {
+     "trait": "route:indices.shrink",
+     "requetes": 4
+    },
+    {
+     "trait": "route:indices.clone",
+     "requetes": 3
+    },
+    {
+     "trait": "route:indices.resolve_cluster",
+     "requetes": 3
+    },
+    {
+     "trait": "route:indices.resolve_index",
+     "requetes": 3
+    },
+    {
+     "trait": "route:indices.split",
+     "requetes": 3
+    },
+    {
+     "trait": "route:indices.downsample",
+     "requetes": 2
+    },
+    {
+     "trait": "route:indices.get_data_lifecycle",
+     "requetes": 2
+    },
+    {
+     "trait": "route:indices.modify_data_stream",
+     "requetes": 2
+    },
+    {
+     "trait": "route:indices.disk_usage",
+     "requetes": 1
+    },
+    {
+     "trait": "route:indices.field_usage_stats",
+     "requetes": 1
+    },
+    {
+     "trait": "route:indices.reload_search_analyzers",
+     "requetes": 1
+    },
+    {
+     "trait": "route:indices.unfreeze",
      "requetes": 1
     }
    ]
@@ -11991,6 +11970,42 @@
     {
      "trait": "route:indices.simulate_index_template",
      "requetes": 2
+    }
+   ]
+  },
+  {
+   "capacite": "hors.flux_de_donnees",
+   "nom": "Flux de données — _data_stream, data_stream dans un template",
+   "etat": "refuse",
+   "motif": "hors_perimetre",
+   "requetes": 47,
+   "part": 0.9,
+   "par_source": {
+    "doc": {
+     "requetes": 47,
+     "part": 1.2
+    }
+   },
+   "traits": [
+    {
+     "trait": "route:indices.delete_data_stream",
+     "requetes": 30
+    },
+    {
+     "trait": "route:indices.get_data_stream",
+     "requetes": 8
+    },
+    {
+     "trait": "route:indices.data_streams_stats",
+     "requetes": 6
+    },
+    {
+     "trait": "route:indices.migrate_to_data_stream",
+     "requetes": 2
+    },
+    {
+     "trait": "route:indices.promote_data_stream",
+     "requetes": 1
     }
    ]
   },
@@ -12540,7 +12555,7 @@
   },
   {
    "capacite": "dsl.nom_de_clause",
-   "nom": "_name (nommer une clause)",
+   "nom": "_name (nommer une clause), matched_queries, include_named_queries_score",
    "etat": "refuse",
    "motif": "pas_encore",
    "requetes": 3,

@@ -36,11 +36,11 @@
     }
   },
   "totaux": {
-    "capacites": 199,
+    "capacites": 200,
     "supporte": 94,
-    "partiel": 60,
+    "partiel": 61,
     "refuse": 45,
-    "poids_renseignes": 141
+    "poids_renseignes": 142
   },
   "capacites": [
     {
@@ -1282,12 +1282,13 @@
       "nom_texte": "POST /_aliases",
       "etat": "partiel",
       "poids": 0.3,
-      "detail": "`index`/`indices` et `alias`/`aliases` au singulier comme au pluriel, motifs compris. Tout ou rien, comme chez ES — c'est ce qui rend une bascule atomique. Écart connu, trouvé par la suite de conformance d'OpenSearch et **compté en régression** : `must_exist` sur un `remove` n'est pas lu, donc retirer un alias qui n'existe pas ne lève pas l'`aliases [...] missing` qu'ES 8.15 lève",
+      "detail": "`index`/`indices` et `alias`/`aliases` au singulier comme au pluriel, motifs compris. Tout ou rien, comme chez ES — c'est ce qui rend une bascule atomique. Un `remove` **désigne** des alias plutôt qu'il ne les nomme (`test_alias*`, `_all`), et ses deux règles de 404 ne sont pas la même : `must_exist: true` se vérifie **par index visé** — un `remove` sur `logs-*` échoue dès qu'un seul des index ne porte pas l'alias —, alors que le 404 par défaut est **global**, il ne tombe que si toute la requête finit sans rien faire (mesuré, `tests/compat/sonde_ecriture_alias.py`). Un seul écart assumé, sur l'**ordre** : quand plusieurs noms manquent, ES les rend dans l'ordre d'itération d'un `HashSet` de Java (`[ab1, ab2]` écrit ressort `[ab2, ab1]`), qui n'est l'ordre de rien — ferrite rend l'ordre écrit, et les noms sont les mêmes",
       "parametres": {
         "supportes": [
           "add",
           "remove",
-          "remove_index"
+          "remove_index",
+          "must_exist"
         ],
         "refuses": [
           "filter",
@@ -1298,11 +1299,11 @@
     {
       "id": "alias.put",
       "table": "alias",
-      "nom": "`PUT|POST /{index}/_alias/{nom}`",
-      "nom_texte": "PUT|POST /{index}/_alias/{nom}",
+      "nom": "`PUT|POST /{index}/_alias/{nom}` et ses six autres URL (`/_alias/{nom}`, `/{index}/_alias`, `/_alias`, `_aliases` pour chacune)",
+      "nom_texte": "PUT|POST /{index}/_alias/{nom} et ses six autres URL (/_alias/{nom}, /{index}/_alias, /_alias, _aliases pour chacune)",
       "etat": "supporte",
       "poids": 0.1,
-      "detail": "`{index}` est une expression, `{nom}` accepte une liste. Écart connu, trouvé par la suite de conformance d'OpenSearch et **compté en régression** : les formes sans `{nom}` dans l'URL — `PUT /{index}/_alias` et `PUT /_alias`, où le nom de l'alias est dans le corps — rendent 405 là où ES 8.15 répond"
+      "detail": "`{index}` est une expression ; `{nom}` est un nom, et un seul (une virgule y rend `Invalid alias name`, comme chez ES). Le nom de l'alias, celui de l'index, ou les deux, peuvent venir du **corps**, et le corps **remplace** alors le chemin — `PUT /inconnu/_alias/a` avec `{\"index\": \"reel\"}` pose l'alias sur `reel`, en 200. Deux refus assumés dans ce corps, tous deux du côté sûr : ES n'y lit que `index` et `alias` au **singulier** (un `indices`/`aliases` y est ignoré, et sort en « [indices] can't be empty »), et d'une **liste** JSON il ne garde que le dernier élément, en 200 — recopier ça poserait l'alias ailleurs que là où le corps le demande, sans un mot"
     },
     {
       "id": "alias.delete",
@@ -1737,12 +1738,12 @@
     {
       "id": "dsl.nom_de_clause",
       "table": "dsl",
-      "nom": "`_name` (nommer une clause)",
-      "nom_texte": "_name (nommer une clause)",
+      "nom": "`_name` (nommer une clause), `matched_queries`, `include_named_queries_score`",
+      "nom_texte": "_name (nommer une clause), matched_queries, include_named_queries_score",
       "etat": "refuse",
       "poids": null,
       "motif": "pas_encore",
-      "raison": "nommer une clause n'a d'interet qu'avec `matched_queries` dans la reponse, qui n'est pas rendu : accepter le nom en le perdant serait promettre une information qui ne reviendra pas. Refuse dans toutes les clauses, `bool` compris."
+      "raison": "nommer une clause n'a d'interet qu'avec `matched_queries` dans la reponse, qui n'est pas rendu : accepter le nom en le perdant serait promettre une information qui ne reviendra pas. Refuse dans toutes les clauses, `bool` compris — et le parametre `include_named_queries_score` (ES 8.13) avec, puisqu'il ne change **que** la forme de `matched_queries` (un objet `{nom: score}` au lieu d'une liste). Le laisser tomber dans « unrecognized parameter » le deguisait en faute de frappe : c'etait le seul defaut de cette ligne, et il comptait en regression pour la suite d'OpenSearch — la seule des trois sources a pouvoir l'exercer, le parametre etant posterieur a la 7.10.2 comme a la 2.12 d'OpenSearch."
     },
     {
       "id": "dsl.non_supportees",
@@ -2065,12 +2066,21 @@
     {
       "id": "recherche.non_supportes",
       "table": "corps_search",
-      "nom": "`search_after`, `pit`, `collapse`, `knn`, `explain`, `seq_no_primary_term`, `post_filter`, `min_score`, `suggest`, `rescore`, `track_scores`, `q`, `timeout`, `terminate_after`, `version`, `indices_boost`, `profile`, `slice`, `stats`, `ext`, `retriever`",
-      "nom_texte": "search_after, pit, collapse, knn, explain, seq_no_primary_term, post_filter, min_score, suggest, rescore, track_scores, q, timeout, terminate_after, version, indices_boost, profile, slice, stats, ext, retriever",
+      "nom": "`search_after`, `pit`, `collapse`, `knn`, `explain`, `seq_no_primary_term`, `post_filter`, `min_score`, `suggest`, `rescore`, `track_scores`, `q`, `terminate_after`, `version`, `indices_boost`, `profile`, `slice`, `stats`, `ext`, `retriever`",
+      "nom_texte": "search_after, pit, collapse, knn, explain, seq_no_primary_term, post_filter, min_score, suggest, rescore, track_scores, q, terminate_after, version, indices_boost, profile, slice, stats, ext, retriever",
       "etat": "refuse",
-      "poids": 4.8,
+      "poids": 3.1,
       "motif": "pas_encore",
       "raison": "aucun n'est un obstacle de moteur ; `search_after` est celui qui manque le plus, pour paginer au-delà de 10 000."
+    },
+    {
+      "id": "recherche.timeout",
+      "table": "corps_search",
+      "nom": "`timeout` (paramètre et corps)",
+      "nom_texte": "timeout (paramètre et corps)",
+      "etat": "partiel",
+      "poids": 1.8,
+      "detail": "accepté et **vérifié**, sans objet : chez ES c'est une borne par shard au-delà de laquelle la collecte s'arrête et la réponse sort **partielle** avec `timed_out: true` ; ferrite cherche en un seul morceau, dans le processus, et rend toujours un résultat complet et `timed_out: false` — le sens sûr, puisqu'un `timeout` honoré rendrait *moins* de documents. Ce qui reste juste, c'est la forme : `1` (unité manquante), `1M`, `-2s`, `1.5s` sont refusés avec les phrases d'ES, `0`, `-1`, `1D` et `1MS` acceptés — tous mesurés. C'est le seul des quatre manques de cette famille qui n'a pas été trouvé par une suite de conformance mais par la **suite de tests du client go**"
     },
     {
       "id": "recherche.expressions_index",

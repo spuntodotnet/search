@@ -344,25 +344,73 @@ répétition. Le conteneur de référence porte donc
 ### Ce que la seconde source a trouvé que la première ne voit pas
 
 Le résultat qui compte n'est pas un taux, c'est **l'intersection**. Les deux
-suites rangent chacune 36 échecs en `regression`, et se recoupent sur **12
-capacités** — deux équipes différentes qui butent au même endroit, ce qui est
-une mesure et non plus une impression.
+suites rangeaient chacune 36 échecs en `regression`, et se recoupaient sur
+**12 capacités** — deux équipes différentes qui butent au même endroit, ce qui
+est une mesure et non plus une impression.
 
 Quatre capacités ne sont trouvées que par Elastic (`_cat/health`, `_cat/indices`,
-la suppression d'index, `_field_caps`), et **trois ne sont trouvées que par
+la suppression d'index, `_field_caps`), et **trois n'étaient trouvées que par
 OpenSearch** — toutes des routes ou paramètres qui n'existaient pas en 2020, donc
 invisibles à une suite figée :
 
-| Ce qu'OpenSearch exerce et Elastic 7.10 non | Ce que ferrite répond | Un vrai ES 8.15 |
+| Ce qu'OpenSearch exerce et Elastic 7.10 non | Ce que ferrite répondait | Un vrai ES 8.15 |
 |---|---|---|
 | `PUT /{index}/_alias` et `PUT /_alias`, le nom de l'alias dans le **corps** (2 cas) | `405`, la route n'accepte que `GET`/`HEAD` | passe |
 | `must_exist` sur le retrait d'un alias (`_aliases`) | pas d'exception `aliases [...] missing` | passe |
 | `include_named_queries_score` sur `_search` (ajouté par ES en 8.13) | `unrecognized parameter` | passe |
 
-Les quatre cas restent comptés en **régression** : ils portent sur des capacités
-déclarées supportées, et un vrai Elasticsearch 8.15 les passe. Les déclarer
-refusées pour les sortir du dénominateur serait le geste que ce fichier interdit
-partout ailleurs.
+Les quatre cas ont été comptés en **régression** tant qu'ils ont duré : ils
+portaient sur des capacités déclarées supportées, et un vrai Elasticsearch 8.15
+les passe. Les déclarer refusées pour les sortir du dénominateur aurait été le
+geste que ce fichier interdit partout ailleurs.
+
+**Les trois sont comblées.** Le compte de régressions de la suite d'OpenSearch
+tombe de 36 à **32**, ses réussites montent de 182 à **188**, et celui de la
+suite d'Elastic ne bouge pas d'un cas — 354 échecs, 36 régressions, avant comme
+après. C'est le résultat le plus instructif de la carte, et il ne se lit pas
+comme un échec : une suite figée en 7.10.2 **ne peut pas** voir un paramètre
+ajouté en 8.13. Sans la seconde source, ces quatre cas n'auraient jamais figuré
+dans un dénominateur.
+
+Trois choses en sont sorties qui ne se lisaient dans aucune documentation, et
+que la sonde [`sonde_ecriture_alias.py`](../tests/compat/sonde_ecriture_alias.py)
+fixe désormais (voir ses chiffres dans son en-tête ; le même fichier lancé contre
+le **ferrite d'avant** rend 14 cas identiques sur 65, ce qui est ce qui prouve
+qu'elle mesure quelque chose) :
+
+- `must_exist: true` se vérifie **par index visé** : un `remove` sur `logs-*`
+  échoue en 404 dès qu'un seul des index couverts ne porte pas l'alias, même si
+  un autre le porte. Le 404 **par défaut** obéit à la règle inverse — il est
+  global, et ne tombe que si toute la requête finit sans rien faire (un `remove`
+  d'un alias absent accompagné d'un `add` valide rend 200) ;
+- dans le corps de `PUT /_alias`, ES ne lit que `index` et `alias` au
+  **singulier** ; `indices`/`aliases` y sont ignorés, et une **liste** JSON n'en
+  garde que le dernier élément, en 200. ferrite refuse les deux formes en les
+  nommant : recopier la seconde poserait l'alias ailleurs que là où le corps le
+  demande, sans un mot ;
+- le corps **remplace** le chemin, y compris quand le chemin nomme un index qui
+  n'existe pas.
+
+Le troisième, `include_named_queries_score`, n'a pas été servi et c'est une
+décision écrite : il ne change **que** la forme de `matched_queries`, qui n'est
+pas rendu, et `_name` est refusé pour ne pas promettre un nom qui ne reviendra
+pas. Le servir à moitié aurait été pire que ne pas le servir. Il est donc refusé
+**en le nommant** — donc rangé en `refus`, comme son voisin `_name` du même
+fichier de test, et plus en régression. Ce n'est pas un déplacement de
+dénominateur : la capacité `dsl.nom_de_clause` était déjà déclarée refusée, et
+c'est le refus générique (« unrecognized parameter ») qui la trahissait en
+déguisant un manque connu en faute de frappe.
+
+Un cas change de sens dans l'autre sens, et c'est voulu : « Remove silently when
+all of the specified aliases are non-existing and must_exist is false » passe de
+`refus` à **`divergence_moteurs`**. Un vrai ES 8.15 le rend 404 lui aussi
+(mesuré dans [`conformance-opensearch-es8150.json`](conformance-opensearch-es8150.json)) :
+OpenSearch a changé cette règle de son côté, ferrite suit celle d'ES.
+
+Une **quatrième** régression de la même famille ne venait d'aucune des deux
+suites mais de la troisième source, celle des clients (`?timeout=` sur
+`_search`, posé par la suite d'intégration du client go) — voir
+[`clients.md`](clients.md).
 
 ## D'où viennent ces tests, et pourquoi on a le droit
 
