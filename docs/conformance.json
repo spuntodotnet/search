@@ -1,11 +1,11 @@
 {
   "schema": 3,
   "mesure": {
-    "date": "2026-08-30T01:24:16Z",
-    "ferrite_sha": "a8e163c7ed625cb8bb3dbd723c02945db188f57a",
+    "date": "2026-08-30T08:59:11Z",
+    "ferrite_sha": "48a9547878975319ab5d7242caa5e7ee080825ed",
     "ferrite_arbre_modifie": false,
     "cible": {
-      "url": "http://localhost:9200",
+      "url": "http://127.0.0.1:9200",
       "moteur": "ferrite",
       "version_annoncee": "8.15.0",
       "build_hash": "ferrite-0.7.0"
@@ -5860,7 +5860,7 @@
       "fichier": "30_remove_index_and_replace_with_alias.yml",
       "cas": "Remove an index and replace it with an alias",
       "categorie": "echec",
-      "raison": "[indices.update_aliases] 400 : an index or data stream exists with the same name as the alias [test]",
+      "raison": "[indices.update_aliases] 400 : Invalid alias name [test]: an index or data stream exists with the same name as the alias",
       "api": "indices.update_aliases",
       "perimetre": "cout_perimetre",
       "capacite": "alias.remove_index_et_add"
