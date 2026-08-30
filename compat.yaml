@@ -144,7 +144,22 @@ tables:
         parametres:
           refuses:
             - {texte: "les sous-ressources", note: "`_nodes/stats`, `_nodes/hot_threads`…"}
+            - {texte: "`/_nodes/{spec}/{metric}`", note: "donc le *sniffing*, qui demande `/_nodes/_all/http` : refusé en le nommant, et les trois clients officiels restent utilisables après ce refus (mesuré)"}
         conformance: {apis: [nodes.info]}
+
+      - id: cluster.compression
+        nom: "`Content-Encoding: gzip` / `deflate` sur le corps d'une requête"
+        etat: supporte
+        poids: null
+        detail: >-
+          ce que pose tout client officiel à qui on demande de compresser —
+          `http_compress=True` en Python, `compression: true` en JavaScript
+          (activé **par défaut** vers Elastic Cloud), `CompressRequestBody` en
+          Go. `gzip` et `deflate` sont décompressés ; `br` et un encodage
+          inconnu sont transmis tels quels, exactement comme le fait
+          Elasticsearch — mesuré, les deux. Un corps annoncé compressé et
+          illisible est refusé **en nommant l'encodage**, là où ES rend
+          « request body is required », qui désigne la mauvaise cause
 
   # ---------------------------------------------------------------------------
   - id: hors_perimetre
@@ -190,6 +205,25 @@ tables:
           mécanique de cluster.
         conformance: {apis: ["snapshot.*"]}
 
+      - id: hors.flux_de_donnees
+        nom: "Flux de données — `_data_stream`, `data_stream` dans un template"
+        etat: refuse
+        motif: hors_perimetre
+        poids: 0.9
+        raison: >-
+          un flux de données est une suite d'index gérée par `_rollover` et
+          l'ILM, donc de l'exploitation de cluster posée au-dessus du moteur.
+          Le refus est déclaré ici parce qu'il est **exercé** : `helpers.reindex`
+          du client officiel demande `GET /_data_stream/{cible}` avant de
+          copier, sur toute cible — c'est la suite serveur du client Python qui
+          l'a montré, et sans cette ligne l'appel comptait `indeterminé`, donc
+          contre nous.
+        conformance:
+          apis: ["indices.get_data_stream", "indices.put_data_stream",
+                 "indices.delete_data_stream", "indices.data_streams_stats",
+                 "indices.migrate_to_data_stream", "indices.promote_data_stream"]
+          erreurs: ["ne supporte pas les flux de donnees"]
+
       - id: hors.cycle_de_vie
         nom: >-
           Cycle de vie d'un index — `_close`, `_open`, `_forcemerge`,
@@ -197,7 +231,7 @@ tables:
           `_flush`, `_upgrade`, `_cache/clear`, `_shard_stores`, `_resolve/index`
         etat: refuse
         motif: pas_encore
-        poids: 3.4
+        poids: 2.6
         raison: >-
           la moitié de ces routes n'a pas de sens sans shards (`_shrink`,
           `_split`, `_recovery`, `_shard_stores`) ; l'autre moitié suppose un
@@ -975,10 +1009,23 @@ tables:
         parametres:
           supportes:
             - {nom: "_index", note: "métadonnée d'action"}
-            - {nom: "_id", note: "métadonnée d'action"}
+            - {nom: "_id", note: "métadonnée d'action ; toute **valeur simple** est convertie en texte comme chez ES (`42` → `\"42\"`), un objet ou un tableau est refusé"}
           refuses:
-            - {texte: "les autres métadonnées", note: "`_routing`, `if_seq_no`, `pipeline`…"}
+            # Nommées une par une, et pas seulement « les autres » : c'est ce
+            # que `perimetre.py` sait lire, donc la différence entre un refus
+            # **déclaré** et un échec compté en régression. La suite du client
+            # go en exerce trois (`version`, `version_type`, `require_alias`) ;
+            # sans ces lignes, elles remontaient comme des régressions.
+            - {nom: "version"}
+            - {nom: "version_type"}
             - {nom: "require_alias"}
+            - {nom: "_routing"}
+            - {nom: "routing"}
+            - {nom: "if_seq_no"}
+            - {nom: "if_primary_term"}
+            - {nom: "pipeline"}
+            - {nom: "retry_on_conflict"}
+            - {nom: "dynamic_templates"}
         conformance: {apis: [bulk]}
 
       - id: ingestion.refresh

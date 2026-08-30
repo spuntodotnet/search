@@ -36,11 +36,11 @@
     }
   },
   "totaux": {
-    "capacites": 197,
-    "supporte": 93,
+    "capacites": 199,
+    "supporte": 94,
     "partiel": 60,
-    "refuse": 44,
-    "poids_renseignes": 140
+    "refuse": 45,
+    "poids_renseignes": 141
   },
   "capacites": [
     {
@@ -136,9 +136,19 @@
       "detail": "un nœud, champs d'identité et `http` ; pas de `settings`, `os`, `jvm`. `{spec}` accepte `_all`, `_local`, `_master` et l'identifiant du nœud",
       "parametres": {
         "refuses": [
-          "les sous-ressources"
+          "les sous-ressources",
+          "/_nodes/{spec}/{metric}"
         ]
       }
+    },
+    {
+      "id": "cluster.compression",
+      "table": "cluster",
+      "nom": "`Content-Encoding: gzip` / `deflate` sur le corps d'une requête",
+      "nom_texte": "Content-Encoding: gzip / deflate sur le corps d'une requête",
+      "etat": "supporte",
+      "poids": null,
+      "detail": "ce que pose tout client officiel à qui on demande de compresser — `http_compress=True` en Python, `compression: true` en JavaScript (activé **par défaut** vers Elastic Cloud), `CompressRequestBody` en Go. `gzip` et `deflate` sont décompressés ; `br` et un encodage inconnu sont transmis tels quels, exactement comme le fait Elasticsearch — mesuré, les deux. Un corps annoncé compressé et illisible est refusé **en nommant l'encodage**, là où ES rend « request body is required », qui désigne la mauvaise cause"
     },
     {
       "id": "hors.cluster_distribue",
@@ -171,12 +181,22 @@
       "raison": "la sauvegarde d'un ferrite est la copie de son répertoire de données, ou l'export par `scroll` ; un dépôt de snapshots répliqué est de la mécanique de cluster."
     },
     {
+      "id": "hors.flux_de_donnees",
+      "table": "hors_perimetre",
+      "nom": "Flux de données — `_data_stream`, `data_stream` dans un template",
+      "nom_texte": "Flux de données — _data_stream, data_stream dans un template",
+      "etat": "refuse",
+      "poids": 0.9,
+      "motif": "hors_perimetre",
+      "raison": "un flux de données est une suite d'index gérée par `_rollover` et l'ILM, donc de l'exploitation de cluster posée au-dessus du moteur. Le refus est déclaré ici parce qu'il est **exercé** : `helpers.reindex` du client officiel demande `GET /_data_stream/{cible}` avant de copier, sur toute cible — c'est la suite serveur du client Python qui l'a montré, et sans cette ligne l'appel comptait `indeterminé`, donc contre nous."
+    },
+    {
       "id": "hors.cycle_de_vie",
       "table": "hors_perimetre",
       "nom": "Cycle de vie d'un index — `_close`, `_open`, `_forcemerge`, `_shrink`, `_split`, `_clone`, `_rollover`, `_recovery`, `_segments`, `_flush`, `_upgrade`, `_cache/clear`, `_shard_stores`, `_resolve/index`",
       "nom_texte": "Cycle de vie d'un index — _close, _open, _forcemerge, _shrink, _split, _clone, _rollover, _recovery, _segments, _flush, _upgrade, _cache/clear, _shard_stores, _resolve/index",
       "etat": "refuse",
-      "poids": 3.4,
+      "poids": 2.6,
       "motif": "pas_encore",
       "raison": "la moitié de ces routes n'a pas de sens sans shards (`_shrink`, `_split`, `_recovery`, `_shard_stores`) ; l'autre moitié suppose un index qu'on peut arrêter de servir sans le supprimer (`_close` / `_open`), état que ferrite n'a pas."
     },
@@ -956,8 +976,16 @@
           "_id"
         ],
         "refuses": [
-          "les autres métadonnées",
-          "require_alias"
+          "version",
+          "version_type",
+          "require_alias",
+          "_routing",
+          "routing",
+          "if_seq_no",
+          "if_primary_term",
+          "pipeline",
+          "retry_on_conflict",
+          "dynamic_templates"
         ]
       }
     },

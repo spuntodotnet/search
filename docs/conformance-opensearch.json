@@ -1,11 +1,11 @@
 {
   "schema": 3,
   "mesure": {
-    "date": "2026-08-29T19:45:19Z",
-    "ferrite_sha": "da48046a9f5c4a82b2c856c090037268599649d9",
+    "date": "2026-08-30T01:25:26Z",
+    "ferrite_sha": "7075d95af52c9361352f40b67a0d5b826c70db3f",
     "ferrite_arbre_modifie": false,
     "cible": {
-      "url": "http://127.0.0.1:9200",
+      "url": "http://localhost:9200",
       "moteur": "ferrite",
       "version_annoncee": "8.15.0",
       "build_hash": "ferrite-0.7.0"
@@ -7122,7 +7122,7 @@
       "fichier": "14_alias_to_multiple_indices.yml",
       "cas": "Multi Get with alias that resolves to multiple indices",
       "categorie": "echec",
-      "raison": "[docs.0.found] devait etre vrai, vaut False",
+      "raison": "[docs.1.error.root_cause.0.type] attendu 'illegal_argument_exception', obtenu None",
       "api": "mget",
       "perimetre": "regression",
       "capacite": "ingestion.mget",

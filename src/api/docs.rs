@@ -398,6 +398,7 @@ pub async fn mget(
                 let doc_id = match o.get("_id") {
                     Some(Value::String(s)) => s.clone(),
                     Some(Value::Number(n)) => n.to_string(),
+                    Some(Value::Bool(b)) => b.to_string(),
                     _ => return Err(EsError::illegal_argument("[_mget] : [_id] est obligatoire")),
                 };
                 let stored = match o.get("stored_fields") {
@@ -629,6 +630,37 @@ fn run_bulk(
     Ok((items, touched))
 }
 
+/// La valeur d'une metadonnee de `_bulk`, lue comme ES la lit.
+///
+/// ES accepte **toute valeur simple** et la rend en texte : `42` devient
+/// `"42"`, `true` devient `"true"` ; `null` vaut « absente ». Ne lire que les
+/// chaines faisait passer `{"_id": 42}` — l'ecriture que produit un
+/// `helpers.bulk` des que la cle primaire de l'appelant est un entier — pour un
+/// identifiant **absent**, donc un document indexe sous un identifiant tire au
+/// sort. En 201, sans un mot, et le `get` suivant rendait 404. Le meme piege
+/// etait deja corrige a une fonction d'ici, sur `_mget`.
+fn valeur_simple(
+    meta: &serde_json::Map<String, Value>,
+    cle: &str,
+    lineno: usize,
+) -> EsResult<Option<String>> {
+    match meta.get(cle) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s.clone())),
+        Some(Value::Number(n)) => Ok(Some(n.to_string())),
+        Some(Value::Bool(b)) => Ok(Some(b.to_string())),
+        Some(v) => Err(EsError::illegal_argument(format!(
+            "Malformed action/metadata line [{lineno}], expected a simple value for field [{cle}] \
+             but found [{}]",
+            if v.is_array() {
+                "START_ARRAY"
+            } else {
+                "START_OBJECT"
+            }
+        ))),
+    }
+}
+
 fn parse_action(value: &Value, default_index: Option<&str>, lineno: usize) -> EsResult<Action> {
     let obj = value.as_object().ok_or_else(|| {
         EsError::parsing(format!(
@@ -660,17 +692,14 @@ fn parse_action(value: &Value, default_index: Option<&str>, lineno: usize) -> Es
             )));
         }
     }
-    let index = meta
-        .get("_index")
-        .and_then(Value::as_str)
-        .map(str::to_string)
+    let index = valeur_simple(meta, "_index", lineno)?
         .or_else(|| default_index.map(str::to_string))
         .ok_or_else(|| {
             EsError::illegal_argument(format!(
                 "[_bulk] ligne {lineno} : [_index] est requis quand l'URL n'en fournit pas"
             ))
         })?;
-    let id = meta.get("_id").and_then(Value::as_str).map(str::to_string);
+    let id = valeur_simple(meta, "_id", lineno)?;
 
     if op == "delete" && id.is_none() {
         return Err(EsError::illegal_argument(format!(

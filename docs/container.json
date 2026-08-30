@@ -1,10 +1,10 @@
 {
   "schema": 1,
   "mesure": {
-    "date": "2026-08-29T02:50:40Z",
+    "date": "2026-08-30T01:22:09Z",
     "ferrite_version": "0.7.0",
-    "ferrite_sha": "0dfd19b81579d1434540aed7c31b8fea18b25602",
-    "ferrite_arbre_modifie": false,
+    "ferrite_sha": "44c407b7cf505bcbb09940d559220801cf87531b",
+    "ferrite_arbre_modifie": true,
     "outil": "./tests/compat/measure_container.sh --json docs/container.json",
     "tours_demarrage": 5,
     "hote": {
@@ -40,21 +40,21 @@
       ],
       "plateforme": "linux/amd64",
       "couches": 1,
-      "digest_manifeste": "sha256:8be274bf8aaaf8f1c90a9e7a7ec46e68042d8bda24cb4b03cfacae823a13efac",
-      "compressee_octets": 4073564,
+      "digest_manifeste": "sha256:85d2acd34d7fd4bf826ca7a91b3c2fd1ee341b134f5ce287e5879486ee9522fd",
+      "compressee_octets": 4094895,
       "couches_nues": [],
-      "decompressee_octets": 9658368,
+      "decompressee_octets": 9699328,
       "entrypoint": "/ferrite",
-      "binaire_octets": 9656448,
-      "demarrage_ms": 171,
+      "binaire_octets": 9697408,
+      "demarrage_ms": 165,
       "demarrage_tours_ms": [
-        201,
-        174,
-        171,
-        167,
-        171
+        237,
+        165,
+        164,
+        165,
+        168
       ],
-      "rss_repos_ko": 4488
+      "rss_repos_ko": 4728
     },
     {
       "nom": "elasticsearch",
@@ -79,15 +79,15 @@
       "decompressee_octets": 1266139136,
       "entrypoint": "/bin/tini",
       "binaire_octets": null,
-      "demarrage_ms": 17083,
+      "demarrage_ms": 19281,
       "demarrage_tours_ms": [
-        16960,
-        17083,
-        16963,
-        17162,
-        17156
+        19903,
+        19779,
+        19281,
+        19178,
+        18977
       ],
-      "rss_repos_ko": 1071560
+      "rss_repos_ko": 1061156
     }
   ]
 }

@@ -189,7 +189,11 @@ class Mouchard:
     rattacher l'echec a une capacite declaree.
     """
 
-    def __init__(self, cible):
+    def __init__(self, cible, port=0):
+        # `port=0` prend un port libre. Un port **impose** sert aux suites qui
+        # ecrivent l'adresse du serveur en dur (celle du client go y est
+        # `localhost:9200` dans quatre cas) : sans lui, ces cas-la viseraient
+        # autre chose que la cible mesuree, ou rien du tout.
         self.cible = cible.rstrip("/")
         self.journal = []
         self.verrou = threading.Lock()
@@ -246,7 +250,7 @@ class Mouchard:
 
             do_GET = do_PUT = do_POST = do_DELETE = do_HEAD = do_OPTIONS = _relaie
 
-        self.serveur = ThreadingHTTPServer(("127.0.0.1", 0), Relais)
+        self.serveur = ThreadingHTTPServer(("127.0.0.1", port), Relais)
         self.port = self.serveur.server_address[1]
         self.fil = threading.Thread(target=self.serveur.serve_forever, daemon=True)
 
@@ -273,7 +277,12 @@ class Mouchard:
         return self
 
     def __exit__(self, *_):
+        # `shutdown` arrete la boucle mais **ne ferme pas** la socket d'ecoute :
+        # le port reste pris. Invisible tant qu'on en tire un au hasard, fatal
+        # des qu'on en impose un — la deuxieme cible d'une campagne n'arrivait
+        # plus a s'y lier.
         self.serveur.shutdown()
+        self.serveur.server_close()
 
 
 def decode(brut):
@@ -338,6 +347,19 @@ def api_de(methode, chemin):
     }
     if dernier in fixes:
         return fixes[dernier]
+    # Les trois familles de templates et les flux de donnees portent un nom
+    # d'API qui depend du **verbe**, comme dans les specs d'Elastic : les
+    # ranger par famille suffirait a les sortir de `indetermine`, mais les
+    # confondrait avec la mauvaise capacite (poser un template composable et le
+    # lire ne sont pas la meme ligne de `compat.yaml`).
+    VERBES = {"GET": "get", "PUT": "put", "POST": "put", "DELETE": "delete", "HEAD": "exists"}
+    NOMMEES = {
+        "_index_template": "indices.{}_index_template",
+        "_component_template": "cluster.{}_component_template",
+        "_data_stream": "indices.{}_data_stream",
+    }
+    if parts[0] in NOMMEES:
+        return NOMMEES[parts[0]].format(VERBES.get(methode, "get"))
     if parts[0] == "_cluster":
         return "cluster." + (parts[1] if len(parts) > 1 else "?")
     if parts[0] == "_cat":
@@ -361,6 +383,18 @@ def api_de(methode, chemin):
         }.get(methode, "?" + chemin)
     if len(parts) == 2 and parts[1] == "_doc" and methode == "POST":
         return "index"
+    # Une route de la forme `/_famille/...` (`_ml`, `_ilm`, `_slm`, `_ccr`,
+    # `_rollup`, `_transform`, `_snapshot`, `_tasks`, `_data_stream`, `_nodes`…)
+    # porte le nom de sa famille, et c'est sous ce nom que `compat.yaml` la
+    # declare. Sans ce repli, tout ce qu'un client appelle en dehors de la
+    # recherche sortait en `?/…` — donc `indetermine`, donc compte contre nous
+    # alors que la capacite existe et dit deja « refuse ».
+    famille = next((p for p in parts if p.startswith("_")), None)
+    if famille and len(famille) > 1:
+        # Une route d'un seul segment (`/_reindex`) **est** un nom d'API et se
+        # rattache exactement ; a plusieurs segments (`/_ml/anomaly_detectors`),
+        # c'est une famille, et `compat.yaml` la declare sous `ml.*`.
+        return famille[1:] if len(parts) == 1 else famille[1:] + ".*"
     return "?" + voie
 
 

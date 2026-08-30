@@ -42,6 +42,12 @@ pub async fn lire_composables(
     super::refuser_reglages_non_supportes(&mut p, "/_index_template")?;
     p.done()?;
 
+    // « aucun nom » et « le motif `*` » ne sont pas la meme question : ES rend
+    // 200 sur la premiere meme quand il n'a aucun template, et 404 sur la
+    // seconde. Les confondre faisait repondre 404 a `GET /_index_template` sur
+    // un serveur neuf — un corps juste sous un statut faux, que tout client
+    // qui leve sur 404 lit comme une erreur.
+    let nomme = nom.is_some();
     let motif = nom.map(|Path(n)| n).unwrap_or_else(|| "*".to_string());
     valider_nom(&motif)?;
     let registre = st.catalog.templates();
@@ -55,7 +61,7 @@ pub async fn lire_composables(
     // Un nom litteral absent est un 404 qui le nomme ; un motif sans
     // correspondance rend une liste vide **et** un 404. C'est la reponse d'un
     // vrai ES 8.15, mesuree.
-    if trouves.is_empty() {
+    if trouves.is_empty() && nomme {
         if motif.contains('*') {
             return Ok(Json(StatusCode::NOT_FOUND, json!({"index_templates": []})));
         }
@@ -134,6 +140,10 @@ pub async fn lire_anciens(
     }
     p.done()?;
 
+    // Meme distinction que sur `_index_template`, et c'est ici qu'elle a ete
+    // mesuree : un ES 8.15 demarre sans aucun template rend `200 {}` sur
+    // `GET /_template` et `404 {}` sur `GET /_template/*`.
+    let nomme = nom.is_some();
     let motifs: Vec<String> = nom
         .map(|Path(n)| n.split(',').map(str::trim).map(str::to_string).collect())
         .unwrap_or_else(|| vec!["*".to_string()]);
@@ -155,7 +165,7 @@ pub async fn lire_anciens(
         }
         out.insert(n.clone(), rendu);
     }
-    if out.is_empty() {
+    if out.is_empty() && nomme {
         // ES rend un corps vide avec un 404, motif ou nom litteral.
         return Ok(Json(StatusCode::NOT_FOUND, json!({})));
     }

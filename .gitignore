@@ -9,3 +9,4 @@ __pycache__/
 .corpus-usage/
 .appli-reelle/
 .bench-echelle/
+.clients-tests/

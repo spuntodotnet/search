@@ -16,8 +16,8 @@ milliers de documents et répondre à des requêtes `bool` + `terms` + un tri.
 |  | Elasticsearch 8.15.0 | ferrite |
 |---|---|---|
 | Image compressée, telle qu'un registre la sert | 669,1 Mo | **4,1 Mo** (`scratch`) |
-| RSS au repos | 1,10 Go | **4,6 Mo** |
-| Démarrage | 17,1 s | **171 ms** (`docker run` → premier `GET /` servi) |
+| RSS au repos | 1,09 Go | **4,8 Mo** |
+| Démarrage | 19,3 s | **165 ms** (`docker run` → premier `GET /` servi) |
 | Runtime | JVM + tuning heap | un binaire statique |
 <!-- /chiffres-conteneur:apercu -->
 
@@ -152,11 +152,11 @@ de CI échoue si le tableau et le fichier divergent.
 <!-- chiffres-conteneur:tableau — généré depuis docs/container.json par `python3 tests/compat/chiffres_conteneur.py --injecte`, ne pas éditer à la main -->
 | | Elasticsearch 8.15.0 | ferrite 0.7.0 | × |
 |---|---|---|---|
-| **Image compressée**, telle qu'un registre la sert | 669,1 Mo | **4,1 Mo** | **×164** |
+| **Image compressée**, telle qu'un registre la sert | 669,1 Mo | **4,1 Mo** | **×163** |
 | Image décompressée, ce que son système de fichiers occupe | 1 266,1 Mo | 9,7 Mo | ×131 |
 | Le binaire seul | — | 9,7 Mo | |
-| Mémoire au repos (RSS) | 1,10 Go | **4,6 Mo** | **×239** |
-| Démarrage (`docker run` → premier `GET /` servi) | 17,1 s | **171 ms** (médiane de 5 ; l'essentiel est la création du conteneur par Docker) | ×100 |
+| Mémoire au repos (RSS) | 1,09 Go | **4,8 Mo** | **×224** |
+| Démarrage (`docker run` → premier `GET /` servi) | 19,3 s | **165 ms** (médiane de 5 ; l'essentiel est la création du conteneur par Docker) | ×117 |
 <!-- /chiffres-conteneur:tableau -->
 
 L'image finale est un `scratch` qui ne contient que le binaire statique — d'où
@@ -213,12 +213,12 @@ $ ./tests/compat/measure_container.sh ferrite:0.7.0
 docker serveur   : 29.7.2 (magasin d'images : overlayfs)
 
 == image : ferrite:0.7.0  (linux/amd64, 1 couche(s))
-compressee (registre) :     4 073 564 octets      4,1 Mo   <- ce qu'un `docker pull` telecharge
-decompressee (disque) :     9 658 368 octets      9,7 Mo   <- ce que le systeme de fichiers de l'image occupe
-binaire /ferrite      :     9 656 448 octets      9,7 Mo   <- le fichier que le conteneur execute
+compressee (registre) :     4 094 895 octets      4,1 Mo   <- ce qu'un `docker pull` telecharge
+decompressee (disque) :     9 699 328 octets      9,7 Mo   <- ce que le systeme de fichiers de l'image occupe
+binaire /ferrite      :     9 697 408 octets      9,7 Mo   <- le fichier que le conteneur execute
 
-demarrage        : 171 ms (docker run -> premier GET / servi, mediane de 5 tours)
-RSS au repos     : 4 488 Ko (4,6 Mo)
+demarrage        : 165 ms (docker run -> premier GET / servi, mediane de 5 tours)
+RSS au repos     : 4 728 Ko (4,8 Mo)
 ```
 <!-- /chiffres-conteneur:sortie -->
 
@@ -284,6 +284,19 @@ sert encore. Aucun de ces refus de trop n'était visible depuis le corpus de
 pas par une recherche, elle commence par créer son index. La recette et le
 relevé de ce que ces applications envoient sont dans
 [`docs/application.md`](docs/application.md).
+
+**Et les clients officiels ne se contentent plus de se connecter : leurs suites
+de tests tournent dessus.** « Le client officiel se branche » est une capture
+d'écran ; « la suite de tests du client officiel passe » est une preuve. Trois
+clients, licence Apache-2.0 vérifiée dans le clone, révision figée, arbre
+vérifié intact : `go-elasticsearch` v8.13.0 passe 15/30 de sa suite
+d'intégration contre ferrite là où un vrai Elasticsearch 8.15 en passe 28/30,
+chaque écart rattaché à une capacité déclarée. Et le **cycle de vie du client** —
+découverte de version, en-tête `X-elastic-product`, négociation de compression,
+sniffing (ou son refus propre), erreurs typées, helpers (`bulk`,
+`streaming_bulk`, `scan`) — passe **entièrement dans les trois langages**, avec
+le client publié sur PyPI, npm et le proxy de modules Go. Ce que ça a trouvé, et
+ce que ça n'a pas mesuré : [`docs/clients.md`](docs/clients.md).
 
 **Ce qui marche** : un client Elasticsearch officiel non modifié crée un index
 avec un mapping explicite, indexe des documents via `_bulk`, et les retrouve via
