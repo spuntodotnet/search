@@ -60,6 +60,17 @@ pub async fn search(
     // `preference` choisit un shard : ferrite n'en a qu'un, le parametre est
     // donc sans objet — pas ignore, juste sans effet possible.
     p.opt("preference");
+    // `timeout` est de la meme famille, et sa forme est quand meme verifiee :
+    // chez ES c'est une borne **par shard** au-dela de laquelle la collecte
+    // s'arrete et la reponse sort partielle avec `timed_out: true`. ferrite
+    // cherche en un seul morceau, dans le processus : il n'y a pas de collecte
+    // a interrompre, donc il rend toujours un resultat complet et
+    // `timed_out: false` — ce qu'ES rend aussi tant que la borne n'est pas
+    // atteinte. C'est le sens sur : un `timeout` honore rendrait **moins** de
+    // documents. Refuser la route entiere serait pire : `?timeout=` est ce que
+    // pose la suite de tests du client go, et le refus tombait alors sur
+    // « unrecognized parameter », donc sur une faute de frappe supposee.
+    verifier_timeout(p.opt("timeout").as_deref())?;
     if let Some(v) = p.opt("track_total_hits") {
         check_track_total_hits(&Value::String(v))?;
     }
@@ -75,6 +86,18 @@ pub async fn search(
         return Err(EsError::unsupported(
             "ferrite ne supporte pas [rest_total_hits_as_int] : il change la forme de \
              [hits.total] (un nombre au lieu de {value, relation}) ; voir docs/compat-es7.md",
+        ));
+    }
+    // Ce parametre (ES 8.13) ne change **que** la forme de `matched_queries` :
+    // un objet `{nom: score}` au lieu d'une liste de noms. Or ferrite ne rend
+    // pas `matched_queries` et refuse `_name`, faute de quoi le nom d'une clause
+    // serait accepte et perdu. Le refuser comme un parametre inconnu le
+    // deguisait en faute de frappe, ce qui est le seul defaut qu'il y avait ici.
+    if p.opt("include_named_queries_score").is_some() {
+        return Err(EsError::unsupported(
+            "ferrite ne supporte pas [include_named_queries_score] : il ne change que la forme de \
+             [matched_queries], que ferrite ne rend pas — nommer une clause ([_name]) est refuse \
+             pour la meme raison (voir docs/compat.md)",
         ));
     }
     p.done()?;
@@ -111,12 +134,29 @@ pub async fn search(
             "script_fields",
             "runtime_mappings",
             "highlight",
+            "timeout",
         ],
         "_search",
     )?;
 
     if let Some(v) = body_obj.get("track_total_hits") {
         check_track_total_hits(v)?;
+    }
+    // ES lit `timeout` des deux cotes, et le corps l'emporte. Meme reponse ici :
+    // accepte, verifie, sans effet.
+    if let Some(v) = body_obj.get("timeout") {
+        // Un nombre nu (`{"timeout": 5}`) n'est pas une erreur de forme chez
+        // ES : il le relit comme une duree, et rend « unit is missing ». Le
+        // message doit donc parler de l'unite, pas du type.
+        match v {
+            Value::String(s) => verifier_timeout(Some(s))?,
+            Value::Number(n) => verifier_timeout(Some(&n.to_string()))?,
+            autre => {
+                return Err(EsError::parsing(format!(
+                    "[_search] : [timeout] attend une duree ecrite en chaine, pas {autre}"
+                )))
+            }
+        }
     }
 
     let demande = lire_demande(&body_obj, param_docvalue, param_stored)?;
@@ -879,6 +919,19 @@ fn body_usize(obj: &Map<String, Value>, key: &str) -> EsResult<Option<usize>> {
             .ok_or_else(|| {
                 EsError::illegal_argument(format!("[{key}] : entier positif attendu, recu {v}"))
             }),
+    }
+}
+
+/// `timeout` : accepte et sans effet, mais **verifie**.
+///
+/// Un parametre sans effet dont la valeur n'est pas relue laisse passer
+/// `timeout=1` (l'unite manque) la ou ES rend 400 : le client ne decouvrirait sa
+/// faute qu'en changeant de serveur. Voir [`crate::util::valider_duree`] pour
+/// les bords, tous mesures.
+fn verifier_timeout(v: Option<&str>) -> EsResult<()> {
+    match v {
+        None => Ok(()),
+        Some(s) => crate::util::valider_duree(s, "timeout").map_err(EsError::illegal_argument),
     }
 }
 

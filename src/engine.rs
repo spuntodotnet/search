@@ -1308,12 +1308,20 @@ impl Catalog {
                         return Err(EsError::index_not_found(index));
                     }
                     // Un alias ne peut pas porter le nom d'un index : la
-                    // resolution ne saurait plus lequel des deux designer.
+                    // resolution ne saurait plus lequel des deux designer. Le
+                    // type et la phrase sont ceux d'ES 8.15, releves — un client
+                    // qui distingue ses erreurs le fait sur le `type`, et
+                    // `illegal_argument_exception` ne disait pas laquelle des
+                    // deux regles de nommage avait parle.
                     if indices.contains_key(alias.as_str()) {
-                        return Err(EsError::illegal_argument(format!(
-                            "an index or data stream exists with the same name as the alias \
-                             [{alias}]"
-                        )));
+                        return Err(EsError::new(
+                            axum::http::StatusCode::BAD_REQUEST,
+                            "invalid_alias_name_exception",
+                            format!(
+                                "Invalid alias name [{alias}]: an index or data stream exists \
+                                 with the same name as the alias"
+                            ),
+                        ));
                     }
                     suivant
                         .entry(alias.clone())

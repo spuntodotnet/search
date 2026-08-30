@@ -124,14 +124,39 @@ chiffres du conteneur sont republiés dans la même PR, mesurés sur l'image
 **reconstruite** — `measure_container.sh` ne construit rien, il mesure ce qui
 existe, et la première mesure a republié la taille de la veille sans broncher.
 
-### 4. Une régression que la campagne laisse ouverte
+### 4. Une régression que la campagne a laissée ouverte, puis comblée
 
-`?timeout=` sur `_search` est refusé comme un paramètre inconnu, alors que la
-capacité `recherche.route` est déclarée **tenue** : le rattachement le compte
-donc en **régression**, pas en coût de périmètre. C'est un cas de
-`esapi_integration_test.go` du client go. Il est publié tel quel — un chiffre
-qu'on subit devient un chiffre qu'on pilote seulement si on ne le range pas
-soi-même du bon côté.
+`?timeout=` sur `_search` était refusé comme un paramètre **inconnu**, alors que
+la capacité `recherche.route` est déclarée **tenue** : le rattachement le
+comptait donc en **régression**, pas en coût de périmètre. C'était un cas de
+`esapi_integration_test.go` du client go, publié tel quel — un chiffre qu'on
+subit devient un chiffre qu'on pilote seulement si on ne le range pas soi-même
+du bon côté.
+
+Il est comblé, et de la même façon que `preference` : **accepté, vérifié, sans
+objet**. Chez ES, `timeout` est une borne *par shard* au-delà de laquelle la
+collecte s'arrête et la réponse sort partielle avec `timed_out: true` ; ferrite
+cherche en un seul morceau, dans le processus, et n'a rien à interrompre — il
+rend toujours un résultat complet et `timed_out: false`, ce qu'ES rend aussi
+tant que la borne n'est pas atteinte. C'est le sens sûr : un `timeout` honoré
+rendrait *moins* de documents.
+
+Deux choses valent d'être notées, et la seconde est la vraie. D'abord, un
+paramètre sans effet dont la valeur n'est pas relue est un nouvel échec
+silencieux : `timeout=1` (l'unité manque) rendrait 200 ici et 400 là-bas, et le
+client ne découvrirait sa faute qu'en changeant de serveur. La forme est donc
+vérifiée, et ses bords viennent d'une mesure et non de la documentation d'ES —
+`0` et `-1` **sans unité** sont valides (ils veulent dire « pas de limite »),
+`1D` / `1H` / `1MS` passent mais **pas `1M`** (un `M` majuscule voudrait dire
+« mois » ailleurs), `-1s` passe et `-2s` non, et un nombre à virgule donne un
+troisième message encore (« fractional time values are not supported »).
+
+Ensuite : ce manque n'a été trouvé par **aucune** des deux suites de
+conformance. Il l'a été par la suite d'un client, sur trois de ses cas — et il
+pèse 94 requêtes du corpus d'usage, dont neuf qui ne passaient qu'à cause de
+lui. C'est la troisième source qui paie, exactement comme la seconde paie pour
+les trois manques d'alias que seule la suite d'OpenSearch voit (voir
+[`conformance.md`](conformance.md)).
 
 ## La suite du client go, cas par cas
 

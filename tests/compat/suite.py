@@ -1578,6 +1578,114 @@ def expression_de_noms_d_alias(es):
 
 
 @scenario
+def alias_ecrit_par_le_corps(es):
+    """Le nom de l'alias — ou celui de l'index — peut venir du **corps**.
+
+    `PUT /{index}/_alias/{nom}` n'est qu'une des sept URL d'ES : le nom de
+    l'alias, celui de l'index, ou les deux, s'ecrivent aussi dans le corps, et
+    le corps **remplace** alors le chemin. Ces formes sont posterieures a 2020,
+    donc invisibles a la suite de conformance d'Elastic ; c'est celle
+    d'OpenSearch qui les a sorties. Le client officiel n'a pas de methode pour
+    elles (`indices.put_alias` exige un `name`), d'ou le passage par son
+    transport — c'est la meme couche HTTP, pas un `curl` a cote.
+    """
+    a, b = "alc_un", "alc_deux"
+    for nom in (a, b):
+        es.options(ignore_status=404).indices.delete(index=nom)
+        es.indices.create(index=nom)
+
+    def aliases(index):
+        return set(es.indices.get_alias(index=index).body[index]["aliases"])
+
+    # Le nom de l'alias dans le corps, l'index dans l'URL.
+    es.perform_request("PUT", f"/{a}/_alias",
+                       headers={"content-type": "application/json"},
+                       body={"alias": "alc_lecture"})
+    assert aliases(a) == {"alc_lecture"}
+
+    # L'index dans le corps, le nom dans l'URL — et l'index du corps l'emporte
+    # sur celui du chemin, meme quand ce dernier n'existe pas.
+    es.perform_request("PUT", "/alc_inconnu/_alias/alc_ecriture",
+                       headers={"content-type": "application/json"},
+                       body={"index": b})
+    assert aliases(b) == {"alc_ecriture"}
+
+    # Les deux dans le corps, l'index en liste, et une attache avec.
+    es.perform_request("PUT", "/_alias",
+                       headers={"content-type": "application/json"},
+                       body={"index": f"{a},{b}", "alias": "alc_tout"})
+    assert aliases(a) == {"alc_lecture", "alc_tout"}
+    assert aliases(b) == {"alc_ecriture", "alc_tout"}
+
+    # Ce qui manque se nomme, avec la phrase d'ES.
+    refused(lambda: es.perform_request(
+        "PUT", "/_alias", headers={"content-type": "application/json"},
+        body={"alias": "alc_sans_index"}), contains="[indices] can't be empty")
+    refused(lambda: es.perform_request("PUT", f"/{a}/_alias"),
+            contains="[alias] can't be empty string")
+
+    for nom in (a, b):
+        es.indices.delete(index=nom)
+
+
+@scenario
+def alias_retire_must_exist(es):
+    """`must_exist` sur un `remove`, et le 404 quand rien n'est retire.
+
+    Deux regles differentes, mesurees contre un ES 8.15 : `must_exist: true` se
+    verifie **par index visé** — un `remove` sur `alm_*` echoue des qu'un seul
+    des index ne porte pas l'alias —, alors que le 404 par defaut est
+    **global** : il ne tombe que si toute la requete finit sans rien faire.
+    Voir `tests/compat/sonde_ecriture_alias.py`.
+    """
+    a, b = "alm_un", "alm_deux"
+    for nom in (a, b):
+        es.options(ignore_status=404).indices.delete(index=nom)
+    es.indices.create(index=a, aliases={"alm_vivant": {}})
+    es.indices.create(index=b)
+
+    # Un `remove` qui ne designe rien, seul dans la requete : 404.
+    refused(lambda: es.indices.update_aliases(actions=[
+        {"remove": {"index": a, "alias": "alm_absent"}}]),
+        status=404, contains="aliases [alm_absent] missing")
+
+    # Le meme, accompagne d'un `add` qui fait quelque chose : 200. Le verdict
+    # porte sur la requete entiere, pas sur l'action.
+    es.indices.update_aliases(actions=[
+        {"remove": {"index": a, "alias": "alm_absent"}},
+        {"add": {"index": b, "alias": "alm_neuf"}}])
+    assert set(es.indices.get_alias(name="alm_neuf")) == {b}
+
+    # `must_exist: true`, lui, ne regarde que son action — et index par index :
+    # `alm_*` couvre les deux, seul `alm_un` porte l'alias.
+    refused(lambda: es.indices.update_aliases(actions=[
+        {"remove": {"index": "alm_*", "alias": "alm_vivant", "must_exist": True}}]),
+        status=404, contains="aliases [alm_vivant] missing")
+    assert set(es.indices.get_alias(name="alm_vivant")) == {a}
+
+    # Sans `must_exist`, la meme commande passe et retire ce qu'elle trouve.
+    es.indices.update_aliases(actions=[
+        {"remove": {"index": "alm_*", "alias": "alm_vivant"}}])
+    # `get_alias` rend un `error` **chaine** sur cette route : pas de `refused`.
+    try:
+        es.indices.get_alias(name="alm_vivant")
+        raise AssertionError("l'alias aurait du avoir disparu")
+    except ApiError as exc:
+        assert exc.meta.status == 404, exc.meta.status
+
+    # Un `remove` nomme un **motif**, pas un nom d'alias : le valider comme un
+    # nom rendait 400 sur le joker.
+    es.indices.put_alias(index=a, name="alm_motif_1")
+    es.indices.put_alias(index=a, name="alm_motif_2")
+    es.indices.update_aliases(actions=[
+        {"remove": {"index": a, "aliases": ["alm_motif*"]}}])
+    assert es.indices.get_alias(index=a).body[a]["aliases"] == {}
+
+    for nom in (a, b):
+        es.indices.delete(index=nom)
+
+
+@scenario
 def suppression_par_motif(es):
     """La purge d'une retention par index quotidien.
 
@@ -2233,6 +2341,65 @@ def recherche_exists(es):
 def recherche_match_all(es):
     r = es.search(index=INDEX, query={"match_all": {}}, size=100)
     assert r["hits"]["total"]["value"] == 3
+
+
+@scenario
+def recherche_timeout(es):
+    """`?timeout=` : accepte, **verifie**, et sans effet.
+
+    Chez ES c'est une borne par shard au-dela de laquelle la collecte s'arrete
+    et la reponse sort partielle. ferrite cherche en un seul morceau, dans le
+    processus : il n'y a rien a interrompre, donc il rend toujours un resultat
+    complet et `timed_out: false` — le sens sur, puisqu'un `timeout` honore
+    rendrait **moins** de documents. Ce qui doit rester juste, c'est la
+    **forme** : un client qui se trompe d'unite doit recevoir ici le 400 qu'il
+    recevrait la-bas. Les bords viennent d'une mesure, pas de la doc d'ES.
+    """
+    r = es.search(index=INDEX, query={"match_all": {}}, timeout="30s")
+    assert r["timed_out"] is False and r["hits"]["total"]["value"] == 3
+
+    # `0` et `-1` sans unite sont valides chez ES (« pas de limite ») ; `1`
+    # tout seul ne l'est pas. `1D`/`1MS` passent, `1M` non — un `M` majuscule
+    # voudrait dire « mois » ailleurs, ES prefere refuser que trancher.
+    for bonne in ("0", "-1", "-1s", "1D", "1MS", "1micros"):
+        assert es.perform_request(
+            "GET", f"/{INDEX}/_search?timeout={bonne}").meta.status == 200, bonne
+    for mauvaise, phrase in (("1", "unit is missing or unrecognized"),
+                             ("1M", "unit is missing or unrecognized"),
+                             ("-2s", "negative durations are not supported"),
+                             ("1.5s", "fractional time values are not supported"),
+                             ("xs", "failed to parse [xs]")):
+        refused(lambda m=mauvaise: es.perform_request(
+            "GET", f"/{INDEX}/_search?timeout={m}"), contains=phrase)
+
+    # Le corps le porte aussi, et un nombre nu y est lu comme une duree sans
+    # unite — pas comme une erreur de type.
+    r = es.perform_request(
+        "POST", f"/{INDEX}/_search", headers={"content-type": "application/json"},
+        body={"query": {"match_all": {}}, "timeout": "1m"})
+    assert r.body["timed_out"] is False, r.body
+    refused(lambda: es.perform_request(
+        "POST", f"/{INDEX}/_search", headers={"content-type": "application/json"},
+        body={"timeout": 5}), contains="unit is missing or unrecognized")
+
+
+@scenario
+def recherche_requetes_nommees_refusees(es):
+    """`_name` et `include_named_queries_score` : refuses, et nommes.
+
+    `include_named_queries_score` (ES 8.13) ne change **que** la forme de
+    `matched_queries` — un objet `{nom: score}` au lieu d'une liste. ferrite ne
+    rend pas `matched_queries` et refuse `_name` pour ne pas promettre un nom
+    qui ne reviendra pas ; le parametre est donc refuse de la meme facon, en
+    disant pourquoi. Le laisser tomber dans « unrecognized parameter » le
+    deguisait en faute de frappe.
+    """
+    refused(lambda: es.perform_request(
+        "GET", f"/{INDEX}/_search?include_named_queries_score=true"),
+        contains="[include_named_queries_score]")
+    refused(lambda: es.search(index=INDEX, query={
+        "match": {"titre": {"query": "bel", "_name": "sur_le_titre"}}}),
+        contains="[_name]")
 
 
 @scenario

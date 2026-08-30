@@ -93,17 +93,28 @@ ici n'avait vus. Voir [`docs/conformance.md`](docs/conformance.md).
 **Et une seule suite reste un examen dont on connaît le sujet.** Celle d'Elastic
 est figée en 2020 : elle ne peut rien dire de ce qui a été ajouté depuis. D'où
 la seconde source, la suite REST d'**OpenSearch** (Apache-2.0, licence vérifiée
-dans le dépôt avant usage), jouée par **le même runner**. Les deux rangent
+dans le dépôt avant usage), jouée par **le même runner**. Les deux rangeaient
 chacune 36 échecs en régression et se recoupent sur **12 capacités** — deux
-équipes qui butent au même endroit, c'est une mesure ; celle d'OpenSearch en
-sort **trois** de plus, toutes des routes ou paramètres postérieurs à 2020
+équipes qui butent au même endroit, c'est une mesure ; celle d'OpenSearch en a
+sorti **trois** de plus, toutes des routes ou paramètres postérieurs à 2020
 (`PUT /{index}/_alias` avec l'alias dans le corps, `must_exist` au retrait d'un
-alias, `include_named_queries_score`), et un vrai ES 8.15 les passe.
+alias, `include_named_queries_score`), qu'un vrai ES 8.15 passe.
+
+Les trois sont comblées, et **c'est la preuve la plus nette que la seconde
+source paie** : la suite d'OpenSearch tombe de 36 à 32 régressions (182 → 188
+réussites) pendant que celle d'Elastic ne bouge **pas d'un cas** — 354 échecs et
+36 régressions avant comme après. Une suite figée en 7.10.2 ne peut pas voir un
+paramètre ajouté en 8.13 ; sans la seconde, ces quatre cas n'auraient jamais
+figuré dans un dénominateur. Deux règles en sont sorties qu'aucune
+documentation ne donne, et elles se contredisent en apparence : `must_exist:
+true` se vérifie **par index visé** (un `remove` sur `logs-*` échoue dès qu'un
+seul des index couverts ne porte pas l'alias), alors que le 404 **par défaut**
+est global — il ne tombe que si toute la requête finit sans rien faire.
 
 Le corollaire coûte une campagne de plus, et il est le vrai contenu du geste :
 **« ce n'est pas un défaut de ferrite, les deux moteurs divergent » ne se
 décrète pas.** La même suite est jouée contre un vrai Elasticsearch 8.15, et un
-cas qu'il échoue lui aussi est rangé `divergence_moteurs` — 92 cas sur 350. Sans
+cas qu'il échoue lui aussi est rangé `divergence_moteurs` — 93 cas sur 347. Sans
 cette mesure, la catégorie serait une opinion dont on choisirait le contenu,
 c'est-à-dire un dénominateur qu'on écrit soi-même sous un autre nom. Le rapport
 publie aussi les deux comptes qui la rendent lisible : les cas que la référence
@@ -286,15 +297,16 @@ développement, pas de CI).
 | `tests/compat/sonde_fields.py` | **ce que la réponse transporte** — `fields`, `docvalue_fields`, `stored_fields`. Compare le **hit entier** (bloc `fields` clé par clé, présence de `_source`, présence de `_id`) : 103/110 identiques, 3 refus assumés écrits, 4 différences d'ordre assumées, 0 écart. Refuse de tourner si elle ne trouve pas les deux serveurs |
 | `tests/compat/sonde_par_requete.py` | **modifier ou purger par requête** — `_delete_by_query`, `_update_by_query`. Compare les compteurs de la réponse **et l'état laissé derrière** (documents restants, `_version`, `_source`) : 62/74 identiques, 12 refus assumés écrits, 0 écart. Les conflits sont provoqués pour de vrai, par une écriture non rafraîchie. Refuse de tourner sans ses deux cibles |
 | `tests/compat/sonde_alias.py` | les mêmes alias sur une **expression de noms** — liste, joker, exclusion, `_all` — et le même 404 ? (21/21, corps et message compris) |
+| `tests/compat/sonde_ecriture_alias.py` | et pour **écrire** un alias ? Les sept URL de `put_alias` (le nom de l'alias, celui de l'index, ou les deux, viennent du corps — qui **remplace** le chemin), `must_exist`, et les deux règles de 404 qui ne sont pas la même : `must_exist: true` se vérifie **par index visé**, le 404 par défaut est **global**. Compare le statut, le message **et l'état laissé derrière** : **57/65 identiques, 7 refus assumés, 1 message non comparé, 0 écart** — et **14/65 contre le ferrite d'avant**. `--calibrer` : 64/65 contre deux ES |
 | `tests/compat/sonde_vide.py` | sur un serveur **sans aucun index**, la même chose qu'ES — et rien accepté en silence ? (28/28 identiques, 0 refus muet ; les deux serveurs doivent être vides, c'est l'état mesuré) |
-| `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **3 500 cas, 154 520 requêtes, 2 divergences ouvertes** (deux ordres que BM25 sépare et qu'ES rend ex æquo, déclarés), sur quatorze plages de graines dont **trois** n'ont jamais servi à corriger — celle sur laquelle on itère ne mesure plus rien, et le générateur ayant changé, les plages du passage précédent ne mesurent plus les mêmes cas. 21 défauts silencieux trouvés au premier passage, 27 de plus depuis — dont **dix-sept** sur le seul surlignage, tous invisibles aux 233 questions écrites à la main. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (60 cas, 2 523 requêtes, 0) |
+| `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **3 500 cas, 162 122 requêtes, 3 divergences ouvertes** (un `avg` sur des `long` aux extrêmes de l'`i64`, un surlignage sous `nested`, et un ordre que BM25 sépare et qu'ES rend ex æquo), sur quatorze plages de graines dont **aucune** n'a servi à corriger — celle sur laquelle on itère ne mesure plus rien, et le générateur ayant changé, les plages du passage précédent ne mesurent plus les mêmes cas. 21 défauts silencieux trouvés au premier passage, 27 de plus depuis — dont **dix-sept** sur le seul surlignage, tous invisibles aux 233 questions écrites à la main. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (60 cas, 2 664 requêtes, 0 divergence réelle) |
 | `tests/compat/sonde_fuzz.py` | les écarts trouvés par le fuzzing, **figés** hors d'une graine (80/80, plus 12 refus assumés) |
 | `tests/compat/appli_reelle.py` | **un logiciel écrit par d'autres démarre-t-il ?** Clone une vraie application à une révision figée, vérifie que rien n'y a bougé, lance sa **propre** suite d'intégration contre un vrai ES puis contre ferrite, et relève tout le trafic HTTP au passage. Gitea v1.27.2 : **34/34 des deux côtés**. Wagtail v7.1 : **83/83 des deux côtés**, et plus un seul refus que ferrite prononce là où ES répond. Voir [`docs/application.md`](docs/application.md) |
 | `tests/compat/tests_clients.py` | **la suite de tests du client officiel passe-t-elle ?** Pas « un client se connecte » : les cas que l'équipe du client a écrits, joués par **son** lanceur, dans **son** langage. Trois clients, licence Apache-2.0 vérifiée **dans le clone**, révision figée, arbre vérifié intact. `go-elasticsearch` v8.13.0 : 28/30 contre un vrai ES, 15/30 contre ferrite, chaque écart rattaché à une capacité. `elasticsearch-py` v8.15.0 : 71/84 *(origine)* · 45/84 *(adapté)* / 43/84 avec le nettoyage de remplacement, **0/84 telle quelle** — sa fixture nettoie par seize routes x-pack, et les deux chiffres sont publiés. Et le **cycle de vie du client**, joué par le client publié : 9/9 en Python, 7/7 en Go, 7/7 en JavaScript, des deux côtés. Voir [`docs/clients.md`](docs/clients.md) |
 | `tests/compat/genere_compat.py` | le périmètre déclaré et la doc disent-ils la **même chose** ? [`compat.yaml`](compat.yaml) est la source (une entrée par capacité : état, paramètres, motif du refus, poids d'usage) ; [`docs/compat.md`](docs/compat.md) et [`docs/compat.json`](docs/compat.json) en sont **générés**, et la CI échoue s'ils divergent |
 | `tests/compat/perimetre.py` | ce cas qui échoue, il porte sur quoi ? Il rattache un échec de conformance à une capacité déclarée : **régression** si elle est annoncée supportée, **coût de périmètre** si elle est annoncée refusée |
 | `tests/compat/recolte_usage.py` | à quoi ressemblent les requêtes que les gens envoient **vraiment** ? Constitue le corpus ([`tests/compat/usage/corpus.jsonl`](tests/compat/usage/corpus.jsonl), 5 311 requêtes) depuis quatre sources citables : doc de référence 8.15, tracks Rally, clients officiels, code open source. Chaque requête porte l'URL d'où elle vient |
-| `tests/compat/ponderation.py` | **quelle part de ces requêtes passe entièrement ?** (42,8 % du corpus, mais **93,8 % du code d'application** et 28,6 % des tracks Rally — l'écart *est* le résultat). Écrit les `poids` de `compat.yaml`, publie [`docs/usage.json`](docs/usage.json) et la table « ce qui manque, par fréquence d'usage ». `--rejoue` pose la même requête à ferrite et à un vrai ES 8.15 : les deux mesures s'accordent sur 99,3 % des cas |
+| `tests/compat/ponderation.py` | **quelle part de ces requêtes passe entièrement ?** (42,9 % du corpus, mais **96,2 % du code d'application** et 28,6 % des tracks Rally — l'écart *est* le résultat). Écrit les `poids` de `compat.yaml`, publie [`docs/usage.json`](docs/usage.json) et la table « ce qui manque, par fréquence d'usage ». `--rejoue` pose la même requête à ferrite et à un vrai ES 8.15 : les deux mesures s'accordent sur 99,3 % des cas |
 | `tests/compat/conformance_es.py` | que disent les suites de tests **d'Elastic** et d'**OpenSearch** ? Deux sources indépendantes (`--source`), Apache-2.0 toutes les deux, **107** et **112 domaines**, sans liste blanche. Leurs rapports sont des fichiers, pas des phrases : [`conformance.json`](docs/conformance.json) et [`conformance-opensearch.json`](docs/conformance-opensearch.json) (totaux, trois taux, exclusions comptées, détail par cas), régénérés par `--json`, tenus par un cliquet en CI (`--diff`). `--divergences` range à part les cas qu'un **vrai ES 8.15 échoue lui aussi** sur la même suite — mesuré ([`conformance-opensearch-es8150.json`](docs/conformance-opensearch-es8150.json)), pas décidé. `--etat` vérifie entre deux cas que rien n'est **apparu** depuis l'état de départ de la cible — index, alias, templates, réglages de cluster — et arrête la campagne au premier écart (+27 %, payés par la CI) : 79 campagnes consécutives rendent le même rapport à l'octet près |
 | `tests/compat/bench_vs_es.py` | mêmes résultats, **et à quel prix** ? Garde-fou de développement : 600 documents et 138 requêtes **écrites ici**, donc un dénominateur qu'on a choisi soi-même — ne sert plus à publier |
 | `tests/compat/bench_echelle.py` | et **à l'échelle**, sur un corpus que nous n'avons pas écrit ? La track Rally `geonames` d'Elastic (Apache-2.0, révision figée, corpus vérifié à l'octet près), 500 000 et 2 000 000 de documents, **ses** 31 requêtes. `term` ×1,7 et `match_phrase` ×2,6 pour ferrite a deux millions de documents (et l'avance **grandit** avec la taille), RSS ×8 en sa faveur — et le **tri jusqu'a ×290 contre lui**, l'indexation ×0,20, le `scroll` ×0,25. 13 requêtes jouables, 18 refusées, toutes rattachées à une capacité déclarée. Voir [`docs/bench.md`](docs/bench.md) |
@@ -1023,6 +1035,18 @@ supposés viennent des 85 domaines de conformance qu'on ne lançait pas :
 `_cat/aliases` (10 cas), `_mapping/field` (15 cas), et `remove_index` posé en
 même temps qu'un alias du même nom (1 cas). Voir
 [`docs/conformance.md`](docs/conformance.md).
+
+**Écrire un alias se fait maintenant par les sept URL d'ES**, pas seulement par
+celle qui porte son nom dans le chemin : le nom de l'alias, celui de l'index, ou
+les deux, peuvent venir du corps, et le corps **remplace** le chemin. `must_exist`
+est lu sur un `remove`, et un `remove` désigne des alias (`logs-*`, `_all`) au
+lieu de les nommer. Ces quatre-là ne venaient d'aucune demande : ils viennent
+des deux suites que ferrite ne contrôle pas — trois de celle d'OpenSearch, la
+quatrième (`?timeout=` sur `_search`, accepté et sans objet comme `preference`)
+de la suite d'intégration du client go. Aucune n'était visible à la suite
+d'Elastic, figée en 7.10.2. `include_named_queries_score` reste **refusé et
+nommé** : il ne change que la forme de `matched_queries`, que ferrite ne rend
+pas, et le servir à moitié aurait été pire que ne pas le servir.
 
 ## Ton, et forme des livrables
 

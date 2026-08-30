@@ -427,8 +427,8 @@ rang qu'un `significant_terms` avec script. Sur un corpus de **5 311 requêtes
 réelles** — la documentation de référence d'ES 8.15, les tracks Rally d'Elastic,
 les tests des clients officiels et le code de 184 dépôts open source — la
 question posée est « celle-ci passerait-elle **entièrement** ? », parce qu'une
-requête supportée à 90 % est une requête qui échoue. Réponse : **93,8 % des
-requêtes trouvées dans du code d'application**, 40,1 % des exemples de la
+requête supportée à 90 % est une requête qui échoue. Réponse : **96,2 % des
+requêtes trouvées dans du code d'application**, 40,2 % des exemples de la
 documentation, 28,6 % des tracks de benchmark. L'écart entre ces trois nombres
 est le résultat ; la méthode, les sources et les biais sont dans
 [`docs/usage.md`](docs/usage.md), le corpus est publié avec.
@@ -446,9 +446,12 @@ pour dire, d'un cas qui échoue, s'il porte sur une capacité qu'on **annonce**
 7.10.2 (la dernière sous Apache 2.0) et celle d'**OpenSearch** 2.19.1 (Apache 2.0
 aussi), jouées toutes les deux par le même runner, sans liste blanche. Une seule
 serait un examen dont on connaît le sujet — et celle d'Elastic est figée en
-2020, donc aveugle à tout ce qui a été ajouté depuis. Les deux rangent chacune
+2020, donc aveugle à tout ce qui a été ajouté depuis. Les deux rangeaient chacune
 36 échecs en « régression » et se recoupent sur 12 capacités ; celle d'OpenSearch
-en sort trois de plus, toutes postérieures à 2020. Et « ce n'est pas un défaut de
+en a sorti trois de plus, toutes postérieures à 2020 — et une fois comblées, son
+compte tombe à 32 pendant que celui d'Elastic ne bouge **pas d'un cas**, ce qui
+est la démonstration la plus courte de ce que coûte une source unique. Et « ce
+n'est pas un défaut de
 ferrite, les deux moteurs divergent » ne s'y décrète pas : la même suite est
 jouée contre un vrai Elasticsearch 8.15, et un cas qu'il échoue lui aussi est
 rangé à part — mesuré, pas décidé. Voir
@@ -458,9 +461,10 @@ Cet inventaire est aussi ce qui **borne un tirage au sort**. Un fuzzer
 différentiel ([`tests/compat/fuzz_vs_es.py`](tests/compat/fuzz_vs_es.py)) génère
 des mappings, des documents et des requêtes dans le périmètre que `compat.yaml`
 déclare, les pose à ferrite **et** à un vrai Elasticsearch 8.15, et compare les
-réponses champ par champ : **3 500 cas, 154 520 requêtes, 2 divergences
-ouvertes** (deux ordres que BM25 sépare et qu'ES rend ex æquo, déclarés) sur
-quatorze plages de graines, dont trois jamais utilisées pour corriger. Il
+réponses champ par champ : **3 500 cas, 162 122 requêtes, 3 divergences
+ouvertes** (un `avg` sur des `long` aux extrêmes de l'`i64`, un surlignage sous
+`nested`, et un ordre que BM25 sépare et qu'ES rend ex æquo) sur quatorze plages
+de graines, dont **aucune** n'a servi à corriger. Il
 s'étalonne d'abord contre deux Elasticsearch — tant qu'il n'y est pas à zéro, ce
 qu'il dit de ferrite ne vaut rien. Son premier passage a trouvé vingt et un défauts
 que personne n'avait signalés, tous silencieux ; ils sont racontés dans
