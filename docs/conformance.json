@@ -1,11 +1,11 @@
 {
   "schema": 3,
   "mesure": {
-    "date": "2026-08-29T19:44:59Z",
-    "ferrite_sha": "da48046a9f5c4a82b2c856c090037268599649d9",
+    "date": "2026-08-30T01:24:16Z",
+    "ferrite_sha": "a8e163c7ed625cb8bb3dbd723c02945db188f57a",
     "ferrite_arbre_modifie": false,
     "cible": {
-      "url": "http://127.0.0.1:9200",
+      "url": "http://localhost:9200",
       "moteur": "ferrite",
       "version_annoncee": "8.15.0",
       "build_hash": "ferrite-0.7.0"
