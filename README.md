@@ -290,7 +290,7 @@ relevé de ce que ces applications envoient sont dans
 de tests tournent dessus.** « Le client officiel se branche » est une capture
 d'écran ; « la suite de tests du client officiel passe » est une preuve. Trois
 clients, licence Apache-2.0 vérifiée dans le clone, révision figée, arbre
-vérifié intact : `go-elasticsearch` v8.13.0 passe 15/30 de sa suite
+vérifié intact : `go-elasticsearch` v8.13.0 passe 16/30 de sa suite
 d'intégration contre ferrite là où un vrai Elasticsearch 8.15 en passe 28/30,
 chaque écart rattaché à une capacité déclarée. Et le **cycle de vie du client** —
 découverte de version, en-tête `X-elastic-product`, négociation de compression,

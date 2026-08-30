@@ -38,7 +38,7 @@ Trois conditions, les mêmes que pour les applications réelles :
 | Client | Révision | Licence | Suite | vrai ES 8.15 | ferrite |
 |---|---|---|---|---|---|
 | `elasticsearch-py` | v8.15.0 | Apache-2.0 ✔ | `pytest test_elasticsearch/test_server` | 71/84 *(origine)* · 45/84 *(adapté)* | **0/84** *(origine)* · **43/84** *(adapté)* |
-| `go-elasticsearch` | v8.13.0 | Apache-2.0 ✔ | `go test -tags integration . ./esapi ./esutil` | 28/30 | 15/30 |
+| `go-elasticsearch` | v8.13.0 | Apache-2.0 ✔ | `go test -tags integration . ./esapi ./esutil` | 28/30 | 16/30 |
 | `elasticsearch-js` | v8.15.0 | Apache-2.0 ✔ | *aucune jouable* — voir « ce qui n'a pas été mesuré » | — | — |
 
 Et, pour les trois, la batterie **cycle de vie du client** — le plancher que la
@@ -162,16 +162,20 @@ les trois manques d'alias que seule la suite d'OpenSearch voit (voir
 
 `go test -tags integration . ./esapi ./esutil` n'a pas de fixture de ménage : la
 suite se lance telle quelle des deux côtés. **28/30 contre un vrai
-Elasticsearch 8.15, 15/30 contre ferrite**, 13 écarts, tous rattachés :
+Elasticsearch 8.15, 16/30 contre ferrite**, 12 écarts, tous rattachés :
 
 | Cas | Ce qui le sépare | Verdict |
 |---|---|---|
-| `TestClientTransport/Persistent` | il lit `total_opened` dans `GET /_nodes/stats/http`, 101 fois, pour vérifier que le transport garde sa connexion | `hors.cluster_distribue` |
-| `TestAPI/Search`, `/Headers`, `/OpaqueID` | `_search?timeout=…` | **régression** — voir plus haut |
+| `TestAPI/Headers`, `/OpaqueID` | `_reindex`, et une forme de sortie | `ingestion.reecriture_en_masse` — voir plus bas |
 | `TestTypedClient/Index_&_Search` | `?typed_keys` | `recherche.routing_filter_path` |
 | `BulkIndexer/*/External_version` (×3) | métadonnées `version` + `version_type` dans une ligne d'action de `_bulk` | `ingestion.bulk` |
 | `BulkIndexer/*/Index_alias` (×3) | métadonnée `require_alias` | `ingestion.bulk` |
 | les 3 parents de ces sous-cas | ils échouent parce que leurs sous-cas échouent | — |
+
+`TestClientTransport/Persistent` n'y est **pas**, et c'est l'étalonnage qui le
+dit : il lit `total_opened` dans `GET /_nodes/stats/http` 101 fois, ferrite le
+refuse (`hors.cluster_distribue`) — mais il échoue **aussi** contre un vrai
+Elasticsearch 8.15. Un cas rouge des deux côtés ne mesure pas ferrite.
 
 Deux choses valent d'être relevées. D'abord, **les trois modes de compression du
 `BulkIndexer` passent leurs cas `Default` et `Multiple indices`** — c'est-à-dire
@@ -184,7 +188,7 @@ remontaient en **régression** faute d'être écrits.
 
 ### Les trois campagnes rejouées, et les deux qui ne bougent pas
 
-Combler `?timeout=` fait passer la suite go de **15/30 à 16/30** contre ferrite,
+Combler `?timeout=` avait fait passer la suite go de **15/30 à 16/30** contre ferrite,
 et surtout la vide de sa seule ligne `regression` : `TestAPI/Search` passe, et
 les deux autres cas de la même famille (`Headers`, `OpaqueID`) échouent désormais
 sur `_reindex` et sur une forme de sortie, tous deux rattachés à une capacité
@@ -194,7 +198,25 @@ Les deux autres clients ont été **rejoués aussi**, et ils ne bougent pas d'un
 cas : JavaScript garde son cycle de vie 7/7 des deux côtés et son unique refus
 `hors.cluster_distribue`, Python ses **71/84** *(origine, ES)* · **0/84**
 *(origine, ferrite)* · **45/84** *(adapté, ES)* · **43/84** *(adapté, ferrite)* et
-son cycle 9/9. Le rapport commité n'en porte aucune trace, et c'est voulu : ses
+son cycle 9/9.
+
+La campagne des **paramètres de tri** (`missing`, `mode`, `unmapped_type`) les a
+rejoués une fois de plus, avec le même résultat : aucun des trois clients ne
+bouge d'un cas — et le seul de leurs tests qui parle de tri,
+`TestJSONSerialisation/Sort_serialisation` du client go, passait déjà des deux
+côtés. Un zéro qui a coûté une campagne, mais qui est une mesure : ce que ces
+suites exercent, ce n'est pas le DSL, c'est la couche en dessous.
+
+Elle a en revanche coûté un **rattrapage d'outillage**, qui est la vraie leçon
+de ce passage. Le premier jeu de résultats a montré le vrai Elasticsearch
+échouant sur des cas basiques (`test_bulk_works_with_single_item`,
+`test_error_is_raised`) qu'il passait avant — et comme ferrite les échoue aussi,
+ces cas **repassaient en « identique »** : le rapport s'améliorait tout seul.
+Le conteneur de référence tournait depuis deux heures et avait encaissé une
+campagne de fuzzing entière plus le rejeu des 5 311 requêtes du corpus. Il a été
+**recréé à neuf** et la campagne relancée, ce qui a restitué les chiffres
+publiés à l'identique. C'est le geste 2 appliqué à un instrument qu'on croyait
+inerte : un conteneur de référence est un état, et un état dérive. Le rapport commité n'en porte aucune trace, et c'est voulu : ses
 seuls écarts entre les deux campagnes sont des durées d'exécution et un
 `_scroll_id`. Ce n'est pas la même chose que de ne pas mesurer — la raison pour
 laquelle rien ne pouvait bouger (leur trafic relevé ne contient ni écriture
