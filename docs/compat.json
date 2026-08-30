@@ -2261,7 +2261,12 @@
       "nom_texte": "min, max, sum, avg, value_count, stats",
       "etat": "supporte",
       "poids": 3.6,
-      "detail": "`field`, `missing`. Sur un champ `date`, la valeur est en millisecondes et le `*_as_string` est rendu comme chez ES"
+      "detail": "`field`, `missing`. Sur un champ `date`, la valeur est en millisecondes et le `*_as_string` est rendu comme chez ES. Les trois qui accumulent (`sum`, `avg`, `stats`) le font en `double` avec la compensation de Kahan, **comme ES**, et lisent les valeurs d'un document multivalué dans le même ordre que lui (croissant) — sans quoi le résultat diffère au-delà de 2^53 : voir la divergence n° 22 pour le seul cas qui reste",
+      "parametres": {
+        "refuses": [
+          "une somme qui n'est pas finie"
+        ]
+      }
     },
     {
       "id": "agg.terms",

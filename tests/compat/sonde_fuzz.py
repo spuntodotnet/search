@@ -167,6 +167,21 @@ DOCS_NESTE = [("n1", {"k": "a", "b": [{"x": 1.0, "y": "2026-01-01"},
                                       {"x": 3.0, "y": "2026-02-01"}]}),
               ("n2", {"k": "b", "b": [{"x": 8.0, "y": "2026-03-01"}]})]
 
+# Le surlignage sous une clause `nested` : un document dont **un** element
+# satisfait la clause interne et un **autre** tombe sous son `must_not`. A plat,
+# la negation etait vraie pour le document entier et faisait taire tout le
+# `bool` — donc aucun fragment, la ou ES en rend un.
+NESTE_HL = {"mappings": {"properties": {
+    "t": {"type": "text"},
+    "e": {"type": "nested", "properties": {"y": {"type": "keyword"}}},
+    "u": {"type": "keyword"},
+}}}
+DOCS_NESTE_HL = [
+    ("1", {"t": "le horla", "e": [{"y": "tiret-bas"}, {"y": "epsilon"}], "u": "1"}),
+    ("2", {"t": "le horla", "e": [{"y": "epsilon"}], "u": "2"}),
+    ("3", {"t": "bel ami", "e": [{"y": "alpha"}], "u": "3"}),
+]
+
 # Un champ dont l'analyzer porte un filtre a n-grammes : ses grammes occupent
 # **tous** la meme position. C'est le seul cas ou une phrase cesse d'etre une
 # suite de termes pour devenir une suite de positions a alternatives.
@@ -225,6 +240,34 @@ DOCS_LONGS = [
     # positions de ce qui suit se decalent.
     ("4", {"t": "avant " + "z" * 300 + " apres", "g": "reductio", "u": "4"}),
     ("5", {"t": "avant apres", "g": "aluminium", "u": "5"}),
+]
+
+# Des valeurs hors du domaine ou un `double` represente tous les entiers, dans
+# un **seul** document et dans le desordre. C'est la seule forme qui montre
+# l'ecart : `sum`, `avg` et `stats` accumulent en `double` des deux cotes, donc
+# c'est l'ordre de lecture de la colonne qui decide du resultat. Ecrites triees
+# (`[-1, -1, MIN, MAX]`), les memes valeurs s'accordaient deja.
+MAX64 = 9223372036854775807
+MIN64 = -9223372036854775808
+EXTREMES = {"mappings": {"properties": {
+    "v": {"type": "long"},
+    "f": {"type": "double"},
+    "l": {"type": "nested", "properties": {"n": {"type": "long"},
+                                           "k": {"type": "keyword"}}},
+    "u": {"type": "keyword"},
+}}}
+DOCS_EXTREMES = [
+    # `f` deborde dans l'ordre du document et pas dans l'ordre trie :
+    # 1e308 + 1e308 vaut `inf`, et `inf - inf` vaut `NaN`, que ferrite rendait
+    # en `null`. Trie, la somme vaut 1e308 — ce que rend ES.
+    ("1", {"v": [MAX64, -1, MIN64, -1], "f": [1e308, 1e308, -1e308, -0.0, 0.0],
+           # Le `nested` est ici pour la contrepartie du tri : la colonne
+           # jumelle `_elem` doit suivre sa valeur, sinon l'element 1 (`-1`,
+           # `b`) se retrouve apparie a `a`.
+           "l": [{"n": MAX64, "k": "a"}, {"n": -1, "k": "b"}],
+           "u": "1"}),
+    ("2", {"v": -1, "f": 1.0, "u": "2"}),
+    ("3", {"v": [MIN64, MAX64, -1], "u": "3"}),
 ]
 
 COPIES = {"mappings": {"properties": {
@@ -801,6 +844,88 @@ CAS = [
      "que `search_analyzer` corrige",
      {"size": 10, "sort": [{"u": {"order": "asc"}}], "_source": False,
       "query": {"match": {"s": "elan"}}}, hits),
+
+    # -- le surlignage sous une jointure -----------------------------------
+    (NESTE_HL, DOCS_NESTE_HL, "highlight sous un nested a must_not",
+     "un `must_not` vrai pour un element faisait taire ce qu'un autre element "
+     "avait fait correspondre : ferrite ne rendait aucun fragment la ou ES "
+     "rend `<em>tiret-bas</em>` (graine 2196237)",
+     {"size": 10, "sort": [{"u": {"order": "asc"}}], "_source": False,
+      "query": {"nested": {"path": "e", "query": {"bool": {
+          "must": [{"exists": {"field": "e.y"}}],
+          "filter": [{"terms": {"e.y": ["tiret-bas", "alpha"]}}],
+          "must_not": [{"term": {"e.y": "epsilon"}}]}}}},
+      "highlight": {"fields": {"e.y": {}}}}, surligne),
+    (NESTE_HL, DOCS_NESTE_HL, "highlight sous un nested simple",
+     "la contrepartie : sans `must_not`, le meme document doit toujours rendre "
+     "le meme fragment — une correction qui marquerait tout serait verte ici "
+     "et fausse ailleurs",
+     {"size": 10, "sort": [{"u": {"order": "asc"}}], "_source": False,
+      "query": {"nested": {"path": "e", "query": {
+          "term": {"e.y": "tiret-bas"}}}},
+      "highlight": {"fields": {"e.y": {}}}}, surligne),
+    (NESTE_HL, DOCS_NESTE_HL, "un nested nie ne fait pas taire ses voisins",
+     "le verdict d'une jointure ne se lit pas a plat dans l'autre sens non "
+     "plus : `must_not: {nested}` rendait le `bool` faux, donc muet",
+     {"size": 10, "sort": [{"u": {"order": "asc"}}], "_source": False,
+      "query": {"bool": {"should": [{"match": {"t": "horla"}}],
+                         "must_not": [{"nested": {"path": "e", "query": {
+                             "term": {"e.y": "gamma"}}}}]}},
+      "highlight": {"fields": {"t": {}}}}, surligne),
+
+    # -- l'ordre des valeurs d'une colonne numerique -----------------------
+    # Lucene stocke les valeurs d'un champ numerique multivalue **triees**
+    # (`SortedNumericDocValues`) ; ferrite les stockait dans l'ordre du
+    # document. Les deux moteurs somment en `double` avec la meme compensation
+    # de Kahan — c'est donc l'ordre, et lui seul, qui separait les resultats
+    # au-dela de 2^53.
+    (EXTREMES, DOCS_EXTREMES, "sum sur des long aux extremes de l'i64",
+     "sur un document dont `v` vaut [MAX, -1, MIN, -1], ferrite rendait -2.0 "
+     "la ou ES rend 0.0 — un resultat faux en 200",
+     {"size": 0, "aggs": {"a": {"sum": {"field": "v"}}}}, agg("a")),
+    (EXTREMES, DOCS_EXTREMES, "avg sur des long aux extremes de l'i64",
+     "meme accumulateur, meme cause : c'est la forme qu'avait sortie la graine "
+     "7451084 (-0,1666... chez ferrite, 0,0 chez ES)",
+     {"size": 0, "aggs": {"a": {"avg": {"field": "v"}}}}, agg("a")),
+    (EXTREMES, DOCS_EXTREMES, "stats sur des long aux extremes de l'i64",
+     "`stats` partage l'accumulateur de `sum` et d'`avg` : le corriger sur un "
+     "seul des trois aurait laisse les deux autres faux",
+     {"size": 0, "aggs": {"a": {"stats": {"field": "v"}}}}, agg("a")),
+    (EXTREMES, DOCS_EXTREMES, "sum sur des double aux extremes",
+     "la meme cause ne tient pas qu'aux entiers, et elle y est plus visible : "
+     "dans l'ordre du document la somme deborde puis rend `NaN`, soit "
+     "`\"value\": null` la ou ES rend 1.0E308",
+     {"size": 0, "aggs": {"a": {"sum": {"field": "f"}}}}, agg("a")),
+    (EXTREMES, DOCS_EXTREMES, "sum sur une selection de documents",
+     "l'agregation ne voit que les documents retenus : c'est la forme du "
+     "fuzzer, ou la somme portait sur ce que rendait un `term`",
+     {"size": 0, "query": {"term": {"v": -1}},
+      "aggs": {"a": {"sum": {"field": "v"}}}}, agg("a")),
+    (EXTREMES, DOCS_EXTREMES, "l'ordre rendu par docvalue_fields",
+     "la colonne triee est celle que lit `docvalue_fields` : les deux "
+     "moitiees doivent dire la meme chose, `-0.0` avant `0.0` compris",
+     {"size": 10, "sort": [{"u": {"order": "asc"}}], "_source": False,
+      "docvalue_fields": ["v", "f"]},
+     lambda r: [h.get("fields") for h in r.get("hits", {}).get("hits", [])]),
+    (EXTREMES, DOCS_EXTREMES, "fields garde l'ordre du document",
+     "le pendant du cas precedent : `fields` lit le `_source`, donc il ne doit "
+     "**pas** suivre le tri de la colonne",
+     {"size": 10, "sort": [{"u": {"order": "asc"}}], "_source": False,
+      "fields": ["v", "f"]},
+     lambda r: [h.get("fields") for h in r.get("hits", {}).get("hits", [])]),
+    (EXTREMES, DOCS_EXTREMES, "un nested apparie encore ses valeurs",
+     "trier la colonne sans deplacer sa jumelle `_elem` apparierait `-1` a "
+     "l'element de `a` : le document remonterait sur une condition qu'aucun "
+     "de ses elements ne satisfait",
+     {"size": 10, "sort": [{"u": {"order": "asc"}}], "_source": False,
+      "query": {"nested": {"path": "l", "query": {"bool": {"must": [
+          {"term": {"l.n": -1}}, {"term": {"l.k": "a"}}]}}}}}, hits),
+    (EXTREMES, DOCS_EXTREMES, "le meme nested, sur l'appariement juste",
+     "la contrepartie du cas precedent : un refus qui refuserait tout ne "
+     "prouverait rien",
+     {"size": 10, "sort": [{"u": {"order": "asc"}}], "_source": False,
+      "query": {"nested": {"path": "l", "query": {"bool": {"must": [
+          {"term": {"l.n": -1}}, {"term": {"l.k": "b"}}]}}}}}, hits),
 ]
 
 # Ce que ferrite refuse **expres** plutot que de rendre un resultat faux. ES sait

@@ -942,7 +942,7 @@ Comparées champ par champ à un vrai ES 8.15 sur 53 requêtes
 
 | Agrégation | État | Détail |
 |---|---|---|
-| `min`, `max`, `sum`, `avg`, `value_count`, `stats` | ✅ | `field`, `missing`. Sur un champ `date`, la valeur est en millisecondes et le `*_as_string` est rendu comme chez ES |
+| `min`, `max`, `sum`, `avg`, `value_count`, `stats` | ✅ | `field`, `missing`. Sur un champ `date`, la valeur est en millisecondes et le `*_as_string` est rendu comme chez ES. Les trois qui accumulent (`sum`, `avg`, `stats`) le font en `double` avec la compensation de Kahan, **comme ES**, et lisent les valeurs d'un document multivalué dans le même ordre que lui (croissant) — sans quoi le résultat diffère au-delà de 2^53 : voir la divergence n° 22 pour le seul cas qui reste. Refusé : une somme qui n'est pas **finie** (au-delà de 1,8 × 10³⁰⁸ une somme de `double` déborde ; ES rend alors la chaîne JSON `\"Infinity\"`, ferrite rend `null` — voir la divergence assumée n° 22) |
 | `terms` | 🟡 | `sum_other_doc_count` est renseigné, et `doc_count_error_upper_bound` suit la règle d'ES : `-1` quand l'ordre est `_count` **croissant** et que le nombre de termes distincts atteint `shard_size` (`size × 1,5 + 10` par défaut), `0` partout ailleurs. Sur un champ `date`, la clé du bucket est rendue en millisecondes avec son `key_as_string`, comme chez ES. Supporté : `field`, `size`, `shard_size`, `min_doc_count` (sa valeur par défaut (`1`) seulement — voir ci-dessous), `order` (`_count` / `_key` seulement), `missing` (sur un `keyword` ou un numérique. La valeur est posée **au type du champ**, comme chez ES : `missing: 0` sur un `keyword` y devient la clé `"0"`, et un `"3"` sur un `long` la clé `3`). Refusé : une valeur de remplissage sur un champ `date` ou `boolean` (tantivy ne lit pas la date et rangerait ces documents sous `1970-01-01`, en 200 et sans un mot ; sur un booléen il n'arrive pas à poser la valeur du tout. Une valeur de remplissage placée au mauvais endroit se lit comme une donnée), une valeur de remplissage d'un type que le champ ne sait pas lire (un `1.5` sur un `long` promeut chez ES **toutes** les clés du bucket en flottant ; ES refuse les autres cas, ferrite aussi), `min_doc_count` autre que sa valeur par défaut (`1`) (à `0`, il demande un bucket pour les valeurs que la recherche n'a **pas** trouvées, et l'agrégation de tantivy ne le rend pas de façon fiable : zéro bucket sur une colonne numérique, zéro bucket quand la requête ne ramène rien, et des buckets vides privés de leurs sous-agrégations. Au-delà de `1`, c'est `sum_other_doc_count` qui ne suit plus : la règle d'ES a été cherchée pour de bon, une formule ajustée sur quinze formes d'un corpus les collait toutes puis s'est effondrée sur d'autres (27 écarts sur 1 450 cas tirés au sort). Elle dépend de l'ordre demandé, de la troncature et de l'ordre de parcours du dictionnaire de termes — c'est le collecteur d'ES qu'il faudrait réécrire, et annoncer un compte faux serait pire. Mesuré par [`fuzz_vs_es.py`](../tests/compat/fuzz_vs_es.py)), `include`, `exclude`, `collect_mode`, `execution_hint`, `script`, `shard_min_doc_count`, `show_term_doc_count_error`, l'ordre par sous-agrégation |
 | `range` | 🟡 | `ranges` avec `from` / `to` / `key`, `keyed`. Sur un champ `date`, les bornes s'écrivent **en dates** (au `format` du champ) et les buckets rendent `from_as_string` / `to_as_string`. Les intervalles que le client n'a pas demandés sont écartés : tantivy comble les trous entre deux bornes, Elasticsearch non. Refusé : un **trou** entre deux intervalles, sur un champ `date` (tantivy comble les trous et ferrite écarte ensuite le bucket de remplissage ; sur une date, où les bornes passent en nanosecondes, ce remplissage avale l'intervalle demandé. Sur un champ numérique, les deux buckets sortent et le filtrage suffit), des intervalles qui se **chevauchent** (ES compte alors un document dans chaque bucket qui le contient ; l'agrégation de tantivy partitionne les valeurs et ne sait pas le faire), un champ **multivalué** (voir la ligne suivante) |
 | `histogram` | 🟡 | `interval`, `offset`, `min_doc_count`, `hard_bounds`, `extended_bounds`, `keyed`. Refusé : un champ **multivalué** (voir la ligne suivante) |
@@ -1379,6 +1379,83 @@ pas pour être découverts en production.
     la raison pour laquelle `_seq_no` nommé dans `fields` est refusé ici.
     ferrite rend les valeurs, comme il le fait pour chacune des trois prises
     séparément.
+
+22. **Une somme qui n'est pas finie est rendue `null`, pas `"Infinity"`.**
+    Au-delà de 1,8 × 10³⁰⁸ une somme de `double` déborde. ES rend alors une
+    **chaîne JSON** dans un champ numérique — mesuré sur un document dont le
+    champ vaut `[1e308, 1e308]` : `{"sum": {"value": "Infinity"}}`,
+    `{"avg": {"value": "Infinity"}}`, et `"-Infinity"` dans l'autre sens.
+    ferrite rend `{"value": null}`.
+
+    Deux raisons, et la seconde est la vraie. La première est que
+    `serde_json` écrit `null` pour tout flottant non fini, et qu'un
+    sérialiseur qui distinguerait `null` d'un infini est un `Serializer` complet
+    à écrire — la valeur est déjà perdue quand ferrite la reçoit. La seconde est
+    que la parité ne serait de toute façon **pas** atteinte : ES et tantivy ne
+    débordent pas pareil. ES arrête de compenser dès que son accumulateur cesse
+    d'être fini et garde `Infinity` ; la compensation de Kahan de tantivy, elle,
+    calcule `(inf − inf)` au coup d'après et devient `NaN` pour de bon. Sur deux
+    documents valant `[1e308, 1e308]` et `[-1e308, -1e308]`, ES rend donc
+    `"Infinity"` et ferrite `NaN` — rendre `"NaN"` au lieu de `null` aurait
+    remplacé un mensonge par un autre.
+
+    Ce qui **n'est pas** dans cette divergence, et c'est l'essentiel : tant que
+    la somme reste finie, les deux moteurs rendent la même valeur, ordre des
+    valeurs d'un document multivalué compris. C'est ce que la section suivante
+    mesure.
+
+### L'ordre dans lequel une agrégation lit les valeurs d'un document
+
+Ce n'est pas une divergence — c'est une décision, et elle est ici parce qu'elle
+n'était pas devinable et qu'elle a été prise **avec la mesure en main**.
+
+`sum`, `avg` et `stats` accumulent en `double`, des deux côtés, avec la **même**
+compensation de Kahan. Ce qui les séparait n'était donc ni le type de
+l'accumulateur ni la formule, mais l'**ordre** : Lucene stocke les valeurs d'un
+champ numérique multivalué **triées croissantes**
+(`SortedNumericDocValues`), tantivy les garde dans l'ordre du document. Au-delà
+de 2^53 un `double` ne représente plus tous les entiers, et l'ordre décide alors
+du résultat.
+
+Les valeurs, mesurées contre un ES 8.15 sur **un seul** document :
+
+| Le document | ES 8.15 | ferrite, avant | ferrite, après |
+|---|---|---|---|
+| `{"v": [-2^63, 2^63-1, -1, -1]}` | `sum: 0.0` | `sum: 0.0` | `sum: 0.0` |
+| `{"v": [2^63-1, -1, -2^63, -1]}` | `sum: 0.0` | `sum: -1.0` | `sum: 0.0` |
+| `{"v": [2^63-1, -2^63, -1, -1]}` | `sum: 0.0` | `sum: -2.0` | `sum: 0.0` |
+| `{"f": [1e308, 1e308, -1e308]}` | `sum: 1.0E308` | `value: null` (`NaN`) | `sum: 1e308` |
+
+Le même contenu écrit **trié** s'accordait déjà des deux côtés : c'est le
+désordre, et lui seul, qui séparait les deux moteurs. L'ordre des **documents**,
+lui, n'a jamais divergé — mesuré sur douze corpus de 3 à 600 documents tirés au
+sort, 0 écart.
+
+Trois issues étaient possibles, et la mesure les a réduites à une seule.
+Reproduire l'accumulation d'ES aurait été un choix s'il avait fallu perdre de la
+précision pour l'obtenir — ce n'est pas le cas : trier la colonne rend ferrite
+identique à ES **et** arithmétiquement meilleur (dans le dernier cas du tableau,
+`NaN` devient `1e308`). Garder l'ordre du document et déclarer la divergence
+aurait laissé un résultat faux en 200. Et refuser au-delà d'un seuil aurait
+refusé une agrégation banale sur la foi d'une valeur.
+
+La colonne est donc triée **à l'indexation**, là où Lucene la trie
+([`src/engine.rs`](../src/engine.rs), `pose`) — c'est le seul endroit que
+l'agrégation de tantivy, qui fait la somme elle-même, regarde. Deux conséquences
+qu'il a fallu payer :
+
+- un champ **stocké** (`store: true`) garde l'ordre du document, parce que c'est
+  celui qu'ES rend à `stored_fields`. Chez Lucene un champ stocké et une colonne
+  sont deux structures distinctes ; ferrite les confondait en un seul champ
+  tantivy, et le tri a fait passer au rouge le cas figé qui l'exige (`[3, 1, 1]`
+  devenait `[1, 1, 3]`). Un champ numérique `store: true` a donc désormais un
+  champ jumeau `_store.{chemin}` ;
+- la colonne jumelle `_elem.{chemin}` d'un `nested` suit sa valeur : le tri
+  déplace la **paire**, sans quoi l'appariement positionnel dont dépend
+  [`nested-join.md`](nested-join.md) serait rompu.
+
+`fields`, lui, ne bouge pas : il lit le `_source`, donc l'ordre du document et
+ses doublons — chez ES aussi.
 
 ## Limites connues (perf, pas fonctionnalité)
 

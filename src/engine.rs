@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use serde_json::{json, Value};
 use tantivy::collector::TopDocs;
 use tantivy::query::TermQuery;
-use tantivy::schema::{IndexRecordOption, TantivyDocument, Value as _};
+use tantivy::schema::{Field, IndexRecordOption, TantivyDocument, Value as _};
 use tantivy::{DateTime, Index, IndexReader, IndexWriter, ReloadPolicy, Searcher, Term};
 
 use crate::error::{EsError, EsResult};
@@ -869,6 +869,7 @@ fn build_doc(
     // se reparcourt pour rien.
     let mut cardinaux: Vec<(String, u32)> = Vec::new();
     let mut valeurs: Vec<(String, &Value, Option<u32>)> = Vec::new();
+    let mut ecrits: Vec<Ecriture> = Vec::new();
     let sans_join: serde_json::Map<String, Value>;
     let obj = match &gen.fields.join {
         Some(j) if obj.contains_key(&j.champ) => {
@@ -929,7 +930,7 @@ fn build_doc(
             // multi-fields, chacun avec son propre type.
             let format = gen.fields.format_de(&chemin);
             for cible in cibles {
-                ecrire(&mut doc, &chemin, cible, v, format, elem)?;
+                ecrire(&mut ecrits, &chemin, cible, v, format, elem)?;
             }
             // Puis dans les cibles de `copy_to`, avec **leur** type et **leur**
             // format : la copie de `n: 42` dans un `text` s'ecrit « 42 ».
@@ -939,18 +940,34 @@ fn build_doc(
                 };
                 let format = gen.fields.format_de(nom);
                 for cible in vers {
-                    ecrire(&mut doc, nom, cible, v, format, elem)?;
+                    ecrire(&mut ecrits, nom, cible, v, format, elem)?;
                 }
             }
         }
     }
+    pose(&mut doc, ecrits);
     Ok(doc)
 }
 
-/// Ecrit une valeur dans une cible du schema, avec l'indice d'element qui va
-/// avec.
+/// Une valeur coercee, en attente d'etre posee dans le document tantivy.
+///
+/// Rien n'est ecrit tant que le document n'est pas parcouru en entier : l'ordre
+/// des valeurs d'une colonne numerique se decide sur le document complet (voir
+/// [`pose`]), pas au fil de la rencontre.
+struct Ecriture {
+    field: Field,
+    valeur: TypedValue,
+    /// Le champ `_elem.{chemin}` et l'indice d'element qui accompagnent cette
+    /// valeur-la, quand elle vient d'un `nested`.
+    elem: Option<(Field, u32)>,
+    /// Cette valeur va-t-elle dans une colonne, qui se trie ? Un champ jumeau
+    /// `_store.{chemin}` garde au contraire l'ordre du document.
+    triee: bool,
+}
+
+/// Range une valeur coercee, avec l'indice d'element qui va avec.
 fn ecrire(
-    doc: &mut TantivyDocument,
+    ecrits: &mut Vec<Ecriture>,
     chemin: &str,
     cible: &mapping::MappedField,
     v: &Value,
@@ -962,19 +979,108 @@ fn ecrire(
             return Ok(());
         }
     }
-    match mapping::coerce_avec(chemin, cible.ty, v, format)? {
-        TypedValue::Str(s) => doc.add_text(cible.field, s),
-        TypedValue::I64(n) => doc.add_i64(cible.field, n),
-        TypedValue::F64(n) => doc.add_f64(cible.field, n),
-        TypedValue::Bool(b) => doc.add_bool(cible.field, b),
-        TypedValue::Date(ms) => doc.add_date(cible.field, DateTime::from_timestamp_millis(ms)),
+    let valeur = mapping::coerce_avec(chemin, cible.ty, v, format)?;
+    // Un numerique `store: true` a un champ jumeau, qui garde l'ordre du
+    // document : la valeur y part telle qu'elle arrive.
+    if let Some(f) = cible.stocke {
+        ecrits.push(Ecriture {
+            field: f,
+            valeur: valeur.clone(),
+            elem: None,
+            triee: false,
+        });
     }
-    // L'indice d'element est ecrit **exactement** quand une valeur l'est : les
-    // deux colonnes gardent la meme arite, meme si `ignore_above` en saute une.
-    if let (Some(e), Some(f)) = (elem, cible.elem) {
-        doc.add_u64(f, u64::from(e));
-    }
+    ecrits.push(Ecriture {
+        field: cible.field,
+        valeur,
+        // L'indice d'element est ecrit **exactement** quand une valeur l'est :
+        // les deux colonnes gardent la meme arite, meme si `ignore_above` en
+        // saute une.
+        elem: match (elem, cible.elem) {
+            (Some(e), Some(f)) => Some((f, e)),
+            _ => None,
+        },
+        triee: true,
+    });
     Ok(())
+}
+
+/// Pose dans le document les valeurs collectees, colonne numerique **triee**.
+///
+/// Lucene ne stocke pas les valeurs d'un champ numerique multivalue dans
+/// l'ordre du document : il les stocke **triees croissantes**
+/// (`SortedNumericDocValues`). Tout ce qui lit la colonne les lit donc dans cet
+/// ordre-la, agregations comprises — et comme `sum`, `avg` et `stats`
+/// accumulent en `double`, l'ordre **decide du resultat** des que les valeurs
+/// d'un meme document sortent du domaine exact d'un `double`. Mesure contre un
+/// ES 8.15 sur un unique document : `{"v": [i64::MIN, i64::MAX, -1, -1]}` rend
+/// `sum: 0.0` chez ES et rendait `-2.0` chez ferrite, quand le meme contenu
+/// ecrit `[-1, -1, i64::MIN, i64::MAX]` rendait `0.0` des deux cotes.
+///
+/// La colonne est donc triee **a l'indexation**, comme celle de Lucene, plutot
+/// qu'a chaque lecture : c'est le seul endroit ou l'agregation de tantivy, qui
+/// fait la somme elle-meme, la voit.
+///
+/// Deux valeurs ne bougent pas :
+///
+/// - un champ **textuel** garde l'ordre du document — ses positions font les
+///   recherches de phrase, et son ordre de lecture (`docvalue_fields`) est deja
+///   trie et dedoublonne par [`crate::fetch`], comme le fait un
+///   `SortedSetDocValues` ;
+/// - un champ **stocke** (`store: true`) garde l'ordre du document, parce que
+///   c'est celui qu'ES rend a `stored_fields` — un champ stocke et une colonne
+///   sont deux structures distinctes chez Lucene, et ferrite les confondait.
+///   D'ou le champ jumeau `_store.{chemin}` (voir
+///   [`crate::mapping::stocke_seul`]) : sans lui, trier la colonne aurait
+///   reordonne la valeur stockee, et le cas fige qui l'exige est passe au rouge
+///   des le premier essai.
+///
+/// Et la colonne jumelle `_elem.{chemin}` d'un `nested` suit sa valeur : le tri
+/// deplace la **paire**, donc l'appariement positionnel dont depend
+/// [`crate::nested`] est conserve.
+fn pose(doc: &mut TantivyDocument, mut ecrits: Vec<Ecriture>) {
+    // Tri stable : les valeurs d'un meme champ se retrouvent contigues sans que
+    // leur ordre de rencontre change.
+    ecrits.sort_by_key(|e| e.field.field_id());
+    let mut debut = 0;
+    while debut < ecrits.len() {
+        let mut fin = debut + 1;
+        while fin < ecrits.len() && ecrits[fin].field == ecrits[debut].field {
+            fin += 1;
+        }
+        if ecrits[debut].triee && !matches!(ecrits[debut].valeur, TypedValue::Str(_)) {
+            ecrits[debut..fin].sort_by(|a, b| compare_valeurs(&a.valeur, &b.valeur));
+        }
+        debut = fin;
+    }
+    for e in ecrits {
+        match e.valeur {
+            TypedValue::Str(s) => doc.add_text(e.field, s),
+            TypedValue::I64(n) => doc.add_i64(e.field, n),
+            TypedValue::F64(n) => doc.add_f64(e.field, n),
+            TypedValue::Bool(b) => doc.add_bool(e.field, b),
+            TypedValue::Date(ms) => doc.add_date(e.field, DateTime::from_timestamp_millis(ms)),
+        }
+        if let Some((f, n)) = e.elem {
+            doc.add_u64(f, u64::from(n));
+        }
+    }
+}
+
+/// L'ordre de Lucene sur les valeurs d'une colonne numerique.
+///
+/// Un `double` y est range par son image entiere signee
+/// (`NumericUtils.doubleToSortableLong`), ce que `total_cmp` reproduit : `-0.0`
+/// passe avant `0.0`. Deux valeurs de types differents ne se rencontrent jamais
+/// — une colonne porte un seul type.
+fn compare_valeurs(a: &TypedValue, b: &TypedValue) -> std::cmp::Ordering {
+    match (a, b) {
+        (TypedValue::I64(x), TypedValue::I64(y)) => x.cmp(y),
+        (TypedValue::F64(x), TypedValue::F64(y)) => x.total_cmp(y),
+        (TypedValue::Bool(x), TypedValue::Bool(y)) => x.cmp(y),
+        (TypedValue::Date(x), TypedValue::Date(y)) => x.cmp(y),
+        _ => std::cmp::Ordering::Equal,
+    }
 }
 
 /// Un champ devine ne doit pas pouvoir entrer en collision avec les champs

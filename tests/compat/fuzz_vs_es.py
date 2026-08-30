@@ -673,6 +673,36 @@ class Generateur:
             return f"{an:04d}-{mois:02d}-{jour:02d}"
         return f"{an:04d}-{mois:02d}-{jour:02d}T{h:02d}:{mn:02d}:{s:02d}.000Z"
 
+    def _melange_extreme(self, champ):
+        """Les valeurs d'un champ numerique, posees dans le desordre.
+
+        Les bornes de l'i64 et des valeurs voisines de zero, melangees : ecrites
+        triees les deux moteurs s'accordent deja, c'est le desordre qui est le
+        sujet. `i64::MAX` ne rentre pas dans un `double`, et c'est de la qu'il
+        vient — une somme accumulee en `double` n'y donne pas le meme resultat
+        selon l'ordre des valeurs.
+
+        `None` pour tout autre type, et chaque fois pour la meme raison : ce
+        qu'on mesurerait ne serait plus l'**ordre**.
+
+        - un `double` ne perd de bits que par **debordement** (mesure : ni
+          `[1e300, 1, -1e300]` ni aucune permutation de valeurs finies ne
+          separe les deux moteurs, la compensation de Kahan y suffit). Or au
+          dela de 1,8e308 la somme n'est plus finie, et c'est alors une
+          divergence **declaree** qu'on poserait (`aggs.somme_non_finie`), pas
+          celle-ci ;
+        - les bornes d'un `integer` ou d'un `byte` s'additionnent exactement en
+          `double` : l'ordre n'y change rien ;
+        - un `float` d'ES tient sur 32 bits, et le fuzzer n'y tire que des
+          valeurs exactement representables (voir l'entete)."""
+        rng = self.rng
+        if champ.ty != "long":
+            return None
+        lo, hi = BORNES["long"]
+        vals = [hi, lo, -1, rng.choice([-1, 1])]
+        rng.shuffle(vals)
+        return vals
+
     def valeur(self, champ):
         """La valeur d'un champ dans un document, bords compris."""
         rng = self.rng
@@ -691,6 +721,19 @@ class Generateur:
             return []                       # tableau vide : absent, chez ES
         if r < 0.22:
             self.brique("champ.tableaux")
+            # Une fois sur deux, un champ `long` recoit ses valeurs
+            # **melangees autour d'un extreme**. C'est la seule forme qui montre
+            # dans quel **ordre** un moteur lit les valeurs d'un document — ES
+            # les lit triees (`SortedNumericDocValues`), et au-dela de 2^53 la
+            # somme n'est plus la meme. Le tirage uniforme, lui, ne la posait
+            # presque jamais : quatre plages de 250 cas ne l'ont pas sortie une
+            # seule fois, contre le binaire d'avant comme contre le corrige. Une
+            # correction que le fuzzer cesse d'exercer se defait en silence, et
+            # c'est la moitie de cette carte.
+            if rng.random() < 0.5:
+                melange = self._melange_extreme(champ)
+                if melange is not None:
+                    return melange
             return [base() for _ in range(rng.randint(1, 3))]
         if r < 0.25:
             self.brique("champ.tableaux")

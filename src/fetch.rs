@@ -645,7 +645,8 @@ pub fn stockes_du_document(
         let Some(f) = gen.fields.get(&col.chemin) else {
             continue;
         };
-        let valeurs = lire_stockees(doc, f.field, col)?;
+        // Meme lecture que dans une recherche : le champ jumeau d'abord.
+        let valeurs = lire_stockees(doc, f.stocke.unwrap_or(f.field), col)?;
         if !valeurs.is_empty() {
             bloc.insert(col.chemin.clone(), Value::Array(valeurs));
         }
@@ -788,7 +789,9 @@ pub fn rendre(
             let Some(f) = gen.fields.get(&col.chemin) else {
                 continue;
             };
-            let valeurs = lire_stockees(&stocke, f.field, col)?;
+            // Un numerique stocke vit dans son champ jumeau `_store.{chemin}`,
+            // qui garde l'ordre du document ; sa colonne, elle, est triee.
+            let valeurs = lire_stockees(&stocke, f.stocke.unwrap_or(f.field), col)?;
             if !valeurs.is_empty() {
                 bloc.insert(col.chemin.clone(), Value::Array(valeurs));
             }

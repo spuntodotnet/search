@@ -416,6 +416,20 @@ enum Noeud {
     /// tout le `bool` — le laisser opaque marquait ses voisins (trouve par le
     /// fuzzer, graine 5150006).
     Existe(String),
+    /// La clause interne d'un `nested` ou d'une jointure.
+    ///
+    /// Elle porte sur d'autres documents que celui qu'on surligne : ses termes
+    /// marquent bien (ES surligne un sous-champ de `nested` depuis la racine),
+    /// mais **rien** de sa structure ne se tranche sur ce `_source`-la. C'est le
+    /// pendant manquant de la regle « dans le doute, marquer de trop » : a
+    /// plat, un `must_not` vrai pour *un* element faisait taire ce qu'un
+    /// *autre* element avait fait correspondre, et le document ressortait sans
+    /// aucun fragment (fuzzer, graine 2196237).
+    ///
+    /// Ne pas couper la-dedans est sur : si le document est un hit, c'est qu'au
+    /// moins un element a satisfait la clause interne — le `_source` a plat ne
+    /// dit simplement pas lequel.
+    Jointure(Box<Noeud>),
 }
 
 impl Noeud {
@@ -714,10 +728,7 @@ fn extraire(v: &Value, gen: &Generation) -> EsResult<Noeud> {
         // verdict ne se lit pas sur ce `_source`-la.
         "nested" | "has_child" | "has_parent" => {
             match corps.as_object().and_then(|o| o.get("query")) {
-                Some(q) => Noeud::Ou {
-                    enfants: vec![extraire(q, gen)?],
-                    minimum: 0,
-                },
+                Some(q) => Noeud::Jointure(Box::new(extraire(q, gen)?)),
                 None => Noeud::Opaque,
             }
         }
@@ -1213,7 +1224,7 @@ impl Noeud {
             Self::Et(enfants) | Self::Ou { enfants, .. } => {
                 enfants.iter().for_each(|e| e.champs_cites(out));
             }
-            Self::Non(e) => e.champs_cites(out),
+            Self::Non(e) | Self::Jointure(e) => e.champs_cites(out),
             Self::Opaque
             | Self::Jamais
             | Self::Toujours
@@ -1259,7 +1270,7 @@ fn evalue(n: &Noeud, vues: &BTreeMap<&str, Vec<Valeur>>, source: &Value, id: &st
         Noeud::Et(e) | Noeud::Ou { enfants: e, .. } => {
             e.iter().map(|x| evalue(x, vues, source, id)).collect()
         }
-        Noeud::Non(e) => vec![evalue(e, vues, source, id)],
+        Noeud::Non(e) | Noeud::Jointure(e) => vec![evalue(e, vues, source, id)],
         _ => Vec::new(),
     };
     let valeur = verdict_de(n, &enfants, vues, source, id);
@@ -1343,6 +1354,9 @@ fn verdict_de(
         // Un `must_not` sur une clause qu'on ne sait pas trancher est suppose
         // **non** satisfait : c'est le sens qui laisse le reste marquer.
         Noeud::Non(_) => Some(!enfants[0].valeur.unwrap_or(false)),
+        // Une jointure ne se tranche pas a plat, dans aucun des deux sens : le
+        // verdict de son contenu porte sur des elements, pas sur ce document.
+        Noeud::Jointure(_) => None,
     }
 }
 
@@ -1365,7 +1379,36 @@ fn collecte<'a>(n: &'a Noeud, verdict: &Verdict, out: &mut Vec<(&'a str, &'a [Mo
                 collecte(e, v, out);
             }
         }
+        // Sous une jointure, aucun verdict ne coupe : voir [`Noeud::Jointure`].
+        Noeud::Jointure(e) => collecte_sans_couper(e, out),
         // Une clause niee ne marque rien, chez ES non plus.
+        Noeud::Non(_)
+        | Noeud::Opaque
+        | Noeud::Jamais
+        | Noeud::Toujours
+        | Noeud::Existe(_)
+        | Noeud::Valeurs { .. }
+        | Noeud::Intervalle { .. }
+        | Noeud::Ids(_) => {}
+    }
+}
+
+/// Les feuilles d'un sous-arbre, **sans** consulter aucun verdict.
+///
+/// C'est la lecture qui vaut sous une jointure : le document est un hit, donc
+/// un element a satisfait la clause interne, mais le `_source` a plat ne dit
+/// pas lequel — et l'y evaluer fait dire « faux » a un `bool` que l'element
+/// gagnant satisfaisait. Seule la negation continue de ne rien marquer : chez
+/// ES non plus, un `must_not` ne marque pas.
+fn collecte_sans_couper<'a>(n: &'a Noeud, out: &mut Vec<(&'a str, &'a [Motif])>) {
+    match n {
+        Noeud::Feuille { champ, motifs } => out.push((champ.as_str(), motifs)),
+        Noeud::Et(enfants) | Noeud::Ou { enfants, .. } => {
+            for e in enfants {
+                collecte_sans_couper(e, out);
+            }
+        }
+        Noeud::Jointure(e) => collecte_sans_couper(e, out),
         Noeud::Non(_)
         | Noeud::Opaque
         | Noeud::Jamais

@@ -283,7 +283,7 @@ développement, pas de CI).
 
 | Commande | La question à laquelle elle répond |
 |---|---|
-| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**112/112**, dont l'export par `helpers.scan`, le date math, la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats`, les templates, ce que la réponse transporte — `fields`, `docvalue_fields`, `stored_fields` — la modification par requête, `_delete_by_query` / `_update_by_query`, et les n-grammes de l'autocomplétion, `search_analyzer`, `copy_to` et `store`) |
+| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**119/119**, dont l'export par `helpers.scan`, le date math, la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats`, les templates, ce que la réponse transporte — `fields`, `docvalue_fields`, `stored_fields` — la modification par requête, `_delete_by_query` / `_update_by_query`, et les n-grammes de l'autocomplétion, `search_analyzer`, `copy_to` et `store`) |
 | `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (212/213, 0 écart réel) |
 | `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (45/46 ; le seul écart est `_cluster/health`, toujours vert par choix) |
 | `tests/compat/diff_aggs.py` | les mêmes agrégations ? (53/53, `filter` comprise, et ce qu'un bucket **vide** doit porter) |
@@ -299,8 +299,8 @@ développement, pas de CI).
 | `tests/compat/sonde_alias.py` | les mêmes alias sur une **expression de noms** — liste, joker, exclusion, `_all` — et le même 404 ? (21/21, corps et message compris) |
 | `tests/compat/sonde_ecriture_alias.py` | et pour **écrire** un alias ? Les sept URL de `put_alias` (le nom de l'alias, celui de l'index, ou les deux, viennent du corps — qui **remplace** le chemin), `must_exist`, et les deux règles de 404 qui ne sont pas la même : `must_exist: true` se vérifie **par index visé**, le 404 par défaut est **global**. Compare le statut, le message **et l'état laissé derrière** : **57/65 identiques, 7 refus assumés, 1 message non comparé, 0 écart** — et **14/65 contre le ferrite d'avant**. `--calibrer` : 64/65 contre deux ES |
 | `tests/compat/sonde_vide.py` | sur un serveur **sans aucun index**, la même chose qu'ES — et rien accepté en silence ? (28/28 identiques, 0 refus muet ; les deux serveurs doivent être vides, c'est l'état mesuré) |
-| `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **3 500 cas, 162 122 requêtes, 3 divergences ouvertes** (un `avg` sur des `long` aux extrêmes de l'`i64`, un surlignage sous `nested`, et un ordre que BM25 sépare et qu'ES rend ex æquo), sur quatorze plages de graines dont **aucune** n'a servi à corriger — celle sur laquelle on itère ne mesure plus rien, et le générateur ayant changé, les plages du passage précédent ne mesurent plus les mêmes cas. 21 défauts silencieux trouvés au premier passage, 27 de plus depuis — dont **dix-sept** sur le seul surlignage, tous invisibles aux 233 questions écrites à la main. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (60 cas, 2 664 requêtes, 0 divergence réelle) |
-| `tests/compat/sonde_fuzz.py` | les écarts trouvés par le fuzzing, **figés** hors d'une graine (80/80, plus 12 refus assumés) |
+| `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **1 000 cas, 46 345 requêtes, 1 divergence ouverte** (un ordre que BM25 sépare et qu'ES rend ex æquo), sur quatre plages de graines dont **aucune** n'a servi à corriger — celle sur laquelle on itère ne mesure plus rien, et le générateur ayant changé, les plages du passage précédent ne mesurent plus les mêmes cas. Les mêmes plages contre le **binaire d'avant** rendent 5 divergences : une brique de générateur qui ne fait pas rougir le binaire d'avant ne mesure rien. 21 défauts silencieux trouvés au premier passage, 30 de plus depuis — dont **dix-sept** sur le seul surlignage, tous invisibles aux 233 questions écrites à la main. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (50 cas, 2 271 requêtes, 0 divergence réelle) |
+| `tests/compat/sonde_fuzz.py` | les écarts trouvés par le fuzzing, **figés** hors d'une graine (95/95, plus 12 refus assumés) |
 | `tests/compat/appli_reelle.py` | **un logiciel écrit par d'autres démarre-t-il ?** Clone une vraie application à une révision figée, vérifie que rien n'y a bougé, lance sa **propre** suite d'intégration contre un vrai ES puis contre ferrite, et relève tout le trafic HTTP au passage. Gitea v1.27.2 : **34/34 des deux côtés**. Wagtail v7.1 : **83/83 des deux côtés**, et plus un seul refus que ferrite prononce là où ES répond. Voir [`docs/application.md`](docs/application.md) |
 | `tests/compat/tests_clients.py` | **la suite de tests du client officiel passe-t-elle ?** Pas « un client se connecte » : les cas que l'équipe du client a écrits, joués par **son** lanceur, dans **son** langage. Trois clients, licence Apache-2.0 vérifiée **dans le clone**, révision figée, arbre vérifié intact. `go-elasticsearch` v8.13.0 : 28/30 contre un vrai ES, 15/30 contre ferrite, chaque écart rattaché à une capacité. `elasticsearch-py` v8.15.0 : 71/84 *(origine)* · 45/84 *(adapté)* / 43/84 avec le nettoyage de remplacement, **0/84 telle quelle** — sa fixture nettoie par seize routes x-pack, et les deux chiffres sont publiés. Et le **cycle de vie du client**, joué par le client publié : 9/9 en Python, 7/7 en Go, 7/7 en JavaScript, des deux côtés. Voir [`docs/clients.md`](docs/clients.md) |
 | `tests/compat/genere_compat.py` | le périmètre déclaré et la doc disent-ils la **même chose** ? [`compat.yaml`](compat.yaml) est la source (une entrée par capacité : état, paramètres, motif du refus, poids d'usage) ; [`docs/compat.md`](docs/compat.md) et [`docs/compat.json`](docs/compat.json) en sont **générés**, et la CI échoue s'ils divergent |
@@ -361,6 +361,17 @@ bouger**, pas après.
   (un intervalle de dates, une jointure) sont **supposées satisfaites**, parce
   que dans le doute il vaut mieux marquer de trop que se taire.
 
+  Et la règle a un **pendant** qui manquait, parce qu'une jointure n'est pas une
+  feuille : sous un `nested`, la clause interne est un `bool` entier, et
+  l'évaluer sur un `_source` qui mélange les éléments faisait taire ce qu'un
+  *autre* élément avait fait correspondre (un `must_not` vrai pour l'élément 1
+  annulait le fragment que l'élément 0 justifiait — ES en rend un, ferrite
+  n'en rendait aucun). La clause interne d'une jointure est donc un nœud à part
+  dont **aucun** verdict ne coupe : si le document est un hit, un élément a
+  satisfait la clause, et le `_source` à plat ne dit pas lequel. Supposer une
+  feuille satisfaite ne suffisait pas — il fallait supposer tout le sous-arbre
+  indécidable.
+
   Le pendant de cette décision est un **refus** : `require_field_match: false`
   fait chercher chez ES les termes de toutes les clauses dans tous les champs,
   par une extraction dont il documente lui-même le résultat comme approximatif
@@ -411,8 +422,19 @@ bouger**, pas après.
   `_field_names`, `_ignored`, `_seq_no`, `_version`, `_nested_path`,
   `_feature`, `_data_stream_timestamp`, `_tier`) — `_score`, `_doc`, `_type`,
   `_size`, `_all`, `_parent` et `_all_text` passent. ferrite y ajoute les
-  racines de ses **colonnes internes** (`_elem`, `_nelem`, `_join_parent`),
-  refusées avec leur raison écrite.
+  racines de ses **colonnes internes** (`_elem`, `_nelem`, `_join_parent`,
+  `_store`), refusées avec leur raison écrite.
+- **Une colonne numérique est triée par document, celle de Lucene l'est.**
+  `sum`, `avg` et `stats` accumulent en `double` des deux côtés, avec la même
+  compensation de Kahan : ce qui séparait ferrite d'ES n'était donc pas
+  l'accumulateur mais l'**ordre** dans lequel il voit les valeurs d'un document
+  multivalué. Le tri est posé à l'**indexation**
+  ([`src/engine.rs`](src/engine.rs), `pose`), seul endroit que l'agrégation de
+  tantivy regarde — pas à la lecture. Deux choses ne suivent pas le tri : un
+  champ `store: true`, qui garde l'ordre du document (d'où son champ jumeau
+  `_store.{chemin}`), et un champ textuel, dont les positions font les phrases.
+  La colonne jumelle `_elem` d'un `nested`, elle, suit sa valeur — le tri
+  déplace la paire. Valeurs mesurées dans [`docs/compat.md`](docs/compat.md).
 - **La syntaxe de `regexp` est traduite, jamais transmise telle quelle**
   ([`src/regexp.rs`](src/regexp.rs)). Celle de Lucene et celle du crate `regex`
   se ressemblent assez pour qu'on croie pouvoir passer le motif directement, et
@@ -867,6 +889,35 @@ bouger**, pas après.
   JSON y lit un entier. Défaut antérieur, invisible parce qu'aucun corpus écrit
   à la main ne met une valeur entière dans un champ flottant ; le fuzzer, lui,
   tire `0.0` et `1024.0` exprès.
+- **Une explication plausible posée à côté d'une mesure finit par être lue comme
+  la mesure.** `docs/fuzz.md` publiait, depuis trois passages, qu'une somme
+  divergeait parce qu'« ES accumule en `double` et tantivy en `i64` ». C'était
+  faux : les deux accumulent en `double`, avec la **même** compensation de
+  Kahan. Ce qui les séparait était l'**ordre de lecture des valeurs d'un
+  document** — Lucene stocke une colonne numérique multivaluée **triée**
+  (`SortedNumericDocValues`), tantivy la garde dans l'ordre du document, et
+  au-delà de 2^53 l'ordre décide du résultat. La mesure qui l'a retourné tient
+  en trois lignes : poser le même document dans deux ordres différents. Elle
+  aurait pu être faite le premier jour ; l'explication était trop satisfaisante
+  pour qu'on la demande. Elle a même fait écrire dans la carte trois issues
+  possibles (parité contre précision) dont **aucune** n'était le sujet : trier
+  la colonne rend ferrite identique à ES *et* arithmétiquement meilleur.
+- **Une colonne et un champ stocké sont deux structures différentes, et ferrite
+  les confondait.** Trier la colonne a réordonné ce que `stored_fields` rend —
+  chez Lucene la colonne est triée, le champ stocké garde l'ordre d'écriture, et
+  les deux vivaient dans un seul champ tantivy. C'est le cas **déjà figé** dans
+  `sonde_fuzz.py` qui l'a dit au premier essai, ce qui est exactement ce à quoi
+  sert de figer une contrepartie. Un champ numérique `store: true` a donc
+  désormais un champ jumeau `_store.{chemin}`.
+- **Une brique de générateur qui ne fait pas rougir le binaire d'avant ne mesure
+  rien.** La règle était écrite pour les cas figés ; elle vaut identiquement
+  pour le fuzzer. Le générateur tirait déjà `i64::MAX` et `i64::MIN` — donc
+  « il tire des entiers extrêmes » était vrai — mais quasiment jamais **dans le
+  même document et dans le désordre**, la seule forme où le défaut se voit :
+  1 000 cas sur quatre plages neuves ont rendu 0 divergence contre le binaire
+  **d'avant** la correction. La brique pose maintenant l'arrangement exprès, et
+  les mêmes plages en sortent 4. Vérifier qu'une brique exerce une capacité ne
+  dit pas qu'elle exerce le **bord** de cette capacité.
 - **Le chiffre le plus facile à vérifier est celui qui dérive le plus vite.**
   La taille d'image est le premier argument du projet, et la seule mesure qui ne
   passait par aucun des neuf gestes : elle lisait un champ d'un outil
