@@ -123,7 +123,7 @@ Sans rien compiler : chaque version publie un binaire statique Linux **x86-64**
 et **arm64** dans les [releases](../../releases) (archive `.tar.gz` + `.sha256`).
 
 ```bash
-tar xzf ferrite-v0.7.0-x86_64-unknown-linux-musl.tar.gz && ./ferrite
+tar xzf ferrite-v0.8.0-x86_64-unknown-linux-musl.tar.gz && ./ferrite
 ```
 
 Puis, avec le client officiel — sans une ligne de code spécifique à ferrite :
@@ -154,7 +154,7 @@ ce tableau est **généré** — chaque valeur y porte sa définition, et un cli
 de CI échoue si le tableau et le fichier divergent.
 
 <!-- chiffres-conteneur:tableau — généré depuis docs/container.json par `python3 tests/compat/chiffres_conteneur.py --injecte`, ne pas éditer à la main -->
-| | Elasticsearch 8.15.0 | ferrite 0.7.0 | × |
+| | Elasticsearch 8.15.0 | ferrite 0.8.0 | × |
 |---|---|---|---|
 | **Image compressée**, telle qu'un registre la sert | 669,1 Mo | **4,1 Mo** | **×161** |
 | Image décompressée, ce que son système de fichiers occupe | 1 266,1 Mo | 9,8 Mo | ×129 |
