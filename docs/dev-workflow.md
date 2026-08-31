@@ -261,7 +261,8 @@ l'ancien sous son nouveau numéro. La release 0.8.0 s'est arrêtée là — le
 garde-fou a fonctionné, rien n'était en panne. Ce qui manquait, c'est que
 personne ne jouait la commande qu'il nomme.
 
-Elle n'est donc pas à assouplir. Elle est à **jouer**, dans la PR de bump :
+Le garde-fou n'est donc pas à assouplir ; la commande qu'il nomme est à
+**jouer**, dans la PR de bump :
 
 ```bash
 # 1) le bump : Cargo.toml, Cargo.lock, et l'archive citée sous « Installer »
@@ -272,7 +273,7 @@ Elle n'est donc pas à assouplir. Elle est à **jouer**, dans la PR de bump :
 # 2) la campagne, à la version qu'on vient de déclarer. Elle mesure les DEUX
 #    images (ferrite et l'ES de référence) dans la même campagne, sur la même
 #    machine : c'est la seule façon de tenir « même définition des deux côtés ».
-#    Docker requis, une dizaine de minutes.
+#    Docker requis ; le build et la campagne prennent une dizaine de minutes.
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 docker build -t "ferrite:$version" .
 ./tests/compat/measure_container.sh --json docs/container.json
