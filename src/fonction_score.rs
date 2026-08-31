@@ -590,6 +590,12 @@ impl Weight for FonctionScoreWeight {
         Ok(Box::new(scorer))
     }
 
+    /// L'arbre du score : la valeur de la clause, et **sous elle** celle de la
+    /// requete a laquelle les fonctions s'appliquent.
+    ///
+    /// C'est cette seconde valeur qui compte pour un outil de mise au point :
+    /// sans elle, un `function_score` est un nombre opaque, et on ne peut pas
+    /// dire si un ecart vient de la fonction ou du BM25 qu'elle multiplie.
     fn explain(&self, reader: &SegmentReader, doc: DocId) -> tantivy::Result<Explanation> {
         let mut scorer = self.scorer(reader, 1.0)?;
         if scorer.seek(doc) != doc {
@@ -597,7 +603,11 @@ impl Weight for FonctionScoreWeight {
                 "document {doc} ne correspond pas a la requete"
             )));
         }
-        Ok(Explanation::new("function score", scorer.score()))
+        let mut explication = Explanation::new("function score", scorer.score());
+        if let Ok(sous) = self.sous.explain(reader, doc) {
+            explication.add_detail(sous);
+        }
+        Ok(explication)
     }
 }
 
@@ -1016,7 +1026,16 @@ impl Weight for RetrogradeWeight {
                 "document {doc} ne correspond pas a la requete"
             )));
         }
-        Ok(Explanation::new("boosting", scorer.score()))
+        let mut explication = Explanation::new("boosting", scorer.score());
+        if let Ok(sous) = self.positive.explain(reader, doc) {
+            explication.add_detail(sous);
+        }
+        // La clause negative n'apparait que si elle a joue : c'est ce qu'on
+        // vient lire, et le document qui n'y correspond pas n'a rien perdu.
+        if let Ok(sous) = self.negative.explain(reader, doc) {
+            explication.add_detail(sous);
+        }
+        Ok(explication)
     }
 
     fn count(&self, reader: &SegmentReader) -> tantivy::Result<u32> {

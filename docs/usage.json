@@ -60,24 +60,24 @@
  },
  "totaux": {
   "requetes": 5311,
-  "servies": 2452,
-  "refusees": 2842,
+  "servies": 2459,
+  "refusees": 2835,
   "indeterminees": 17,
-  "taux_servies": 46.2
+  "taux_servies": 46.3
  },
  "par_source": {
   "clients": {
-   "servie": 116,
+   "servie": 117,
    "total": 143,
-   "refusee": 27,
-   "taux_servies": 81.1
+   "refusee": 26,
+   "taux_servies": 81.8
   },
   "doc": {
-   "servie": 1604,
+   "servie": 1610,
    "total": 3969,
-   "refusee": 2350,
+   "refusee": 2344,
    "indeterminee": 15,
-   "taux_servies": 40.4
+   "taux_servies": 40.6
   },
   "github": {
    "refusee": 12,
@@ -172,9 +172,9 @@
  ],
  "par_api": {
   "search": {
-   "servie": 940,
+   "servie": 943,
    "total": 1801,
-   "refusee": 860,
+   "refusee": 857,
    "indeterminee": 1
   },
   "indices.create": {
@@ -751,7 +751,7 @@
    "total": 4
   },
   "explain": {
-   "refusee": 4,
+   "servie": 4,
    "total": 4
   },
   "nodes.hot_threads": {
@@ -8228,6 +8228,7 @@
   "nested.tri_et_aggs": null,
   "recherche.aggs": 14.0,
   "recherche.docvalue_fields": 0.5,
+  "recherche.explain": 0.1,
   "recherche.expressions_index": null,
   "recherche.field_caps": 0.2,
   "recherche.fields": 2.4,
@@ -8235,7 +8236,7 @@
   "recherche.from_size": 16.3,
   "recherche.highlight": 1.9,
   "recherche.min_score": 0.0,
-  "recherche.msearch": 0.1,
+  "recherche.msearch": 0.0,
   "recherche.non_supportes": 3.0,
   "recherche.preference": null,
   "recherche.query": 25.3,
@@ -10837,7 +10838,7 @@
   },
   {
    "capacite": "recherche.non_supportes",
-   "nom": "search_after, pit, collapse, knn, explain, seq_no_primary_term, post_filter, suggest, rescore, track_scores, q, terminate_after, version, indices_boost, profile, slice, stats, ext, retriever",
+   "nom": "search_after, pit, collapse, knn, seq_no_primary_term, post_filter, suggest, rescore, track_scores, q, terminate_after, version, indices_boost, profile, slice, stats, ext, retriever",
    "etat": "refuse",
    "motif": "pas_encore",
    "requetes": 161,
@@ -12328,30 +12329,6 @@
    ]
   },
   {
-   "capacite": "recherche.msearch",
-   "nom": "_msearch, _search/template, _explain",
-   "etat": "refuse",
-   "motif": "pas_encore",
-   "requetes": 5,
-   "part": 0.1,
-   "par_source": {
-    "doc": {
-     "requetes": 5,
-     "part": 0.1
-    }
-   },
-   "traits": [
-    {
-     "trait": "route:explain",
-     "requetes": 4
-    },
-    {
-     "trait": "route:msearch",
-     "requetes": 1
-    }
-   ]
-  },
-  {
    "capacite": "ingestion.delete_by_query",
    "nom": "POST /{index}/_delete_by_query",
    "etat": "partiel",
@@ -12464,34 +12441,6 @@
     {
      "trait": "dsl:multi_match.minimum_should_match",
      "requetes": 1
-    }
-   ]
-  },
-  {
-   "capacite": "dsl.nom_de_clause",
-   "nom": "_name (nommer une clause), matched_queries, include_named_queries_score",
-   "etat": "refuse",
-   "motif": "pas_encore",
-   "requetes": 3,
-   "part": 0.1,
-   "par_source": {
-    "clients": {
-     "requetes": 1,
-     "part": 0.7
-    },
-    "doc": {
-     "requetes": 2,
-     "part": 0.1
-    }
-   },
-   "traits": [
-    {
-     "trait": "dsl:match._name",
-     "requetes": 3
-    },
-    {
-     "trait": "dsl:terms._name",
-     "requetes": 2
     }
    ]
   },
@@ -12687,6 +12636,26 @@
    "traits": [
     {
      "trait": "dsl:wildcard.rewrite",
+     "requetes": 1
+    }
+   ]
+  },
+  {
+   "capacite": "recherche.msearch",
+   "nom": "_msearch, _search/template",
+   "etat": "refuse",
+   "motif": "pas_encore",
+   "requetes": 1,
+   "part": 0.0,
+   "par_source": {
+    "doc": {
+     "requetes": 1,
+     "part": 0.0
+    }
+   },
+   "traits": [
+    {
+     "trait": "route:msearch",
      "requetes": 1
     }
    ]

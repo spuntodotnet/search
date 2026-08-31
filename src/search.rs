@@ -540,8 +540,9 @@ impl SegmentCollector for SortSegmentCollector {
 // Filtrage de _source
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum SourceFilter {
+    #[default]
     All,
     None,
     Filter {
@@ -679,6 +680,14 @@ pub struct Cible {
     /// [`crate::fonction_score::Incidents`]). Relu **apres** chaque recherche :
     /// un `Scorer` ne peut pas echouer, mais son verdict ne doit pas se perdre.
     pub incidents: Arc<crate::fonction_score::Incidents>,
+    /// Les clauses nommees par un `_name`, traduites **dans cette generation**
+    /// comme la requete principale.
+    ///
+    /// Chacune est rejouee seule contre chaque document rendu : c'est ce que
+    /// fait ES, et c'est ce qui explique qu'un `should` place sous un `must_not`
+    /// ne se nomme pas dans un hit qui, lui, correspond (voir
+    /// [`crate::dsl::extraire_noms`]).
+    pub nommees: Arc<Vec<(String, Box<dyn Query>)>>,
 }
 
 pub struct SearchRequest {
@@ -688,10 +697,9 @@ pub struct SearchRequest {
     pub size: usize,
     /// Le sens de chaque cle de tri. Vide : tri par score.
     pub sort_asc: Vec<bool>,
-    pub source: SourceFilter,
-    /// `_id` est-il rendu ? Seul `stored_fields: "_none_"` le retire (mesure
-    /// contre ES 8.15).
-    pub avec_id: bool,
+    /// Ce que chaque hit transporte : `_source`, `_id`, `_explanation`,
+    /// `matched_queries`.
+    pub rendu: Rendu,
 }
 
 pub struct SearchOutcome {
@@ -731,6 +739,14 @@ pub struct CibleFigee {
     pub searcher: Searcher,
     pub plan: Arc<crate::fetch::Plan>,
     pub hl: Arc<crate::highlight::Plan>,
+    /// La requete elle-meme : `explain` et `matched_queries` la rejouent
+    /// document par document, bien apres que le classement soit decide.
+    pub query: Arc<dyn Query>,
+    pub nommees: Arc<Vec<(String, Box<dyn Query>)>>,
+    /// Rejouer une clause nommee **note** le document, donc peut declencher un
+    /// garde-fou de `function_score` — et une page de `scroll` est rendue bien
+    /// apres la recherche qui l'a ouverte (voir [`build_hit`]).
+    pub incidents: Arc<crate::fonction_score::Incidents>,
 }
 
 /// Tous les documents qui correspondent, dans l'ordre final.
@@ -826,6 +842,9 @@ pub fn balayer(cibles: Vec<Cible>, req: &SearchRequest) -> EsResult<Balayage> {
             searcher: s,
             plan: c.plan,
             hl: c.hl,
+            query: Arc::from(c.query),
+            nommees: c.nommees,
+            incidents: c.incidents,
         })
         .collect();
 
@@ -864,6 +883,9 @@ pub fn rendre_page(
             avec_score.then_some(hit.score),
             trie.then(|| hit.sort.clone()),
             rendu,
+            &*cible.query,
+            &cible.nommees,
+            &cible.incidents,
         )?);
     }
     Ok(out)
@@ -874,10 +896,18 @@ pub fn rendre_page(
 /// `stored_fields` ne rend aucun champ chez ferrite (aucun n'est stocke, voir
 /// [`crate::fetch`]) mais change bel et bien la reponse : il retire `_source`,
 /// et `_none_` retire aussi `_id`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Rendu {
     pub source: SourceFilter,
     pub avec_id: bool,
+    /// `explain: true` : le hit porte alors `_explanation`, et — comme chez ES —
+    /// `_shard` et `_node`, qu'il ne porte pas autrement.
+    pub explique: bool,
+    /// `include_named_queries_score` : `matched_queries` devient un objet
+    /// `{nom: score}` au lieu d'une liste de noms.
+    pub noms_avec_score: bool,
+    /// L'identifiant du noeud, pour `_node`. Un seul noeud ici.
+    pub noeud: String,
 }
 
 /// Les index sur lesquels les agregations se collectent : ceux qui mappent tous
@@ -1010,10 +1040,7 @@ pub fn execute(cibles: &[Cible], req: &SearchRequest) -> EsResult<SearchOutcome>
 
     candidats.sort_by(|a, b| compare(&req.sort_asc, a, b));
 
-    let rendu = Rendu {
-        source: req.source.clone(),
-        avec_id: req.avec_id,
-    };
+    let rendu = req.rendu.clone();
     let mut hits = Vec::new();
     for hit in candidats.into_iter().skip(req.from).take(req.size) {
         let cible = &cibles[hit.cible];
@@ -1030,6 +1057,9 @@ pub fn execute(cibles: &[Cible], req: &SearchRequest) -> EsResult<SearchOutcome>
             score,
             sort_values,
             &rendu,
+            &*cible.query,
+            &cible.nommees,
+            &cible.incidents,
         )?);
     }
     Ok(SearchOutcome {
@@ -1167,6 +1197,9 @@ fn build_hit(
     score: Option<f32>,
     sort_values: Option<Vec<Value>>,
     rendu: &Rendu,
+    query: &dyn Query,
+    nommees: &[(String, Box<dyn Query>)],
+    incidents: &crate::fonction_score::Incidents,
 ) -> EsResult<Value> {
     let doc: tantivy::schema::TantivyDocument = searcher.doc(addr)?;
     let id = {
@@ -1190,6 +1223,13 @@ fn build_hit(
     };
 
     let mut hit = Map::new();
+    // ES ne pose `_shard` et `_node` que quand `explain` est demande : ils
+    // disent de quel shard vient l'arbre qui suit. ferrite n'a qu'un shard et
+    // qu'un noeud, mais la reponse change quand meme de forme.
+    if rendu.explique {
+        hit.insert("_shard".into(), json!(format!("[{index_name}][0]")));
+        hit.insert("_node".into(), json!(rendu.noeud));
+    }
     hit.insert("_index".into(), json!(index_name));
     if rendu.avec_id {
         hit.insert("_id".into(), json!(id));
@@ -1230,6 +1270,31 @@ fn build_hit(
     }
     if let Some(sv) = sort_values {
         hit.insert("sort".into(), Value::Array(sv));
+    }
+    // Une clause nommee est **rejouee, et notee** : elle peut donc rencontrer ce
+    // qu'ES traite en erreur — un `field_value_factor` a score negatif, une
+    // valeur manquante — alors que la recherche principale ne l'a pas
+    // rencontre. C'est exactement ce qui arrive sous un `sort` : personne n'y
+    // demande de score, la requete principale ne calcule rien, et c'est le
+    // `_name` qui rallume le calcul (mesure : sans `sort` les deux serveurs
+    // refusent, avec `sort` les deux repondent, avec `sort` **et** `_name` seul
+    // ES refusait).
+    //
+    // L'incident se relit donc **ici**, et pas apres la recherche : a ce
+    // moment-la il n'existait pas encore. Le laisser tomber rendait 200 la ou
+    // ES rend 400 — un silence, trouve par une plage de controle du fuzzer
+    // (graine 9610018) apres le rebase sur la carte 40.
+    let noms = crate::explain::matched_queries(searcher, nommees, addr, rendu.noms_avec_score);
+    if let Some(e) = incidents.erreur() {
+        return Err(e);
+    }
+    if let Some(m) = noms {
+        hit.insert("matched_queries".into(), m);
+    }
+    if rendu.explique {
+        let arbre = crate::explain::expliquer(searcher, query, addr, &gen.index.schema())
+            .unwrap_or_else(crate::explain::sans_correspondance);
+        hit.insert("_explanation".into(), arbre.json());
     }
     Ok(Value::Object(hit))
 }

@@ -1,14 +1,14 @@
 {
   "schema": 3,
   "mesure": {
-    "date": "2026-08-30T19:40:38Z",
-    "ferrite_sha": "66248e00daa9caa77b0032f9f2b2c7ef6bd0da96",
-    "ferrite_arbre_modifie": false,
+    "date": "2026-09-01T18:35:43Z",
+    "ferrite_sha": "19f248b776c0beced86f35c3029ac57f6f7dac5e",
+    "ferrite_arbre_modifie": true,
     "cible": {
-      "url": "http://127.0.0.1:9200",
+      "url": "http://localhost:9200",
       "moteur": "ferrite",
       "version_annoncee": "8.15.0",
-      "build_hash": "ferrite-0.7.0"
+      "build_hash": "ferrite-0.10.0"
     },
     "suite_rest": {
       "source": "opensearch",
@@ -151,34 +151,34 @@
   },
   "totaux": {
     "cas": 1434,
-    "reussis": 190,
+    "reussis": 192,
     "refuses": 688,
     "sautes": 209,
-    "echecs": 347
+    "echecs": 345
   },
   "taux": {
     "fidelite_perimetre": {
-      "valeur": 0.3538,
-      "numerateur": 190,
+      "valeur": 0.3575,
+      "numerateur": 192,
       "denominateur": 537,
       "definition": "reussis / (reussis + echecs) — la part des cas que ferrite n'a ni refuses ni fait sauter qui repond comme Elasticsearch. Un pis-aller : une partie des echecs sont des refus dont le type d'erreur imite celui d'ES au lieu de porter le marqueur, donc ils gonflent le denominateur alors qu'ils sont hors perimetre. Voir [fidelite_perimetre_declare]"
     },
     "couverture_brute": {
-      "valeur": 0.1325,
-      "numerateur": 190,
+      "valeur": 0.1339,
+      "numerateur": 192,
       "denominateur": 1434,
       "definition": "reussis / total — la part de la suite d'Elastic qui passe, perimetre non declare compris"
     },
     "fidelite_perimetre_declare": {
-      "valeur": 0.8559,
-      "numerateur": 190,
-      "denominateur": 222,
+      "valeur": 0.8571,
+      "numerateur": 192,
+      "denominateur": 224,
       "definition": "reussis / (reussis + regressions + indetermines) — le taux precedent, mais en sortant du denominateur les echecs qui portent sur une capacite declaree refusee dans compat.yaml (le cout du perimetre), et ceux qu'un vrai moteur de reference echoue lui aussi (divergence_moteurs, mesuree — voir [divergences]). Les cas qu'aucune capacite ne reclame restent dedans"
     }
   },
   "perimetre": {
     "regressions": 32,
-    "couts_perimetre": 222,
+    "couts_perimetre": 220,
     "indetermines": 0,
     "divergences_moteurs": 93,
     "echecs_hors_reference": 0,
@@ -206,7 +206,6 @@
       "index.refresh": 2,
       "ingestion.bulk": 2,
       "ingestion.get": 2,
-      "recherche.msearch": 2,
       "reglages.route": 2,
       "alias.remove_index_et_add": 1,
       "index.creation": 1,
@@ -453,9 +452,9 @@
     },
     "explain": {
       "reussis": 0,
-      "refuses": 3,
+      "refuses": 5,
       "sautes": 0,
-      "echecs": 2,
+      "echecs": 0,
       "cas": 5
     },
     "field_caps": {
@@ -872,8 +871,8 @@
       "cas": 14
     },
     "search": {
-      "reussis": 24,
-      "refuses": 108,
+      "reussis": 26,
+      "refuses": 106,
       "sautes": 96,
       "echecs": 50,
       "cas": 278
@@ -3191,29 +3190,15 @@
       "suite": "explain",
       "fichier": "20_source_filtering.yml",
       "cas": "Source filtering",
-      "categorie": "echec",
-      "raison": "[explain] 400 : no handler found for uri [/test_1/_explain/1?_source=false] and method [POST]",
-      "api": "explain",
-      "perimetre": "cout_perimetre",
-      "capacite": "recherche.msearch",
-      "reference": {
-        "categorie": "reussi",
-        "raison": ""
-      }
+      "categorie": "refus",
+      "raison": "ferrite ne supporte pas [_source] sur [_explain] : la route rend l'arbre du score, pas le document (voir docs/compat.md)"
     },
     {
       "suite": "explain",
       "fichier": "30_query_string.yml",
       "cas": "explain with query_string parameters",
-      "categorie": "echec",
-      "raison": "[explain] 400 : no handler found for uri [/test/_explain/1?q=bar&df=field] and method [GET]",
-      "api": "explain",
-      "perimetre": "cout_perimetre",
-      "capacite": "recherche.msearch",
-      "reference": {
-        "categorie": "reussi",
-        "raison": ""
-      }
+      "categorie": "refus",
+      "raison": "ferrite ne supporte pas la recherche par chaine [q] (query_string) sur [_explain] ; utilise le Query DSL dans le corps"
     },
     {
       "suite": "field_caps",
@@ -9874,7 +9859,7 @@
       "fichier": "330_fetch_fields.yml",
       "cas": "Test search rewrite",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas [from] dans [range] ; parametres acceptes : [\"gte\", \"gt\", \"lte\", \"lt\", \"boost\", \"format\"]"
+      "raison": "ferrite ne supporte pas [from] dans [range] ; parametres acceptes : [\"gte\", \"gt\", \"lte\", \"lt\", \"boost\", \"format\", \"time_zone\"]"
     },
     {
       "suite": "search",
@@ -9911,15 +9896,15 @@
       "suite": "search",
       "fichier": "350_matched_queries.yml",
       "cas": "matched queries",
-      "categorie": "refus",
-      "raison": "ferrite ne supporte pas [_name] dans [match] ; parametres acceptes : [\"query\", \"operator\", \"boost\", \"lenient\"]"
+      "categorie": "reussi",
+      "raison": ""
     },
     {
       "suite": "search",
       "fichier": "350_matched_queries.yml",
       "cas": "matched queries with scores",
-      "categorie": "refus",
-      "raison": "ferrite ne supporte pas [include_named_queries_score] : il ne change que la forme de [matched_queries], que ferrite ne rend pas — nommer une clause (["
+      "categorie": "reussi",
+      "raison": ""
     },
     {
       "suite": "search",
@@ -12413,7 +12398,7 @@
       "fichier": "50_filter.yml",
       "cas": "Sorting terms",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas l'ordre [high.doc_count] dans [aggs.category.order] ; cles acceptees : _count, _key (ordonner par une sous-agregation n'est pa"
+      "raison": "ferrite ne supporte pas l'ordre par l'agregation [filter] [high] (dans [aggs.category.order]) : Elasticsearch classe alors les seaux sur son [doc_coun"
     },
     {
       "suite": "search.aggregation",

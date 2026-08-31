@@ -89,17 +89,12 @@ pub async fn search(
         ));
     }
     // Ce parametre (ES 8.13) ne change **que** la forme de `matched_queries` :
-    // un objet `{nom: score}` au lieu d'une liste de noms. Or ferrite ne rend
-    // pas `matched_queries` et refuse `_name`, faute de quoi le nom d'une clause
-    // serait accepte et perdu. Le refuser comme un parametre inconnu le
-    // deguisait en faute de frappe, ce qui est le seul defaut qu'il y avait ici.
-    if p.opt("include_named_queries_score").is_some() {
-        return Err(EsError::unsupported(
-            "ferrite ne supporte pas [include_named_queries_score] : il ne change que la forme de \
-             [matched_queries], que ferrite ne rend pas — nommer une clause ([_name]) est refuse \
-             pour la meme raison (voir docs/compat.md)",
-        ));
-    }
+    // un objet `{nom: score}` au lieu d'une liste de noms. Il a longtemps ete
+    // refuse **en le nommant**, parce que ferrite ne rendait pas
+    // `matched_queries` : servir la forme d'une information absente n'aurait
+    // rien voulu dire. Le nom d'une clause etant maintenant lu, le refus tombe.
+    let noms_avec_score = p.bool_opt("include_named_queries_score")?.unwrap_or(false);
+    let param_explain = p.bool_opt("explain")?;
     p.done()?;
 
     let indices = resoudre(&st.catalog, &index, &opts)?;
@@ -136,6 +131,7 @@ pub async fn search(
             "highlight",
             "timeout",
             "min_score",
+            "explain",
         ],
         "_search",
     )?;
@@ -228,11 +224,38 @@ pub async fn search(
     // question.
     let maintenant = crate::datemath::maintenant();
 
+    // `explain` se lit dans le corps **et** en query string ; comme chez ES, le
+    // parametre l'emporte (mesure).
+    let explique = match param_explain {
+        Some(v) => v,
+        None => match body_obj.get("explain") {
+            Some(Value::Bool(b)) => *b,
+            None | Some(Value::Null) => false,
+            Some(autre) => {
+                return Err(EsError::parsing(format!(
+                    "[_search] : [explain] attend un booleen, pas {autre}"
+                )))
+            }
+        },
+    };
+
+    // Les clauses nommees sont retirees de la requete **avant** toute
+    // traduction : aucun parseur de clause n'a donc a connaitre `_name`, et
+    // chaque clause nommee devient une requete a part, rejouee document par
+    // document (voir [`crate::dsl::extraire_noms`]).
+    let (requete, clauses_nommees) = match body_obj.get("query") {
+        Some(v) => {
+            let (nettoye, noms) = crate::dsl::extraire_noms(v)?;
+            (Some(nettoye), noms)
+        }
+        None => (None, Vec::new()),
+    };
+
     // Aucun index vise : la boucle ci-dessous ne tourne pas, donc rien du corps
     // ne serait lu. Il est valide a part, contre un schema vide.
     if generations.is_empty() {
         valider_sans_index(
-            body_obj.get("query"),
+            requete.as_ref(),
             aggs.as_ref(),
             param_sort.as_deref(),
             body_obj.get("sort"),
@@ -294,7 +317,7 @@ pub async fn search(
             .avec_nom_index(&nom)
             .selon_le_mapping(&gen.mapping)
             .avec_incidents(incidents.clone());
-        let query = match body_obj.get("query") {
+        let query = match requete.as_ref() {
             Some(v) => build_query(v, &ctx),
             None => Ok(Box::new(tantivy::query::AllQuery) as Box<dyn tantivy::query::Query>),
         };
@@ -355,9 +378,22 @@ pub async fn search(
         // Le surlignage se resout sur ce mapping **et** sur cette requete :
         // deux index ne posent pas les memes termes sur le meme champ.
         let hl = std::sync::Arc::new(match &surlignage {
-            Some(d) => crate::highlight::resoudre(d, body_obj.get("query"), &gen)?,
+            Some(d) => crate::highlight::resoudre(d, requete.as_ref(), &gen)?,
             None => crate::highlight::Plan::default(),
         });
+        // Les clauses nommees se traduisent dans **cette** generation, comme la
+        // requete principale : un `Field` tantivy n'a de sens que dans le schema
+        // ou il a ete obtenu. Une clause qu'un index ne sait pas construire (un
+        // champ qu'il ne mappe pas) ne correspond a rien ici, exactement comme
+        // dans la requete.
+        let mut nommees: Vec<(String, Box<dyn tantivy::query::Query>)> = Vec::new();
+        for (n, clause) in &clauses_nommees {
+            match build_query(clause, &ctx) {
+                Ok(q) => nommees.push((n.clone(), q)),
+                Err(e) if e.champ_inconnu.is_some() || e.de_shard => {}
+                Err(e) => return Err(e),
+            }
+        }
         if sort_asc.is_empty() {
             sort_asc = sort.iter().map(|s| s.asc).collect();
         }
@@ -371,6 +407,7 @@ pub async fn search(
             agrege,
             filtres,
             incidents,
+            nommees: std::sync::Arc::new(nommees),
         });
     }
 
@@ -398,8 +435,13 @@ pub async fn search(
         from,
         size,
         sort_asc,
-        source,
-        avec_id: demande.avec_id(),
+        rendu: Rendu {
+            source,
+            avec_id: demande.avec_id(),
+            explique,
+            noms_avec_score,
+            noeud: st.catalog.cluster_uuid.clone(),
+        },
     };
 
     // Avec `?scroll=`, la recherche ne rend pas une page : elle ouvre un
@@ -411,10 +453,7 @@ pub async fn search(
         let echecs_du_scroll = echecs.clone();
         let (page, contexte, aggregations, total, max_score) =
             tokio::task::spawn_blocking(move || -> EsResult<_> {
-                let rendu = Rendu {
-                    source: req.source.clone(),
-                    avec_id: req.avec_id,
-                };
+                let rendu = req.rendu.clone();
                 let b = balayer(cibles, &req)?;
                 let fin = req.size.min(b.hits.len());
                 let page = rendre_page(&b.cibles, &b.hits[..fin], &rendu, b.trie, b.avec_score)?;
@@ -838,8 +877,14 @@ pub async fn count(
     let maintenant = crate::datemath::maintenant();
     // Meme trou qu'en recherche : sans index, la boucle ne tourne pas et la
     // requete n'est jamais lue (voir [`valider_sans_index`]).
+    // `_name` est retire comme sur `_search` : `_count` ne rend pas de hits,
+    // donc pas de `matched_queries`, mais la requete doit rester construisible.
+    let requete = match body_obj.get("query") {
+        Some(v) => Some(crate::dsl::extraire_noms(v)?.0),
+        None => None,
+    };
     if generations.is_empty() {
-        valider_sans_index(body_obj.get("query"), None, None, None, maintenant)?;
+        valider_sans_index(requete.as_ref(), None, None, None, maintenant)?;
     }
     for (nom, _, gen) in &generations {
         let gen = gen.clone();
@@ -850,7 +895,7 @@ pub async fn count(
                 .avec_maintenant(maintenant)
                 .avec_nom_index(nom)
                 .selon_le_mapping(&gen.mapping);
-            match body_obj.get("query") {
+            match requete.as_ref() {
                 Some(v) => build_query(v, &ctx),
                 None => Ok(Box::new(tantivy::query::AllQuery) as Box<dyn tantivy::query::Query>),
             }

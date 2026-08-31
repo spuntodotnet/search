@@ -383,6 +383,15 @@ test écrit ici n'aurait comptés, et ils confirment la règle plutôt qu'ils ne
 l'illustrent : ce qu'une suite figée en 2020 ne pose pas, elle ne peut pas le
 mesurer.
 
+Et une troisième fois, sur les clauses nommées — mais cette fois **les deux
+sources bougent**, et c'est la première : la suite d'Elastic passe de 354 à
+**352** échecs (le domaine `explain` tombe de 3 échecs à 1) pendant que celle
+d'OpenSearch passe de 190 à **192** réussites, en récupérant les deux cas
+d'`include_named_queries_score` qu'elle était seule à porter. Une route
+ancienne (`_explain` existe depuis la 1.x) et un paramètre de 2024, servis par
+la même carte : la première source voit la route, la seconde voit le paramètre,
+et aucune ne voit les deux.
+
 Trois choses en sont sorties qui ne se lisaient dans aucune documentation, et
 que la sonde [`sonde_ecriture_alias.py`](../tests/compat/sonde_ecriture_alias.py)
 fixe désormais (voir ses chiffres dans son en-tête ; le même fichier lancé contre
@@ -402,15 +411,16 @@ qu'elle mesure quelque chose) :
 - le corps **remplace** le chemin, y compris quand le chemin nomme un index qui
   n'existe pas.
 
-Le troisième, `include_named_queries_score`, n'a pas été servi et c'est une
-décision écrite : il ne change **que** la forme de `matched_queries`, qui n'est
-pas rendu, et `_name` est refusé pour ne pas promettre un nom qui ne reviendra
-pas. Le servir à moitié aurait été pire que ne pas le servir. Il est donc refusé
-**en le nommant** — donc rangé en `refus`, comme son voisin `_name` du même
-fichier de test, et plus en régression. Ce n'est pas un déplacement de
-dénominateur : la capacité `dsl.nom_de_clause` était déjà déclarée refusée, et
-c'est le refus générique (« unrecognized parameter ») qui la trahissait en
-déguisant un manque connu en faute de frappe.
+Le troisième, `include_named_queries_score`, n'avait **pas** été servi, et
+c'était une décision écrite : il ne change que la forme de `matched_queries`,
+qui n'était pas rendu, et `_name` était refusé pour ne pas promettre un nom qui
+ne reviendrait pas. Ce refus est **caduc depuis** que les clauses nommées sont
+servies : les deux cas de ce fichier passent maintenant (190 → 192 réussites
+chez OpenSearch), et c'est la seule des trois sources capable de les exercer, le
+paramètre étant postérieur à la 7.10.2 comme à la 2.12. La décision de la
+carte 43 n'était pas fausse pour autant : elle disait « servir la forme d'une
+information absente ne veut rien dire », et elle est tombée le jour où
+l'information a existé — c'est exactement ce qu'un refus daté doit faire.
 
 Un cas change de sens dans l'autre sens, et c'est voulu : « Remove silently when
 all of the specified aliases are non-existing and must_exist is false » passe de

@@ -6,6 +6,7 @@
 pub mod aliases;
 pub mod cluster;
 pub mod docs;
+pub mod explain;
 pub mod fieldcaps;
 pub mod indices;
 pub mod parrequete;
@@ -212,6 +213,11 @@ fn routes(state: SharedState) -> Router {
             post(indices::refresh).get(indices::refresh),
         )
         .route("/{index}/_search", post(search::search).get(search::search))
+        // `_explain` : pourquoi **ce** document, avec ce score.
+        .route(
+            "/{index}/_explain/{id}",
+            post(explain::explain).get(explain::explain),
+        )
         .route(
             "/{index}/_bulk",
             post(docs::bulk_index).put(docs::bulk_index),
@@ -552,6 +558,16 @@ impl Params {
         match self.map.remove(name) {
             None => Ok(default),
             Some(v) => parse_bool(name, &v),
+        }
+    }
+
+    /// Un booleen **facultatif** : `None` dit qu'il n'a pas ete pose du tout,
+    /// ce que `flag` ne distingue pas d'un `false` explicite. `explain` en a
+    /// besoin : le parametre l'emporte sur le corps, mais seulement s'il est la.
+    pub fn bool_opt(&mut self, name: &str) -> EsResult<Option<bool>> {
+        match self.map.remove(name) {
+            None => Ok(None),
+            Some(v) => parse_bool(name, &v).map(Some),
         }
     }
 

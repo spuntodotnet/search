@@ -278,6 +278,7 @@ BRIQUES = {
     "corps.docvalue_fields": "recherche.docvalue_fields",
     "corps.stored_fields": "recherche.stored_fields",
     "corps.highlight": "recherche.highlight",
+    "corps.nom_de_clause": "dsl.nom_de_clause",
     "corps.track_total_hits": "recherche.track_total_hits",
     "corps.aggs": "recherche.aggs",
     "corps.scroll": "recherche.scroll",
@@ -1567,7 +1568,68 @@ class Generateur:
             hl = self._highlight(champs)
             if hl:
                 corps["highlight"] = hl
+        if "query" in corps and rng.random() < 0.3 \
+                and self.brique("corps.nom_de_clause"):
+            self._nommer(corps["query"])
         return corps
+
+    # `_name` se pose **la ou `boost` se pose** : au niveau du champ pour les
+    # clauses qui en citent un, au niveau du corps pour les autres. Ces deux
+    # listes sont celles de `src/dsl.rs`, et une clause absente des deux n'est
+    # simplement jamais nommee.
+    NOM_AU_CORPS = ("match_all", "match_none", "bool", "nested", "dis_max",
+                    "function_score", "boosting", "constant_score", "exists",
+                    "ids", "terms", "multi_match")
+    NOM_AU_CHAMP = ("term", "match", "match_phrase", "match_phrase_prefix",
+                    "prefix", "wildcard", "regexp", "fuzzy", "range")
+
+    def _nommer(self, noeud, deja=None):
+        """Pose des `_name` au hasard dans une requete deja generee.
+
+        Ce que la brique exerce n'est pas « le nom est accepte » — le binaire
+        d'avant refusait `_name` en 400, n'importe quelle forme l'aurait fait
+        rougir. C'est **ce que `matched_queries` rend** : quelles clauses sont
+        citees pour quel document (une clause sous un `must_not` ne l'est pas),
+        et dans quel ordre (celui d'une table de hachage de Java, voir
+        `src/explain.rs`). Les noms sont tires dans un alphabet large expres :
+        c'est la seule facon de tomber parfois sur deux noms du **meme seau**,
+        le cas ou ferrite ne classe pas comme ES — et il porte son predicat.
+        """
+        rng = self.rng
+        deja = deja if deja is not None else set()
+        if isinstance(noeud, list):
+            for e in noeud:
+                self._nommer(e, deja)
+            return
+        if not isinstance(noeud, dict) or len(noeud) != 1:
+            if isinstance(noeud, dict):
+                for v in noeud.values():
+                    self._nommer(v, deja)
+            return
+        cle, corps = next(iter(noeud.items()))
+        if not isinstance(corps, dict):
+            return
+
+        def neuf():
+            while True:
+                n = "".join(rng.choice("abcdefghijklmnopqrstuvwxyz")
+                            for _ in range(rng.randint(1, 3)))
+                if n not in deja:
+                    deja.add(n)
+                    return n
+
+        if cle in self.NOM_AU_CORPS:
+            if rng.random() < 0.5:
+                corps["_name"] = neuf()
+            for v in corps.values():
+                self._nommer(v, deja)
+        elif cle in self.NOM_AU_CHAMP:
+            for spec in corps.values():
+                # Seule une valeur ecrite en objet peut porter un nom : le
+                # raccourci `{"term": {"a": "x"}}` n'a pas de place ou le
+                # mettre, et ES le refuse comme un second champ.
+                if isinstance(spec, dict) and rng.random() < 0.5:
+                    spec["_name"] = neuf()
 
     def _highlight(self, champs):
         """Un bloc `highlight` : ce qui est marque, et surtout **ou le fragment
@@ -2651,7 +2713,38 @@ def _refus_declare(e, _requete=None, ecarts=()):
 # Chaque entree : (nom, predicat). Un predicat qui declare un second parametre
 # recoit aussi la requete — certaines divergences se reconnaissent a ce qu'on a
 # demande, pas a ce qui est revenu.
+def _seau_java(nom, capacite):
+    h = 0
+    for c in str(nom):
+        h = (h * 31 + ord(c)) & 0xFFFFFFFF
+    return ((h ^ (h >> 16)) & 0xFFFFFFFF) & (capacite - 1)
+
+
+def _ordre_des_noms(e, _requete=None):
+    """`matched_queries` dans un autre ordre, mais la **meme suite de seaux**.
+
+    ES rend ses clauses nommees dans l'ordre d'iteration d'une `HashMap` de
+    Java. ferrite reproduit l'ordre des seaux (mesure contre deux conteneurs) ;
+    ce qu'il ne reproduit pas est l'ordre a l'interieur d'un seau, qui depend
+    chez ES de l'historique des deux tables chainees qu'un nom traverse. Le
+    predicat n'accepte donc que ca : memes noms, et meme suite de seaux. Deux
+    listes qui different autrement — un nom en trop, un nom manquant, deux
+    seaux echanges — restent un ecart."""
+    if "matched_queries" not in str(e.get("chemin", "")):
+        return False
+    a, b = e.get("a"), e.get("b")
+    if not isinstance(a, list) or not isinstance(b, list):
+        return False
+    if sorted(a) != sorted(b):
+        return False
+    cap = 16
+    while len(a) > 0.75 * cap:
+        cap *= 2
+    return [_seau_java(x, cap) for x in a] == [_seau_java(x, cap) for x in b]
+
+
 DIVERGENCES_ASSUMEES = [
+    ("ordre des noms dans un meme seau (matched_queries)", _ordre_des_noms),
     ("float sur 32 bits", _meme_float32),
     ("refus declare", _refus_declare),
     ("somme de dates, a la tolerance des nombres", _somme_de_dates),
@@ -2799,6 +2892,19 @@ def compare_recherche(st_a, ra, st_b, rb, tri_score=()):
     ca = {h["_id"]: nettoie_hit(h, tri_score) for h in ha.get("hits", [])}
     cb = {h["_id"]: nettoie_hit(h, tri_score) for h in hb.get("hits", [])}
     for cle in sorted(set(ca) & set(cb)):
+        # `matched_queries` se compare **en bloc**, pas element par element :
+        # l'ordre de cette liste est celui d'une table de hachage de Java, et
+        # le predicat qui absorbe la seule divergence declaree (deux noms d'un
+        # meme seau) a besoin des deux listes entieres pour se prononcer. Un
+        # ecart pose sur `matched_queries[0]` ne porte qu'une chaine, donc
+        # aucun predicat ne peut le juger.
+        ma = ca[cle].pop("matched_queries", None)
+        mb = cb[cle].pop("matched_queries", None)
+        if ma != mb:
+            ecart(ecarts, f"hits[{cle}].matched_queries", ma, mb,
+                  f"hits[{cle}].matched_queries : "
+                  f"{json.dumps(ma, default=str)[:70]} / "
+                  f"{json.dumps(mb, default=str)[:70]}")
         arbre_egal(ca[cle], cb[cle], f"hits[{cle}]", ecarts)
 
     if ("aggregations" in ra) != ("aggregations" in rb):

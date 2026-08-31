@@ -221,6 +221,9 @@ async fn filtrer_les_index(
     filtre: &Value,
 ) -> EsResult<Vec<std::sync::Arc<crate::engine::FerriteIndex>>> {
     let maintenant = crate::datemath::maintenant();
+    // Meme geste que sur `_search` : `_name` ne change rien a ce que
+    // `index_filter` designe, mais il doit etre retire avant la traduction.
+    let filtre = &crate::dsl::extraire_noms(filtre)?.0;
     let mut prets = Vec::new();
     for idx in indices {
         let gen = idx.current();

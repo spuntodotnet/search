@@ -77,7 +77,15 @@ pub async fn validate(
     // la validation du noeud coordinateur, et elle ne depend d'aucun mapping.
     let requete = match &body {
         Value::Null => None,
-        Value::Object(o) => match lire_corps(o) {
+        // `_name` est retire ici comme sur `_search` : il ne change pas ce que
+        // la requete vaut, et le laisser dans l'arbre le ferait prendre pour un
+        // parametre inconnu — donc rendre `valid: false` sur une requete qu'ES
+        // declare valide. Trouve par le fuzzer, le jour ou on lui a donne une
+        // brique pour les clauses nommees.
+        Value::Object(o) => match lire_corps(o).and_then(|q| match q {
+            Some(v) => crate::dsl::extraire_noms(&v).map(|(n, _)| Some(n)),
+            None => Ok(None),
+        }) {
             Ok(q) => q,
             Err(e) => return Ok(invalide(explain, &e)),
         },

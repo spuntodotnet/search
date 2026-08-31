@@ -341,7 +341,12 @@ impl Weight for NestedWeight {
                 "document {doc} hors de la requete nested"
             )));
         }
-        Ok(Explanation::new("NestedQuery", scorer.score()))
+        let mut explication = Explanation::new("NestedQuery", scorer.score());
+        // Le pre-filtre est ce qui a note le document : c'est lui qu'on lit.
+        if let Ok(sous) = self.interne.explain(reader, doc) {
+            explication.add_detail(sous);
+        }
+        Ok(explication)
     }
 }
 

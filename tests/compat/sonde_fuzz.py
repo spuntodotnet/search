@@ -345,6 +345,13 @@ def surligne(r):
             for h in r.get("hits", {}).get("hits", [])}
 
 
+def noms(r):
+    """Le bloc `matched_queries` de chaque hit, par identifiant — **dans son
+    ordre**, qui est celui d'une table de hachage de Java."""
+    return {h["_id"]: h.get("matched_queries")
+            for h in r.get("hits", {}).get("hits", [])}
+
+
 def statut(r):
     """Pour un cas ou seule la frontiere accepte/refuse se compare.
 
@@ -1071,6 +1078,64 @@ CAS = [
       "query": {"function_score": {"query": {"term": {"u": "a"}},
                                    "weight": 2, "min_score": 0}},
       "highlight": {"fields": {"u": {}}}}, surligne),
+    # -- clauses nommees ----------------------------------------------------
+    (SCORES, DOCS_SCORES, "un bool must_not match_all ne nomme rien",
+     "ES reecrit un `bool` dont un `must_not` est un `match_all` **nu** en "
+     "`match_none`, et il le fait au niveau du QueryBuilder — donc avant de "
+     "traduire ses clauses, donc aucun de leurs `_name` n'est enregistre. "
+     "ferrite rejouait chaque clause nommee seule et rendait le nom d'un "
+     "`match_all` qui, chez ES, n'existe plus",
+     {"size": 10, "_source": False, "sort": [{"k": "asc"}],
+      "query": {"dis_max": {"queries": [
+          {"term": {"k": {"value": "a", "_name": "vu"}}},
+          {"bool": {"_name": "efface", "must_not": [
+              {"match_all": {"_name": "aussi_efface"}},
+              {"term": {"k": {"value": "b", "_name": "encore"}}}]}}]}}},
+     noms),
+    (SCORES, DOCS_SCORES, "la meme chose enveloppee : le nom revient",
+     "la reecriture porte sur la clause **exacte** : un `match_all` place "
+     "sous un `constant_score` n'est pas un `MatchAllQueryBuilder`, et ES y "
+     "nomme bien ses clauses. C'est ce cas-la qui empeche de traiter le "
+     "precedent comme « un match_all quelque part sous un must_not »",
+     {"size": 10, "_source": False, "sort": [{"k": "asc"}],
+      "query": {"dis_max": {"queries": [
+          {"term": {"k": {"value": "a", "_name": "vu"}}},
+          {"bool": {"must_not": [{"constant_score": {
+              "filter": {"match_all": {"_name": "garde"}}}}]}}]}}},
+     noms),
+    (SCORING, DOCS_SCORING, "un _name rallume le scoring sous un sort",
+     "une clause nommee est **rejouee, et notee**. Sous un `sort`, la requete "
+     "principale ne calcule aucun score — c'est donc le `_name` qui rallume le "
+     "calcul, et le garde-fou du `field_value_factor` (score negatif) tombe. "
+     "ferrite rejouait bien la clause mais **perdait l'incident**, releve apres "
+     "la recherche alors qu'il naissait a la restitution : 200 la ou ES rend "
+     "400",
+     {"size": 10, "_source": False, "sort": [{"u": "asc"}],
+      "query": {"function_score": {
+          "query": {"match_all": {}}, "_name": "fs",
+          "field_value_factor": {"field": "f", "factor": 2, "missing": 1}}}},
+     cause),
+    (SCORING, DOCS_SCORING, "le meme _name pose ailleurs ne rallume rien",
+     "le garde-fou ne doit pas devenir une regle plus large qu'ES : un `_name` "
+     "pose sur une **autre** clause ne fait pas noter le `function_score`, et "
+     "les deux serveurs repondent 200",
+     {"size": 10, "_source": False, "sort": [{"u": "asc"}],
+      "query": {"bool": {
+          "must": [{"function_score": {
+              "query": {"match_all": {}},
+              "field_value_factor": {"field": "f", "factor": 2, "missing": 1}}}],
+          "filter": [{"exists": {"field": "u", "_name": "ailleurs"}}]}}},
+     cause),
+    (SCORES, DOCS_SCORES, "un must_not nomme qui correspond se nomme quand meme",
+     "chaque clause nommee est rejouee **seule** : une clause placee sous un "
+     "`must_not` est citee dans un document qu'elle satisfait, meme si c'est "
+     "une autre branche qui a ramene ce document",
+     {"size": 10, "_source": False, "sort": [{"k": "asc"}],
+      "query": {"dis_max": {"queries": [
+          {"term": {"k": {"value": "a", "_name": "vu"}}},
+          {"bool": {"must_not": [
+              {"term": {"k": {"value": "a", "_name": "nie"}}}]}}]}}},
+     noms),
 ]
 
 # Ce que ferrite refuse **expres** plutot que de rendre un resultat faux. ES sait

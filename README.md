@@ -455,6 +455,22 @@ référence : 58 476 points rejoués par `cargo test`, sans Docker
 ([`genere_scoring.py`](tests/compat/genere_scoring.py)). `random_score` et
 `script_score` sont refusés en les nommant.
 
+**Savoir pourquoi un document sort** — « laquelle de mes clauses a retenu
+celui-ci ? », « pourquoi ce score ? », « pourquoi celui-là ne sort pas ? » —
+passe par les trois mécanismes d'Elasticsearch : `_name` sur n'importe quelle
+clause avec `matched_queries` dans chaque hit (et leurs scores sous
+`include_named_queries_score`), `explain: true` dans le corps, et la route
+`GET|POST /{index}/_explain/{id}`. L'arbre rendu reproduit la **forme** et les
+**valeurs** de celui d'ES, pas ses phrases : celles de Lucene sont du texte, et
+les recopier masquerait justement les deux nœuds où les deux moteurs ne
+mesurent pas la même chose. C'est ce qui permet de chiffrer la seule divergence
+de scoring déclarée du projet : sur les cinq statistiques du BM25, `n`, `freq`
+et `dl` sont identiques, et `N` et `avgdl` ne le sont pas — Lucene les calcule
+sur les documents *qui ont le champ*, tantivy sur tous. Conséquence mesurée :
+jusqu'à **43 %** d'écart relatif sur le `_score` quand une partie du corpus n'a
+pas le champ interrogé, et **zéro** sur un champ que tous les documents portent
+([`sonde_explain.py --ecart`](tests/compat/sonde_explain.py)).
+
 **Ce qui n'y est pas encore** : `search_after`, `_msearch`,
 `_reindex`, `query_string`, les templates de composants
 (`_component_template`), les champs calculés par un script Painless
@@ -473,7 +489,7 @@ réelles** — la documentation de référence d'ES 8.15, les tracks Rally d'Ela
 les tests des clients officiels et le code de 184 dépôts open source — la
 question posée est « celle-ci passerait-elle **entièrement** ? », parce qu'une
 requête supportée à 90 % est une requête qui échoue. Réponse : **96,4 % des
-requêtes trouvées dans du code d'application**, 40,4 % des exemples de la
+requêtes trouvées dans du code d'application**, 40,6 % des exemples de la
 documentation, 47,2 % des tracks de benchmark. L'écart entre ces trois nombres
 est le résultat ; la méthode, les sources et les biais sont dans
 [`docs/usage.md`](docs/usage.md), le corpus est publié avec.

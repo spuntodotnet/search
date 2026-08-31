@@ -1,14 +1,14 @@
 {
   "schema": 3,
   "mesure": {
-    "date": "2026-08-30T19:39:46Z",
-    "ferrite_sha": "5987528906989793ed8acb18fc6953b06624e669",
+    "date": "2026-09-01T18:35:27Z",
+    "ferrite_sha": "19f248b776c0beced86f35c3029ac57f6f7dac5e",
     "ferrite_arbre_modifie": false,
     "cible": {
-      "url": "http://127.0.0.1:9200",
+      "url": "http://localhost:9200",
       "moteur": "ferrite",
       "version_annoncee": "8.15.0",
-      "build_hash": "ferrite-0.7.0"
+      "build_hash": "ferrite-0.10.0"
     },
     "suite_rest": {
       "source": "elasticsearch",
@@ -147,15 +147,15 @@
   "totaux": {
     "cas": 1173,
     "reussis": 172,
-    "refuses": 476,
+    "refuses": 478,
     "sautes": 171,
-    "echecs": 354
+    "echecs": 352
   },
   "taux": {
     "fidelite_perimetre": {
-      "valeur": 0.327,
+      "valeur": 0.3282,
       "numerateur": 172,
-      "denominateur": 526,
+      "denominateur": 524,
       "definition": "reussis / (reussis + echecs) — la part des cas que ferrite n'a ni refuses ni fait sauter qui repond comme Elasticsearch. Un pis-aller : une partie des echecs sont des refus dont le type d'erreur imite celui d'ES au lieu de porter le marqueur, donc ils gonflent le denominateur alors qu'ils sont hors perimetre. Voir [fidelite_perimetre_declare]"
     },
     "couverture_brute": {
@@ -173,7 +173,7 @@
   },
   "perimetre": {
     "regressions": 36,
-    "couts_perimetre": 318,
+    "couts_perimetre": 316,
     "indetermines": 0,
     "divergences_moteurs": 0,
     "echecs_hors_reference": 0,
@@ -203,7 +203,6 @@
       "index.refresh": 2,
       "index.suppression": 2,
       "ingestion.bulk": 2,
-      "recherche.msearch": 2,
       "reglages.destructive_requires_name": 2,
       "reglages.route": 2,
       "alias.remove_index_et_add": 1,
@@ -446,9 +445,9 @@
     },
     "explain": {
       "reussis": 0,
-      "refuses": 3,
+      "refuses": 5,
       "sautes": 0,
-      "echecs": 3,
+      "echecs": 1,
       "cas": 6
     },
     "field_caps": {
@@ -2618,21 +2617,15 @@
       "suite": "explain",
       "fichier": "20_source_filtering.yml",
       "cas": "Source filtering",
-      "categorie": "echec",
-      "raison": "[explain] 400 : no handler found for uri [/test_1/_explain/1?_source=false] and method [POST]",
-      "api": "explain",
-      "perimetre": "cout_perimetre",
-      "capacite": "recherche.msearch"
+      "categorie": "refus",
+      "raison": "ferrite ne supporte pas [_source] sur [_explain] : la route rend l'arbre du score, pas le document (voir docs/compat.md)"
     },
     {
       "suite": "explain",
       "fichier": "30_query_string.yml",
       "cas": "explain with query_string parameters",
-      "categorie": "echec",
-      "raison": "[explain] 400 : no handler found for uri [/test/_explain/1?q=bar&df=field] and method [GET]",
-      "api": "explain",
-      "perimetre": "cout_perimetre",
-      "capacite": "recherche.msearch"
+      "categorie": "refus",
+      "raison": "ferrite ne supporte pas la recherche par chaine [q] (query_string) sur [_explain] ; utilise le Query DSL dans le corps"
     },
     {
       "suite": "explain",
@@ -8157,7 +8150,7 @@
       "fichier": "330_fetch_fields.yml",
       "cas": "Test search rewrite",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas [from] dans [range] ; parametres acceptes : [\"gte\", \"gt\", \"lte\", \"lt\", \"boost\", \"format\"]"
+      "raison": "ferrite ne supporte pas [from] dans [range] ; parametres acceptes : [\"gte\", \"gt\", \"lte\", \"lt\", \"boost\", \"format\", \"time_zone\"]"
     },
     {
       "suite": "search",
@@ -9673,7 +9666,7 @@
       "fichier": "50_filter.yml",
       "cas": "Sorting terms",
       "categorie": "refus",
-      "raison": "ferrite ne supporte pas l'ordre [high.doc_count] dans [aggs.category.order] ; cles acceptees : _count, _key (ordonner par une sous-agregation n'est pa"
+      "raison": "ferrite ne supporte pas l'ordre par l'agregation [filter] [high] (dans [aggs.category.order]) : Elasticsearch classe alors les seaux sur son [doc_coun"
     },
     {
       "suite": "search.aggregation",

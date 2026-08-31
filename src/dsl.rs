@@ -1713,7 +1713,17 @@ fn bool_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     // `bool` etait combine a autre chose, sans que rien ne le signale.
     let purement_negatif = !has_required && should_count == 0;
     if purement_negatif {
-        clauses.insert(0, (Occur::Must, Box::new(AllQuery)));
+        // Le score constant se pose **sur la clause implicite**, pas autour du
+        // booleen : c'est ce que fait ES, et son arbre d'explication le montre
+        // (`sum of:` → `match on required clause` → `*:*`). Poser l'enveloppe
+        // dehors donnait le meme score et un arbre d'une profondeur decalee.
+        clauses.insert(
+            0,
+            (
+                Occur::Must,
+                Box::new(ConstScoreQuery::new(Box::new(AllQuery), 0.0)),
+            ),
+        );
         has_required = true;
     }
 
@@ -1724,16 +1734,13 @@ fn bool_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         return Ok(Box::new(EmptyQuery));
     }
 
-    let mut inner: Box<dyn Query> = if min_should > 0 {
+    let inner: Box<dyn Query> = if min_should > 0 {
         Box::new(BooleanQuery::with_minimum_required_clauses(
             clauses, min_should,
         ))
     } else {
         Box::new(BooleanQuery::new(clauses))
     };
-    if purement_negatif {
-        inner = Box::new(ConstScoreQuery::new(inner, 0.0));
-    }
     boost(inner, obj.get("boost"))
 }
 
@@ -2720,6 +2727,198 @@ fn boost(query: Box<dyn Query>, value: Option<&Value>) -> EsResult<Box<dyn Query
 fn as_object<'a>(v: &'a Value, clause: &str) -> EsResult<&'a Map<String, Value>> {
     v.as_object()
         .ok_or_else(|| EsError::parsing(format!("[{clause}] doit etre un objet JSON")))
+}
+
+// ---------------------------------------------------------------------------
+// `_name` : nommer une clause
+// ---------------------------------------------------------------------------
+
+/// Les clauses ou `_name` est une cle **du corps** de la clause.
+const NOM_AU_CORPS: &[&str] = &[
+    "match_all",
+    "match_none",
+    "bool",
+    "nested",
+    "dis_max",
+    "function_score",
+    "boosting",
+    "constant_score",
+    "exists",
+    "ids",
+    "terms",
+    "multi_match",
+    "has_child",
+    "has_parent",
+    "parent_id",
+];
+
+/// Les clauses ou `_name` est une cle de l'objet **du champ**.
+///
+/// Ce sont exactement celles dont le corps est un `{champ: valeur}` : `_name` y
+/// voisine avec `boost`, et une valeur ecrite en raccourci
+/// (`{"term": {"k": "a"}}`) ne peut donc pas etre nommee — c'est ce que fait ES,
+/// qui rend alors « [term] query doesn't support multiple fields » (mesure).
+const NOM_AU_CHAMP: &[&str] = &[
+    "term",
+    "match",
+    "match_phrase",
+    "match_phrase_prefix",
+    "prefix",
+    "wildcard",
+    "regexp",
+    "fuzzy",
+    "range",
+];
+
+/// Retire les `_name` d'une requete et rend, a cote de la requete nettoyee, la
+/// liste des clauses nommees — chacune sous la forme d'une requete a part
+/// entiere.
+///
+/// C'est ce que fait Elasticsearch : `matched_queries` n'est pas lu dans l'arbre
+/// booleen du resultat, chaque clause nommee est **rejouee seule** contre le
+/// document (mesure : un `should` sous un `must_not` qui correspond n'apparait
+/// pas, un `filter` nomme apparait). Le prix de cette forme est de traduire la
+/// clause deux fois ; le gain est qu'aucun des vingt-cinq parseurs de clause
+/// n'a a connaitre `_name`.
+///
+/// L'ordre de la liste est celui d'**apparition** de la clause dans la requete,
+/// les enfants avant leur parent — l'ordre dans lequel ES enregistre les siennes
+/// (`doToQuery` construit ses enfants avant de se nommer). Il ne sert qu'a
+/// departager deux noms qui tombent dans le meme seau, voir
+/// [`crate::explain::ordre_es`].
+///
+/// Un nom pose deux fois ne compte qu'une : ES range ses clauses dans une table,
+/// donc **la derniere gagne** (mesure).
+pub fn extraire_noms(query: &Value) -> EsResult<(Value, Vec<(String, Value)>)> {
+    let mut noms: Vec<(String, Value)> = Vec::new();
+    let nettoye = descendre(query, &mut noms)?;
+    // La derniere occurrence d'un nom l'emporte, sans changer la place des
+    // autres : on parcourt a l'envers en gardant la premiere vue.
+    let mut vus = std::collections::HashSet::new();
+    let mut garde: Vec<(String, Value)> = Vec::new();
+    for (nom, clause) in noms.into_iter().rev() {
+        if vus.insert(nom.clone()) {
+            garde.push((nom, clause));
+        }
+    }
+    garde.reverse();
+    Ok((nettoye, garde))
+}
+
+fn lire_nom(v: &Value) -> EsResult<String> {
+    match v {
+        Value::String(s) => Ok(s.clone()),
+        // ES accepte toute valeur simple et la rend en texte.
+        Value::Number(n) => Ok(n.to_string()),
+        Value::Bool(b) => Ok(b.to_string()),
+        _ => Err(EsError::parsing(
+            "[_name] attend un nom, pas un objet ni un tableau",
+        )),
+    }
+}
+
+fn descendre(v: &Value, noms: &mut Vec<(String, Value)>) -> EsResult<Value> {
+    match v {
+        Value::Object(o) => {
+            if o.len() == 1 {
+                let (cle, corps) = o.iter().next().expect("un seul element");
+                if let Value::Object(b) = corps {
+                    if NOM_AU_CORPS.contains(&cle.as_str()) {
+                        // Un `bool` dont un `must_not` est un `match_all` nu ne
+                        // nomme **rien**, pas meme ses autres clauses : ES le
+                        // reecrit en `match_none` au niveau du QueryBuilder,
+                        // donc avant de traduire ses enfants, et aucun de leurs
+                        // noms n'est enregistre. Mesure contre ES 8.15, trouvee
+                        // par le fuzzer (graine 9110050) ; c'est la meme
+                        // reecriture que le surlignage connait deja.
+                        let avant = noms.len();
+                        let mut sortie = Map::new();
+                        let mut nom = None;
+                        for (k, val) in b {
+                            if k == "_name" {
+                                nom = Some(lire_nom(val)?);
+                                continue;
+                            }
+                            sortie.insert(k.clone(), descendre(val, noms)?);
+                        }
+                        if cle == "bool" && nie_tout(b) {
+                            noms.truncate(avant);
+                            nom = None;
+                        }
+                        return Ok(marquer(cle, sortie, nom, noms));
+                    }
+                    if NOM_AU_CHAMP.contains(&cle.as_str()) {
+                        let mut sortie = Map::new();
+                        let mut nom = None;
+                        for (champ, spec) in b {
+                            match spec {
+                                Value::Object(s) if s.contains_key("_name") => {
+                                    let mut sans = s.clone();
+                                    let brut = sans.remove("_name").expect("presente");
+                                    nom = Some(lire_nom(&brut)?);
+                                    sortie.insert(champ.clone(), Value::Object(sans));
+                                }
+                                autre => {
+                                    sortie.insert(champ.clone(), autre.clone());
+                                }
+                            }
+                        }
+                        return Ok(marquer(cle, sortie, nom, noms));
+                    }
+                }
+            }
+            let mut sortie = Map::new();
+            for (k, val) in o {
+                sortie.insert(k.clone(), descendre(val, noms)?);
+            }
+            Ok(Value::Object(sortie))
+        }
+        Value::Array(a) => Ok(Value::Array(
+            a.iter()
+                .map(|x| descendre(x, noms))
+                .collect::<EsResult<Vec<_>>>()?,
+        )),
+        autre => Ok(autre.clone()),
+    }
+}
+
+/// Un `bool` dont un `must_not` est un `match_all` nu : il ne correspond a rien,
+/// et ES le sait avant meme de traduire ses clauses.
+///
+/// La verification porte sur la clause **exacte** : `{"constant_score":
+/// {"filter": {"match_all": {}}}}` sous un `must_not` ne declenche pas la
+/// reecriture, et ES y nomme bien ses clauses (mesure).
+fn nie_tout(corps: &Map<String, Value>) -> bool {
+    for cle in ["must_not", MUST_NOT_CAMEL] {
+        let Some(v) = corps.get(cle) else { continue };
+        let liste: Vec<&Value> = match v {
+            Value::Array(a) => a.iter().collect(),
+            autre => vec![autre],
+        };
+        if liste.iter().any(|c| {
+            c.as_object()
+                .and_then(|o| single_key(o, "bool").ok())
+                .is_some_and(|(k, _)| k == "match_all")
+        }) {
+            return true;
+        }
+    }
+    false
+}
+
+fn marquer(
+    cle: &str,
+    corps: Map<String, Value>,
+    nom: Option<String>,
+    noms: &mut Vec<(String, Value)>,
+) -> Value {
+    let mut clause = Map::new();
+    clause.insert(cle.to_string(), Value::Object(corps));
+    let clause = Value::Object(clause);
+    if let Some(n) = nom {
+        noms.push((n, clause.clone()));
+    }
+    clause
 }
 
 fn single_key<'a>(obj: &'a Map<String, Value>, clause: &str) -> EsResult<(&'a str, &'a Value)> {
