@@ -521,7 +521,13 @@ TYPES_DEFAUT = "type.autres"
 ANALYZERS = {"standard": "analyzer.standard", "simple": "analyzer.simple",
              "whitespace": "analyzer.whitespace", "keyword": "analyzer.keyword",
              "stop": "analyzer.stop", "english": "analyzer.english",
-             "french": "analyzer.french"}
+             "french": "analyzer.french", "snowball": "analyzer.snowball",
+             "finnish": "analyzer.finnish"}
+# Les douze analyzers de langue servis comptent pour **une** capacite, celle
+# sous laquelle ils sont declares.
+ANALYZERS.update({l: "analyzer.langues" for l in (
+    "danish", "dutch", "german", "hungarian", "italian", "norwegian",
+    "portuguese", "romanian", "russian", "spanish", "swedish", "turkish")})
 # Les analyzers de langue d'ES, nommes un par un. Tout autre nom est celui d'un
 # analyzer **declare par l'index** : `settings.analysis` l'a pose dans une
 # requete precedente, que ce corps-ci ne porte pas. On ne peut donc pas trancher
@@ -533,10 +539,8 @@ ANALYZERS = {"standard": "analyzer.standard", "simple": "analyzer.simple",
 # pour un analyzer que l'index venait de declarer et que ferrite sert.
 ANALYZERS_LANGUE = {
     "arabic", "armenian", "basque", "bengali", "brazilian", "bulgarian", "catalan", "cjk",
-    "czech", "danish", "dutch", "estonian", "finnish", "galician", "german", "greek", "hindi",
-    "hungarian", "indonesian", "irish", "italian", "latvian", "lithuanian", "norwegian",
-    "persian", "portuguese", "romanian", "russian", "serbian", "sorani", "spanish", "swedish",
-    "thai", "turkish", "snowball", "pattern", "fingerprint",
+    "czech", "estonian", "galician", "greek", "hindi", "indonesian", "irish", "latvian",
+    "lithuanian", "persian", "serbian", "sorani", "thai", "pattern", "fingerprint",
 }
 
 CHAMPS = {"fields": "type.multi_fields", "ignore_above": "type.ignore_above",

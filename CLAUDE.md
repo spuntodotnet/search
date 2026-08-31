@@ -294,21 +294,22 @@ développement, pas de CI).
 | `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (212/213, 0 écart réel) |
 | `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (45/46 ; le seul écart est `_cluster/health`, toujours vert par choix) |
 | `tests/compat/diff_aggs.py` | les mêmes agrégations ? (73/73, `filter` comprise, ce qu'un bucket **vide** doit porter, et les deux compteurs d'un `terms` **après** filtrage) |
-| `tests/compat/diff_analyzers.py` | les mêmes tokens, **aux mêmes positions et aux mêmes offsets** ? (38 batteries × 217 textes : 7 analyzers intégrés, 21 déclarations de n-grammes, les 5 analyzers de Wagtail, et les 5 classes de `token_chars` demandées caractère par caractère — toutes identiques) |
+| `tests/compat/diff_analyzers.py` | les mêmes tokens, **aux mêmes positions et aux mêmes offsets** ? (51 batteries × 217 textes : 20 analyzers intégrés dont les 12 de langue, 21 déclarations de n-grammes, les 5 analyzers de Wagtail, et les 5 classes de `token_chars` demandées caractère par caractère — toutes identiques) |
+| `tests/compat/sonde_langues.py` | et sur un corpus que nous n'avons **pas** écrit ? Les vocabulaires du projet Snowball (BSD-3-Clause, licence vérifiée, 20 913 à 96 325 mots par langue, **563 000** en tout) posés aux deux serveurs : **43/43 batteries identiques**, `--calibrer` 40/40 contre deux ES. `--ecart` imprime le tableau que la carte demandait — la chaîne d'ES arrêtée après chaque étape, donc **d'où** vient l'écart — et ne demande qu'ES, donc il vaut même sous un refus. `--mots-vides` régénère `src/mots_vides.rs` depuis le jar de Lucene du conteneur, en le vérifiant contre lui dans les deux sens |
 | `tests/compat/diff_datemath.py` | les mêmes documents sur une **borne de date** — `now`, `now-1d/d`, `2026-03-15\|\|+1M`, et l'arrondi selon le côté de la borne ? (276/276, messages d'erreur compris ; 45/276 avant le chantier) |
 | `tests/compat/diff_highlight.py` | les mêmes **fragments surlignés** — pas leur nombre, leur contenu exact, balises comprises ? (233 questions, **221 identiques au caractère près, 11 refus assumés, 0 écart** ; `--calibrer` : 233/233 contre deux ES). Le même fichier lancé contre le ferrite d'avant rend **0/233** |
-| `tests/compat/diff_motifs.py` | les mêmes documents sur un **motif** — `regexp`, `wildcard`, `prefix`, `match_phrase_prefix` ? (101/101) |
+| `tests/compat/diff_motifs.py` | les mêmes documents sur un **motif** — `regexp`, `wildcard`, `prefix`, `match_phrase_prefix` ? (110/110, dont les neuf formes du `|` sans branche gauche) |
 | `tests/compat/diff_multi_index.py` | `index=["a","b"]`, `logs-*`, les alias : **les mêmes index visés, fusionnés pareil** ? (87/87, 0 écart, plus aucune divergence assumée ; `--calibrer` : 87/87 contre deux ES) |
 | `tests/compat/sonde_facettes.py` | ce qui sépare un `terms` d'une **facette** : `include` / `exclude` (expression régulière de Lucene, liste exacte, partition) et l'**ordre par sous-agrégation**. Compare le **bloc `terms` entier** — seaux dans leur ordre, valeurs des sous-agrégations, `sum_other_doc_count` et `doc_count_error_upper_bound` : **145/170 identiques, 25 refus assumés, 0 écart** (`--calibrer` : 170/170 contre deux ES). Le même fichier lancé contre le ferrite d'avant rend **30/170** |
 | `tests/compat/sonde_msm.py` | les mêmes documents sur un **`minimum_should_match`** — entier, pourcentage, formes négatives, conditions `3<90%`, et sous un `nested` ? (53/53) |
 | `tests/compat/sonde_tri.py` | les mêmes documents **dans le même ordre** sur un `missing`, un `mode` ou un `unmapped_type` — et la même chose dans le tableau `sort` de chaque hit ? (224 questions, **220 identiques, 4 refus assumés, 0 écart** ; `--calibrer` : 224/224 contre deux ES). Le même fichier lancé contre le ferrite d'avant rend **17/224** |
-| `tests/compat/releve_mots_vides.py` | quelle est **vraiment** la liste de mots vides d'un analyzer d'ES ? |
+| `tests/compat/releve_mots_vides.py` | quelle est **vraiment** la liste de mots vides d'un analyzer d'ES ? Le relevé par candidats — exact *pour les candidats proposés*, et c'est sa limite : il avait manqué `celà` en français. Les listes livrées viennent maintenant de `sonde_langues.py --mots-vides` |
 | `tests/compat/sonde_fields.py` | **ce que la réponse transporte** — `fields`, `docvalue_fields`, `stored_fields`. Compare le **hit entier** (bloc `fields` clé par clé, présence de `_source`, présence de `_id`) : 103/110 identiques, 3 refus assumés écrits, 4 différences d'ordre assumées, 0 écart. Refuse de tourner si elle ne trouve pas les deux serveurs |
 | `tests/compat/sonde_par_requete.py` | **modifier ou purger par requête** — `_delete_by_query`, `_update_by_query`. Compare les compteurs de la réponse **et l'état laissé derrière** (documents restants, `_version`, `_source`) : 62/74 identiques, 12 refus assumés écrits, 0 écart. Les conflits sont provoqués pour de vrai, par une écriture non rafraîchie. Refuse de tourner sans ses deux cibles |
 | `tests/compat/sonde_alias.py` | les mêmes alias sur une **expression de noms** — liste, joker, exclusion, `_all` — et le même 404 ? (21/21, corps et message compris) |
 | `tests/compat/sonde_ecriture_alias.py` | et pour **écrire** un alias ? Les sept URL de `put_alias` (le nom de l'alias, celui de l'index, ou les deux, viennent du corps — qui **remplace** le chemin), `must_exist`, et les deux règles de 404 qui ne sont pas la même : `must_exist: true` se vérifie **par index visé**, le 404 par défaut est **global**. Compare le statut, le message **et l'état laissé derrière** : **57/65 identiques, 7 refus assumés, 1 message non comparé, 0 écart** — et **14/65 contre le ferrite d'avant**. `--calibrer` : 64/65 contre deux ES |
 | `tests/compat/sonde_vide.py` | sur un serveur **sans aucun index**, la même chose qu'ES — et rien accepté en silence ? (28/28 identiques, 0 refus muet ; les deux serveurs doivent être vides, c'est l'état mesuré) |
-| `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **1 000 cas, 46 327 requêtes, 0 divergence de la carte** — les 11 signalements sont des `500` **antérieurs** sur `range`, `histogram` et un `bool` profond, rejoués graine par graine contre le binaire d'avant. Sur quatre plages de graines dont **aucune** n'a servi à corriger : celle sur laquelle on itère ne mesure plus rien, et le générateur ayant changé, les plages du passage précédent ne mesurent plus les mêmes cas. Les mêmes plages contre le **binaire d'avant** rendent 892 divergences : une brique de générateur qui ne fait pas rougir le binaire d'avant ne mesure rien. 21 défauts silencieux trouvés au premier passage, 30 de plus depuis — dont **dix-sept** sur le seul surlignage, tous invisibles aux 233 questions écrites à la main. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (50 cas, 2 230 requêtes, 0 divergence réelle) |
+| `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **750 cas, 34 864 requêtes, 0 divergence** sur trois plages de graines dont **aucune** n'a servi à corriger : celle sur laquelle on itère ne mesure plus rien, et le générateur ayant changé, les plages du passage précédent ne mesurent plus les mêmes cas. Les mêmes plages contre le **binaire d'avant** rendent 181 divergences : une brique de générateur qui ne fait pas rougir le binaire d'avant ne mesure rien. 21 défauts silencieux trouvés au premier passage, 31 de plus depuis — dont **dix-sept** sur le seul surlignage, tous invisibles aux 233 questions écrites à la main, et le dernier sur le `|` de `regexp`, sans rapport avec la carte qui l'a sorti. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (50 cas, 2 230 requêtes, 0 divergence réelle) |
 | `tests/compat/sonde_fuzz.py` | les écarts trouvés par le fuzzing, **figés** hors d'une graine (95/95, plus 12 refus assumés) |
 | `tests/compat/appli_reelle.py` | **un logiciel écrit par d'autres démarre-t-il ?** Clone une vraie application à une révision figée, vérifie que rien n'y a bougé, lance sa **propre** suite d'intégration contre un vrai ES puis contre ferrite, et relève tout le trafic HTTP au passage. Gitea v1.27.2 : **34/34 des deux côtés**. Wagtail v7.1 : **83/83 des deux côtés**, et plus un seul refus que ferrite prononce là où ES répond. Voir [`docs/application.md`](docs/application.md) |
 | `tests/compat/tests_clients.py` | **la suite de tests du client officiel passe-t-elle ?** Pas « un client se connecte » : les cas que l'équipe du client a écrits, joués par **son** lanceur, dans **son** langage. Trois clients, licence Apache-2.0 vérifiée **dans le clone**, révision figée, arbre vérifié intact. `go-elasticsearch` v8.13.0 : 28/30 contre un vrai ES, 16/30 contre ferrite, chaque écart rattaché à une capacité. `elasticsearch-py` v8.15.0 : 71/84 *(origine)* · 45/84 *(adapté)* / 43/84 avec le nettoyage de remplacement, **0/84 telle quelle** — sa fixture nettoie par seize routes x-pack, et les deux chiffres sont publiés. Et le **cycle de vie du client**, joué par le client publié : 9/9 en Python, 7/7 en Go, 7/7 en JavaScript, des deux côtés. Voir [`docs/clients.md`](docs/clients.md) |
@@ -402,12 +403,29 @@ bouger**, pas après.
   obligatoire. Deux passes suffisent.
 - **Les stemmers de Lucene sont portés** dans `src/stemmer.rs`, parce que celui
   de tantivy (Snowball) n'est celui d'aucun des deux : `french` et `english`
-  sont mesurés identiques à ES sur 210 textes. Un analyzer n'est **jamais**
+  sont mesurés identiques à ES sur 217 textes. Un analyzer n'est **jamais**
   livré sous le nom d'ES tant qu'il n'est pas mesuré identique. Les analyzers
   **sur mesure**
   (`settings.analysis`), eux, sont supportés : ils se composent de briques que
   ferrite reproduit à l'identique (`standard`, `lowercase`, `asciifolding`,
   `stop`, `ngram`, `edge_ngram`).
+- **Mais « le stemmer de tantivy n'est pas celui de Lucene » était faux pour la
+  plupart des langues**, et c'est la seule décision de ce fichier qu'une mesure
+  a **renversée**. Elle tenait par analogie : elle est vraie du français et de
+  l'anglais, dont ES n'emploie pas Snowball, et personne n'avait posé la
+  question aux douze autres. Sur les vocabulaires du projet Snowball, le
+  Snowball de tantivy est **identique à l'octet** à celui de Lucene sur huit
+  langues — 0 écart sur 45 670 mots néerlandais, 96 325 turcs, 87 642 roumains.
+  Ce qui manquait était ailleurs : les listes de mots vides, quatre filtres
+  (normalisation allemande, élision, apostrophe et minuscules turques), les
+  stemmers **légers** de Savoy pour l'allemand, l'espagnol, l'italien et le
+  portugais, et deux règles qui vivent *dans* le stemmer (le prélude russe
+  ё → е que `rust-stemmers` n'applique pas, et le dictionnaire de quatre mots
+  que `DutchAnalyzer` impose). Le finnois reste refusé, **avec son chiffre** :
+  13 écarts sur 84 399 mots. La leçon n'est pas « il fallait porter les
+  langues » : c'est qu'un refus qu'on ne rechiffre jamais devient une croyance,
+  et que celui-ci a tenu des mois sur une raison qui n'avait jamais été mesurée
+  là où elle s'appliquait.
 - **Une phrase est une suite de positions, pas une suite de termes**
   ([`src/dsl.rs`](src/dsl.rs)). Tant qu'un analyzer posait un terme par
   position, la distinction ne se voyait pas ; un filtre à n-grammes pose **tous
@@ -865,6 +883,43 @@ bouger**, pas après.
   mot si long ; il a fallu qu'un `copy_to` fasse entrer un `keyword` de 300
   caractères dans un champ `text` pour qu'un tokenizer le voie. **Une brique
   nouvelle ne mesure pas qu'elle-même** — deuxième fois de suite.
+- **Un `|` sans branche gauche n'est pas une alternation vide.** L'analyseur de
+  `regexp` de Lucene lit **toujours** un atome après un `|`, et rend un
+  caractère **littéral** devant ce qu'il ne reconnaît pas : `|a` cherche la
+  chaîne `|a`, `a||b` cherche `a` ou `|b`, et `a|` échoue. ferrite en faisait
+  des branches vides, donc `|a` rendait les documents **vides** en plus de ceux
+  qui portent `a`, en 200. Défaut antérieur, sans rapport avec la carte qui l'a
+  sorti, et sur un motif qu'aucun test écrit ici n'avait posé — le corpus de
+  `diff_motifs.py` porte pourtant `a|b` comme valeur exprès. C'est le fuzzer,
+  sur une plage de graines neuves (8210220), qui l'a trouvé, et il l'a trouvé
+  par le **statut** (400 chez ES, 200 chez ferrite) avant qu'on découvre que les
+  documents rendus étaient faux aussi.
+- **Un dictionnaire de quatre mots dans un corpus de 45 670.**
+  `DutchAnalyzer` pose un `StemmerOverrideFilter` avant son stemmer : `ei` →
+  `eier`, `kind` → `kinder`, `fiets` et `bromfiets` laissés intacts. Quatre
+  mots. Le premier passage, sur 3 000 mots tirés au sort, n'en voyait aucun et
+  annonçait « identique » ; c'est le vocabulaire **entier** qui les a sortis. La
+  règle du geste 5 a donc une seconde moitié : élargir le corpus ne suffit pas
+  s'il reste un échantillon — pour une règle qui porte sur des mots **nommés**,
+  seule l'exhaustivité mesure quelque chose. Même famille : le prélude ё → е de
+  l'algorithme russe, 112 mots sur 49 785, invisible sur 3 000.
+- **Un paramètre peut vouloir l'inverse de ce que son nom dit.**
+  `articles_case` du filtre `elision` n'est pas « les articles sont sensibles à
+  la casse » : il est passé tel quel à un `CharArraySet` en guise de
+  `ignoreCase`. Son défaut (`false`) compare donc **exactement**, et
+  `articles_case: true` élide `L'anno` comme `l'anno`. ferrite l'avait lu dans
+  le sens du nom, et la sonde l'a retourné en un cas. Un booléen dont on croit
+  connaître le sens se mesure comme le reste.
+- **Le repli en minuscules de Rust n'est pas celui de Java.** 32 caractères :
+  les 31 caractères *titre* d'Unicode (`ǅ`, `ᾈ`…), que le `LowerCaser` de
+  tantivy laisse passer parce qu'il ne replie que ce que `is_uppercase`
+  accepte — et Lt n'est pas Uppercase ; et le `İ` turc, dont le repli **long**
+  de Rust fait deux caractères (`i` + point suscrit) là où `Character.
+  toLowerCase` de Java n'en rend qu'un. Défaut antérieur, sur `standard` comme
+  sur tout analyzer sur mesure, en 200 et depuis toujours : aucun texte du
+  corpus n'avait de caractère titre. Trouvé en cherchant les minuscules
+  **turques**, c'est-à-dire à côté. C'est la troisième fois qu'une brique
+  nouvelle sort un défaut qui ne la concerne pas.
 - **`max_expansions` est un budget par position, pas par terme.**
   `MultiPhrasePrefixQuery` remplit **un seul** ensemble en parcourant les termes
   de la position, et s'arrête dès qu'il est plein. Tant qu'un analyzer posait un
@@ -1067,6 +1122,16 @@ dans [`docs/application.md`](docs/application.md), et il vaut plus que le
 chiffre : le blocage est tombé d'un cran à chaque carte, et **à chaque fois le
 suivant était un refus de trop** plutôt qu'un manque.
 
+**Chercher dans une autre langue** ne demande plus de contourner : douze
+analyzers de langue (`danish`, `dutch`, `german`, `hungarian`, `italian`,
+`norwegian`, `portuguese`, `romanian`, `russian`, `spanish`, `swedish`,
+`turkish`) et `snowball` sont mesurés identiques à ES sur **563 000 mots** de
+vocabulaire écrits par d'autres. Leurs briques se posent aussi une à une dans un
+`settings.analysis` — `stemmer` (19 noms), `stop` par nom de langue, `elision`,
+`apostrophe`, `german_normalization`, `porter_stem` — ce qui est la forme sous
+laquelle un vrai mapping les emploie : le corpus d'usage cite `stemmer` 47 fois
+et `stop` 53. Le finnois reste refusé, chiffré.
+
 **L'autocomplétion « au fil de la frappe »** est complète : `ngram` et
 `edge_ngram` — tokenizer et filtre, déclarés dans `settings.analysis` et bornés
 par `index.max_ngram_diff` — travaillent à l'**indexation**, et
@@ -1181,7 +1246,8 @@ Ce qui reste, par ordre de gêne pour un projet réel : `rest_total_hits_as_int`
 plurielle de `filter`), `time_zone` sur un `range` (refusé explicitement), les
 alias **filtrés** (`filter`, refusé explicitement), `?stored_fields=` sur
 `GET /{index}/_doc/{id}` (le geste se fait par `_search`), et les analyzers des
-autres langues.
+langues non latines ou slaves (`arabic`, `czech`, `greek`, `thai`… — ils
+demandent des filtres de normalisation qui ne sont pas portés).
 
 Le seul échec silencieux connu du projet est **corrigé** : une recherche qui ne
 visait **aucun index** (cluster vide, ou motif sans correspondance) rendait 200

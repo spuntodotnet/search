@@ -347,6 +347,7 @@ version = "0.7.0"
 dependencies = [
  "axum",
  "flate2",
+ "rust-stemmers",
  "serde",
  "serde_json",
  "tantivy",

@@ -27,7 +27,17 @@ from elasticsearch import ApiError, Elasticsearch
 FERRITE = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:9200"
 ES = sys.argv[2] if len(sys.argv) > 2 else "http://localhost:9201"
 
-ANALYZERS = ["standard", "simple", "whitespace", "keyword", "stop", "english", "french"]
+ANALYZERS = ["standard", "simple", "whitespace", "keyword", "stop", "english", "french",
+             # Les analyzers de langue, poses sur le meme corpus francais et
+             # anglais que les autres : ce n'est **pas** ce que
+             # `sonde_langues.py` mesure (elle, c'est le vocabulaire de la
+             # langue, 20 000 a 96 000 mots). Ici on leur donne du texte qui
+             # n'est pas le leur — elisions, accents, mots longs, chiffres —
+             # parce que c'est la que les bords se croisent : la normalisation
+             # allemande sur un mot francais, l'apostrophe turque sur `l'oeuvre`.
+             "snowball", "danish", "dutch", "german", "hungarian", "italian",
+             "norwegian", "portuguese", "romanian", "russian", "spanish",
+             "swedish", "turkish"]
 
 # Du francais courant, avec ce qui fait trebucher : elisions, accents, traits
 # d'union, chiffres, pluriels irreguliers, majuscules.

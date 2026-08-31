@@ -125,28 +125,48 @@ avec sa raison, et `--tout` les imprime.
 
 ## La mesure du jour
 
-Le générateur a changé — deux briques de plus, **le filtre de termes d'un
-`terms`** (`include` / `exclude`, dans les trois formes d'ES) et **l'ordre par
-sous-agrégation** — donc **toutes les graines ont changé de sens** : la campagne
-précédente ne mesurait plus les mêmes cas, et ses chiffres ne sont pas
-reconduits. Ce tableau est celui de ce passage, sur des plages jamais
-utilisées.
+Le générateur a changé — une brique de plus, **les analyzers de langue**
+(`analyzer.langues` et `analyzer.snowball`, tirés sur un champ `text` comme
+`analyzer` ou comme `search_analyzer`) — donc **toutes les graines ont changé de
+sens** : la campagne précédente ne mesurait plus les mêmes cas, et ses chiffres
+ne sont pas reconduits. Ce tableau est celui de ce passage, sur des plages
+jamais utilisées.
 
 ```
-graines 7100000+       250 cas, 11 621 requêtes, 3 panics antérieurs
-graines 7200000+       250 cas, 11 475 requêtes, 6 panics antérieurs
-graines 7300000+       250 cas, 11 638 requêtes, 2 panics antérieurs
-graines 7400000+       250 cas, 11 593 requêtes, 0 divergence
+graines 8210000+       250 cas, 11 638 requêtes, 0 divergence
+graines 8220000+       250 cas, 11 586 requêtes, 0 divergence
+graines 8230000+       250 cas, 11 640 requêtes, 0 divergence
                      ------------------------------------------------
-                     1 000 cas,  46 327 requêtes, 0 divergence de la carte
-                                                 (11 panics antérieurs)
+                       750 cas,  34 864 requêtes, 0 divergence
 
 les mêmes plages, contre le binaire d'AVANT la carte
-                     1 000 cas,  46 377 requêtes, 892 divergences
-                                 (233 + 205 + 210 + 244)
+                       750 cas,  26 559 requêtes, 181 divergences
+                                 (57 + 56 + 68)
 
 étalonnage ES vs ES     50 cas,   2 230 requêtes, 0 divergence réelle
 ```
+
+La ligne du milieu dit que la brique mesure quelque chose, et elle se lit avec
+la même réserve que la précédente : les douze analyzers étaient **refusés**
+avant, donc chaque mapping qui en tire un rendait 400 d'un côté et 200 de
+l'autre. Ce 181 mesure que la brique est posée souvent, pas qu'elle a trouvé
+181 défauts. L'écart de requêtes entre les deux colonnes (34 864 contre 26 559)
+vient de là : un refus au mapping coupe toutes les requêtes de suite d'un cas.
+
+**Et le vrai contenu de ce passage est ailleurs.** À 300 cas sur la plage
+8210000, une graine (8210220) a sorti un défaut qui n'a **rien à voir** avec les
+analyzers : un `include` de `terms` valant `(leger\ edition\ ecole|)` rendait
+200 chez ferrite et 400 chez ES. La branche vide était le sujet — et en
+cherchant pourquoi, on a trouvé pire que le statut. Chez Lucene, le `|` n'a pas
+de branche vide du tout : son analyseur lit **toujours** un atome après un `|`,
+et rend un caractère **littéral** devant ce qu'il ne reconnaît pas. Donc `|a`
+cherche la chaîne `|a`, `a||b` cherche `a` ou `|b`, et `a|` échoue en 400.
+ferrite en faisait de vraies alternations à branche vide : `|a` rendait les
+documents **vides** en plus de ceux qui portent `a`, en 200 et sans un mot.
+Défaut antérieur à cette carte, sur un motif qu'aucun des 101 motifs écrits à la
+main n'avait posé — alors que leur corpus porte `a|b` comme **valeur** exprès.
+Corrigé, et figé : `diff_motifs.py` passe de 101 à 110 motifs, dont les neuf
+formes du `|` sans branche gauche.
 
 La ligne du milieu est celle qui compte, et c'est la seule qui dit que les
 briques mesurent quelque chose. **La règle du dépôt appliquée à un générateur :
@@ -158,6 +178,9 @@ mesure vraiment, c'est que les briques sont posées souvent — pas qu'elles ont
 trouvé 892 défauts. Le nombre de requêtes diffère un peu entre les deux colonnes
 (46 377 contre 46 327) parce que le générateur enchaîne selon ce que le serveur
 répond : un refus coupe les requêtes de suite d'un cas.
+
+> Ce paragraphe-ci décrit le passage **précédent** (celui des facettes) ; les
+> chiffres du passage courant sont plus haut.
 
 La colonne de droite se lit en deux temps, et le second est le vrai contenu de
 ce passage. Les **onze** signalements sont tous des `500` de ferrite sur du

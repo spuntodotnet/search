@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "mesure": {
-    "date": "2026-08-30T01:22:09Z",
+    "date": "2026-08-31T08:09:16Z",
     "ferrite_version": "0.7.0",
-    "ferrite_sha": "44c407b7cf505bcbb09940d559220801cf87531b",
+    "ferrite_sha": "b64367ee8c261498c875d9307c8e307f07fb7752",
     "ferrite_arbre_modifie": true,
     "outil": "./tests/compat/measure_container.sh --json docs/container.json",
     "tours_demarrage": 5,
@@ -40,21 +40,21 @@
       ],
       "plateforme": "linux/amd64",
       "couches": 1,
-      "digest_manifeste": "sha256:85d2acd34d7fd4bf826ca7a91b3c2fd1ee341b134f5ce287e5879486ee9522fd",
-      "compressee_octets": 4094895,
+      "digest_manifeste": "sha256:59e6a88d35012dea94b6afef82a804058dbe55529ed326969f4f255443d53d03",
+      "compressee_octets": 4149171,
       "couches_nues": [],
-      "decompressee_octets": 9699328,
+      "decompressee_octets": 9818112,
       "entrypoint": "/ferrite",
-      "binaire_octets": 9697408,
-      "demarrage_ms": 165,
+      "binaire_octets": 9816192,
+      "demarrage_ms": 171,
       "demarrage_tours_ms": [
-        237,
-        165,
+        196,
+        171,
         164,
-        165,
-        168
+        175,
+        164
       ],
-      "rss_repos_ko": 4728
+      "rss_repos_ko": 4444
     },
     {
       "nom": "elasticsearch",
@@ -79,15 +79,15 @@
       "decompressee_octets": 1266139136,
       "entrypoint": "/bin/tini",
       "binaire_octets": null,
-      "demarrage_ms": 19281,
+      "demarrage_ms": 17350,
       "demarrage_tours_ms": [
-        19903,
-        19779,
-        19281,
-        19178,
-        18977
+        17399,
+        17350,
+        17188,
+        16907,
+        17928
       ],
-      "rss_repos_ko": 1061156
+      "rss_repos_ko": 1051736
     }
   ]
 }

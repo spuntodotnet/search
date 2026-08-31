@@ -311,7 +311,13 @@ BRIQUES = {
 # sort sur un champ `text` exerce celui-la, pas « les analyzers » en general.
 BRIQUES.update({f"analyzer.{a}": f"analyzer.{a}" for a in
                 ("standard", "simple", "whitespace", "keyword", "stop",
-                 "english", "french")})
+                 "english", "french", "snowball")})
+# Les douze analyzers de langue comptent pour **une** capacite : c'est ainsi
+# qu'ils sont declares, et les separer ferait croire a douze mesures la ou il y
+# en a une. Le corpus de mots reste francais — ce n'est pas leur langue, et
+# c'est exactement l'interet : `sonde_langues.py` les mesure sur leur
+# vocabulaire, le fuzzer les mesure la ou ils croisent le reste du moteur.
+BRIQUES.update({"analyzer.langues": "analyzer.langues"})
 # Les formes de date math que le generateur pose vraiment sur une borne.
 BRIQUES.update({"datemath.decalage": "datemath.decalage",
                 "datemath.arrondi": "datemath.arrondi"})
@@ -335,7 +341,9 @@ MOTS = ["appareil", "modele", "version", "ecran", "batterie", "capteur",
 CLES = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "", "AlphA",
         "avec espace", "tiret-bas", "point.non", "accentue-e"]
 ANALYZERS = ["standard", "simple", "whitespace", "keyword", "stop", "english",
-             "french"]
+             "french", "snowball"]
+LANGUES = ["danish", "dutch", "german", "hungarian", "italian", "norwegian",
+           "portuguese", "romanian", "russian", "spanish", "swedish", "turkish"]
 FORMATS_DATE = [None, "yyyy-MM-dd", "yyyy-MM-dd HH:mm:ss", "epoch_millis",
                 "strict_date_optional_time"]
 # Les bornes exactes de chaque type entier d'ES : c'est la ou un moteur se
@@ -565,17 +573,21 @@ class Generateur:
         self.brique("champ.text")
         m = {"type": "text"}
         if self.rng.random() < 0.4 and self.brique("champ.analyzer"):
-            a = self.rng.choice(ANALYZERS + self.analyzers_declares)
+            a = self.rng.choice(ANALYZERS + LANGUES + self.analyzers_declares)
             if a in ANALYZERS:
                 self.brique(f"analyzer.{a}")
+            elif a in LANGUES:
+                self.brique("analyzer.langues")
             m["analyzer"] = a
             # Un analyzer different a la requete : c'est ce qu'un champ a
             # n-grammes reclame, et c'est le seul endroit ou l'indexation et la
             # recherche ne decoupent pas pareil.
             if self.rng.random() < 0.4 and self.brique("champ.search_analyzer"):
-                s = self.rng.choice(ANALYZERS + self.analyzers_declares)
+                s = self.rng.choice(ANALYZERS + LANGUES + self.analyzers_declares)
                 if s in ANALYZERS:
                     self.brique(f"analyzer.{s}")
+                elif s in LANGUES:
+                    self.brique("analyzer.langues")
                 m["search_analyzer"] = s
         champs = [Champ(nom, "text", m)]
         if self.rng.random() < 0.5 and self.brique("champ.multi_fields"):

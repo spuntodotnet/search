@@ -16,8 +16,8 @@ milliers de documents et répondre à des requêtes `bool` + `terms` + un tri.
 |  | Elasticsearch 8.15.0 | ferrite |
 |---|---|---|
 | Image compressée, telle qu'un registre la sert | 669,1 Mo | **4,1 Mo** (`scratch`) |
-| RSS au repos | 1,09 Go | **4,8 Mo** |
-| Démarrage | 19,3 s | **165 ms** (`docker run` → premier `GET /` servi) |
+| RSS au repos | 1,08 Go | **4,6 Mo** |
+| Démarrage | 17,4 s | **171 ms** (`docker run` → premier `GET /` servi) |
 | Runtime | JVM + tuning heap | un binaire statique |
 <!-- /chiffres-conteneur:apercu -->
 
@@ -156,11 +156,11 @@ de CI échoue si le tableau et le fichier divergent.
 <!-- chiffres-conteneur:tableau — généré depuis docs/container.json par `python3 tests/compat/chiffres_conteneur.py --injecte`, ne pas éditer à la main -->
 | | Elasticsearch 8.15.0 | ferrite 0.7.0 | × |
 |---|---|---|---|
-| **Image compressée**, telle qu'un registre la sert | 669,1 Mo | **4,1 Mo** | **×163** |
-| Image décompressée, ce que son système de fichiers occupe | 1 266,1 Mo | 9,7 Mo | ×131 |
-| Le binaire seul | — | 9,7 Mo | |
-| Mémoire au repos (RSS) | 1,09 Go | **4,8 Mo** | **×224** |
-| Démarrage (`docker run` → premier `GET /` servi) | 19,3 s | **165 ms** (médiane de 5 ; l'essentiel est la création du conteneur par Docker) | ×117 |
+| **Image compressée**, telle qu'un registre la sert | 669,1 Mo | **4,1 Mo** | **×161** |
+| Image décompressée, ce que son système de fichiers occupe | 1 266,1 Mo | 9,8 Mo | ×129 |
+| Le binaire seul | — | 9,8 Mo | |
+| Mémoire au repos (RSS) | 1,08 Go | **4,6 Mo** | **×237** |
+| Démarrage (`docker run` → premier `GET /` servi) | 17,4 s | **171 ms** (médiane de 5 ; l'essentiel est la création du conteneur par Docker) | ×101 |
 <!-- /chiffres-conteneur:tableau -->
 
 L'image finale est un `scratch` qui ne contient que le binaire statique — d'où
@@ -181,7 +181,7 @@ définition, ce qui n'était pas le cas jusqu'ici (voir juste en dessous).
 <!-- chiffres-conteneur:unites — généré depuis docs/container.json par `python3 tests/compat/chiffres_conteneur.py --injecte`, ne pas éditer à la main -->
 Les « Mo » sont des mégaoctets décimaux (10⁶ octets), les mêmes que ceux
 qu'affiche `docker images` ; en Mio (2²⁰) la première ligne se lirait
-638,1 contre 3,9.
+638,1 contre 4,0.
 <!-- /chiffres-conteneur:unites -->
 
 ### Correction : les 8,2 Mo annoncés jusqu'ici
@@ -217,12 +217,12 @@ $ ./tests/compat/measure_container.sh ferrite:0.7.0
 docker serveur   : 29.7.2 (magasin d'images : overlayfs)
 
 == image : ferrite:0.7.0  (linux/amd64, 1 couche(s))
-compressee (registre) :     4 094 895 octets      4,1 Mo   <- ce qu'un `docker pull` telecharge
-decompressee (disque) :     9 699 328 octets      9,7 Mo   <- ce que le systeme de fichiers de l'image occupe
-binaire /ferrite      :     9 697 408 octets      9,7 Mo   <- le fichier que le conteneur execute
+compressee (registre) :     4 149 171 octets      4,1 Mo   <- ce qu'un `docker pull` telecharge
+decompressee (disque) :     9 818 112 octets      9,8 Mo   <- ce que le systeme de fichiers de l'image occupe
+binaire /ferrite      :     9 816 192 octets      9,8 Mo   <- le fichier que le conteneur execute
 
-demarrage        : 165 ms (docker run -> premier GET / servi, mediane de 5 tours)
-RSS au repos     : 4 728 Ko (4,8 Mo)
+demarrage        : 171 ms (docker run -> premier GET / servi, mediane de 5 tours)
+RSS au repos     : 4 444 Ko (4,6 Mo)
 ```
 <!-- /chiffres-conteneur:sortie -->
 
@@ -332,9 +332,24 @@ en sortir : [`docs/tantivy-patch.md`](docs/tantivy-patch.md).
 
 Les **analyzers** `standard`, `simple`, `whitespace`, `keyword`, `stop`,
 `english` et `french` sont vérifiés identiques à ceux d'ES sur 217 textes —
-**positions et offsets compris** — et `_analyze` permet de le constater. Les
-autres langues restent **refusées** : leur stemmer n'est pas porté, et porter le
-nom d'ES en indexant autre chose changerait silencieusement les résultats.
+**positions et offsets compris** — et `_analyze` permet de le constater.
+
+Les **analyzers de langue** aussi, désormais : `danish`, `dutch`, `german`,
+`hungarian`, `italian`, `norwegian`, `portuguese`, `romanian`, `russian`,
+`spanish`, `swedish`, `turkish` et `snowball`. Ils étaient refusés au motif que
+« le stemmer de tantivy n'est pas celui de Lucene » ; la mesure a montré que
+c'est **faux pour huit d'entre eux** — zéro écart sur les vocabulaires du projet
+Snowball, 563 000 mots que personne n'a écrits ici. Ce qui manquait était
+ailleurs : les listes de mots vides, quatre filtres (normalisation allemande,
+élision, apostrophe et minuscules turques) et les stemmers **légers** que
+l'allemand, l'espagnol, l'italien et le portugais d'ES posent à la place de
+Snowball. Le tableau de l'écart, étape par étape, est dans
+[`docs/compat.md`](docs/compat.md).
+
+Le **finnois** reste refusé, et il est chiffré : le stemmer disponible s'écarte
+de celui de Lucene sur **13 mots des 84 399** du vocabulaire finnois (0,015 %),
+tous des emprunts à diacritique étranger. Un analyzer n'est jamais livré sous le
+nom d'ES tant qu'il n'est pas mesuré identique.
 
 Un index peut aussi **déclarer son analyse** (`settings.analysis`) : ses propres
 analyzers `custom`, ses tokenizers et ses filtres. Les **n-grammes** (`ngram`,
@@ -470,7 +485,7 @@ Cet inventaire est aussi ce qui **borne un tirage au sort**. Un fuzzer
 différentiel ([`tests/compat/fuzz_vs_es.py`](tests/compat/fuzz_vs_es.py)) génère
 des mappings, des documents et des requêtes dans le périmètre que `compat.yaml`
 déclare, les pose à ferrite **et** à un vrai Elasticsearch 8.15, et compare les
-réponses champ par champ : **1 000 cas, 46 327 requêtes, 0 divergence ouverte**
+réponses champ par champ : **750 cas, 34 864 requêtes, 0 divergence ouverte**
 (un ordre que BM25 sépare et qu'ES rend ex æquo) sur quatre plages de graines,
 dont **aucune** n'a servi à corriger — et **5 divergences** sur les mêmes
 plages contre le binaire d'avant la dernière carte, ce qui est la seule chose

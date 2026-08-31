@@ -36,11 +36,11 @@
     }
   },
   "totaux": {
-    "capacites": 200,
-    "supporte": 94,
+    "capacites": 203,
+    "supporte": 96,
     "partiel": 61,
-    "refuse": 45,
-    "poids_renseignes": 142
+    "refuse": 46,
+    "poids_renseignes": 145
   },
   "capacites": [
     {
@@ -506,7 +506,7 @@
       "nom_texte": "standard (défaut)",
       "etat": "supporte",
       "poids": 0.2,
-      "detail": "identique à ES sur les 210 textes"
+      "detail": "identique à ES sur les 217 textes"
     },
     {
       "id": "analyzer.simple",
@@ -563,14 +563,42 @@
       "detail": "identique — stemmer léger de Savoy, élision, mots vides relevés"
     },
     {
-      "id": "analyzer.autres_langues",
+      "id": "analyzer.snowball",
       "table": "analyzers",
-      "nom": "`german`, `spanish`, `snowball` et les autres langues",
-      "nom_texte": "german, spanish, snowball et les autres langues",
+      "nom": "`snowball`",
+      "nom_texte": "snowball",
+      "etat": "supporte",
+      "poids": 0.0,
+      "detail": "identique — `standard` + minuscules + mots vides anglais + Snowball **anglais** (`porter2`), qui n'est pas le Porter de `english` : `quickly` rend `quick` ici et `quickli` là"
+    },
+    {
+      "id": "analyzer.langues",
+      "table": "analyzers",
+      "nom": "`danish`, `dutch`, `german`, `hungarian`, `italian`, `norwegian`, `portuguese`, `romanian`, `russian`, `spanish`, `swedish`, `turkish`",
+      "nom_texte": "danish, dutch, german, hungarian, italian, norwegian, portuguese, romanian, russian, spanish, swedish, turkish",
+      "etat": "supporte",
+      "poids": 0.0,
+      "detail": "identiques à ES sur les vocabulaires du projet Snowball (BSD-3-Clause, 20 913 à 96 325 mots par langue, écrits par d'autres) — **positions et offsets compris**, `tests/compat/sonde_langues.py`. Le refus reposait sur « le stemmer de tantivy n'est pas celui de Lucene » : la mesure a montré que c'est faux pour 8 de ces 12 langues (0 écart), et que le reste tenait aux mots vides, à quatre filtres absents et aux stemmers **légers** que l'allemand, l'espagnol, l'italien et le portugais d'ES posent à la place de Snowball"
+    },
+    {
+      "id": "analyzer.finnish",
+      "table": "analyzers",
+      "nom": "`finnish`",
+      "nom_texte": "finnish",
       "etat": "refuse",
       "poids": 0.0,
       "motif": "divergence_moteur",
-      "raison": "leur stemmer n'est pas porté, et livrer sous le nom d'ES un analyzer qui indexe autre chose changerait silencieusement les résultats d'un mapping existant."
+      "raison": "le stemmer finnois de `rust-stemmers` s'écarte de celui de Lucene sur **13 mots des 84 399** du vocabulaire finnois de Snowball (0,015 %) : il coupe la voyelle finale d'un emprunt à diacritique étranger là où l'algorithme la garde (`garcía` rend `garcí` chez lui et `garcía` chez ES ; de même `bundesstraße`, `españa`, `musée`). Un analyzer n'est jamais livré sous le nom d'ES tant qu'il n'est pas mesuré identique — un écart de 0,015 % rendu en 200 est le pire résultat possible ici."
+    },
+    {
+      "id": "analyzer.autres_langues",
+      "table": "analyzers",
+      "nom": "`arabic`, `czech`, `greek`, `thai` et les autres langues",
+      "nom_texte": "arabic, czech, greek, thai et les autres langues",
+      "etat": "refuse",
+      "poids": 0.0,
+      "motif": "pas_encore",
+      "raison": "leur chaîne demande des filtres de normalisation qui ne sont pas portés (et, pour plusieurs, un stemmer absent de `rust-stemmers`). Rien n'y est mesuré : les douze langues servies le sont mot à mot, et celles-ci ne le seraient pas."
     },
     {
       "id": "analyzer.sur_mesure",
@@ -615,7 +643,7 @@
       "nom_texte": "ngram et edge_ngram — tokenizer et filtre",
       "etat": "supporte",
       "poids": null,
-      "detail": "la brique de l'autocomplétion « au fil de la frappe » : elle travaille à l'**indexation**, là où `match_phrase_prefix` travaille à la requête. Mesurée identique à ES sur 210 textes, **positions et offsets compris** (`diff_analyzers.py`) : un n-gramme mal positionné casse `match_phrase` sans changer le compte de tokens",
+      "detail": "la brique de l'autocomplétion « au fil de la frappe » : elle travaille à l'**indexation**, là où `match_phrase_prefix` travaille à la requête. Mesurée identique à ES sur 217 textes, **positions et offsets compris** (`diff_analyzers.py`) : un n-gramme mal positionné casse `match_phrase` sans changer le compte de tokens",
       "parametres": {
         "supportes": [
           "min_gram",
@@ -642,10 +670,16 @@
           "lowercase",
           "asciifolding",
           "stop",
+          "stemmer",
+          "porter_stem",
+          "elision",
+          "apostrophe",
+          "german_normalization",
           "ngram, edge_ngram"
         ],
         "refuses": [
-          "tout filtre à base de stemmer",
+          "les stemmers qu'aucune mesure ne couvre",
+          "stemmer_override, keyword_marker",
           "synonym, shingle, word_delimiter, truncate…"
         ]
       }

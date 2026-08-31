@@ -539,9 +539,11 @@ def type_de_champ_non_supporte(es):
 
 @scenario
 def parametre_de_champ_non_supporte(es):
+    # `german` est servi depuis le portage des analyzers de langue ; `czech`
+    # ne l'est pas, et son refus doit nommer ce qu'il refuse.
     refused(lambda: es.indices.create(
         index="analyse", mappings={"properties": {
-            "t": {"type": "text", "analyzer": "german"}}}),
+            "t": {"type": "text", "analyzer": "czech"}}}),
         contains="analyzer")
 
 
@@ -730,27 +732,80 @@ def analyzers(es):
 
 
 @scenario
-def analyzers_refuses(es):
-    """`french` et `english` sont mesures identiques a ES (`diff_analyzers.py`,
-    210 textes) : leurs stemmers sont ceux de Lucene, portes dans
-    `src/stemmer.rs`. Ce qui reste refuse, ce sont les langues dont le stemmer
-    n'a pas ete porte."""
-    assert [t["token"] for t in es.indices.analyze(
-        analyzer="english", text="The running dogs run quickly")["tokens"]] == [
+def analyzers_de_langue(es):
+    """Les douze analyzers de langue, plus `snowball`.
+
+    Ils etaient refuses en bloc — « le stemmer de tantivy n'est pas celui de
+    Lucene ». La mesure a montre que c'est faux pour huit d'entre eux (0 ecart
+    sur les vocabulaires du projet Snowball) et que le reste tenait aux mots
+    vides, a quatre filtres absents et aux stemmers *legers* de Savoy. Le
+    verdict complet est dans `sonde_langues.py` ; ce qui est verifie ici, c'est
+    que le **client officiel** obtient bien ces termes-la."""
+    def tokens(**kw):
+        return [t["token"] for t in es.indices.analyze(**kw)["tokens"]]
+
+    # `english` pose le Porter original, `snowball` le Snowball anglais : deux
+    # analyzers, deux algorithmes, et la difference se voit sur un seul mot.
+    assert tokens(analyzer="english", text="The running dogs run quickly") == [
         "run", "dog", "run", "quickli"]
-    assert [t["token"] for t in es.indices.analyze(
-        analyzer="french", text="l'ascension des chevaux")["tokens"]] == [
+    assert tokens(analyzer="snowball", text="The running dogs run quickly") == [
+        "run", "dog", "run", "quick"]
+    assert tokens(analyzer="french", text="l'ascension des chevaux") == [
         "ascension", "cheval"]
-    for nom in ("german", "snowball"):
+    # La normalisation allemande, son automate a trois etats compris : le `e`
+    # de `haeuser` tombe, celui de `quelle` reste.
+    assert tokens(analyzer="german", text="Die Häuser der Strasse und quelle") == [
+        "haus", "strass", "quell"]
+    assert tokens(analyzer="german", text="Haeuser") == ["haus"]
+    # Le dictionnaire de quatre mots que `DutchAnalyzer` impose avant son
+    # stemmer — quatre mots sur 45 670, invisibles a tout echantillon.
+    assert tokens(analyzer="dutch", text="ei kind fiets huizen") == [
+        "eier", "kinder", "fiets", "huiz"]
+    # L'apostrophe turque, et le `I` sans point.
+    assert tokens(analyzer="turkish", text="ISTANBUL Diyarbakır'ın evler") == [
+        "ıstanbul", "diyarbakır", "ev"]
+    # L'elision italienne, insensible a la casse parce qu'elle passe avant les
+    # minuscules.
+    assert tokens(analyzer="italian", text="DELL'ANNO dell'uomo") == ["anno", "uomo"]
+    # Le prelude de l'algorithme russe : « ё » devient « е ».
+    assert tokens(analyzer="russian", text="костёр") == ["костер"]
+
+    # Et un index reel s'en sert : le mapping rend le nom declare, et la
+    # recherche retrouve le document par une autre forme du mot.
+    es.options(ignore_status=404).indices.delete(index="langues")
+    es.indices.create(index="langues", mappings={"properties": {
+        "de": {"type": "text", "analyzer": "german"},
+        "ru": {"type": "text", "analyzer": "russian"}}})
+    es.index(index="langues", id="1", refresh=True,
+             document={"de": "Die Häuser der Straße", "ru": "красивые города"})
+    assert ids(es.search(index="langues", query={"match": {"de": "Haus"}})) == ["1"]
+    assert ids(es.search(index="langues", query={"match": {"ru": "город"}})) == ["1"]
+    props = es.indices.get_mapping(index="langues")["langues"]["mappings"]["properties"]
+    assert props["de"]["analyzer"] == "german", props
+    es.indices.delete(index="langues")
+
+
+@scenario
+def analyzers_refuses(es):
+    """Ce qui reste refuse l'est **avec son chiffre**.
+
+    Le finnois n'est pas refuse parce qu'on ne l'a pas ecrit : il l'est parce
+    que le stemmer de `rust-stemmers` s'ecarte de celui de Lucene sur 13 mots
+    des 84 399 du vocabulaire finnois. Un refus chiffre est un argument."""
+    refused(lambda: es.indices.create(
+        index="an", mappings={"properties": {"t": {"type": "text",
+                                                   "analyzer": "finnish"}}}),
+        contains="84 399")
+    for nom in ("czech", "greek", "inexistant"):
         refused(lambda n=nom: es.indices.create(
             index="an", mappings={"properties": {"t": {"type": "text", "analyzer": n}}}),
             contains=nom)
-    refused(lambda: es.indices.create(
-        index="an", mappings={"properties": {"t": {"type": "text",
-                                                   "analyzer": "inexistant"}}}),
-        contains="inexistant")
-    # Un analyzer sur mesure, lui, est supporte (voir `analyzers_sur_mesure`) :
-    # ce qui reste refuse, c'est ce qui repose sur un stemmer.
+    # Un stemmer qu'aucune mesure ne couvre, cite dans un analyzer sur mesure.
+    refused(lambda: es.indices.create(index="an", settings={"analysis": {
+        "filter": {"f": {"type": "stemmer", "language": "kstem"}},
+        "analyzer": {"mien": {"type": "custom", "tokenizer": "standard",
+                              "filter": ["f"]}}}}),
+        contains="kstem")
     refused(lambda: es.indices.create(index="an", settings={"analysis": {
         "analyzer": {"mien": {"type": "custom", "tokenizer": "standard",
                               "filter": ["french_stem"]}}}}),
@@ -904,10 +959,45 @@ def analyzers_sur_mesure(es):
     props = es.indices.get_mapping(index="ana")["ana"]["mappings"]["properties"]
     assert props["titre"]["analyzer"] == "fr_produit"
 
+    # Les briques des analyzers de langue se posent aussi une a une — c'est
+    # ainsi qu'un mapping reel les emploie (`stemmer` est cite 47 fois dans le
+    # corpus d'usage, `stop` 53, `elision` 7).
+    es.options(ignore_status=404).indices.delete(index="briques")
+    es.indices.create(index="briques", settings={"analysis": {
+        "filter": {
+            "mon_stem": {"type": "stemmer", "language": "light_german"},
+            "vides_de": {"type": "stop", "stopwords": "_german_"},
+            "elide": {"type": "elision", "articles": ["l", "d"], "articles_case": True},
+        },
+        "analyzer": {
+            "de_maison": {"type": "custom", "tokenizer": "standard",
+                          "filter": ["lowercase", "vides_de", "german_normalization",
+                                     "mon_stem"]},
+            "fr_elide": {"type": "custom", "tokenizer": "standard",
+                         "filter": ["elide", "lowercase"]},
+            "tr_apos": {"type": "custom", "tokenizer": "standard",
+                        "filter": ["apostrophe", "lowercase"]},
+            "en_porter": {"type": "custom", "tokenizer": "standard",
+                          "filter": ["lowercase", "porter_stem"]},
+        }}})
+
+    def tok(**kw):
+        return [t["token"] for t in es.indices.analyze(index="briques", **kw)["tokens"]]
+
+    assert tok(analyzer="de_maison", text="Die Häuser der Strasse") == ["haus", "strass"]
+    assert tok(analyzer="fr_elide", text="L'ascension d'un homme") == [
+        "ascension", "un", "homme"]
+    assert tok(analyzer="tr_apos", text="Diyarbakır'ın") == ["diyarbakır"]
+    assert tok(analyzer="en_porter", text="running quickly") == ["run", "quickli"]
+    # Et la declaration se relit : ce qui est persiste doit repasser par le
+    # parseur, sinon le serveur ne redemarre pas.
+    assert es.indices.get_settings(index="briques")["briques"]["settings"]["index"]
+    es.indices.delete(index="briques")
+
     # Ce qui n'est pas reproductible à l'identique reste refusé.
     refused(lambda: es.indices.create(index="ana_ko", settings={"analysis": {"analyzer": {
-        "x": {"type": "custom", "tokenizer": "standard", "filter": ["porter_stem"]}}}}),
-        contains="ne supporte pas le filtre [porter_stem]")
+        "x": {"type": "custom", "tokenizer": "standard", "filter": ["czech_stem"]}}}}),
+        contains="ne supporte pas le filtre [czech_stem]")
     refused(lambda: es.indices.create(index="ana_ko", settings={"analysis": {"analyzer": {
         "x": {"type": "custom", "tokenizer": "pattern"}}}}),
         contains="ne supporte pas le tokenizer [pattern]")
