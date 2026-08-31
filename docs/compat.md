@@ -748,7 +748,7 @@ suppression de données.
 | `constant_score` | ✅ | `filter`, `boost` |
 | `dis_max` | ✅ | `queries`, `tie_breaker`, `boost` — voir [`src/dismax.rs`](../src/dismax.rs) |
 | `terms` | 🟡 | liste de valeurs, score constant comme chez ES. Sur un champ `date`, chaque valeur est une période, comme dans `term`. Refusé : les *terms lookup* (lire la liste des valeurs dans un autre document) |
-| `range` | 🟡 | sur `keyword` / numérique / `date` / `boolean`. Sur un champ `date`, les bornes acceptent le **date math** (`now`, `now-1d/d`, `2026-03-15\|\|+1M`) et sont **arrondies selon leur côté** — voir [la section dédiée](#date-math-et-arrondi-des-bornes). Supporté : `gte`, `gt`, `lte`, `lt`, `boost`, `format` (lecture des bornes). Refusé : `time_zone`, `relation`, un `range` sur un champ `text` |
+| `range` | 🟡 | sur `keyword` / numérique / `date` / `boolean`. Sur un champ `date`, les bornes acceptent le **date math** (`now`, `now-1d/d`, `2026-03-15\|\|+1M`) et sont **arrondies selon leur côté** — voir [la section dédiée](#date-math-et-arrondi-des-bornes). Supporté : `gte`, `gt`, `lte`, `lt`, `boost`, `format` (lecture des bornes), `time_zone` (la borne est résolue **dans le fuseau**, arrondi compris — voir [la section dédiée](#date-math-et-arrondi-des-bornes). Sur un champ qui n'est pas une date, il est accepté sans effet, comme chez ES (mesuré)). Refusé : `relation`, un `range` sur un champ `text` |
 | `bool` | 🟡 | `filter` ne contribue pas au score. Un `bool` qui n'a que des `must_not` matche tous les autres documents, comme chez ES. Supporté : `must`, `should`, `filter`, `must_not`, `mustNot` (l'écriture camelCase **dépréciée**, qu'ES 8.15 sert encore — et la seule du DSL : `minimumShouldMatch`, `adjustPureNegative`, `maxExpansions`, `caseInsensitive`, `tieBreaker`, `scoreMode` sont tous refusés chez lui (mesuré, un par un). ferrite ne rend pas l'en-tête `Warning` de dépréciation qu'ES y ajoute), `boost`, `minimum_should_match` (ses **quatre notations**, voir [la section dédiée](#minimum_should_match)). Refusé : `_name`, `adjust_pure_negative` |
 | `_name` (nommer une clause), `matched_queries`, `include_named_queries_score` | ❌ | **pas encore** — nommer une clause n'a d'interet qu'avec `matched_queries` dans la reponse, qui n'est pas rendu : accepter le nom en le perdant serait promettre une information qui ne reviendra pas. Refuse dans toutes les clauses, `bool` compris — et le parametre `include_named_queries_score` (ES 8.13) avec, puisqu'il ne change **que** la forme de `matched_queries` (un objet `{nom: score}` au lieu d'une liste). Le laisser tomber dans « unrecognized parameter » le deguisait en faute de frappe : c'etait le seul defaut de cette ligne, et il comptait en regression pour la suite d'OpenSearch — la seule des trois sources a pouvoir l'exercer, le parametre etant posterieur a la 7.10.2 comme a la 2.12 d'OpenSearch |
 | `query_string`, `simple_query_string`, `function_score`, `boosting`, `intervals`, `terms_set`, `script`… | ❌ | **pas encore** — `parsing_exception: unknown query [...]`, avec la liste des clauses connues — la plus regrettée est `query_string`, dont la syntaxe est un langage à part entière |
@@ -1036,7 +1036,7 @@ Tout ce qui suit est mesuré contre un ES 8.15.0
 | `format` sur `range` | ✅ | remplace le format du champ pour **lire les bornes** ; il ne s'applique pas à `now` |
 | dans `term`, `terms`, `match`, et sous un `nested` | ✅ | une date y désigne la période qu'elle couvre : `{"term": {"d": "2026-03-15"}}` rend toute la journée, comme chez ES |
 | à l'indexation | ❌ | **comme Elasticsearch** — `{"d": "now"}` est refusé, comme chez ES : le document porterait une date qui dépend de l'instant où il a été écrit |
-| `time_zone` | ❌ | **pas encore** — il déplace les arrondis, donc les résultats ; l'accepter sans l'appliquer rendrait les mauvais documents en silence |
+| `time_zone` | ✅ | la borne est **résolue dans le fuseau**, arrondi compris : une date écrite sans décalage (`2026-03-29`) est minuit **local**, `now/d` arrondit au jour local, et `lte: "2026-03-29"` couvre la journée locale — qui ce jour-là, à Paris, dure 23 heures. Une date qui porte déjà son décalage (`…Z`, `+02:00`) ou un nombre d'époque désigne un instant : le fuseau ne la déplace pas (mesuré). Les règles de changement d'heure viennent du tzdb du **JDK d'Elasticsearch** ([`fuseau.rs`](../src/fuseau.rs)), et une heure locale qui n'a jamais existé est décalée de la durée du trou, comme le fait Java |
 
 Une expression malformée est refusée avec **le message d'ES, mot pour mot**
 (`unit [q] not supported for date math [-1q]`, `truncated date math [/]`,
@@ -1044,6 +1044,17 @@ Une expression malformée est refusée avec **le message d'ES, mot pour mot**
 rend sous un `search_phase_execution_exception` « all shards failed » dont la
 `root_cause` porte ce texte ; ferrite rend l'erreur directement, sans cet
 empilement.
+
+**`time_zone` déplace la borne *et* ce que l'arrondi veut dire.** Tout le calcul
+se fait en heure locale, et c'est le résultat qui est reposé sur l'axe du temps :
+une date écrite sans décalage (`2026-03-29`) est minuit **local**, `now/d`
+arrondit au jour local, et `lte: "2026-03-29"` couvre la journée locale — qui ce
+jour-là, à Paris, dure 23 heures. Une date qui porte déjà son décalage (`…Z`,
+`+02:00`) ou un nombre d'époque désigne un instant, et le fuseau ne la déplace
+pas : c'est ce que fait ES, mesuré. Les deux cas que le changement d'heure
+fabrique suivent `ZonedDateTime.ofLocal` de Java : une heure locale qui a existé
+**deux fois** prend la première, une heure locale qui n'a **jamais** existé est
+décalée de la durée du trou.
 
 ## Agrégations
 
@@ -1060,7 +1071,7 @@ sous-agrégation — a en plus sa propre sonde,
 | `terms` | 🟡 | `sum_other_doc_count` est renseigné — **après** filtrage, comme chez ES : les documents des termes qu'un `include` / `exclude` écarte n'y sont pas du tout. `doc_count_error_upper_bound` suit la règle d'ES : `-1` quand l'ordre ne classe pas par compte décroissant (`_count` **croissant**, ou une sous-agrégation) **et** que le nombre de termes distincts atteint `shard_size` (`size × 1,5 + 10` par défaut), `0` partout ailleurs — `_key` compris, dans les deux sens. Sur un champ `date`, la clé du bucket est rendue en millisecondes avec son `key_as_string`, comme chez ES. Supporté : `field`, `size`, `shard_size`, `min_doc_count` (sa valeur par défaut (`1`) seulement — voir ci-dessous), `order` (`_count`, `_key`, et le chemin d'une **sous-agrégation métrique** — `{"prix_moyen": "desc"}` sur un `avg`, `{"stats_prix.avg": "desc"}` sur un `stats` (les cinq valeurs `count` / `min` / `max` / `avg` / `sum`). Une métrique à valeur unique s'écrit aussi bien `pm` que `pm.value`. Le sens se lit sans égard à la casse, comme chez ES. Les ex æquo sont départagés par **clé croissante dans les deux sens**, et un seau dont la métrique n'a aucune valeur se classe là où ES le met : comme `NaN` sous un `avg` (donc en tête d'un `desc`), comme `+∞` sous un `min`, comme `-∞` sous un `max`), `include` (sur un champ `keyword`, dans les deux formes d'ES : une **expression régulière** dans la syntaxe de Lucene, ancrée sur le terme entier (`^` et `$` y sont des littéraux) et traduite par le même code que celle d'une requête `regexp` — donc avec les mêmes quatre opérateurs refusés ; ou une **liste exacte de valeurs**, dont chaque élément est lu comme du texte (`include: [1]` cherche le terme `"1"`, comme chez ES)), `exclude` (les deux mêmes formes, et les deux peuvent être posées ensemble), `missing` (sur un `keyword` ou un numérique. La valeur est posée **au type du champ**, comme chez ES : `missing: 0` sur un `keyword` y devient la clé `"0"`, et un `"3"` sur un `long` la clé `3`). Refusé : une valeur de remplissage sur un champ `date` ou `boolean` (tantivy ne lit pas la date et rangerait ces documents sous `1970-01-01`, en 200 et sans un mot ; sur un booléen il n'arrive pas à poser la valeur du tout. Une valeur de remplissage placée au mauvais endroit se lit comme une donnée), une valeur de remplissage d'un type que le champ ne sait pas lire (un `1.5` sur un `long` promeut chez ES **toutes** les clés du bucket en flottant ; ES refuse les autres cas, ferrite aussi), `min_doc_count` autre que sa valeur par défaut (`1`) (à `0`, il demande un bucket pour les valeurs que la recherche n'a **pas** trouvées, et l'agrégation de tantivy ne le rend pas de façon fiable : zéro bucket sur une colonne numérique, zéro bucket quand la requête ne ramène rien, et des buckets vides privés de leurs sous-agrégations. Au-delà de `1`, c'est `sum_other_doc_count` qui ne suit plus : la règle d'ES a été cherchée pour de bon, une formule ajustée sur quinze formes d'un corpus les collait toutes puis s'est effondrée sur d'autres (27 écarts sur 1 450 cas tirés au sort). Elle dépend de l'ordre demandé, de la troncature et de l'ordre de parcours du dictionnaire de termes — c'est le collecteur d'ES qu'il faudrait réécrire, et annoncer un compte faux serait pire. Mesuré par [`fuzz_vs_es.py`](../tests/compat/fuzz_vs_es.py)), un filtre de termes — inclusion ou exclusion — sur un champ qui n'est **pas** textuel (ES sert la liste exacte sur un numérique, une date et un booléen (`include: [1, 3]` sur un `long` rend deux seaux) ; l'agrégation de tantivy, elle, ne filtre les termes que sur une colonne de chaînes et **écarte la colonne entière** dès qu'elle ne l'est pas — elle rendrait zéro seau, en 200 et sans un mot. L'expression régulière, elle, est refusée **des deux côtés** : le message d'ES est repris mot pour mot), un filtre de termes posé en même temps qu'une valeur de remplissage (le seau de remplissage de `missing` n'a pas d'identifiant dans le dictionnaire de termes : le filtre de tantivy l'écarte toujours, alors qu'ES le traite comme un terme ordinaire — il reste sous un `exclude` qui ne le vise pas, et il sort sous un `include` qui le nomme. Perdre en silence les documents sans valeur est exactement ce qu'une facette ne doit pas faire), la forme partitionnée (`{"partition": n, "num_partitions": m}`) (elle retient un terme selon un **hachage** de sa valeur — `Math.floorMod(murmurhash3_x86_32(terme, 31), num_partitions)`, mesuré contre ES 8.15 et stable à son redémarrage. La règle est donc connue ; ce qui manque est un moyen de l'exprimer à tantivy, dont le filtre ne connaît qu'une expression régulière ou une liste exacte. Il faudrait énumérer tout le dictionnaire de termes pour en dresser la liste, ce qui défait la raison d'être du paramètre — parcourir un champ à très forte cardinalité sans tout charger), un chemin d'ordre à plusieurs niveaux (`filtre>prix`) (ES descend à travers une agrégation mono-seau ; la seule qu'implémente ferrite (`filter`) est déjà refusée sous une agrégation de seaux), l'ordre par une agrégation mono-seau (ES classe alors les seaux sur son `doc_count`, que le chemin le nomme ou non ; la seule agrégation mono-seau que ferrite serve est déjà refusée sous une agrégation de seaux, donc le chemin ne mène nulle part), l'ordre par une agrégation de **seaux**, ou par une clé que la métrique ne rend pas (ES refuse aussi, avec le même statut — mais seulement quand il a **deux seaux à comparer** : le chemin n'est résolu qu'au moment de trier, donc à zéro ou un seau il rend 200 sur la même demande fautive. ferrite valide avant d'exécuter : voir la divergence assumée n° 23), `collect_mode`, `execution_hint`, `script`, `shard_min_doc_count`, `show_term_doc_count_error` |
 | `range` | 🟡 | `ranges` avec `from` / `to` / `key`, `keyed`. Sur un champ `date`, les bornes s'écrivent **en dates** (au `format` du champ) et les buckets rendent `from_as_string` / `to_as_string`. Les intervalles que le client n'a pas demandés sont écartés : tantivy comble les trous entre deux bornes, Elasticsearch non. Refusé : un **trou** entre deux intervalles, sur un champ `date` (tantivy comble les trous et ferrite écarte ensuite le bucket de remplissage ; sur une date, où les bornes passent en nanosecondes, ce remplissage avale l'intervalle demandé. Sur un champ numérique, les deux buckets sortent et le filtrage suffit), des intervalles qui se **chevauchent** (ES compte alors un document dans chaque bucket qui le contient ; l'agrégation de tantivy partitionne les valeurs et ne sait pas le faire), un champ **multivalué** (voir la ligne suivante) |
 | `histogram` | 🟡 | `interval`, `offset`, `min_doc_count`, `hard_bounds`, `extended_bounds`, `keyed`. Refusé : un champ **multivalué** (voir la ligne suivante) |
-| `date_histogram` | 🟡 | Supporté : `field`, `fixed_interval`, `offset`, `min_doc_count`, `hard_bounds`, `extended_bounds`, `keyed` (comme `histogram`). Refusé : `calendar_interval` (mois et années civils n'ont pas d'équivalent dans tantivy), `time_zone`, `format`, `order` |
+| `date_histogram` | 🟡 | les seaux sont **calculés par ferrite** ([`histodate.rs`](../src/histodate.rs)) : une pré-passe mesure le premier et le dernier instant, les bornes sont déroulées par l'arrondi d'Elasticsearch reproduit ([`calendrier.rs`](../src/calendrier.rs)), et tantivy exécute le `range` contigu qui en résulte — donc avec ses sous-agrégations et sa fusion multi-index. C'est ce qui rend `calendar_interval` et `time_zone` possibles : un mois civil n'a pas de durée constante, et un jour à Paris en a deux (23 h et 25 h). Supporté : `field`, `fixed_interval`, `calendar_interval` (`second`/`1s`, `minute`/`1m`, `hour`/`1h`, `day`/`1d`, `week`/`1w`, `month`/`1M`, `quarter`/`1q`, `year`/`1y` — **une** unité, jamais un multiple, comme chez ES), `time_zone` (identifiant IANA (`Europe/Paris`) ou décalage (`+05:30`). Les seaux suivent l'heure locale : un jour de changement d'heure dure 23 ou 25 heures, un `fixed_interval: 3h` posé sur la nuit d'octobre dure quatre heures réelles, et `key_as_string` porte le décalage local (`2026-03-01T00:00:00.000+01:00`)), `format` (rend `key_as_string` à ce format, dans le fuseau), `offset`, `min_doc_count`, `hard_bounds`, `extended_bounds`, `keyed` (`extended_bounds` et `hard_bounds` sont lues **dans le fuseau** puis arrondies ; la borne haute de `hard_bounds` est exclue, celle d'`extended_bounds` incluse (mesuré)). Refusé : `order` |
 | Sous-agrégations | ✅ | sur tous les types de buckets, vérifiées jusqu'à trois niveaux. Un bucket **vide** porte les siennes, comme chez ES : tantivy comble les trous d'un `histogram` sans exécuter ce qu'il y a dessous, et ferrite y remet la forme « zéro document » — mesurée sur une recherche qui ne ramène rien, pas écrite à la main. Un bucket **rare** porte les siennes aussi, ce qui n'a pas toujours été vrai : tantivy 0.26.1 perdait ses documents au-delà de 2 048 par segment, en 200 et avec le bon `doc_count` à côté. Le correctif d'amont est épinglé (voir [`tantivy-patch.md`](tantivy-patch.md)), et 46 combinaisons parent × sous-agrégation le tiennent contre un vrai ES ([`sonde_sous_aggs.py`](../tests/compat/sonde_sous_aggs.py)) |
 | `histogram`, `date_histogram`, `range` sur un champ **multivalué** | ❌ | **divergence de moteur** — l'agrégation de tantivy compte les **valeurs**, Elasticsearch compte les **documents** : un document dont le champ vaut `[1, 2, 3]` tombe trois fois dans le bucket qui les contient (mesuré : `doc_count` de 4 là où ES en compte 2). Le refus n'est prononcé que si la colonne est réellement multivaluée — un champ à une valeur par document, le cas courant, reste servi et exact. `terms`, `value_count` et `stats` ne sont pas concernés : leurs comptes coïncident avec ceux d'ES |
 | `cardinality` | ❌ | **divergence de moteur** — l'estimation de tantivy diffère de celle d'ES (mesuré : 582 valeurs distinctes annoncées là où ES en compte 598), y compris sous le seuil où ES est exact — un compte approché sous le nom d'ES serait faux sans le dire |
@@ -1097,6 +1108,69 @@ d'être de la couche de mise en forme dans `src/aggs.rs` :
    frontière, la sélection pourrait encore différer ;
 4. ES formate les bornes d'un `range` en flottants (`*-100.0`), même sur un champ
    entier, et rend la clé d'un `date_histogram` en entier.
+
+### `date_histogram` : le calendrier et le fuseau
+
+Un mois n'est pas trente jours, et un jour n'est pas toujours vingt-quatre
+heures. `fixed_interval` ne sait dire ni l'un ni l'autre, et c'est pour ça que
+`calendar_interval` était refusé : tantivy n'a pas d'équivalent du mois civil.
+La carte pariait que ce refus n'était pas nécessaire — **le seau d'une date est
+une fonction pure du calendrier**, que ferrite peut appliquer lui-même, comme il
+exécute déjà l'agrégation `filter`. Le pari tient, à une correction près qui a
+décidé de toute la mécanique : ce qu'il faut calculer soi-même, ce n'est pas un
+seau à la fois, c'est la **liste des bornes**. Une fois cette liste connue,
+l'agrégation redevient un `range` contigu — que tantivy exécute, avec ses
+sous-agrégations, ses seaux vides et sa fusion multi-index.
+
+D'où trois temps ([`src/histodate.rs`](../src/histodate.rs)) : une **pré-passe**
+mesure le premier et le dernier instant du champ sur la même requête (c'est
+exactement ce qu'ES connaît au moment de remplir les trous), les bornes sont
+déroulées par l'arrondi, puis le résultat est remis en forme de
+`date_histogram`.
+
+**L'arrondi est celui d'Elasticsearch, pas une idée de l'arrondi calendaire.**
+`org.elasticsearch.common.Rounding` est reproduit dans
+[`src/calendrier.rs`](../src/calendrier.rs), et l'oracle n'est pas une lecture :
+`tests/compat/genere_fuseaux.py --grille` fait tourner **cette classe-là**, dans
+le conteneur de référence avec les jars d'ES au classpath, sur une grille de
+25 914 arrondis (603 fuseaux × intervalles × instants choisis autour des
+bascules de chaque zone) ; `tests/arrondi_vs_es.rs` la rejoue dans `cargo test`,
+sans Docker. Rien de ce qui suit n'était devinable :
+
+- une heure locale **qui n'existe pas** (le dimanche de mars) : pour un seau qui
+  tombe à minuit, ES prend l'instant de la bascule — à Santiago, le seau du
+  8 septembre 2024 commence à `01:00-03:00` ; pour un seau plus court, il repart
+  de juste avant le trou ;
+- une heure locale qui existe **deux fois** (le dimanche d'octobre) n'est pas
+  tranchée de la même façon selon que l'unité tombe à minuit ou non ;
+- un `fixed_interval` avec un fuseau **n'est plus fixe** : un seau de 3 h posé
+  sur la nuit du changement d'heure à Paris dure quatre heures réelles ;
+- `hard_bounds` et `extended_bounds` sont lues dans le fuseau **puis arrondies**,
+  et pas du même côté : la borne haute de `hard_bounds` est exclue, celle
+  d'`extended_bounds` incluse.
+
+Les règles de changement d'heure viennent du **tzdb du JDK d'Elasticsearch**
+(`jdk/lib/tzdb.dat`, 603 zones, tzdb 2024a), dumpé du conteneur de référence par
+`tests/compat/genere_fuseaux.py` et embarqué dans le binaire
+([`src/tzdata.bin`](../src/tzdata.bin), 110 Ko). Une table tirée d'ailleurs
+divergerait de l'arbitre sur toute zone dont les règles ont bougé entre deux
+versions du tzdb — et elle divergerait en silence : un seau décalé d'une heure
+ressemble à un seau.
+
+Le tout est mesuré seau par seau, `key`, `key_as_string` et `doc_count`
+compris, par [`sonde_calendrier.py`](../tests/compat/sonde_calendrier.py) sur un
+corpus qui traverse les deux bascules de l'année, un 29 février et un minuit qui
+n'existe pas.
+
+**Ce que ça coûte**, parce qu'un chemin de plus n'est pas gratuit : sur 20 000
+documents, un `date_histogram` passe de 1,4 à 2,5 ms en `fixed_interval: 30d`
+(12 seaux), de 3,3 à 9,5 ms en `1d` (365 seaux) et de 15,6 à 28,9 ms avec une
+sous-agrégation — deux binaires *release* sur la même machine, médiane de vingt
+tours, un `terms` témoin inchangé. La pré-passe `min`/`max` est une lecture de
+plus, et une agrégation `range` cherche son seau par dichotomie là où un
+histogramme divise. C'est le prix d'une seule mécanique pour tous les
+`date_histogram` — la même que celle qui rend les mois civils et les fuseaux
+possibles.
 
 ### `nested`
 

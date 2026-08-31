@@ -290,13 +290,15 @@ développement, pas de CI).
 
 | Commande | La question à laquelle elle répond |
 |---|---|
-| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**119/119**, dont l'export par `helpers.scan`, le date math, la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats`, les templates, ce que la réponse transporte — `fields`, `docvalue_fields`, `stored_fields` — la modification par requête, `_delete_by_query` / `_update_by_query`, et les n-grammes de l'autocomplétion, `search_analyzer`, `copy_to` et `store`) |
+| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**122/122**, dont l'export par `helpers.scan`, le date math et son `time_zone`, le graphe temporel « par mois » et « par jour à Paris », la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats`, les templates, ce que la réponse transporte — `fields`, `docvalue_fields`, `stored_fields` — la modification par requête, `_delete_by_query` / `_update_by_query`, et les n-grammes de l'autocomplétion, `search_analyzer`, `copy_to` et `store`) |
 | `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (212/213, 0 écart réel) |
 | `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (45/46 ; le seul écart est `_cluster/health`, toujours vert par choix) |
 | `tests/compat/diff_aggs.py` | les mêmes agrégations ? (73/73, `filter` comprise, ce qu'un bucket **vide** doit porter, et les deux compteurs d'un `terms` **après** filtrage) |
 | `tests/compat/diff_analyzers.py` | les mêmes tokens, **aux mêmes positions et aux mêmes offsets** ? (51 batteries × 217 textes : 20 analyzers intégrés dont les 12 de langue, 21 déclarations de n-grammes, les 5 analyzers de Wagtail, et les 5 classes de `token_chars` demandées caractère par caractère — toutes identiques) |
 | `tests/compat/sonde_langues.py` | et sur un corpus que nous n'avons **pas** écrit ? Les vocabulaires du projet Snowball (BSD-3-Clause, licence vérifiée, 20 913 à 96 325 mots par langue, **563 000** en tout) posés aux deux serveurs : **43/43 batteries identiques**, `--calibrer` 40/40 contre deux ES. `--ecart` imprime le tableau que la carte demandait — la chaîne d'ES arrêtée après chaque étape, donc **d'où** vient l'écart — et ne demande qu'ES, donc il vaut même sous un refus. `--mots-vides` régénère `src/mots_vides.rs` depuis le jar de Lucene du conteneur, en le vérifiant contre lui dans les deux sens |
 | `tests/compat/diff_datemath.py` | les mêmes documents sur une **borne de date** — `now`, `now-1d/d`, `2026-03-15\|\|+1M`, et l'arrondi selon le côté de la borne ? (276/276, messages d'erreur compris ; 45/276 avant le chantier) |
+| `tests/compat/sonde_calendrier.py` | les mêmes seaux sur un **graphe temporel** — `calendar_interval`, `time_zone`, et `time_zone` sur un `range` ? Le bloc entier, seau par seau (`key`, `key_as_string`, `doc_count`), sur un corpus qui traverse les **deux** bascules de l'heure d'été, un 29 février, un minuit qui n'existe pas (Santiago) et une heure d'été d'une demi-heure (Lord Howe) : **231/233 identiques, 2 refus assumés, 0 écart** (`--calibrer` : 233/233 contre deux ES) |
+| `tests/compat/genere_fuseaux.py` | **quelles règles de fuseau, et d'où ?** La table est dumpée du tzdb du **JDK du conteneur de référence** — celles qu'ES applique lui-même, son image n'ayant pas de `/usr/share/zoneinfo` (603 zones, 110 Ko, `--verifie` recompare octet par octet). `--grille` écrit les 25 914 arrondis que **la classe `Rounding` d'ES elle-même** rend, exécutée dans le conteneur avec ses jars : c'est l'oracle de `tests/arrondi_vs_es.rs`, rejoué par `cargo test` sans Docker |
 | `tests/compat/diff_highlight.py` | les mêmes **fragments surlignés** — pas leur nombre, leur contenu exact, balises comprises ? (233 questions, **221 identiques au caractère près, 11 refus assumés, 0 écart** ; `--calibrer` : 233/233 contre deux ES). Le même fichier lancé contre le ferrite d'avant rend **0/233** |
 | `tests/compat/diff_motifs.py` | les mêmes documents sur un **motif** — `regexp`, `wildcard`, `prefix`, `match_phrase_prefix` ? (110/110, dont les neuf formes du `|` sans branche gauche) |
 | `tests/compat/diff_multi_index.py` | `index=["a","b"]`, `logs-*`, les alias : **les mêmes index visés, fusionnés pareil** ? (87/87, 0 écart, plus aucune divergence assumée ; `--calibrer` : 87/87 contre deux ES) |
@@ -310,13 +312,13 @@ développement, pas de CI).
 | `tests/compat/sonde_ecriture_alias.py` | et pour **écrire** un alias ? Les sept URL de `put_alias` (le nom de l'alias, celui de l'index, ou les deux, viennent du corps — qui **remplace** le chemin), `must_exist`, et les deux règles de 404 qui ne sont pas la même : `must_exist: true` se vérifie **par index visé**, le 404 par défaut est **global**. Compare le statut, le message **et l'état laissé derrière** : **57/65 identiques, 7 refus assumés, 1 message non comparé, 0 écart** — et **14/65 contre le ferrite d'avant**. `--calibrer` : 64/65 contre deux ES |
 | `tests/compat/sonde_vide.py` | sur un serveur **sans aucun index**, la même chose qu'ES — et rien accepté en silence ? (28/28 identiques, 0 refus muet ; les deux serveurs doivent être vides, c'est l'état mesuré) |
 | `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **750 cas, 34 864 requêtes, 0 divergence** sur trois plages de graines dont **aucune** n'a servi à corriger : celle sur laquelle on itère ne mesure plus rien, et le générateur ayant changé, les plages du passage précédent ne mesurent plus les mêmes cas. Les mêmes plages contre le **binaire d'avant** rendent 181 divergences : une brique de générateur qui ne fait pas rougir le binaire d'avant ne mesure rien. 21 défauts silencieux trouvés au premier passage, 31 de plus depuis — dont **dix-sept** sur le seul surlignage, tous invisibles aux 233 questions écrites à la main, et le dernier sur le `|` de `regexp`, sans rapport avec la carte qui l'a sorti. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (50 cas, 2 230 requêtes, 0 divergence réelle) |
-| `tests/compat/sonde_fuzz.py` | les écarts trouvés par le fuzzing, **figés** hors d'une graine (95/95, plus 12 refus assumés) |
+| `tests/compat/sonde_fuzz.py` | les écarts trouvés par le fuzzing, **figés** hors d'une graine (100/100, plus 12 refus assumés ; les cinq derniers portent sur le motif **vide**, qui désigne la chaîne vide chez Lucene et que ferrite refusait en 400) |
 | `tests/compat/appli_reelle.py` | **un logiciel écrit par d'autres démarre-t-il ?** Clone une vraie application à une révision figée, vérifie que rien n'y a bougé, lance sa **propre** suite d'intégration contre un vrai ES puis contre ferrite, et relève tout le trafic HTTP au passage. Gitea v1.27.2 : **34/34 des deux côtés**. Wagtail v7.1 : **83/83 des deux côtés**, et plus un seul refus que ferrite prononce là où ES répond. Voir [`docs/application.md`](docs/application.md) |
 | `tests/compat/tests_clients.py` | **la suite de tests du client officiel passe-t-elle ?** Pas « un client se connecte » : les cas que l'équipe du client a écrits, joués par **son** lanceur, dans **son** langage. Trois clients, licence Apache-2.0 vérifiée **dans le clone**, révision figée, arbre vérifié intact. `go-elasticsearch` v8.13.0 : 28/30 contre un vrai ES, 16/30 contre ferrite, chaque écart rattaché à une capacité. `elasticsearch-py` v8.15.0 : 71/84 *(origine)* · 45/84 *(adapté)* / 43/84 avec le nettoyage de remplacement, **0/84 telle quelle** — sa fixture nettoie par seize routes x-pack, et les deux chiffres sont publiés. Et le **cycle de vie du client**, joué par le client publié : 9/9 en Python, 7/7 en Go, 7/7 en JavaScript, des deux côtés. Voir [`docs/clients.md`](docs/clients.md) |
 | `tests/compat/genere_compat.py` | le périmètre déclaré et la doc disent-ils la **même chose** ? [`compat.yaml`](compat.yaml) est la source (une entrée par capacité : état, paramètres, motif du refus, poids d'usage) ; [`docs/compat.md`](docs/compat.md) et [`docs/compat.json`](docs/compat.json) en sont **générés**, et la CI échoue s'ils divergent |
 | `tests/compat/perimetre.py` | ce cas qui échoue, il porte sur quoi ? Il rattache un échec de conformance à une capacité déclarée : **régression** si elle est annoncée supportée, **coût de périmètre** si elle est annoncée refusée |
 | `tests/compat/recolte_usage.py` | à quoi ressemblent les requêtes que les gens envoient **vraiment** ? Constitue le corpus ([`tests/compat/usage/corpus.jsonl`](tests/compat/usage/corpus.jsonl), 5 311 requêtes) depuis quatre sources citables : doc de référence 8.15, tracks Rally, clients officiels, code open source. Chaque requête porte l'URL d'où elle vient |
-| `tests/compat/ponderation.py` | **quelle part de ces requêtes passe entièrement ?** (43,2 % du corpus, mais **96,2 % du code d'application** et 30,5 % des tracks Rally — l'écart *est* le résultat). Écrit les `poids` de `compat.yaml`, publie [`docs/usage.json`](docs/usage.json) et la table « ce qui manque, par fréquence d'usage ». `--rejoue` pose la même requête à ferrite et à un vrai ES 8.15 : les deux mesures s'accordent sur 98,8 % des cas |
+| `tests/compat/ponderation.py` | **quelle part de ces requêtes passe entièrement ?** (45,9 % du corpus, mais **96,4 % du code d'application** et 46,6 % des tracks Rally — l'écart *est* le résultat). Écrit les `poids` de `compat.yaml`, publie [`docs/usage.json`](docs/usage.json) et la table « ce qui manque, par fréquence d'usage ». `--rejoue` pose la même requête à ferrite et à un vrai ES 8.15 : les deux mesures s'accordent sur 98,8 % des cas |
 | `tests/compat/conformance_es.py` | que disent les suites de tests **d'Elastic** et d'**OpenSearch** ? Deux sources indépendantes (`--source`), Apache-2.0 toutes les deux, **107** et **112 domaines**, sans liste blanche. Leurs rapports sont des fichiers, pas des phrases : [`conformance.json`](docs/conformance.json) et [`conformance-opensearch.json`](docs/conformance-opensearch.json) (totaux, trois taux, exclusions comptées, détail par cas), régénérés par `--json`, tenus par un cliquet en CI (`--diff`). `--divergences` range à part les cas qu'un **vrai ES 8.15 échoue lui aussi** sur la même suite — mesuré ([`conformance-opensearch-es8150.json`](docs/conformance-opensearch-es8150.json)), pas décidé. `--etat` vérifie entre deux cas que rien n'est **apparu** depuis l'état de départ de la cible — index, alias, templates, réglages de cluster — et arrête la campagne au premier écart (+27 %, payés par la CI) : 79 campagnes consécutives rendent le même rapport à l'octet près |
 | `tests/compat/bench_vs_es.py` | mêmes résultats, **et à quel prix** ? Garde-fou de développement : 600 documents et 138 requêtes **écrites ici**, donc un dénominateur qu'on a choisi soi-même — ne sert plus à publier |
 | `tests/compat/bench_echelle.py` | et **à l'échelle**, sur un corpus que nous n'avons pas écrit ? La track Rally `geonames` d'Elastic (Apache-2.0, révision figée, corpus vérifié à l'octet près), 500 000 et 2 000 000 de documents, **ses** 31 requêtes. `term` ×1,7 et `match_phrase` ×2,6 pour ferrite a deux millions de documents (et l'avance **grandit** avec la taille), RSS ×8 en sa faveur — et le **tri jusqu'a ×290 contre lui**, l'indexation ×0,20, le `scroll` ×0,25. 13 requêtes jouables, 18 refusées, toutes rattachées à une capacité déclarée. Voir [`docs/bench.md`](docs/bench.md) |
@@ -512,6 +514,48 @@ bouger**, pas après.
   intersection de requêtes, et le Query DSL de ferrite sait déjà traduire la
   seconde : le refus n'était donc pas une limite de tantivy, seulement de son
   agrégation homonyme. Sous une agrégation de buckets, elle reste refusée.
+- **Un `date_histogram` calendaire se calcule en bornes, pas en seaux.** Le même
+  raisonnement que `filter`, poussé d'un cran — et la carte 13 avait écrit le
+  pari : « le seau d'une date est une fonction pure du calendrier ». Il est
+  vrai, et il ne suffit pas. Calculer le seau *d'un document* demanderait un
+  collecteur, donc de réécrire les sous-agrégations, la fusion multi-index et
+  les seaux vides. Calculer la **liste des bornes** ne demande rien de tout ça :
+  une pré-passe `min`/`max` (ce qu'ES connaît lui aussi au moment de remplir ses
+  trous), l'arrondi déroulé, et l'agrégation redevient un `range` **contigu**
+  que tantivy sait exécuter. Trois conséquences qui ne se devinaient pas : les
+  seaux vides d'un `range` portent déjà leurs sous-agrégations (le rustinage de
+  `formes_vides` ne concerne plus que l'`histogram` numérique) ; les bornes
+  étant globales, il faut **rogner par seau parent** — sous un `terms`, chaque
+  catégorie a ses propres premier et dernier seaux non vides, mesuré ; et une
+  borne passe à tantivy en **nanosecondes flottantes**, où seule la seconde
+  pleine est exacte (voir les pièges). Le prix est publié parce qu'il est réel :
+  sur 20 000 documents, ×1,8 en `30d`, ×2,9 en `1d` (365 seaux), ×1,9 avec une
+  sous-agrégation — deux binaires *release* sur la même machine, `terms` témoin
+  inchangé. Garder l'ancien chemin pour le cas simple aurait rendu la moitié de
+  ces mesures inapplicables et ramené le rustinage des seaux vides.
+- **Un arbitre s'exécute, il ne se lit pas.** L'arrondi calendaire d'ES
+  (`org.elasticsearch.common.Rounding`) tient en 1 466 lignes de Java dont
+  chaque branche compte, et le reproduire d'après une lecture aurait donné ce
+  qu'une lecture donne toujours ici : une réponse plausible. Le conteneur de
+  référence embarque un JDK **et** les jars d'ES : `java -cp
+  '/usr/share/elasticsearch/lib/*'` fait tourner cette classe-là, et
+  `tests/compat/genere_fuseaux.py --grille` en tire 25 914 arrondis (603
+  fuseaux, autour des bascules de **chaque** zone) que `cargo test` rejoue sans
+  Docker. Le générateur vérifie au passage que les **deux** chemins d'ES
+  (l'optimisé et celui qui passe par `java.time`) disent la même chose, sans
+  quoi la grille ne dirait pas de quoi elle est la mesure. C'est le geste 1
+  appliqué à une bibliothèque plutôt qu'à un serveur, et il coûte trois minutes.
+- **Les règles de fuseau viennent du tzdb de l'arbitre, pas du plus récent.**
+  ES lit le tzdb de son JDK (`jdk/lib/tzdb.dat`, 104 Ko) — son image n'a même
+  pas de `/usr/share/zoneinfo`. Une table tirée d'ailleurs divergerait sur toute
+  zone dont les règles ont bougé entre deux versions du tzdb, et elle
+  divergerait **en silence** : un seau décalé d'une heure ressemble à un seau.
+  `src/tzdata.bin` (110 Ko, 603 zones, tzdb 2024a) est donc dumpé du conteneur,
+  comme `src/mots_vides.rs` l'est du jar de Lucene, et `--verifie` le recompare
+  octet par octet. Ce qu'il porte n'est pas qu'un historique : une zone a aussi
+  des **règles annuelles** pour l'avenir (« le dernier dimanche de mars à 01:00
+  UTC »), sans lesquelles tout graphe posé sur une date future serait faux d'une
+  heure la moitié de l'année.
 - **`lenient` écarte un champ, il n'avale pas les erreurs.** Une barre de
   recherche pose la même chaîne sur des champs de types différents : `lenient`
   dit « le champ qui ne sait pas lire cette valeur sort de la clause ». La
@@ -1031,6 +1075,21 @@ bouger**, pas après.
   JSON y lit un entier. Défaut antérieur, invisible parce qu'aucun corpus écrit
   à la main ne met une valeur entière dans un champ flottant ; le fuzzer, lui,
   tire `0.0` et `1024.0` exprès.
+- **Une borne qui passe par un flottant n'arrive pas toujours où on l'a mise.**
+  L'agrégation `range` de tantivy prend ses bornes en `f64`, et une date y est
+  comptée en **nanosecondes** : à l'échelle de 2026, un `f64` ne représente plus
+  les entiers qu'à 256 près. Une borne arrondie vers le haut rejette dans le
+  seau précédent un document posé exactement dessus. Ce qu'il a fallu mesurer,
+  et qui change la portée de la phrase précédente : une borne à la **seconde
+  pleine** est toujours exacte (un milliard de nanosecondes est un multiple de
+  256), donc tous les seaux d'un `calendar_interval` le sont aussi ; ce sont les
+  bornes **sous-seconde** qui débordent — 3 750 fois sur 10 000 millisecondes
+  consécutives. La correction (ramener chaque borne au flottant immédiatement
+  inférieur) tient en trois lignes, mais l'énoncé qui l'accompagnait — « c'est
+  le cas courant d'un graphe temporel, des mesures à minuit » — était **faux**,
+  et il aurait survécu sans la mesure. La sonde porte donc des documents à la
+  milliseconde : sans la correction, `fixed_interval: 1ms` et `3ms` divergent
+  d'ES, et rien d'autre ne bouge.
 - **Une explication plausible posée à côté d'une mesure finit par être lue comme
   la mesure.** `docs/fuzz.md` publiait, depuis trois passages, qu'une somme
   divergeait parce qu'« ES accumule en `double` et tantivy en `i64` ». C'était
@@ -1259,13 +1318,30 @@ plutôt que supposé — un filtre sur un champ qui n'est pas textuel (tantivy y
 seau de remplissage disparaît), et la forme partitionnée. Le corpus passe de
 43,2 % à 43,6 %, et les tracks Rally de 30,5 % à 32,8 %.
 
+**Un graphe temporel a enfin sa maille.** « Par mois », « par trimestre »,
+« par jour à Paris » : `calendar_interval` et `time_zone` sont servis, et avec
+eux `time_zone` sur la borne d'un `range`. C'était le **rang 8 mesuré** du
+corpus d'usage. Ce que ça a demandé n'est pas ce que la carte annonçait : le
+pari — « le seau d'une date est une fonction pure du calendrier que ferrite peut
+appliquer lui-même » — tient, mais ce qu'il faut calculer soi-même est la
+**liste des bornes**, pas un seau à la fois. Une fois cette liste connue,
+l'agrégation redevient un `range` contigu que tantivy exécute, avec ses
+sous-agrégations et sa fusion multi-index. Les seaux d'un jour de changement
+d'heure durent alors 23 ou 25 heures, un `fixed_interval: 3h` posé sur la nuit
+d'octobre en dure quatre, et `key_as_string` porte le décalage local
+(`2026-03-01T00:00:00.000+01:00`). Le corpus d'usage passe de 43,6 % à
+**45,9 %**, et les tracks Rally de 32,8 % à **46,6 %** — le plus gros
+déplacement qu'une carte ait fait sur ce sous-corpus, et la ligne
+`agg.date_histogram` (première du tableau des manques chez Rally, 25,8 %) tombe
+à **une** requête sur 5 311, qui porte `order`.
+
 Ce qui reste, par ordre de gêne pour un projet réel : `rest_total_hits_as_int`,
 `_msearch`, `_reindex`, les templates de **composants** (`_component_template`, et le
 `composed_of` qui les cite — refusé à la pose plutôt qu'appliqué à moitié),
 `inner_hits`, `GET /_cat/aliases` et les colonnes `h` / `s` des `_cat`,
 `GET /{index}/_mapping/field/{champs}`, l'agrégation `filters` (la sœur
-plurielle de `filter`), `time_zone` sur un `range` (refusé explicitement), les
-alias **filtrés** (`filter`, refusé explicitement), `?stored_fields=` sur
+plurielle de `filter`), l'`order` d'un `date_histogram` (refusé explicitement),
+les alias **filtrés** (`filter`, refusé explicitement), `?stored_fields=` sur
 `GET /{index}/_doc/{id}` (le geste se fait par `_search`), et les analyzers des
 langues non latines ou slaves (`arabic`, `czech`, `greek`, `thai`… — ils
 demandent des filtres de normalisation qui ne sont pas portés).

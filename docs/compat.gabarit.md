@@ -820,6 +820,17 @@ rend sous un `search_phase_execution_exception` « all shards failed » dont la
 `root_cause` porte ce texte ; ferrite rend l'erreur directement, sans cet
 empilement.
 
+**`time_zone` déplace la borne *et* ce que l'arrondi veut dire.** Tout le calcul
+se fait en heure locale, et c'est le résultat qui est reposé sur l'axe du temps :
+une date écrite sans décalage (`2026-03-29`) est minuit **local**, `now/d`
+arrondit au jour local, et `lte: "2026-03-29"` couvre la journée locale — qui ce
+jour-là, à Paris, dure 23 heures. Une date qui porte déjà son décalage (`…Z`,
+`+02:00`) ou un nombre d'époque désigne un instant, et le fuseau ne la déplace
+pas : c'est ce que fait ES, mesuré. Les deux cas que le changement d'heure
+fabrique suivent `ZonedDateTime.ofLocal` de Java : une heure locale qui a existé
+**deux fois** prend la première, une heure locale qui n'a **jamais** existé est
+décalée de la durée du trou.
+
 ## Agrégations
 
 Comparées champ par champ à un vrai ES 8.15 sur 73 requêtes
@@ -861,6 +872,69 @@ d'être de la couche de mise en forme dans `src/aggs.rs` :
    frontière, la sélection pourrait encore différer ;
 4. ES formate les bornes d'un `range` en flottants (`*-100.0`), même sur un champ
    entier, et rend la clé d'un `date_histogram` en entier.
+
+### `date_histogram` : le calendrier et le fuseau
+
+Un mois n'est pas trente jours, et un jour n'est pas toujours vingt-quatre
+heures. `fixed_interval` ne sait dire ni l'un ni l'autre, et c'est pour ça que
+`calendar_interval` était refusé : tantivy n'a pas d'équivalent du mois civil.
+La carte pariait que ce refus n'était pas nécessaire — **le seau d'une date est
+une fonction pure du calendrier**, que ferrite peut appliquer lui-même, comme il
+exécute déjà l'agrégation `filter`. Le pari tient, à une correction près qui a
+décidé de toute la mécanique : ce qu'il faut calculer soi-même, ce n'est pas un
+seau à la fois, c'est la **liste des bornes**. Une fois cette liste connue,
+l'agrégation redevient un `range` contigu — que tantivy exécute, avec ses
+sous-agrégations, ses seaux vides et sa fusion multi-index.
+
+D'où trois temps ([`src/histodate.rs`](../src/histodate.rs)) : une **pré-passe**
+mesure le premier et le dernier instant du champ sur la même requête (c'est
+exactement ce qu'ES connaît au moment de remplir les trous), les bornes sont
+déroulées par l'arrondi, puis le résultat est remis en forme de
+`date_histogram`.
+
+**L'arrondi est celui d'Elasticsearch, pas une idée de l'arrondi calendaire.**
+`org.elasticsearch.common.Rounding` est reproduit dans
+[`src/calendrier.rs`](../src/calendrier.rs), et l'oracle n'est pas une lecture :
+`tests/compat/genere_fuseaux.py --grille` fait tourner **cette classe-là**, dans
+le conteneur de référence avec les jars d'ES au classpath, sur une grille de
+25 914 arrondis (603 fuseaux × intervalles × instants choisis autour des
+bascules de chaque zone) ; `tests/arrondi_vs_es.rs` la rejoue dans `cargo test`,
+sans Docker. Rien de ce qui suit n'était devinable :
+
+- une heure locale **qui n'existe pas** (le dimanche de mars) : pour un seau qui
+  tombe à minuit, ES prend l'instant de la bascule — à Santiago, le seau du
+  8 septembre 2024 commence à `01:00-03:00` ; pour un seau plus court, il repart
+  de juste avant le trou ;
+- une heure locale qui existe **deux fois** (le dimanche d'octobre) n'est pas
+  tranchée de la même façon selon que l'unité tombe à minuit ou non ;
+- un `fixed_interval` avec un fuseau **n'est plus fixe** : un seau de 3 h posé
+  sur la nuit du changement d'heure à Paris dure quatre heures réelles ;
+- `hard_bounds` et `extended_bounds` sont lues dans le fuseau **puis arrondies**,
+  et pas du même côté : la borne haute de `hard_bounds` est exclue, celle
+  d'`extended_bounds` incluse.
+
+Les règles de changement d'heure viennent du **tzdb du JDK d'Elasticsearch**
+(`jdk/lib/tzdb.dat`, 603 zones, tzdb 2024a), dumpé du conteneur de référence par
+`tests/compat/genere_fuseaux.py` et embarqué dans le binaire
+([`src/tzdata.bin`](../src/tzdata.bin), 110 Ko). Une table tirée d'ailleurs
+divergerait de l'arbitre sur toute zone dont les règles ont bougé entre deux
+versions du tzdb — et elle divergerait en silence : un seau décalé d'une heure
+ressemble à un seau.
+
+Le tout est mesuré seau par seau, `key`, `key_as_string` et `doc_count`
+compris, par [`sonde_calendrier.py`](../tests/compat/sonde_calendrier.py) sur un
+corpus qui traverse les deux bascules de l'année, un 29 février et un minuit qui
+n'existe pas.
+
+**Ce que ça coûte**, parce qu'un chemin de plus n'est pas gratuit : sur 20 000
+documents, un `date_histogram` passe de 1,4 à 2,5 ms en `fixed_interval: 30d`
+(12 seaux), de 3,3 à 9,5 ms en `1d` (365 seaux) et de 15,6 à 28,9 ms avec une
+sous-agrégation — deux binaires *release* sur la même machine, médiane de vingt
+tours, un `terms` témoin inchangé. La pré-passe `min`/`max` est une lecture de
+plus, et une agrégation `range` cherche son seau par dichotomie là où un
+histogramme divise. C'est le prix d'une seule mécanique pour tous les
+`date_histogram` — la même que celle qui rend les mois civils et les fuseaux
+possibles.
 
 ### `nested`
 

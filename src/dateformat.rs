@@ -153,9 +153,39 @@ impl DateFormat {
         }
     }
 
+    /// La valeur porte-t-elle **son propre** instant ?
+    ///
+    /// La question n'a de sens que sous un `time_zone` : une date ecrite sans
+    /// decalage (`2026-03-29T02:00:00`) est une heure **locale**, que le fuseau
+    /// place sur l'axe du temps ; une date qui porte un decalage
+    /// (`...T02:00:00+02:00`, ou un `Z`) et un nombre d'epoque designent deja
+    /// un instant, et ES les laisse alors tranquilles.
+    pub fn est_absolue(&self, v: &Value) -> bool {
+        match v {
+            Value::Number(_) => true,
+            Value::String(s) => {
+                let s = s.trim();
+                self.formes
+                    .iter()
+                    .find(|f| f.lit(s).is_some())
+                    .is_some_and(|f| f.absolue(s))
+            }
+            _ => false,
+        }
+    }
+
     /// Rend une date au premier format declare, comme le `*_as_string` d'ES.
     pub fn rend(&self, millis: i64) -> Option<String> {
         self.formes.first()?.rend(millis)
+    }
+
+    /// La meme chose **dans un fuseau** : ES ecrit alors l'heure locale, et le
+    /// decalage a la place du `Z` (mesure : `2024-02-29T00:00:00.000+01:00`).
+    ///
+    /// Un decalage nul rend le `Z` — c'est ce qu'ES ecrit meme pour un
+    /// `time_zone: "+00:00"` explicite (mesure).
+    pub fn rend_avec_decalage(&self, millis: i64, decalage_s: i32) -> Option<String> {
+        self.formes.first()?.rend_avec_decalage(millis, decalage_s)
     }
 }
 
@@ -217,6 +247,22 @@ impl Forme {
         }
     }
 
+    /// Cette ecriture-la porte-t-elle son instant ? (voir
+    /// [`DateFormat::est_absolue`])
+    fn absolue(&self, s: &str) -> bool {
+        match self {
+            Self::EpochMillis | Self::EpochSecond => true,
+            Self::Motif { offset, .. } => *offset,
+            // Le format par defaut accepte les deux ecritures : c'est la valeur
+            // qui dit laquelle.
+            Self::DateOptionalTime => {
+                s.ends_with('Z')
+                    || s.find('T')
+                        .is_some_and(|t| s[t..].contains('+') || s[t..].contains('-'))
+            }
+        }
+    }
+
     fn rend(&self, millis: i64) -> Option<String> {
         let dt = OffsetDateTime::from_unix_timestamp_nanos(i128::from(millis) * 1_000_000).ok()?;
         match self {
@@ -229,6 +275,40 @@ impl Forme {
                 dt.format(f).ok()
             }
             Self::Motif { items, .. } => dt.format(items).ok(),
+        }
+    }
+
+    fn rend_avec_decalage(&self, millis: i64, decalage_s: i32) -> Option<String> {
+        if decalage_s == 0 {
+            return self.rend(millis);
+        }
+        // Un epoch est un instant : il ne change pas de fuseau (mesure :
+        // `format: "epoch_millis"` avec un `time_zone` rend le meme nombre).
+        if matches!(self, Self::EpochMillis | Self::EpochSecond) {
+            return self.rend(millis);
+        }
+        let decalage = time::UtcOffset::from_whole_seconds(decalage_s).ok()?;
+        let dt = OffsetDateTime::from_unix_timestamp_nanos(i128::from(millis) * 1_000_000)
+            .ok()?
+            .to_offset(decalage);
+        match self {
+            Self::DateOptionalTime => {
+                let f = time::macros::format_description!(
+                    "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]\
+                     [offset_hour sign:mandatory]:[offset_minute]"
+                );
+                dt.format(f).ok()
+            }
+            // Un motif qui porte un decalage le rend tel quel ; les autres
+            // rendent l'heure locale, et c'est aussi ce que fait ES.
+            _ => self.rend_motif(dt),
+        }
+    }
+
+    fn rend_motif(&self, dt: OffsetDateTime) -> Option<String> {
+        match self {
+            Self::Motif { items, .. } => dt.format(items).ok(),
+            _ => None,
         }
     }
 }

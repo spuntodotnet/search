@@ -321,6 +321,15 @@ BRIQUES.update({"analyzer.langues": "analyzer.langues"})
 # Les formes de date math que le generateur pose vraiment sur une borne.
 BRIQUES.update({"datemath.decalage": "datemath.decalage",
                 "datemath.arrondi": "datemath.arrondi"})
+# Le calendrier : `calendar_interval` et `time_zone`. Chacun sa brique, parce
+# que chacun est **silencieux** quand il est faux — un seau « par mois » de
+# trente jours et un seau « par jour » decale d'une heure rendent tous les deux
+# un graphe plausible. Le fuseau est tire sur les deux endroits ou il change le
+# resultat : les seaux d'un histogramme, et les bornes d'un `range`.
+BRIQUES.update({"agg.date_histogram_calendrier": "agg.date_histogram",
+                "agg.date_histogram_fuseau": "agg.date_histogram",
+                "agg.date_histogram_bornes": "agg.date_histogram",
+                "datemath.time_zone": "datemath.time_zone"})
 # Les analyzers a n-grammes declares par l'index : sans cette brique, la
 # capacite sortirait declaree tenue sans que rien ne l'exerce.
 BRIQUES.update({"analyse.custom": "analyse.custom",
@@ -355,6 +364,14 @@ BORNES = {
     "long": (-9223372036854775808, 9223372036854775807),
 }
 NUMERIQUES = list(BORNES) + ["float", "double"]
+# Les fuseaux tires au sort, choisis pour ce qu'ils ont d'irregulier : deux
+# hemispheres (les bascules n'y tombent pas aux memes dates), un decalage a la
+# demi-heure, une heure d'ete d'une demi-heure, une zone dont **minuit
+# n'existe pas** un jour par an, une zone sans heure d'ete du tout, et les deux
+# ecritures d'un decalage constant.
+FUSEAUX = ["Europe/Paris", "America/New_York", "Australia/Sydney",
+           "Asia/Kolkata", "Australia/Lord_Howe", "America/Santiago",
+           "America/Phoenix", "Pacific/Chatham", "+05:30", "-08:00", "UTC"]
 TRIABLES = ("keyword", "boolean", "date") + tuple(NUMERIQUES)
 # La cle unique ajoutee a tout mapping : elle sert de dernier critere de tri, et
 # c'est elle qui rend une pagination comparable entre deux moteurs.
@@ -927,6 +944,17 @@ class Generateur:
         return {"range": {c.chemin: q}}
 
     def _bornes_date(self, c, docs):
+        rng = self.rng
+        fmt = (c.mapping or {}).get("format")
+        bornes = self._bornes_date_sans_fuseau(c, docs)
+        # Le fuseau ne deplace pas seulement la borne : il change ce que
+        # l'arrondi veut dire. `lte: "2026-03-29"` couvre la journee **locale**,
+        # qui ce jour-la, a Paris, dure 23 heures.
+        if rng.random() < 0.25 and self.brique("datemath.time_zone"):
+            bornes["time_zone"] = rng.choice(FUSEAUX)
+        return bornes
+
+    def _bornes_date_sans_fuseau(self, c, docs):
         rng = self.rng
         fmt = (c.mapping or {}).get("format")
         if rng.random() < 0.3 and self.brique("corps.datemath"):
@@ -1539,10 +1567,35 @@ class Generateur:
             return self._peut_etre_sous(q, "histogram", champs, docs, prof)
         if quoi == "date_histogram" and self.brique("agg.date_histogram"):
             c = rng.choice(dates)
-            q = {"field": c.chemin,
-                 "fixed_interval": rng.choice(["1d", "30d", "12h", "365d"])}
+            q = {"field": c.chemin}
+            # Un intervalle **de calendrier** n'a pas de duree constante : c'est
+            # exactement ce qui le rend interessant, et ce que `fixed_interval`
+            # ne sait pas dire. Les unites plus fines que l'heure ne sont pas
+            # tirees : le corpus s'etale sur quatre ans, elles y demanderaient
+            # des millions de seaux et les deux serveurs refuseraient — on
+            # mesurerait leur limite, pas leur calendrier.
+            if rng.random() < 0.5 and self.brique("agg.date_histogram_calendrier"):
+                q["calendar_interval"] = rng.choice(
+                    ["day", "1w", "month", "quarter", "1y"])
+            else:
+                q["fixed_interval"] = rng.choice(["1d", "30d", "12h", "365d"])
+            if rng.random() < 0.4 and self.brique("agg.date_histogram_fuseau"):
+                q["time_zone"] = rng.choice(FUSEAUX)
+            if rng.random() < 0.25:
+                q["offset"] = rng.choice(["+6h", "-3h", "+30m", "+2d"])
             if rng.random() < 0.3:
-                q["min_doc_count"] = 1
+                q["min_doc_count"] = rng.choice([0, 1, 2])
+            if rng.random() < 0.2:
+                q["keyed"] = True
+            if rng.random() < 0.2:
+                q["format"] = rng.choice(["yyyy-MM-dd", "epoch_millis", "yyyy-MM"])
+            # `extended_bounds` et `hard_bounds` ne se posent pas ensemble : ES
+            # exige que les premieres soient **dans** les secondes, et un tirage
+            # qui violerait la regle mesurerait le refus, pas les seaux.
+            if rng.random() < 0.3 and self.brique("agg.date_histogram_bornes"):
+                a, b = sorted([self._date(None), self._date(None)], key=str)
+                q[rng.choice(["extended_bounds", "hard_bounds"])] = {
+                    "min": a, "max": b}
             return self._peut_etre_sous(q, "date_histogram", champs, docs, prof)
         if quoi == "filter" and self.brique("agg.filter"):
             # `filter` sous une agregation de buckets est refusee : elle ne sort

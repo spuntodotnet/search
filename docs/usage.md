@@ -104,11 +104,11 @@ régression.
 
 | Sous-corpus | Requêtes | Servies entièrement |
 |---|---|---|
-| **`github` — du code d'application open source** | 338 | **96,2 %** |
+| **`github` — du code d'application open source** | 338 | **96,4 %** |
 | `clients` — tests et exemples des clients officiels | 143 | 81,1 % |
-| `doc` — la documentation de référence | 3 969 | 40,1 % |
-| `rally` — les tracks de benchmark d'Elastic | 861 | 32,8 % |
-| **tout le corpus** | 5 311 | 43,6 % |
+| `doc` — la documentation de référence | 3 969 | 40,2 % |
+| `rally` — les tracks de benchmark d'Elastic | 861 | 46,6 % |
+| **tout le corpus** | 5 311 | 45,9 % |
 
 Ces quatre nombres ne se contredisent pas, ils mesurent quatre choses
 différentes, et l'écart entre eux **est** le résultat :
@@ -118,18 +118,20 @@ différentes, et l'écart entre eux **est** le résultat :
   requêtes sur dix passent telles quelles** ;
 - la documentation de référence consacre **une page par fonctionnalité**, avec au
   moins un exemple chacune : elle sur-représente exactement ce qui est rare. Un
-  taux de 40,1 % s'y lit « ferrite couvre un peu plus d'un tiers de la surface
+  taux de 40,2 % s'y lit « ferrite couvre un peu plus d'un tiers de la surface
   d'API », ce qui est vrai et sans rapport avec la question précédente ;
 - les tracks Rally sont des **bancs d'essai analytiques** : `date_histogram`
   avec `calendar_interval`, `runtime_mappings`, `fields`, `percentiles`. Et le
   track `elastic/logs` rejoue les requêtes de **Kibana**, qui pose
-  systématiquement des `runtime_mappings` et des `fields`. 32,8 % — c'était
+  systématiquement des `runtime_mappings` et des `fields`. 46,6 % — c'était
   17,4 % avant que `fields`, `docvalue_fields` et `stored_fields` ne soient
-  livrés, 28,6 % avant les trois paramètres de `sort`, et 30,5 % avant que
+  livrés, 28,6 % avant les trois paramètres de `sort`, 30,5 % avant que
   `terms` ne sache filtrer ses termes et classer ses seaux sur une
-  sous-agrégation (ces tracks posent cet ordre-là plus que quiconque : 106
-  requêtes du corpus le citent) — c'est le prix d'entrée pour servir un Kibana,
-  pas celui d'une application.
+  sous-agrégation, et **32,8 % avant que `date_histogram` ne sache dire « par
+  mois »** : ce dernier saut de 13,8 points est le plus gros qu'une seule carte
+  ait fait bouger sur ce sous-corpus, et il dit ce qu'un banc analytique
+  demande vraiment — c'est le prix d'entrée pour servir un Kibana, pas celui
+  d'une application.
 
 Le corpus n'est pas homogène et il ne prétend pas l'être : la documentation en
 fait 74,7 %, et le seul répertoire `elastic/logs` des tracks Rally 8,3 %.
@@ -146,15 +148,23 @@ source » compte autant que le total :
 | Capacité refusée | Tout le corpus | doc | rally | applications |
 |---|---|---|---|---|
 | `hors.xpack` — sécurité, ML, ILM, watcher, transform, EQL/SQL… | 18,9 % | 25,2 % | 0,2 % | — |
-| `recherche.non_supportes` — `search_after`, `pit`, `collapse`… | 4,8 % | 2,0 % | 16,6 % | 3,6 % |
 | `dsl.non_supportees` — `query_string`, `function_score`… | 6,5 % | 4,4 % | 18,9 % | 0,6 % |
 | `agg.non_supportees` — `percentiles`, `top_hits`, `filters`… | 6,1 % | 3,0 % | 23,2 % | 0,6 % |
-| `agg.date_histogram` — `calendar_interval`, `time_zone`, `format` | 4,9 % | 0,9 % | 25,8 % | 0,6 % |
-| `ingestion.reecriture_en_masse` — `_update_by_query`… | 3,6 % | 4,4 % | 0,8 % | 2,4 % |
-| `hors.cycle_de_vie` — `_close`, `_open`, `_forcemerge`… | 3,4 % | 4,6 % | — | — |
-| `type.autres_parametres` — `null_value`, `doc_values`, `store`… | 3,0 % | 3,1 % | 3,8 % | — |
+| `recherche.non_supportes` — `search_after`, `pit`, `collapse`… | 3,1 % | 2,0 % | 7,0 % | 1,2 % |
 | `type.autres` — `geo_point`, `ip`, `binary`… | 3,0 % | 3,2 % | 3,6 % | — |
+| `ingestion.reecriture_en_masse` — `_reindex`, pipelines… | 3,0 % | 3,8 % | 0,8 % | — |
+| `type.autres_parametres` — `null_value`, `doc_values`, `store`… | 2,8 % | 2,9 % | 3,7 % | — |
+| `hors.cycle_de_vie` — `_close`, `_open`, `_forcemerge`… | 2,6 % | 3,4 % | — | — |
 | `hors.snapshots` — `_snapshot/*` | 2,0 % | 2,4 % | 0,8 % | — |
+| `hors.cluster_distribue` — `_cluster/state`, `_cluster/reroute`… | 1,8 % | 2,4 % | — | — |
+
+La ligne `agg.date_histogram` (4,9 % du corpus, **25,8 % des tracks Rally** —
+elle y était la première) **a disparu de ce tableau** : c'est la carte 13,
+faite. Il en reste **une** requête sur 5 311, et elle porte `order`. C'est le
+plus gros déplacement qu'une carte ait fait sur ce corpus (259 requêtes citaient
+ces paramètres), et il tient à ce que le tableau ne dit pas : sur un banc
+analytique, « par mois » n'est pas une option de `date_histogram`, c'en est
+l'usage.
 
 La ligne `agg.terms` (2,0 % du corpus, **11,7 % des tracks Rally**) **a disparu
 de ce tableau** à son tour : c'est la carte 12, faite. Il en reste 11 requêtes
@@ -301,6 +311,20 @@ débloque. Deux colonnes, parce qu'elles ne disent pas la même chose :
 > `script_fields` compris : ils demandent Painless, et la mesure a servi à
 > décider de ne pas les faire (voir plus bas). Les autres lignes n'ont pas été
 > recalculées ; elles se refont avec la recette qui suit.
+>
+> La **13** — `calendar_interval`, `time_zone`, `format`, et `time_zone` sur la
+> borne d'un `range` — a fait passer le corpus de **43,6 % à 45,9 %**
+> (2 316 → 2 438), et les tracks Rally de **32,8 % à 46,6 %**. La ligne du
+> tableau annonçait 11 ; la mesure en donne **122**, soit onze fois plus, et
+> c'est le plus gros écart entre une prévision et sa mesure de tout ce tableau.
+> La raison est écrite dans la colonne « bloque » : 259 requêtes citent ces
+> paramètres, et la prévision comptait celles que *cette carte seule* débloquait
+> — donc celles dont **tout le reste** passait déjà. Entre-temps, six cartes ont
+> livré ce qui bloquait à côté (`fields`, les paramètres de `sort`, les filtres
+> de `terms`, `_delete_by_query`…), et le calendrier était devenu la **dernière**
+> clause manquante de cent onze requêtes de plus. Une prévision de déblocage
+> vieillit à mesure que ses voisines sont faites : elle se remesure avant d'être
+> citée.
 
 | Rang mesuré | Carte | bloque | débloque | débloque (applications) |
 |---|---|---|---|---|
@@ -311,7 +335,7 @@ débloque. Deux colonnes, parce qu'elles ne disent pas la même chose :
 | 5 | **09** — `sort` : `missing`, `mode`, `unmapped_type` — **faite** | 94 | **20** | 0 |
 | 6 | **12** — `terms` : `include`, `exclude`, ordre par sous-agrégation — **faite** | 103 | **19** | 0 |
 | 7 | **21** — les analyzers de langue | 22 | 14 | 0 |
-| 8 | **13** — `date_histogram` : `calendar_interval`, `time_zone` | 259 | 11 | 2 |
+| 8 | **13** — `date_histogram` : `calendar_interval`, `time_zone` — **faite** | 259 | **122** | 1 |
 | 9 | **15** — `function_score`, `boosting` | 45 | 7 | 0 |
 | 10 | **16** — `explain`, `_explain`, `matched_queries` | 7 | 7 | 1 |
 | 11 | **17** — `collapse`, `post_filter`, `min_score` | 11 | 7 | 2 |

@@ -125,35 +125,61 @@ avec sa raison, et `--tout` les imprime.
 
 ## La mesure du jour
 
-Le générateur a changé — une brique de plus, **les analyzers de langue**
-(`analyzer.langues` et `analyzer.snowball`, tirés sur un champ `text` comme
-`analyzer` ou comme `search_analyzer`) — donc **toutes les graines ont changé de
+Le générateur a changé — trois briques de plus, **le calendrier** :
+`agg.date_histogram_calendrier` (un `calendar_interval` à la place d'un
+`fixed_interval`), `agg.date_histogram_fuseau` (un `time_zone` tiré parmi onze,
+choisis pour ce qu'ils ont d'irrégulier) et `datemath.time_zone` (le même
+paramètre sur la borne d'un `range`), plus l'`offset`, le `format`, le `keyed`
+et les bornes d'un `date_histogram` — donc **toutes les graines ont changé de
 sens** : la campagne précédente ne mesurait plus les mêmes cas, et ses chiffres
 ne sont pas reconduits. Ce tableau est celui de ce passage, sur des plages
 jamais utilisées.
 
 ```
-graines 8210000+       250 cas, 11 638 requêtes, 0 divergence
-graines 8220000+       250 cas, 11 586 requêtes, 0 divergence
-graines 8230000+       250 cas, 11 640 requêtes, 0 divergence
+graines 9310000+       250 cas, 11 696 requêtes, 0 divergence
+graines 9320000+       250 cas, 11 734 requêtes, 0 divergence
+graines 9330000+       250 cas, 11 494 requêtes, 1 divergence  (corrigée, plus bas)
                      ------------------------------------------------
-                       750 cas,  34 864 requêtes, 0 divergence
+                       750 cas,  34 924 requêtes, 1 divergence
 
 les mêmes plages, contre le binaire d'AVANT la carte
-                       750 cas,  26 559 requêtes, 181 divergences
-                                 (57 + 56 + 68)
+                       750 cas,  34 928 requêtes, 165 divergences
+                                 (55 + 65 + 45)
 
-étalonnage ES vs ES     50 cas,   2 230 requêtes, 0 divergence réelle
+étalonnage ES vs ES     40 cas,   1 832 requêtes, 0 divergence réelle
 ```
 
-La ligne du milieu dit que la brique mesure quelque chose, et elle se lit avec
-la même réserve que la précédente : les douze analyzers étaient **refusés**
-avant, donc chaque mapping qui en tire un rendait 400 d'un côté et 200 de
-l'autre. Ce 181 mesure que la brique est posée souvent, pas qu'elle a trouvé
-181 défauts. L'écart de requêtes entre les deux colonnes (34 864 contre 26 559)
-vient de là : un refus au mapping coupe toutes les requêtes de suite d'un cas.
+Les deux colonnes sont mesurées avec des binaires **release** des deux côtés, et
+ce n'est pas un détail : les trois `500` que ce document publie plus bas
+(`assertion failed: buckets[pos].range.contains(&val)`, `target (N) should be
+greater than or equal to doc (M)`) sont des `debug_assert!` de tantivy. La même
+plage 9310000 rend **3 divergences en profil debug et 0 en release** — le profil
+fait donc partie de ce qu'une campagne doit dire, au même titre que la plage.
 
-**Et le vrai contenu de ce passage est ailleurs.** À 300 cas sur la plage
+La ligne du milieu dit que les briques mesurent quelque chose, et elle se lit
+avec la même réserve que les fois précédentes : `calendar_interval` et
+`time_zone` étaient **refusés** avant, donc chaque requête qui en tire un
+rendait 400 d'un côté et 200 de l'autre. Ce 165 mesure que les briques sont
+posées souvent, pas qu'elles ont trouvé 165 défauts. Ici les deux colonnes ont
+presque le même nombre de requêtes (34 924 contre 34 928), ce qui n'était pas le
+cas des passages précédents : un refus d'agrégation ne coupe pas la suite d'un
+cas, là où un refus au **mapping** coupait tout.
+
+**Et le vrai contenu de ce passage est ailleurs — encore une fois sur un motif.**
+La graine 9330220 a sorti un défaut qui n'a **rien à voir** avec le calendrier :
+un `exclude` de `terms` valant `""` — le motif **vide** — rendait 400 chez
+ferrite et 200 chez ES. Chez Lucene, un motif vide désigne la **chaîne vide**,
+et rien d'autre : c'est le seul endroit où son analyseur n'exige pas un atome
+(`a|` échoue justement parce qu'il en veut un). Mesuré contre ES 8.15 :
+`{"regexp": {"k": ""}}` rend le document dont le terme est vide, `include: ""`
+ne garde que ce seau-là, `exclude: ""` ne retire que lui. ferrite refusait les
+trois formes ; `()`, qui dit la même chose, passait déjà. Corrigé et figé dans
+[`sonde_fuzz.py`](../tests/compat/sonde_fuzz.py) (cinq cas, dont `a|` qui doit
+**rester** un refus des deux côtés) — et le corpus de `diff_motifs.py` ne
+pouvait pas le trouver : aucun corpus écrit à la main n'indexe la chaîne vide.
+
+Le passage précédent, celui des analyzers de langue, avait sorti exactement le
+même genre de chose. À 300 cas sur la plage
 8210000, une graine (8210220) a sorti un défaut qui n'a **rien à voir** avec les
 analyzers : un `include` de `terms` valant `(leger\ edition\ ecole|)` rendait
 200 chez ferrite et 400 chez ES. La branche vide était le sujet — et en
@@ -191,6 +217,30 @@ plage 7400000, mesurée, déclarée, et c'est pour ça que cette ligne est à z�
 elle porte maintenant un prédicat écrit. **Un zéro obtenu en déclarant se lit
 autrement qu'un zéro obtenu en corrigeant** — la déclaration est la n° 23, et ce
 qu'elle contient est plus bas.
+
+### Ce que la brique « calendrier » pose
+
+Trois briques, et elles citent deux capacités : `agg.date_histogram_calendrier`
+et `agg.date_histogram_fuseau` pour l'agrégation, `datemath.time_zone` pour la
+borne d'un `range`. Séparées parce qu'elles échouent séparément, et surtout
+parce qu'elles échouent **en silence** : un seau « par mois » qui dure trente
+jours et un seau « par jour » décalé d'une heure rendent tous les deux un graphe
+plausible, avec le bon nombre de documents dedans.
+
+Ce que le tirage évite, et pourquoi : les unités plus fines que l'heure
+(`second`, `minute`) ne sont pas posées en `calendar_interval`. Le corpus d'un
+cas s'étale sur quatre ans ; elles y demanderaient des millions de seaux et les
+deux serveurs refuseraient — on mesurerait leur limite de seaux, pas leur
+calendrier. Les onze fuseaux tirés, eux, sont choisis pour ce qu'ils ont
+d'irrégulier : deux hémisphères (les bascules n'y tombent pas aux mêmes dates),
+un décalage à la demi-heure (`Asia/Kolkata`), une heure d'été d'une demi-heure
+(`Australia/Lord_Howe`), une zone dont **minuit n'existe pas** un jour par an
+(`America/Santiago`), une zone sans heure d'été (`America/Phoenix`), et les deux
+écritures d'un décalage constant.
+
+`extended_bounds` et `hard_bounds` ne sont jamais tirés ensemble : ES exige que
+les premières soient **dans** les secondes, et un tirage qui violerait la règle
+mesurerait le refus au lieu des seaux.
 
 ### Ce que la brique « facette » pose
 
