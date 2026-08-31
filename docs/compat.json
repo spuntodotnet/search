@@ -2283,7 +2283,7 @@
       "nom_texte": "terms",
       "etat": "partiel",
       "poids": 7.5,
-      "detail": "`sum_other_doc_count` est renseigné, et `doc_count_error_upper_bound` suit la règle d'ES : `-1` quand l'ordre est `_count` **croissant** et que le nombre de termes distincts atteint `shard_size` (`size × 1,5 + 10` par défaut), `0` partout ailleurs. Sur un champ `date`, la clé du bucket est rendue en millisecondes avec son `key_as_string`, comme chez ES",
+      "detail": "`sum_other_doc_count` est renseigné — **après** filtrage, comme chez ES : les documents des termes qu'un `include` / `exclude` écarte n'y sont pas du tout. `doc_count_error_upper_bound` suit la règle d'ES : `-1` quand l'ordre ne classe pas par compte décroissant (`_count` **croissant**, ou une sous-agrégation) **et** que le nombre de termes distincts atteint `shard_size` (`size × 1,5 + 10` par défaut), `0` partout ailleurs — `_key` compris, dans les deux sens. Sur un champ `date`, la clé du bucket est rendue en millisecondes avec son `key_as_string`, comme chez ES",
       "parametres": {
         "supportes": [
           "field",
@@ -2291,20 +2291,25 @@
           "shard_size",
           "min_doc_count",
           "order",
+          "include",
+          "exclude",
           "missing"
         ],
         "refuses": [
           "une valeur de remplissage sur un champ date ou boolean",
           "une valeur de remplissage d'un type que le champ ne sait pas lire",
           "min_doc_count autre que sa valeur par défaut (1)",
-          "include",
-          "exclude",
+          "un filtre de termes — inclusion ou exclusion — sur un champ qui n'est pas textuel",
+          "un filtre de termes posé en même temps qu'une valeur de remplissage",
+          "la forme partitionnée ({\"partition\": n, \"num_partitions\": m})",
+          "un chemin d'ordre à plusieurs niveaux (filtre>prix)",
+          "l'ordre par une agrégation mono-seau",
+          "l'ordre par une agrégation de seaux, ou par une clé que la métrique ne rend pas",
           "collect_mode",
           "execution_hint",
           "script",
           "shard_min_doc_count",
-          "show_term_doc_count_error",
-          "l'ordre par sous-agrégation"
+          "show_term_doc_count_error"
         ]
       }
     },

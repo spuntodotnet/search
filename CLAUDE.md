@@ -293,12 +293,13 @@ développement, pas de CI).
 | `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**119/119**, dont l'export par `helpers.scan`, le date math, la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats`, les templates, ce que la réponse transporte — `fields`, `docvalue_fields`, `stored_fields` — la modification par requête, `_delete_by_query` / `_update_by_query`, et les n-grammes de l'autocomplétion, `search_analyzer`, `copy_to` et `store`) |
 | `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (212/213, 0 écart réel) |
 | `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (45/46 ; le seul écart est `_cluster/health`, toujours vert par choix) |
-| `tests/compat/diff_aggs.py` | les mêmes agrégations ? (53/53, `filter` comprise, et ce qu'un bucket **vide** doit porter) |
+| `tests/compat/diff_aggs.py` | les mêmes agrégations ? (73/73, `filter` comprise, ce qu'un bucket **vide** doit porter, et les deux compteurs d'un `terms` **après** filtrage) |
 | `tests/compat/diff_analyzers.py` | les mêmes tokens, **aux mêmes positions et aux mêmes offsets** ? (38 batteries × 217 textes : 7 analyzers intégrés, 21 déclarations de n-grammes, les 5 analyzers de Wagtail, et les 5 classes de `token_chars` demandées caractère par caractère — toutes identiques) |
 | `tests/compat/diff_datemath.py` | les mêmes documents sur une **borne de date** — `now`, `now-1d/d`, `2026-03-15\|\|+1M`, et l'arrondi selon le côté de la borne ? (276/276, messages d'erreur compris ; 45/276 avant le chantier) |
 | `tests/compat/diff_highlight.py` | les mêmes **fragments surlignés** — pas leur nombre, leur contenu exact, balises comprises ? (233 questions, **221 identiques au caractère près, 11 refus assumés, 0 écart** ; `--calibrer` : 233/233 contre deux ES). Le même fichier lancé contre le ferrite d'avant rend **0/233** |
 | `tests/compat/diff_motifs.py` | les mêmes documents sur un **motif** — `regexp`, `wildcard`, `prefix`, `match_phrase_prefix` ? (101/101) |
 | `tests/compat/diff_multi_index.py` | `index=["a","b"]`, `logs-*`, les alias : **les mêmes index visés, fusionnés pareil** ? (87/87, 0 écart, plus aucune divergence assumée ; `--calibrer` : 87/87 contre deux ES) |
+| `tests/compat/sonde_facettes.py` | ce qui sépare un `terms` d'une **facette** : `include` / `exclude` (expression régulière de Lucene, liste exacte, partition) et l'**ordre par sous-agrégation**. Compare le **bloc `terms` entier** — seaux dans leur ordre, valeurs des sous-agrégations, `sum_other_doc_count` et `doc_count_error_upper_bound` : **145/170 identiques, 25 refus assumés, 0 écart** (`--calibrer` : 170/170 contre deux ES). Le même fichier lancé contre le ferrite d'avant rend **30/170** |
 | `tests/compat/sonde_msm.py` | les mêmes documents sur un **`minimum_should_match`** — entier, pourcentage, formes négatives, conditions `3<90%`, et sous un `nested` ? (53/53) |
 | `tests/compat/sonde_tri.py` | les mêmes documents **dans le même ordre** sur un `missing`, un `mode` ou un `unmapped_type` — et la même chose dans le tableau `sort` de chaque hit ? (224 questions, **220 identiques, 4 refus assumés, 0 écart** ; `--calibrer` : 224/224 contre deux ES). Le même fichier lancé contre le ferrite d'avant rend **17/224** |
 | `tests/compat/releve_mots_vides.py` | quelle est **vraiment** la liste de mots vides d'un analyzer d'ES ? |
@@ -307,7 +308,7 @@ développement, pas de CI).
 | `tests/compat/sonde_alias.py` | les mêmes alias sur une **expression de noms** — liste, joker, exclusion, `_all` — et le même 404 ? (21/21, corps et message compris) |
 | `tests/compat/sonde_ecriture_alias.py` | et pour **écrire** un alias ? Les sept URL de `put_alias` (le nom de l'alias, celui de l'index, ou les deux, viennent du corps — qui **remplace** le chemin), `must_exist`, et les deux règles de 404 qui ne sont pas la même : `must_exist: true` se vérifie **par index visé**, le 404 par défaut est **global**. Compare le statut, le message **et l'état laissé derrière** : **57/65 identiques, 7 refus assumés, 1 message non comparé, 0 écart** — et **14/65 contre le ferrite d'avant**. `--calibrer` : 64/65 contre deux ES |
 | `tests/compat/sonde_vide.py` | sur un serveur **sans aucun index**, la même chose qu'ES — et rien accepté en silence ? (28/28 identiques, 0 refus muet ; les deux serveurs doivent être vides, c'est l'état mesuré) |
-| `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **1 000 cas, 46 345 requêtes, 1 divergence ouverte** (un ordre que BM25 sépare et qu'ES rend ex æquo), sur quatre plages de graines dont **aucune** n'a servi à corriger — celle sur laquelle on itère ne mesure plus rien, et le générateur ayant changé, les plages du passage précédent ne mesurent plus les mêmes cas. Les mêmes plages contre le **binaire d'avant** rendent 5 divergences : une brique de générateur qui ne fait pas rougir le binaire d'avant ne mesure rien. 21 défauts silencieux trouvés au premier passage, 30 de plus depuis — dont **dix-sept** sur le seul surlignage, tous invisibles aux 233 questions écrites à la main. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (50 cas, 2 271 requêtes, 0 divergence réelle) |
+| `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **1 000 cas, 46 327 requêtes, 0 divergence de la carte** — les 11 signalements sont des `500` **antérieurs** sur `range`, `histogram` et un `bool` profond, rejoués graine par graine contre le binaire d'avant. Sur quatre plages de graines dont **aucune** n'a servi à corriger : celle sur laquelle on itère ne mesure plus rien, et le générateur ayant changé, les plages du passage précédent ne mesurent plus les mêmes cas. Les mêmes plages contre le **binaire d'avant** rendent 892 divergences : une brique de générateur qui ne fait pas rougir le binaire d'avant ne mesure rien. 21 défauts silencieux trouvés au premier passage, 30 de plus depuis — dont **dix-sept** sur le seul surlignage, tous invisibles aux 233 questions écrites à la main. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (50 cas, 2 230 requêtes, 0 divergence réelle) |
 | `tests/compat/sonde_fuzz.py` | les écarts trouvés par le fuzzing, **figés** hors d'une graine (95/95, plus 12 refus assumés) |
 | `tests/compat/appli_reelle.py` | **un logiciel écrit par d'autres démarre-t-il ?** Clone une vraie application à une révision figée, vérifie que rien n'y a bougé, lance sa **propre** suite d'intégration contre un vrai ES puis contre ferrite, et relève tout le trafic HTTP au passage. Gitea v1.27.2 : **34/34 des deux côtés**. Wagtail v7.1 : **83/83 des deux côtés**, et plus un seul refus que ferrite prononce là où ES répond. Voir [`docs/application.md`](docs/application.md) |
 | `tests/compat/tests_clients.py` | **la suite de tests du client officiel passe-t-elle ?** Pas « un client se connecte » : les cas que l'équipe du client a écrits, joués par **son** lanceur, dans **son** langage. Trois clients, licence Apache-2.0 vérifiée **dans le clone**, révision figée, arbre vérifié intact. `go-elasticsearch` v8.13.0 : 28/30 contre un vrai ES, 16/30 contre ferrite, chaque écart rattaché à une capacité. `elasticsearch-py` v8.15.0 : 71/84 *(origine)* · 45/84 *(adapté)* / 43/84 avec le nettoyage de remplacement, **0/84 telle quelle** — sa fixture nettoie par seize routes x-pack, et les deux chiffres sont publiés. Et le **cycle de vie du client**, joué par le client publié : 9/9 en Python, 7/7 en Go, 7/7 en JavaScript, des deux côtés. Voir [`docs/clients.md`](docs/clients.md) |
@@ -572,6 +573,40 @@ bouger**, pas après.
   serveurs. C'est le paramètre que le README du projet cite comme exemple du
   pire échec possible : l'ignorer rendrait **plus** de documents que demandé,
   en silence.
+- **Une métrique vide ne se classe pas à un seul endroit.** Ordonner un `terms`
+  par une sous-agrégation ([`src/aggs.rs`](src/aggs.rs)) est la seule forme
+  d'ordre qui demande de calculer les sous-agrégations **avant** de trier les
+  seaux — et son bord n'est pas celui qu'on croit. Un seau dont la métrique n'a
+  aucune valeur affiche `null` des deux côtés, mais ES ne compare pas ce qu'il
+  affiche : il compare ce que sa métrique rend **quand elle est vide**. Un
+  `avg` y vaut `NaN` (`0/0`), un `min` `+∞`, un `max` `-∞`, un `sum` et un
+  `value_count` `0`. Le `Double.compare` de Java classant `NaN` au-dessus de
+  tout, un `avg` nul part **en tête** d'un `desc` alors qu'un `max` nul part en
+  queue — l'inverse l'un de l'autre, sur deux métriques que rien ne distingue
+  dans la réponse. Prendre `null` pour un seul et même « absent » rendait donc
+  un ordre faux en 200. Le `total_cmp` de Rust range le `NaN` positif
+  exactement là où Java le met, ce qui rend la règle courte une fois qu'on la
+  connaît. Deux conséquences de plus : les ex æquo se départagent par **clé
+  croissante dans les deux sens** (mesure), et tantivy classant l'absent à
+  `f64::MIN` — l'opposé — sa troncature ne garde pas les mêmes seaux que celle
+  d'ES : ferrite lui demande donc **tous** les seaux et fait la sélection
+  lui-même.
+- **Un filtre de termes se pose au collecteur, pas sur la réponse.**
+  `include` / `exclude` sur un `terms` est délégué à tantivy, et les deux
+  compteurs qu'ES calcule **après** filtrage (`sum_other_doc_count`,
+  `doc_count_error_upper_bound`) tombent alors juste sans qu'on ait rien à
+  faire. Ce qui a demandé la mesure est ailleurs, et c'est une agrégation
+  déléguée de plus dont les bords ne sont pas ceux de son homonyme : tantivy ne
+  filtre que sur une colonne de **chaînes** et **écarte la colonne entière**
+  quand elle ne l'est pas — un `include: [1, 3]` sur un `long` y rendrait zéro
+  seau là où ES en rend deux, en 200. Et le seau de remplissage de `missing`,
+  qui n'a pas d'identifiant dans le dictionnaire de termes, disparaît dès qu'un
+  filtre est posé. Les deux sont refusés explicitement plutôt que servis faux.
+  La forme partitionnée, elle, est refusée pour une raison qui n'est pas
+  l'ignorance : sa règle **est** connue (`Math.floorMod(murmurhash3_x86_32(terme,
+  31), num_partitions)`, mesuré, et stable au redémarrage d'ES) — ce qui manque
+  est un moyen de l'exprimer à tantivy sans énumérer tout le dictionnaire,
+  c'est-à-dire sans défaire la raison d'être du paramètre.
 
 ## Les pièges rencontrés, pour ne pas les repayer
 
@@ -1123,6 +1158,20 @@ document. `type`, `highlight_query`, `matched_fields`, `boundary_scanner`,
 C'était le **rang 4 mesuré** du corpus d'usage, et la raison pour laquelle
 ReadTheDocs avait été écarté des applications réelles — il ne lui reste que
 `inner_hits`.
+
+**Une facette de catalogue** n'a plus besoin d'être recomposée côté client :
+`terms` filtre ses termes (`include` / `exclude`, par expression régulière de
+Lucene ou par liste exacte de valeurs) et classe ses seaux sur une
+sous-agrégation métrique — « les dix catégories au panier moyen le plus élevé »
+s'écrit `{"order": {"panier_moyen": "desc"}}`, et `stats_prix.avg` marche aussi.
+C'était le **rang 6 mesuré** du corpus d'usage, et c'est celle des deux moitiés
+qui a coûté le travail : c'est la seule forme d'ordre qui demande de calculer
+les sous-agrégations **avant** de trier les seaux, donc de renoncer à la
+troncature que tantivy fait pour nous. Trois refus l'accompagnent, chacun mesuré
+plutôt que supposé — un filtre sur un champ qui n'est pas textuel (tantivy y
+écarte la colonne entière), un filtre posé en même temps qu'un `missing` (le
+seau de remplissage disparaît), et la forme partitionnée. Le corpus passe de
+43,2 % à 43,6 %, et les tracks Rally de 30,5 % à 32,8 %.
 
 Ce qui reste, par ordre de gêne pour un projet réel : `rest_total_hits_as_int`,
 `_msearch`, `_reindex`, les templates de **composants** (`_component_template`, et le

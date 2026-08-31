@@ -3133,6 +3133,99 @@ def agregations(es):
 
 
 @scenario
+def facette_filtree_et_ordonnee(es):
+    """Ce qui separe un `terms` d'une vraie facette de catalogue : ne garder
+    que certains termes, et classer les seaux sur ce qu'ils contiennent.
+
+    « Les auteurs au tirage moyen le plus eleve » est la seule forme d'ordre
+    qui demande de calculer les sous-agregations **avant** de trier les
+    seaux."""
+    # `include` par expression reguliere : la syntaxe est celle de Lucene, et
+    # elle est ancree sur le terme entier — `Zol` ne trouve rien, `Zol.*` si.
+    r = es.search(index=INDEX, size=0, aggs={
+        "f": {"terms": {"field": "auteur", "include": "Zol"}}})
+    assert r["aggregations"]["f"]["buckets"] == []
+    r = es.search(index=INDEX, size=0, aggs={
+        "f": {"terms": {"field": "auteur", "include": "Zol.*"}}})
+    assert [b["key"] for b in r["aggregations"]["f"]["buckets"]] == ["Zola"]
+
+    # `exclude` par liste exacte. Les deux compteurs se calculent **apres**
+    # filtrage : les 2 documents de Maupassant ne sont pas dans
+    # `sum_other_doc_count`, ils ne sont nulle part.
+    r = es.search(index=INDEX, size=0, aggs={
+        "f": {"terms": {"field": "auteur", "exclude": ["Maupassant"]}}})
+    a = r["aggregations"]["f"]
+    assert [b["key"] for b in a["buckets"]] == ["Zola"]
+    assert a["sum_other_doc_count"] == 0
+    assert a["doc_count_error_upper_bound"] == 0
+
+    # Les deux ensemble, sur un champ multivalue.
+    r = es.search(index=INDEX, size=0, aggs={
+        "f": {"terms": {"field": "tags", "include": ".*o.*",
+                        "exclude": ["social"]}}})
+    assert sorted(b["key"] for b in r["aggregations"]["f"]["buckets"]) == \
+        ["nouvelle", "roman"]
+
+    # L'ordre par une sous-agregation metrique : « les auteurs au tirage moyen
+    # le plus eleve ».
+    r = es.search(index=INDEX, size=0, aggs={
+        "par_auteur": {"terms": {"field": "auteur",
+                                 "order": {"tirage_moyen": "desc"}},
+                       "aggs": {"tirage_moyen": {"avg": {"field": "tirage"}}}}})
+    b = r["aggregations"]["par_auteur"]["buckets"]
+    assert [x["key"] for x in b] == ["Zola", "Maupassant"]
+    assert b[0]["tirage_moyen"]["value"] == 880000
+    # Le meme, en croissant : l'ordre s'inverse pour de bon.
+    r = es.search(index=INDEX, size=0, aggs={
+        "par_auteur": {"terms": {"field": "auteur",
+                                 "order": {"tirage_moyen": "asc"}},
+                       "aggs": {"tirage_moyen": {"avg": {"field": "tirage"}}}}})
+    assert [x["key"] for x in r["aggregations"]["par_auteur"]["buckets"]] == \
+        ["Maupassant", "Zola"]
+
+    # Une metrique **multi-valuee** s'adresse par la valeur voulue, et elle
+    # seule : `stats` nu est refuse, `stats.max` sert.
+    r = es.search(index=INDEX, size=0, aggs={
+        "par_auteur": {"terms": {"field": "auteur", "order": {"t.max": "asc"}},
+                       "aggs": {"t": {"stats": {"field": "tirage"}}}}})
+    assert [x["key"] for x in r["aggregations"]["par_auteur"]["buckets"]] == \
+        ["Maupassant", "Zola"]
+    refused(lambda: es.search(index=INDEX, size=0, aggs={
+        "f": {"terms": {"field": "auteur", "order": {"t": "asc"}},
+              "aggs": {"t": {"stats": {"field": "tirage"}}}}}),
+        contains="multi-value metric")
+
+    # Rien n'est accepte en silence : une agregation d'ordre qui n'existe pas,
+    # une agregation de seaux comme cle de tri, et les trois formes que ferrite
+    # ne sert pas — un filtre sur un champ qui n'est pas un `keyword`, la forme
+    # partitionnee, et un filtre pose en meme temps qu'un `missing`.
+    refused(lambda: es.search(index=INDEX, size=0, aggs={
+        "f": {"terms": {"field": "auteur", "order": {"absent": "asc"}},
+              "aggs": {"t": {"avg": {"field": "tirage"}}}}}),
+        contains="Cannot find aggregation named [absent]")
+    refused(lambda: es.search(index=INDEX, size=0, aggs={
+        "f": {"terms": {"field": "auteur", "order": {"g": "asc"}},
+              "aggs": {"g": {"terms": {"field": "tags"}}}}}),
+        contains="Can't sort a [terms] aggregation")
+    refused(lambda: es.search(index=INDEX, size=0, aggs={
+        "f": {"terms": {"field": "annee", "include": [1885]}}}),
+        contains="que sur un champ de chaines")
+    refused(lambda: es.search(index=INDEX, size=0, aggs={
+        "f": {"terms": {"field": "auteur",
+                        "include": {"partition": 0, "num_partitions": 2}}}}),
+        contains="forme partitionnee")
+    refused(lambda: es.search(index=INDEX, size=0, aggs={
+        "f": {"terms": {"field": "auteur", "missing": "(sans)",
+                        "exclude": ["Zola"]}}}),
+        contains="sur la meme agregation [terms]")
+    # Une expression reguliere sur un champ numerique : le message est celui
+    # d'ES, qui la refuse aussi.
+    refused(lambda: es.search(index=INDEX, size=0, aggs={
+        "f": {"terms": {"field": "annee", "include": "18.*"}}}),
+        contains="can only be applied to string fields")
+
+
+@scenario
 def agregation_filter(es):
     """Compter un sous-ensemble sans faire une requete de plus : c'est ce dont
     se servent les compteurs de filtres rapides d'une interface."""
@@ -3243,14 +3336,12 @@ def agregations_refusees(es):
         "pa": {"terms": {"field": "auteur"},
                "aggs": {"f": {"filter": {"term": {"auteur": "Zola"}}}}}}),
         contains="filter")
-    # Parametre non supporte : jamais avale en silence.
+    # Parametre non supporte : jamais avale en silence. `include` et l'ordre
+    # par sous-agregation sont servis depuis qu'ils sont mesures ; ce qui
+    # reste refuse est verrouille par `facette_filtree_et_ordonnee`.
     refused(lambda: es.search(index=INDEX, size=0, aggs={
-        "f": {"terms": {"field": "auteur", "include": "Z.*"}}}),
-        contains="include")
-    # Ordonner par une sous-agregation n'est pas supporte.
-    refused(lambda: es.search(index=INDEX, size=0, aggs={
-        "f": {"terms": {"field": "auteur", "order": {"m": "desc"}},
-              "aggs": {"m": {"avg": {"field": "annee"}}}}}))
+        "f": {"terms": {"field": "auteur", "execution_hint": "map"}}}),
+        contains="execution_hint")
     # Une metrique ne porte pas de sous-agregations.
     refused(lambda: es.search(index=INDEX, size=0, aggs={
         "m": {"avg": {"field": "annee"}, "aggs": {"x": {"max": {"field": "annee"}}}}}))

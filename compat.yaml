@@ -2360,10 +2360,13 @@ tables:
         etat: partiel
         poids: 7.5
         detail: >-
-          `sum_other_doc_count` est renseigné, et `doc_count_error_upper_bound`
-          suit la règle d'ES : `-1` quand l'ordre est `_count` **croissant** et
-          que le nombre de termes distincts atteint `shard_size`
-          (`size × 1,5 + 10` par défaut), `0` partout ailleurs. Sur un champ
+          `sum_other_doc_count` est renseigné — **après** filtrage, comme chez
+          ES : les documents des termes qu'un `include` / `exclude` écarte n'y
+          sont pas du tout. `doc_count_error_upper_bound` suit la règle d'ES :
+          `-1` quand l'ordre ne classe pas par compte décroissant (`_count`
+          **croissant**, ou une sous-agrégation) **et** que le nombre de termes
+          distincts atteint `shard_size` (`size × 1,5 + 10` par défaut), `0`
+          partout ailleurs — `_key` compris, dans les deux sens. Sur un champ
           `date`, la clé du bucket est rendue en millisecondes avec son
           `key_as_string`, comme chez ES
         parametres:
@@ -2372,7 +2375,28 @@ tables:
             - {nom: "size"}
             - {nom: "shard_size"}
             - {nom: "min_doc_count", note: "sa valeur par défaut (`1`) seulement — voir ci-dessous"}
-            - {nom: "order", note: "`_count` / `_key` seulement"}
+            - nom: "order"
+              note: >-
+                `_count`, `_key`, et le chemin d'une **sous-agrégation
+                métrique** — `{"prix_moyen": "desc"}` sur un `avg`,
+                `{"stats_prix.avg": "desc"}` sur un `stats` (les cinq
+                valeurs `count` / `min` / `max` / `avg` / `sum`). Une métrique
+                à valeur unique s'écrit aussi bien `pm` que `pm.value`. Le sens
+                se lit sans égard à la casse, comme chez ES. Les ex æquo sont
+                départagés par **clé croissante dans les deux sens**, et un
+                seau dont la métrique n'a aucune valeur se classe là où ES le
+                met : comme `NaN` sous un `avg` (donc en tête d'un `desc`),
+                comme `+∞` sous un `min`, comme `-∞` sous un `max`
+            - nom: "include"
+              note: >-
+                sur un champ `keyword`, dans les deux formes d'ES : une
+                **expression régulière** dans la syntaxe de Lucene, ancrée sur
+                le terme entier (`^` et `$` y sont des littéraux) et traduite
+                par le même code que celle d'une requête `regexp` — donc avec
+                les mêmes quatre opérateurs refusés ; ou une **liste exacte de
+                valeurs**, dont chaque élément est lu comme du texte
+                (`include: [1]` cherche le terme `"1"`, comme chez ES)
+            - {nom: "exclude", note: "les deux mêmes formes, et les deux peuvent être posées ensemble"}
             - {nom: "missing", note: "sur un `keyword` ou un numérique. La valeur est posée **au type du champ**, comme chez ES : `missing: 0` sur un `keyword` y devient la clé `\"0\"`, et un `\"3\"` sur un `long` la clé `3`"}
           refuses:
             - texte: "une valeur de remplissage sur un champ `date` ou `boolean`"
@@ -2398,14 +2422,57 @@ tables:
                 dictionnaire de termes — c'est le collecteur d'ES qu'il faudrait
                 réécrire, et annoncer un compte faux serait pire. Mesuré par
                 [`fuzz_vs_es.py`](../tests/compat/fuzz_vs_es.py)
-            - {nom: "include"}
-            - {nom: "exclude"}
+            - texte: "un filtre de termes — inclusion ou exclusion — sur un champ qui n'est **pas** textuel"
+              note: >-
+                ES sert la liste exacte sur un numérique, une date et un
+                booléen (`include: [1, 3]` sur un `long` rend deux seaux) ;
+                l'agrégation de tantivy, elle, ne filtre les termes que sur une
+                colonne de chaînes et **écarte la colonne entière** dès qu'elle
+                ne l'est pas — elle rendrait zéro seau, en 200 et sans un mot.
+                L'expression régulière, elle, est refusée **des deux côtés** :
+                le message d'ES est repris mot pour mot
+            - texte: "un filtre de termes posé en même temps qu'une valeur de remplissage"
+              note: >-
+                le seau de remplissage de `missing` n'a pas d'identifiant dans
+                le dictionnaire de termes : le filtre de tantivy l'écarte
+                toujours, alors qu'ES le traite comme un terme ordinaire — il
+                reste sous un `exclude` qui ne le vise pas, et il sort sous un
+                `include` qui le nomme. Perdre en silence les documents sans
+                valeur est exactement ce qu'une facette ne doit pas faire
+            - texte: "la forme partitionnée (`{\"partition\": n, \"num_partitions\": m}`)"
+              note: >-
+                elle retient un terme selon un **hachage** de sa valeur —
+                `Math.floorMod(murmurhash3_x86_32(terme, 31), num_partitions)`,
+                mesuré contre ES 8.15 et stable à son redémarrage. La règle est
+                donc connue ; ce qui manque est un moyen de l'exprimer à
+                tantivy, dont le filtre ne connaît qu'une expression régulière
+                ou une liste exacte. Il faudrait énumérer tout le dictionnaire
+                de termes pour en dresser la liste, ce qui défait la raison
+                d'être du paramètre — parcourir un champ à très forte
+                cardinalité sans tout charger
+            - texte: "un chemin d'ordre à plusieurs niveaux (`filtre>prix`)"
+              note: >-
+                ES descend à travers une agrégation mono-seau ; la seule
+                qu'implémente ferrite (`filter`) est déjà refusée sous une
+                agrégation de seaux
+            - texte: "l'ordre par une agrégation mono-seau"
+              note: >-
+                ES classe alors les seaux sur son `doc_count`, que le chemin le
+                nomme ou non ; la seule agrégation mono-seau que ferrite serve
+                est déjà refusée sous une agrégation de seaux, donc le chemin ne
+                mène nulle part
+            - texte: "l'ordre par une agrégation de **seaux**, ou par une clé que la métrique ne rend pas"
+              note: >-
+                ES refuse aussi, avec le même statut — mais seulement quand il a
+                **deux seaux à comparer** : le chemin n'est résolu qu'au moment
+                de trier, donc à zéro ou un seau il rend 200 sur la même demande
+                fautive. ferrite valide avant d'exécuter : voir la divergence
+                assumée n° 23
             - {nom: "collect_mode"}
             - {nom: "execution_hint"}
             - {nom: "script"}
             - {nom: "shard_min_doc_count"}
             - {nom: "show_term_doc_count_error"}
-            - {texte: "l'ordre par sous-agrégation"}
 
       - id: agg.range
         nom: "`range`"
