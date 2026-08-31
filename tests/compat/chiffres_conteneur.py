@@ -61,7 +61,10 @@ SCHEMA = 1
 IMAGES = [
     {
         "nom": "ferrite",
-        "reference": "ferrite:0.7.0",
+        # `None` : la reference se lit dans Cargo.toml a la campagne, voir
+        # `reference_ferrite`. Elle a ete ecrite en dur ici, et la release 0.8.0
+        # l'a paye.
+        "reference": None,
         "origine": "construite ici depuis le Dockerfile du depot (`scratch` + binaire statique musl)",
         "run": [],
     },
@@ -137,6 +140,13 @@ DEFINITIONS = {
         "heap ne se compare pas a celui d'hier."
     ),
     "origine": "D'ou vient l'image mesuree : construite ici, ou tiree telle quelle.",
+    "build_hash": (
+        "Le `version.build_hash` que le serveur annonce sur `GET /` pendant la "
+        "campagne — ce que le binaire dit de lui-meme, et la seule chose ici qui "
+        "ne soit pas un nom qu'on a tape. Pour ferrite c'est "
+        "`ferrite-{version de Cargo.toml}` : un tag dit ce qu'on a voulu "
+        "construire, ce champ dit ce qui a repondu."
+    ),
     "mesure.ferrite_arbre_modifie": (
         "Vrai si un des fichiers dont l'image est faite (`src/`, `Cargo.toml`, "
         "`Cargo.lock`, `Dockerfile`) differait de `mesure.ferrite_sha` pendant la "
@@ -262,6 +272,20 @@ def attend(port: int, nom: str, limite_s: float = 300.0) -> None:
         time.sleep(0.005)
 
 
+def build_hash(port: int) -> str | None:
+    """Ce que le serveur qui vient de repondre dit de lui-meme.
+
+    Le tag d'une image dit ce qu'on a voulu construire ; ce champ dit quel
+    binaire a servi le `GET /` qu'on vient de chronometrer. C'est la seule
+    piece de la campagne que personne ne tape.
+    """
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as reponse:
+            return json.load(reponse).get("version", {}).get("build_hash")
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
 def rss_du_cgroup(cid: str) -> int:
     """La somme des VmRSS de tous les processus du cgroup du conteneur, en Ko."""
     total = 0
@@ -290,6 +314,7 @@ def demarrage_et_rss(reference: str, run: list[str], port: int, tours: int) -> d
     """Demarre le conteneur `tours` fois, et releve le RSS sur le dernier."""
     temps = []
     rss = None
+    annonce = None
     for tour in range(tours):
         nom = f"mesure-conteneur-{os.getpid()}-{tour}"
         subprocess.run(["docker", "rm", "-f", nom], capture_output=True)
@@ -304,6 +329,7 @@ def demarrage_et_rss(reference: str, run: list[str], port: int, tours: int) -> d
             temps.append((time.monotonic_ns() - debut) // 1_000_000)
             if tour == tours - 1:
                 cid = docker("inspect", "-f", "{{.Id}}", nom)
+                annonce = build_hash(port)
                 time.sleep(2)  # laisser le serveur se poser
                 rss = rss_du_cgroup(cid)
         finally:
@@ -312,6 +338,7 @@ def demarrage_et_rss(reference: str, run: list[str], port: int, tours: int) -> d
         "demarrage_ms": int(statistics.median(temps)),
         "demarrage_tours_ms": temps,
         "rss_repos_ko": rss,
+        "build_hash": annonce,
     }
 
 
@@ -344,6 +371,29 @@ def version_ferrite() -> str:
         if ligne.startswith("version = "):
             return ligne.split('"')[1]
     raise SystemExit("version absente de Cargo.toml")
+
+
+def reference_ferrite() -> str:
+    """`ferrite:{la version de Cargo.toml}` — elle ne se retape nulle part.
+
+    Elle etait ecrite en dur dans ce fichier, et la release 0.8.0 l'a paye : le
+    bump de version laissait la campagne mesurer l'image `ferrite:0.7.0` — le
+    binaire d'avant — tout en ecrivant `ferrite_version: 0.8.0` dans le rapport,
+    puis `ferrite 0.8.0` dans le tableau du README. Soit la taille d'un binaire
+    publiee sous le numero d'un autre, c'est-a-dire exactement ce que le
+    controle de `charge()` empeche du cote de la publication. Il manquait du
+    cote de la mesure.
+    """
+    return f"ferrite:{version_ferrite()}"
+
+
+def image_presente(reference: str) -> bool:
+    return (
+        subprocess.run(
+            ["docker", "image", "inspect", reference], capture_output=True
+        ).returncode
+        == 0
+    )
 
 
 def rend_humain(machine: dict, image: dict) -> str:
@@ -379,20 +429,45 @@ def campagne(tours: int, port: int, archive_ferrite: str | None) -> dict:
     machine = hote()
     sha, modifie = sha_ferrite()
     images = []
+    version = version_ferrite()
     for spec in IMAGES:
-        print(f"== {spec['nom']} : {spec['reference']}", file=sys.stderr)
+        reference = spec["reference"] or reference_ferrite()
         archive = archive_ferrite if spec["nom"] == "ferrite" else None
+        print(f"== {spec['nom']} : {reference}", file=sys.stderr)
+        if not archive and not image_presente(reference):
+            # Une image absente doit se dire, pas se lire dans la trace d'un
+            # `docker save` qui echoue.
+            quoi = (
+                f"docker build -t {reference} ."
+                if spec["nom"] == "ferrite"
+                else f"docker pull {reference}"
+            )
+            raise SystemExit(
+                f"l'image {reference} n'existe pas sur cette machine — "
+                f"la campagne mesure ce qui est declare, pas ce qui traine :\n"
+                f"    {quoi}"
+            )
         # L'identite d'abord, les nombres ensuite : une mesure qu'on ne peut pas
         # rattacher a des octets precis ne se relit pas.
         image = {
             "nom": spec["nom"],
-            "reference": spec["reference"],
-            "tag": spec["reference"].rsplit(":", 1)[-1],
+            "reference": reference,
+            "tag": reference.rsplit(":", 1)[-1],
             "origine": spec["origine"],
             "docker_run": ["-p", f"{port}:9200", *spec["run"]],
         }
-        image.update(tailles(spec["reference"], archive))
-        image.update(demarrage_et_rss(spec["reference"], spec["run"], port, tours))
+        image.update(tailles(reference, archive))
+        image.update(demarrage_et_rss(reference, spec["run"], port, tours))
+        if spec["nom"] == "ferrite" and image["build_hash"] != f"ferrite-{version}":
+            # Le tag dit ce qu'on a voulu construire ; c'est le binaire qui a
+            # repondu qui dit ce qu'on a mesure. Une image reconstruite sans
+            # avoir recompile porterait le bon nom et les mauvais octets.
+            raise SystemExit(
+                f"{reference} annonce build_hash {image['build_hash']!r}, "
+                f"Cargo.toml declare {version} — l'image n'a pas ete "
+                f"reconstruite depuis le bump :\n"
+                f"    docker build -t {reference} ."
+            )
         images.append(image)
         print(rend_humain(machine, image))
         print()
@@ -613,6 +688,24 @@ def charge() -> dict:
         raise SystemExit(
             f"{RAPPORT} mesure ferrite {donnees['mesure']['ferrite_version']}, "
             f"Cargo.toml declare {attendue} — la campagne est a relancer :\n"
+            f"    docker build -t ferrite:{attendue} . && "
+            "./tests/compat/measure_container.sh --json docs/container.json"
+        )
+    # `mesure.ferrite_version` est lu dans Cargo.toml au moment de la campagne :
+    # il dit ce qui etait declare, pas ce qui a ete mesure. Les deux champs qui
+    # le disent sont le tag de l'image et le `build_hash` que le binaire a
+    # annonce sur `GET /` — sans ce controle, une campagne lancee sur l'image
+    # d'avant republierait ses octets sous le numero du jour, et le controle
+    # ci-dessus serait vert.
+    ferrite = image(donnees, "ferrite")
+    mesures = {"tag": ferrite.get("tag"), "build_hash": ferrite.get("build_hash")}
+    voulues = {"tag": attendue, "build_hash": f"ferrite-{attendue}"}
+    if mesures != voulues:
+        raise SystemExit(
+            f"{RAPPORT} dit ferrite {attendue} mais a mesure l'image "
+            f"{ferrite.get('reference')!r} "
+            f"(tag {mesures['tag']!r}, build_hash {mesures['build_hash']!r}) — "
+            f"la campagne est a relancer :\n"
             f"    docker build -t ferrite:{attendue} . && "
             "./tests/compat/measure_container.sh --json docs/container.json"
         )

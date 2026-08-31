@@ -66,7 +66,10 @@ case "${1:-}" in
     ;;
 esac
 
-TAG="${1:-ferrite:0.7.0}"
+# Le tag par defaut se lit dans Cargo.toml : ecrit en dur ici, il designait
+# encore `ferrite:0.7.0` le jour ou le depot en etait a la 0.8.0 — donc l'image
+# du binaire d'avant, mesuree sous le numero du jour.
+TAG="${1:-ferrite:$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)}"
 shift || true
 [ "${1:-}" = "--" ] && shift   # tout ce qui suit va a `docker run`
 exec "${OUTIL[@]}" --image "$TAG" --tours "${TOURS:-5}" --run "$@"
