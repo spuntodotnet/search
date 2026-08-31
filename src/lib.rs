@@ -39,6 +39,7 @@ pub mod aggs;
 pub mod alias;
 pub mod analysis;
 pub mod api;
+pub mod calendrier;
 pub mod dateformat;
 pub mod datemath;
 pub mod dismax;
@@ -46,7 +47,9 @@ pub mod dsl;
 pub mod engine;
 pub mod error;
 pub mod fetch;
+pub mod fuseau;
 pub mod highlight;
+pub mod histodate;
 pub mod langue;
 pub mod mapping;
 pub mod mots_vides;
@@ -62,6 +65,7 @@ pub mod segments;
 pub mod selection;
 pub mod stemmer;
 pub mod templates;
+pub mod tzdata;
 pub mod util;
 
 /// Version d'Elasticsearch annoncee par ferrite.
