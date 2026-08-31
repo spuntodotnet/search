@@ -274,10 +274,19 @@ pub async fn search(
         // internes des agregations [filter] : toutes doivent etre construites
         // dans **cette** generation, leurs `Field` n'ont de sens que la.
         let searcher = gen.searcher();
+        // Les incidents de scoring sont ranges par index, et enveloppes des
+        // maintenant : la mise en forme d'un echec de shard a besoin du nom et
+        // de l'uuid, que le `Scorer` n'a pas.
+        let incidents = std::sync::Arc::new(crate::fonction_score::Incidents::pour(
+            &nom,
+            &uuid,
+            &st.catalog.cluster_uuid,
+        ));
         let ctx = QueryCtx::new(&gen.fields, &gen.index, &searcher)
             .avec_champs_ailleurs(&champs_connus)
             .avec_maintenant(maintenant)
-            .selon_le_mapping(&gen.mapping);
+            .selon_le_mapping(&gen.mapping)
+            .avec_incidents(incidents.clone());
         let query = match body_obj.get("query") {
             Some(v) => build_query(v, &ctx),
             None => Ok(Box::new(tantivy::query::AllQuery) as Box<dyn tantivy::query::Query>),
@@ -289,6 +298,13 @@ pub async fn search(
             // gardee et rendue une fois la boucle finie.
             Err(e) if e.champ_inconnu.is_some() => {
                 ignore.get_or_insert(e);
+                continue;
+            }
+            // Une clause valide que **ce mapping-la** ne sait pas servir (un
+            // `field_value_factor` sur un `keyword`) est un echec de shard chez
+            // ES, pas une erreur de requete : les autres index repondent.
+            Err(e) if e.de_shard => {
+                echecs.push(echec_de_shard(&nom, &uuid, &e, &st.catalog.cluster_uuid));
                 continue;
             }
             Err(e) => return Err(e),
@@ -339,6 +355,7 @@ pub async fn search(
             sort,
             agrege,
             filtres,
+            incidents,
         });
     }
 

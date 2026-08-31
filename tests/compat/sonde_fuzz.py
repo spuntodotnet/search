@@ -353,6 +353,41 @@ def statut(r):
     return "ok" if "hits" in r or "aggregations" in r else "refus"
 
 
+# `function_score` : ce que le fuzzing a sorti sur le scoring, hors d'une
+# graine. Le corpus est minuscule exprès — un document qui **a** la valeur, un
+# qui ne l'a pas, une valeur nulle et une negative : c'est tout ce qu'il faut
+# pour faire sortir un `NaN` d'un modificateur.
+SCORING = {
+    "mappings": {"properties": {
+        "n": {"type": "long"}, "f": {"type": "double"},
+        "d": {"type": "date"}, "u": {"type": "keyword"},
+    }},
+}
+DOCS_SCORING = [
+    ("a", {"n": 10, "f": 2.5, "d": "2026-08-31", "u": "a"}),
+    ("b", {"n": 0, "f": 0.0, "d": "2026-06-01", "u": "b"}),
+    ("c", {"n": -3, "f": -1.5, "d": "2026-01-01", "u": "c"}),
+    # Celui qui n'a **rien** : c'est lui qui fait entrer le `missing` dans le
+    # modificateur, et donc le `NaN` dans la suite du calcul.
+    ("z", {"u": "z"}),
+
+]
+
+def cause(r):
+    """Le type et le debut de la phrase de la cause — pas seulement « refus ».
+
+    Un cas ou les deux serveurs refusent ne mesure rien tant qu'on ne compare
+    que le verdict : le binaire d'avant refusait `function_score` en bloc, et
+    passait donc tous les cas de scoring. Ce qui est compare est donc la
+    **cause**, coupee avant le numero de document qu'ES y met (il n'est pas le
+    meme d'un moteur a l'autre)."""
+    if "hits" in r or "aggregations" in r:
+        return "ok"
+    e = r.get("error", {})
+    c = (e.get("root_cause") or [e])[0]
+    return f"{c.get('type')} :: {str(c.get('reason'))[:40]}"
+
+
 CAS = [
     # -- tri ---------------------------------------------------------------
     (MULTI, DOCS_MULTI, "tri multivalue croissant",
@@ -957,6 +992,85 @@ CAS = [
      {"size": 10, "sort": [{"u": {"order": "asc"}}], "_source": False,
       "query": {"nested": {"path": "l", "query": {"bool": {"must": [
           {"term": {"l.n": -1}}, {"term": {"l.k": "b"}}]}}}}}, hits),
+
+    # -- function_score : le NaN qui disparaissait dans un plafond ----------
+    #
+    # Trois cas, un seul defaut : `Math.min` de Java **propage** `NaN`, le
+    # `f64::min` de Rust rend l'autre operande. Un score de fonction `NaN`
+    # traversait donc `min(fonction, max_boost)` en devenant le plafond, et
+    # ferrite rendait un classement invente **en 200** la ou ES refuse en 500.
+    # La grille de `genere_scoring.py` ne le voyait pas : elle ne portait ni
+    # `NaN` ni les infinis.
+    (SCORING, DOCS_SCORING, "sqrt d'un missing negatif",
+     "le `NaN` disparaissait dans `min(fonction, max_boost)` ; ES refuse en 500",
+     {"size": 10, "_source": False, "query": {"function_score": {
+         "query": {"match_all": {}},
+         "field_value_factor": {"field": "n", "modifier": "sqrt",
+                                "missing": -1}}}}, cause),
+    (SCORING, DOCS_SCORING, "log1p sous -1, sous un boost_mode replace",
+     "meme cause, par l'autre chemin : `replace` rend le plafond tel quel",
+     {"size": 10, "_source": False, "query": {"function_score": {
+         "query": {"match_all": {}}, "boost_mode": "replace", "min_score": 0,
+         "field_value_factor": {"field": "n", "factor": 2, "modifier": "log1p",
+                                "missing": -1}}}}, cause),
+    (SCORING, DOCS_SCORING, "un NaN parmi deux fonctions multipliees",
+     "meme cause encore, en `score_mode` par defaut : un seul `NaN` suffit",
+     {"size": 10, "_source": False, "query": {"function_score": {
+         "query": {"match_all": {}}, "functions": [
+             {"field_value_factor": {"field": "n", "modifier": "log1p",
+                                     "missing": 1}, "weight": 2},
+             {"field_value_factor": {"field": "f", "factor": 0.5,
+                                     "modifier": "sqrt", "missing": -1}}]}}},
+     cause),
+    # -- function_score : ce que la clause doit rendre juste ----------------
+    (SCORING, DOCS_SCORING, "decroissance sur un document sans valeur",
+     "un document sans valeur a une distance **nulle**, donc un score de 1.0 : "
+     "ES remplace la distance manquante par 0, il n'ecarte pas le document",
+     {"size": 10, "_source": False,
+      "sort": [{"_score": "desc"}, {"u": "asc"}],
+      "query": {"function_score": {"query": {"match_all": {}},
+                                   "gauss": {"n": {"origin": 10, "scale": 5}}}}},
+     hits),
+    (SCORING, DOCS_SCORING, "score_mode ignore sur une fonction unique",
+     "une seule fonction sans filtre fait poser `FIRST` a ES : le `score_mode` "
+     "demande est ignore, et `avg` ne divise donc pas par le poids",
+     {"size": 10, "_source": False,
+      "sort": [{"_score": "desc"}, {"u": "asc"}],
+      "query": {"function_score": {"query": {"match_all": {}}, "weight": 2,
+                                   "score_mode": "avg"}}}, hits),
+    (SCORING, DOCS_SCORING, "min_score compare le score boosté",
+     "le `boost` de la clause s'applique **avant** le filtrage, pas apres : "
+     "avec lui, `min_score: 3` ne coupe plus rien",
+     {"size": 10, "_source": False,
+      "sort": [{"_score": "desc"}, {"u": "asc"}],
+      "query": {"function_score": {"query": {"match_all": {}}, "weight": 2,
+                                   "min_score": 3, "boost": 10}}}, hits),
+    (SCORING, DOCS_SCORING, "boosting ne retire personne",
+     "`negative` deplace le score, il n'exclut pas : l'ensemble rendu est "
+     "exactement celui de `positive`",
+     {"size": 10, "_source": False,
+      "sort": [{"_score": "desc"}, {"u": "asc"}],
+      "query": {"boosting": {"positive": {"match_all": {}},
+                             "negative": {"term": {"u": "a"}},
+                             "negative_boost": 0.2}}}, hits),
+    (SCORING, DOCS_SCORING, "min_score : le boost tombe quand le tri remplace le score",
+     "le `boost` d'une clause ne s'applique **que si** le collecteur demande "
+     "des scores — Lucene comme tantivy laissent alors tomber leur "
+     "`BoostQuery`. Ca ne se voit nulle part ailleurs, sauf sous un "
+     "`min_score`, qui fait du score un seuil",
+     {"size": 10, "_source": False, "sort": [{"u": "asc"}], "track_total_hits": True,
+      "query": {"function_score": {
+          "query": {"match_all": {}}, "min_score": 2, "boost": 3,
+          "field_value_factor": {"field": "n", "missing": 1,
+                                 "modifier": "square"}}}}, hits),
+    (SCORING, DOCS_SCORING, "surlignage sous un min_score",
+     "un `min_score`, meme a zero, fait taire le surlignage de tout le "
+     "sous-arbre : ES y perd ses `Matches`",
+     {"size": 10, "_source": False,
+      "sort": [{"u": "asc"}],
+      "query": {"function_score": {"query": {"term": {"u": "a"}},
+                                   "weight": 2, "min_score": 0}},
+      "highlight": {"fields": {"u": {}}}}, surligne),
 ]
 
 # Ce que ferrite refuse **expres** plutot que de rendre un resultat faux. ES sait

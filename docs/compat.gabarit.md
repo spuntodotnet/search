@@ -645,6 +645,89 @@ Toute notation qui n'est pas comprise est refusée en 400. C'est la règle du
 projet appliquée à son exemple canonique : ignorer ce paramètre rendrait **plus**
 de documents que demandé, sans que rien ne le signale.
 
+### `function_score` et `boosting`
+
+Le réglage de la pertinence : « le même match, mais les articles récents
+devant », « les produits en stock devant », « ne pas exclure les archives,
+juste les repousser ».
+
+Ces deux clauses posent un problème qu'aucune autre ne pose. Les autres rendent
+un **ensemble** de documents et parfois un **ordre** ; celles-ci rendent une
+**valeur** — le `_score` lui-même est ce que le client lit, affiche et compare.
+Une formule recopiée depuis la documentation d'Elastic rend un nombre
+plausible, et un nombre plausible ne se distingue pas d'un nombre juste par la
+lecture.
+
+D'où la méthode, qui est celle de la carte du `date_histogram` appliquée à
+d'autres classes : **l'arbitre s'exécute, il ne se lit pas.** Le conteneur de
+référence embarque un JDK *et* les jars d'ES, donc
+`java -cp '/usr/share/elasticsearch/lib/*'` fait tourner telles quelles les
+classes qui décident :
+
+| Ce qui est mesuré | La classe d'ES qui répond |
+|---|---|
+| `gauss`, `exp`, `linear` | `GaussDecayFunctionBuilder$GaussScoreFunction` et ses deux sœurs (`processScale`, puis `evaluate`) |
+| les dix `modifier` de `field_value_factor` | `FieldValueFactorFunction$Modifier` (`apply`) |
+| les six `boost_mode`, `max_boost` compris | `CombineFunction` (`combine`) |
+
+[`tests/compat/genere_scoring.py`](../tests/compat/genere_scoring.py) en tire
+**47 184 points** (1 744 batteries faisant varier l'échelle, le `offset`, le
+`decay` et l'origine), et
+[`tests/scoring_vs_es.rs`](../tests/scoring_vs_es.rs) les rejoue dans
+`cargo test`, **sans Docker**. Ça évite d'avoir à *choisir* une tolérance : la
+question n'est pas « est-ce assez proche », c'est « est-ce le même `f64` ». Le
+seul écart qui subsiste est **1 ULP** sur les `double`, là où le JDK et la libm
+du système n'arrondissent pas `exp` ou `log` pareil — et il disparaît toujours
+au passage en `float`, où l'égalité est exigée stricte.
+
+De bout en bout, [`sonde_score.py`](../tests/compat/sonde_score.py) pose 194
+questions aux deux serveurs et compare le `_score` de chaque hit,
+`max_score`, le total et l'ordre : **180 identiques, 14 refus assumés, 0
+écart** (`--calibrer` : 193/194 contre deux Elasticsearch, le seul écart étant
+`random_score`, qui est tiré au sort). La plupart des questions partent d'une
+requête dont le score de base est **exact des deux côtés** (une somme de
+`constant_score`) : ce que l'égalité y mesure est bien l'arithmétique de la
+clause, et rien d'autre. Les questions marquées `[bm25]` partent d'un vrai
+`match`, dont tantivy et Lucene ne calculent pas le dernier bit pareil ; leur
+tolérance n'est pas choisie, c'est l'écart **mesuré sur la requête nue** plus
+trois arrondis de `float`.
+
+Cinq règles qu'aucune documentation ne donne, toutes mesurées :
+
+- **`min_score` compare le score *après* le `boost` de la clause.** On
+  attendrait l'inverse, puisque le `boost` est un `BoostQuery` qui *enveloppe*
+  la clause ; Lucene le fait descendre dans `createWeight`, et
+  `FunctionScoreQuery` l'applique **dans** son scorer, que `MinScoreScorer`
+  enveloppe ensuite. `min_score: 3` avec `boost: 10` ne coupe rien là où le même
+  `min_score` sans `boost` coupe tout.
+- **Une fonction unique sans `filter` fait ignorer `score_mode`.** ES construit
+  alors son autre constructeur, celui qui pose `ScoreMode.FIRST`. Ça ne se voit
+  que sur `avg`, le seul mode qui diffère de `first` à une fonction : sur un
+  `weight: 2`, ES rend le score de base ×2 là où une moyenne pondérée rendrait
+  ×1. La règle vaut aussi pour un `functions` à un seul élément, et un `filter`
+  qui est un `match_all` **littéral** compte comme absent.
+- **`avg` divise par la somme des poids**, pas par le nombre de fonctions. Deux
+  fonctions de poids 3 et 5 font une moyenne sur 8.
+- **Un document sans valeur a une distance nulle**, donc un score de
+  décroissance de **1.0** : ES remplace la distance manquante par 0, il n'écarte
+  pas le document. Le `field_value_factor`, lui, **fait échouer la recherche**
+  si le document n'a pas de valeur et qu'aucun `missing` n'est posé — et cet
+  échec-là, ferrite le reproduit (un `Scorer` ne peut pas échouer : l'incident
+  est posé de côté et relu après la recherche).
+- **Sur un champ multivalué, c'est la plus petite *distance* qui compte** pour
+  une décroissance, et la plus petite *valeur* pour un `field_value_factor` —
+  ce n'est pas la même chose dès que l'origine tombe au milieu des valeurs.
+
+Et un refus qui n'en est pas un : **`boost_factor` est refusé par ES 8.15
+lui-même** (`field [boost_factor] is not supported`, il a disparu en 5.0).
+ferrite rend la même phrase — le servir reviendrait à accepter une requête
+qu'un vrai Elasticsearch rejette.
+
+`boosting` est plus simple, et son seul piège est qu'il n'en a pas :
+l'ensemble rendu est **exactement** celui de `positive`, `negative` ne retire
+rien. `negative_boost` est obligatoire et doit être positif ; au-dessus de 1 il
+promeut au lieu de repousser, ce qu'ES accepte sans rien dire.
+
 ### Corps et paramètres de `_search`
 
 <!-- table:corps_search -->

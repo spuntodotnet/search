@@ -60,10 +60,10 @@
  },
  "totaux": {
   "requetes": 5311,
-  "servies": 2438,
-  "refusees": 2856,
+  "servies": 2449,
+  "refusees": 2845,
   "indeterminees": 17,
-  "taux_servies": 45.9
+  "taux_servies": 46.1
  },
  "par_source": {
   "clients": {
@@ -73,11 +73,11 @@
    "taux_servies": 81.1
   },
   "doc": {
-   "servie": 1595,
+   "servie": 1601,
    "total": 3969,
-   "refusee": 2359,
+   "refusee": 2353,
    "indeterminee": 15,
-   "taux_servies": 40.2
+   "taux_servies": 40.3
   },
   "github": {
    "refusee": 12,
@@ -86,11 +86,11 @@
    "taux_servies": 96.4
   },
   "rally": {
-   "refusee": 458,
+   "refusee": 453,
    "total": 861,
-   "servie": 401,
+   "servie": 406,
    "indeterminee": 2,
-   "taux_servies": 46.6
+   "taux_servies": 47.2
   }
  },
  "concentration": [
@@ -172,9 +172,9 @@
  ],
  "par_api": {
   "search": {
-   "servie": 929,
+   "servie": 940,
    "total": 1801,
-   "refusee": 871,
+   "refusee": 860,
    "indeterminee": 1
   },
   "indices.create": {
@@ -8136,9 +8136,11 @@
   "datemath.now": 0.1,
   "datemath.time_zone": null,
   "dsl.bool": 12.1,
+  "dsl.boosting": 0.0,
   "dsl.constant_score": 0.2,
   "dsl.dis_max": 0.1,
   "dsl.exists": 2.6,
+  "dsl.function_score": 0.4,
   "dsl.fuzzy": 0.0,
   "dsl.ids": 0.0,
   "dsl.match": 6.8,
@@ -8148,7 +8150,7 @@
   "dsl.match_phrase_prefix": 0.1,
   "dsl.multi_match": 0.9,
   "dsl.nom_de_clause": null,
-  "dsl.non_supportees": 6.5,
+  "dsl.non_supportees": 6.1,
   "dsl.prefix": 0.3,
   "dsl.range": 11.4,
   "dsl.regexp": 0.0,
@@ -9510,27 +9512,27 @@
   },
   {
    "capacite": "dsl.non_supportees",
-   "nom": "query_string, simple_query_string, function_score, boosting, intervals, terms_set, script…",
+   "nom": "query_string, simple_query_string, intervals, terms_set, script…",
    "etat": "refuse",
    "motif": "pas_encore",
-   "requetes": 345,
-   "part": 6.5,
+   "requetes": 325,
+   "part": 6.1,
    "par_source": {
     "clients": {
      "requetes": 7,
      "part": 4.9
     },
     "doc": {
-     "requetes": 173,
-     "part": 4.4
+     "requetes": 159,
+     "part": 4.0
     },
     "github": {
-     "requetes": 2,
-     "part": 0.6
+     "requetes": 1,
+     "part": 0.3
     },
     "rally": {
-     "requetes": 163,
-     "part": 18.9
+     "requetes": 158,
+     "part": 18.4
     }
    },
    "traits": [
@@ -9583,10 +9585,6 @@
      "requetes": 20
     },
     {
-     "trait": "dsl:function_score",
-     "requetes": 19
-    },
-    {
      "trait": "dsl:percolate.document",
      "requetes": 16
     },
@@ -9635,16 +9633,8 @@
      "requetes": 7
     },
     {
-     "trait": "dsl:function_score.functions",
-     "requetes": 6
-    },
-    {
      "trait": "dsl:intervals",
      "requetes": 6
-    },
-    {
-     "trait": "dsl:function_score.script_score",
-     "requetes": 5
     },
     {
      "trait": "dsl:geo_distance.lat",
@@ -9669,10 +9659,6 @@
     {
      "trait": "dsl:span_near.slop",
      "requetes": 5
-    },
-    {
-     "trait": "dsl:function_score.random_score",
-     "requetes": 4
     },
     {
      "trait": "dsl:geo_polygon",
@@ -9783,30 +9769,6 @@
      "requetes": 2
     },
     {
-     "trait": "dsl:function_score.boost",
-     "requetes": 2
-    },
-    {
-     "trait": "dsl:function_score.boost_mode",
-     "requetes": 2
-    },
-    {
-     "trait": "dsl:function_score.field_value_factor",
-     "requetes": 2
-    },
-    {
-     "trait": "dsl:function_score.gauss",
-     "requetes": 2
-    },
-    {
-     "trait": "dsl:function_score.min_score",
-     "requetes": 2
-    },
-    {
-     "trait": "dsl:function_score.score_mode",
-     "requetes": 2
-    },
-    {
      "trait": "dsl:intervals.all_of",
      "requetes": 2
     },
@@ -9893,18 +9855,6 @@
     {
      "trait": "dsl:weighted_tokens.tokens",
      "requetes": 2
-    },
-    {
-     "trait": "dsl:boosting",
-     "requetes": 1
-    },
-    {
-     "trait": "dsl:boosting.negative_boost",
-     "requetes": 1
-    },
-    {
-     "trait": "dsl:function_score.max_boost",
-     "requetes": 1
     },
     {
      "trait": "dsl:geo_bounding_box.bottom",
@@ -12221,6 +12171,34 @@
     {
      "trait": "corps:highlight.highlight_query",
      "requetes": 1
+    }
+   ]
+  },
+  {
+   "capacite": "dsl.function_score",
+   "nom": "function_score",
+   "etat": "partiel",
+   "motif": null,
+   "requetes": 9,
+   "part": 0.2,
+   "par_source": {
+    "doc": {
+     "requetes": 8,
+     "part": 0.2
+    },
+    "github": {
+     "requetes": 1,
+     "part": 0.3
+    }
+   },
+   "traits": [
+    {
+     "trait": "dsl:function_score.script_score",
+     "requetes": 5
+    },
+    {
+     "trait": "dsl:function_score.random_score",
+     "requetes": 4
     }
    ]
   },

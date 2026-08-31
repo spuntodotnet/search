@@ -54,6 +54,10 @@ pub struct Cible {
     pub index: Arc<FerriteIndex>,
     pub gen: Arc<Generation>,
     pub query: Box<dyn Query>,
+    /// Ce que l'execution a rencontre et qu'ES traite en erreur (voir
+    /// [`crate::fonction_score::Incidents`]) : une commande par requete ne
+    /// score pas, mais un `min_score` la fait scorer quand meme.
+    pub incidents: Arc<crate::fonction_score::Incidents>,
 }
 
 /// Ce que le client a demande, une fois les parametres lus.
@@ -224,6 +228,9 @@ fn echec(index: &str, id: &str, e: &EsError) -> Value {
 fn relever(cible: &Cible, geste: Geste) -> EsResult<Vec<Candidat>> {
     let searcher = cible.gen.searcher();
     let adresses = searcher.search(&cible.query, &CollecteurDeDocs)?;
+    if let Some(e) = cible.incidents.erreur() {
+        return Err(e);
+    }
 
     let mut out = Vec::with_capacity(adresses.len());
     for (seg, doc) in adresses {

@@ -97,8 +97,8 @@ qu'un zéro qui aurait l'air d'une mesure.
 | `match` | 6,8 % | 🟡 |
 | `PUT\|POST /{index}/_doc/{id}` | 6,8 % | 🟡 |
 | `stored_fields` | 6,6 % | ✅ |
-| `query_string`, `simple_query_string`, `function_score`, `boosting`, `intervals`, `terms_set`, `script`… | 6,5 % | ❌ |
 | `percentiles`, `extended_stats`, `top_hits`, `composite`, `filters`, `nested`, `significant_terms`, `date_range`, `ip_range`… | 6,1 % | ❌ |
+| `query_string`, `simple_query_string`, `intervals`, `terms_set`, `script`… | 6,1 % | ❌ |
 | `date_histogram` | 5,3 % | 🟡 |
 | `match_phrase` | 4,5 % | 🟡 |
 | `_all`, `*`, URL sans index | 4,1 % | ✅ |
@@ -747,11 +747,13 @@ suppression de données.
 | `fuzzy` | 🟡 | Supporté : `value`, `fuzziness` (`AUTO` ou distance entière), `transpositions`, `boost`. Refusé : `prefix_length`, `max_expansions`, `rewrite` |
 | `constant_score` | ✅ | `filter`, `boost` |
 | `dis_max` | ✅ | `queries`, `tie_breaker`, `boost` — voir [`src/dismax.rs`](../src/dismax.rs) |
+| `function_score` | 🟡 | le réglage de la pertinence : « le même match, mais les articles récents devant ». Les trois briques de calcul — les fonctions de décroissance, les modificateurs de `field_value_factor` et les six `boost_mode` — sont **verrouillées contre les classes d'Elasticsearch elles-mêmes**, exécutées dans le conteneur de référence ([`genere_scoring.py`](../tests/compat/genere_scoring.py), 47 184 points rejoués par `cargo test`). Voir [la section dédiée](#function_score-et-boosting). Supporté : `query` (facultative ; sans elle, `match_all`), `functions` (avec `filter` et `weight` par entrée), `weight`, `field_value_factor` (`field`, `factor`, `modifier` (les dix), `missing` — sur un champ numérique, `date` ou `boolean`), `gauss` (sur un champ numérique, `date` ou `boolean` ; `origin`, `scale`, `offset`, `decay`. Sur une `date`, `origin` accepte le date math et vaut `now` par défaut, `scale` et `offset` sont des durées), `exp` (mêmes paramètres que `gauss`), `linear` (mêmes paramètres que `gauss`), `score_mode` (`multiply`, `sum`, `avg`, `first`, `max`, `min` — **ignoré** quand il n'y a qu'une fonction sans `filter`, comme chez ES (mesuré)), `boost_mode` (`multiply`, `replace`, `sum`, `avg`, `max`, `min`), `max_boost`, `min_score` (comparé au score **après** le `boost` de la clause, comme chez ES (mesuré)), `boost`. Refusé : `random_score` (un score tiré au sort ne se reproduit pas d'un moteur à l'autre : il faudrait reproduire le hachage de Lucene sur des identifiants internes qui ne sont pas les mêmes), `script_score` (suppose Painless, un langage à part entière), `boost_factor` (**ES 8.15 le refuse aussi** (`field [boost_factor] is not supported`), et ferrite rend la même phrase : il a disparu en 5.0), `multi_value_mode` (seul le défaut d'ES est servi — `min`, appliqué à la **distance** et non à la valeur), plusieurs champs dans une même décroissance (ES en applique **un seul** sans dire lequel (mesuré) ; le reproduire demanderait de deviner), une décroissance sur un champ non mappé (ES la refuse aussi (`unknown field [x]`) — son `field_value_factor`, lui, l'accepte et sert son `missing`, et ferrite fait pareil) |
+| `boosting` | ✅ | la démotion sans exclusion : `positive`, `negative`, `negative_boost` (obligatoire et positif, comme chez ES), `boost`. L'ensemble rendu est **exactement** celui de `positive` |
 | `terms` | 🟡 | liste de valeurs, score constant comme chez ES. Sur un champ `date`, chaque valeur est une période, comme dans `term`. Refusé : les *terms lookup* (lire la liste des valeurs dans un autre document) |
 | `range` | 🟡 | sur `keyword` / numérique / `date` / `boolean`. Sur un champ `date`, les bornes acceptent le **date math** (`now`, `now-1d/d`, `2026-03-15\|\|+1M`) et sont **arrondies selon leur côté** — voir [la section dédiée](#date-math-et-arrondi-des-bornes). Supporté : `gte`, `gt`, `lte`, `lt`, `boost`, `format` (lecture des bornes), `time_zone` (la borne est résolue **dans le fuseau**, arrondi compris — voir [la section dédiée](#date-math-et-arrondi-des-bornes). Sur un champ qui n'est pas une date, il est accepté sans effet, comme chez ES (mesuré)). Refusé : `relation`, un `range` sur un champ `text` |
 | `bool` | 🟡 | `filter` ne contribue pas au score. Un `bool` qui n'a que des `must_not` matche tous les autres documents, comme chez ES. Supporté : `must`, `should`, `filter`, `must_not`, `mustNot` (l'écriture camelCase **dépréciée**, qu'ES 8.15 sert encore — et la seule du DSL : `minimumShouldMatch`, `adjustPureNegative`, `maxExpansions`, `caseInsensitive`, `tieBreaker`, `scoreMode` sont tous refusés chez lui (mesuré, un par un). ferrite ne rend pas l'en-tête `Warning` de dépréciation qu'ES y ajoute), `boost`, `minimum_should_match` (ses **quatre notations**, voir [la section dédiée](#minimum_should_match)). Refusé : `_name`, `adjust_pure_negative` |
 | `_name` (nommer une clause), `matched_queries`, `include_named_queries_score` | ❌ | **pas encore** — nommer une clause n'a d'interet qu'avec `matched_queries` dans la reponse, qui n'est pas rendu : accepter le nom en le perdant serait promettre une information qui ne reviendra pas. Refuse dans toutes les clauses, `bool` compris — et le parametre `include_named_queries_score` (ES 8.13) avec, puisqu'il ne change **que** la forme de `matched_queries` (un objet `{nom: score}` au lieu d'une liste). Le laisser tomber dans « unrecognized parameter » le deguisait en faute de frappe : c'etait le seul defaut de cette ligne, et il comptait en regression pour la suite d'OpenSearch — la seule des trois sources a pouvoir l'exercer, le parametre etant posterieur a la 7.10.2 comme a la 2.12 d'OpenSearch |
-| `query_string`, `simple_query_string`, `function_score`, `boosting`, `intervals`, `terms_set`, `script`… | ❌ | **pas encore** — `parsing_exception: unknown query [...]`, avec la liste des clauses connues — la plus regrettée est `query_string`, dont la syntaxe est un langage à part entière |
+| `query_string`, `simple_query_string`, `intervals`, `terms_set`, `script`… | ❌ | **pas encore** — `parsing_exception: unknown query [...]`, avec la liste des clauses connues — la plus regrettée est `query_string`, dont la syntaxe est un langage à part entière |
 
 ### La recherche libre (`multi_match`)
 
@@ -834,6 +836,89 @@ Toute notation qui n'est pas comprise est refusée en 400. C'est la règle du
 projet appliquée à son exemple canonique : ignorer ce paramètre rendrait **plus**
 de documents que demandé, sans que rien ne le signale.
 
+### `function_score` et `boosting`
+
+Le réglage de la pertinence : « le même match, mais les articles récents
+devant », « les produits en stock devant », « ne pas exclure les archives,
+juste les repousser ».
+
+Ces deux clauses posent un problème qu'aucune autre ne pose. Les autres rendent
+un **ensemble** de documents et parfois un **ordre** ; celles-ci rendent une
+**valeur** — le `_score` lui-même est ce que le client lit, affiche et compare.
+Une formule recopiée depuis la documentation d'Elastic rend un nombre
+plausible, et un nombre plausible ne se distingue pas d'un nombre juste par la
+lecture.
+
+D'où la méthode, qui est celle de la carte du `date_histogram` appliquée à
+d'autres classes : **l'arbitre s'exécute, il ne se lit pas.** Le conteneur de
+référence embarque un JDK *et* les jars d'ES, donc
+`java -cp '/usr/share/elasticsearch/lib/*'` fait tourner telles quelles les
+classes qui décident :
+
+| Ce qui est mesuré | La classe d'ES qui répond |
+|---|---|
+| `gauss`, `exp`, `linear` | `GaussDecayFunctionBuilder$GaussScoreFunction` et ses deux sœurs (`processScale`, puis `evaluate`) |
+| les dix `modifier` de `field_value_factor` | `FieldValueFactorFunction$Modifier` (`apply`) |
+| les six `boost_mode`, `max_boost` compris | `CombineFunction` (`combine`) |
+
+[`tests/compat/genere_scoring.py`](../tests/compat/genere_scoring.py) en tire
+**47 184 points** (1 744 batteries faisant varier l'échelle, le `offset`, le
+`decay` et l'origine), et
+[`tests/scoring_vs_es.rs`](../tests/scoring_vs_es.rs) les rejoue dans
+`cargo test`, **sans Docker**. Ça évite d'avoir à *choisir* une tolérance : la
+question n'est pas « est-ce assez proche », c'est « est-ce le même `f64` ». Le
+seul écart qui subsiste est **1 ULP** sur les `double`, là où le JDK et la libm
+du système n'arrondissent pas `exp` ou `log` pareil — et il disparaît toujours
+au passage en `float`, où l'égalité est exigée stricte.
+
+De bout en bout, [`sonde_score.py`](../tests/compat/sonde_score.py) pose 194
+questions aux deux serveurs et compare le `_score` de chaque hit,
+`max_score`, le total et l'ordre : **180 identiques, 14 refus assumés, 0
+écart** (`--calibrer` : 193/194 contre deux Elasticsearch, le seul écart étant
+`random_score`, qui est tiré au sort). La plupart des questions partent d'une
+requête dont le score de base est **exact des deux côtés** (une somme de
+`constant_score`) : ce que l'égalité y mesure est bien l'arithmétique de la
+clause, et rien d'autre. Les questions marquées `[bm25]` partent d'un vrai
+`match`, dont tantivy et Lucene ne calculent pas le dernier bit pareil ; leur
+tolérance n'est pas choisie, c'est l'écart **mesuré sur la requête nue** plus
+trois arrondis de `float`.
+
+Cinq règles qu'aucune documentation ne donne, toutes mesurées :
+
+- **`min_score` compare le score *après* le `boost` de la clause.** On
+  attendrait l'inverse, puisque le `boost` est un `BoostQuery` qui *enveloppe*
+  la clause ; Lucene le fait descendre dans `createWeight`, et
+  `FunctionScoreQuery` l'applique **dans** son scorer, que `MinScoreScorer`
+  enveloppe ensuite. `min_score: 3` avec `boost: 10` ne coupe rien là où le même
+  `min_score` sans `boost` coupe tout.
+- **Une fonction unique sans `filter` fait ignorer `score_mode`.** ES construit
+  alors son autre constructeur, celui qui pose `ScoreMode.FIRST`. Ça ne se voit
+  que sur `avg`, le seul mode qui diffère de `first` à une fonction : sur un
+  `weight: 2`, ES rend le score de base ×2 là où une moyenne pondérée rendrait
+  ×1. La règle vaut aussi pour un `functions` à un seul élément, et un `filter`
+  qui est un `match_all` **littéral** compte comme absent.
+- **`avg` divise par la somme des poids**, pas par le nombre de fonctions. Deux
+  fonctions de poids 3 et 5 font une moyenne sur 8.
+- **Un document sans valeur a une distance nulle**, donc un score de
+  décroissance de **1.0** : ES remplace la distance manquante par 0, il n'écarte
+  pas le document. Le `field_value_factor`, lui, **fait échouer la recherche**
+  si le document n'a pas de valeur et qu'aucun `missing` n'est posé — et cet
+  échec-là, ferrite le reproduit (un `Scorer` ne peut pas échouer : l'incident
+  est posé de côté et relu après la recherche).
+- **Sur un champ multivalué, c'est la plus petite *distance* qui compte** pour
+  une décroissance, et la plus petite *valeur* pour un `field_value_factor` —
+  ce n'est pas la même chose dès que l'origine tombe au milieu des valeurs.
+
+Et un refus qui n'en est pas un : **`boost_factor` est refusé par ES 8.15
+lui-même** (`field [boost_factor] is not supported`, il a disparu en 5.0).
+ferrite rend la même phrase — le servir reviendrait à accepter une requête
+qu'un vrai Elasticsearch rejette.
+
+`boosting` est plus simple, et son seul piège est qu'il n'en a pas :
+l'ensemble rendu est **exactement** celui de `positive`, `negative` ne retire
+rien. `negative_boost` est obligatoire et doit être positif ; au-dessus de 1 il
+promeut au lieu de repousser, ce qu'ES accepte sans rien dire.
+
 ### Corps et paramètres de `_search`
 
 | | État | Détail |
@@ -849,7 +934,7 @@ de documents que demandé, sans que rien ne le signale.
 | `highlight` | 🟡 | les fragments surlignés d'une barre de recherche. Ce qui se reproduit ici n'est pas « marquer les termes » mais le **découpage** de Lucene, et aucune de ses règles n'était devinable : les phrases (au sens d'UAX#29) sont fusionnées vers l'avant tant que la longueur reste sous `fragment_size`, et une phrase qui déborde à elle seule est re-coupée **au mot** autour de la correspondance — donc `fragment_size: 19` rend une phrase là où `20` en rend deux, sur le même texte. Un point suivi d'une **minuscule** ne termine pas une phrase (règle SB8), un point entre deux capitales non plus. Le fragment se centre sur le **milieu** de la correspondance : sur un mot isolé ça ne se voit pas, sur un `match_phrase` de quatre mots le bord gauche se décale de plusieurs mots. Quand il y a plus de fragments que `number_of_fragments`, ce sont les mieux notés par le `PassageScorer` de Lucene qui restent, puis remis dans **l'ordre du document**. Une phrase rend **une seule** marque, du premier terme au dernier. Un champ multivalué est traité valeur par valeur — un fragment ne franchit jamais la frontière entre deux valeurs — mais les fragments de toutes les valeurs sont mis en concurrence ensemble. Un champ sans correspondance est **absent** de la réponse, pas une chaîne vide. Mesuré fragment par fragment par [`diff_highlight.py`](../tests/compat/diff_highlight.py). Supporté : `fields` (un nom, un motif `*`, la forme héritée en liste d'objets ; seuls les champs `text` et `keyword` répondent, comme chez ES), `pre_tags` (seule la première balise est employée, comme le surligneur par défaut d'ES), `post_tags`, `tags_schema` (`default` et `styled` (`<em class="hlt1">`)), `number_of_fragments` (`0` rend la valeur entière, valeur par valeur), `fragment_size` (`0` rend une phrase entière ; une valeur négative retombe sur le défaut, comme chez ES), `no_match_size` (le début de la **première** valeur, étendu à la frontière de mot qui suit), `require_field_match` (`true`, le défaut : le champ n'est surligné que par ce que la requête y pose), la surcharge champ par champ de tous les réglages ci-dessus, `order: none` (le défaut : les fragments sortent dans l'ordre du document). Refusé : `type` (`fvh`, `plain` et même `unified` écrit explicitement : ferrite n'a qu'un surligneur, et un `type` accepté en silence laisserait croire qu'un autre découpage a été appliqué), `order` (`score` trie les fragments par leur note ; ES y emploie un tri **instable** (`introSort`), donc deux fragments de même note ne sortent pas dans un ordre reproductible), `require_field_match: false` (ES y cherche les termes de **toutes** les clauses dans **tous** les champs, par une extraction qui n'est pas celle du mode normal — il en documente lui-même le résultat comme approximatif, et ferrite n'en reproduit pas tous les cas. Un refus se voit ; un fragment silencieusement différent, non), `highlight_query`, `matched_fields`, `boundary_scanner`, `boundary_chars`, `boundary_max_scan`, `boundary_scanner_locale`, `fragmenter`, `encoder` (`html` échappe le texte du fragment), `force_source`, `phrase_limit`, `max_analyzed_offset`, un fragment d'un `nested` sous `inner_hits` (`inner_hits` est hors périmètre ; un sous-champ de `nested` se surligne bien depuis la racine) |
 | `script_fields`, `runtime_mappings` | ❌ | **hors périmètre assumé** — les deux définissent des champs **calculés par un script Painless**, que ferrite n'exécute pas. La mesure le confirme plutôt que la supposition : sur les 444 requêtes du corpus qui portent `runtime_mappings`, **425 l'envoient vide** (des gabarits de tracks Rally), et sur les 19 non vides **18 portent un script**. L'objet **vide** est donc accepté — il ne définit aucun champ, donc ne demande rien, et ES rend la même réponse avec ou sans (mesuré) ; un objet non vide est refusé explicitement |
 | `track_total_hits` | 🟡 | le total est **toujours exact** (`relation: "eq"`). Supporté : `true`, une valeur numérique. Refusé : `false` (il n'y a rien à économiser sur un total déjà exact) |
-| Scoring | 🟡 | BM25 (tantivy), `_score` et `max_score` renseignés ; `null` quand un tri est demandé, comme chez ES. Les **valeurs** ne sont pas comparées à celles d'ES (les constantes diffèrent) ; c'est l'**ordre** qui l'est, par [`diff_relevance.py`](../tests/compat/diff_relevance.py). Un `term` sur un champ numérique vaut `1.0` comme chez ES (requête de points), un `keyword` et un `boolean` sont indexés sans *fieldnorm* comme chez Lucene — donc deux documents qui portent la même valeur marquent pareil, quel que soit le nombre de valeurs du champ. Refusé : l'`avgdl` de BM25 sur un champ `text` **facultatif** (Lucene calcule la longueur moyenne sur les documents **qui ont le champ**, tantivy sur **tous** les documents de l'index. Deux scores voisins peuvent alors s'inverser. Mesuré par [`fuzz_vs_es.py`](../tests/compat/fuzz_vs_es.py) ; l'ampleur est mesurée par `diff_relevance.py`), le score d'un `fuzzy` (tantivy le rend **constant** ; Lucene pondère chaque terme par sa distance d'édition. Les documents rendus sont les mêmes, leur ordre non) |
+| Scoring | 🟡 | BM25 (tantivy), `_score` et `max_score` renseignés ; `null` quand un tri est demandé, comme chez ES. Les **valeurs** ne sont pas comparées à celles d'ES (les constantes diffèrent) ; c'est l'**ordre** qui l'est, par [`diff_relevance.py`](../tests/compat/diff_relevance.py). Un `term` sur un champ numérique vaut `1.0` comme chez ES (requête de points), un `keyword` et un `boolean` sont indexés sans *fieldnorm* comme chez Lucene — donc deux documents qui portent la même valeur marquent pareil, quel que soit le nombre de valeurs du champ. Refusé : l'`avgdl` de BM25 sur un champ `text` **facultatif** (Lucene calcule la longueur moyenne sur les documents **qui ont le champ**, tantivy sur **tous** les documents de l'index. Deux scores voisins peuvent alors s'inverser. Mesuré par [`fuzz_vs_es.py`](../tests/compat/fuzz_vs_es.py) ; l'ampleur est mesurée par `diff_relevance.py`. Et depuis `function_score`, cet écart de **valeur** peut devenir un écart d'**ensemble** : `min_score` est le seul endroit où le score cesse d'être un ordre pour devenir un seuil. Un `min_score` réglé sur les scores d'un vrai Elasticsearch ne coupe donc pas exactement au même endroit chez ferrite dès qu'un champ `text` est facultatif (mesuré : 0,998 chez ES contre 1,169 chez ferrite sur le même document, de part et d'autre d'un `min_score: 1`)), le score d'un `fuzzy` (tantivy le rend **constant** ; Lucene pondère chaque terme par sa distance d'édition. Les documents rendus sont les mêmes, leur ordre non) |
 | Format de réponse | ✅ | `took`, `timed_out`, `_shards` (avec `failures[]` quand un index n'a pas su répondre), `hits.total.{value,relation}`, `hits.max_score`, `hits.hits[]` avec `_index` / `_id` / `_score` / `_source` / `sort` |
 | `preference` | 🟡 | accepté, sans objet : il n'y a qu'un shard |
 | `aggs` / `aggregations` | 🟡 | voir la section dédiée |

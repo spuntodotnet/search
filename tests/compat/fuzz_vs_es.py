@@ -242,6 +242,17 @@ BRIQUES = {
     "q.bool": "dsl.bool",
     "q.constant_score": "dsl.constant_score",
     "q.dis_max": "dsl.dis_max",
+    "q.boosting": "dsl.boosting",
+    # `function_score` a **quatre** briques et pas une, pour la meme raison que
+    # les trois de la cle de tri : chacune est silencieuse quand elle est
+    # fausse. Un `weight` non applique rend le meme ensemble de documents dans
+    # le meme ordre des que le score de base les separe deja ; une decroissance
+    # de travers rend un classement plausible ; un `min_score` mal place rend
+    # un total faux en 200.
+    "q.function_score": "dsl.function_score",
+    "q.function_score.valeur": "dsl.function_score",
+    "q.function_score.decroissance": "dsl.function_score",
+    "q.function_score.bornes": "dsl.function_score",
     "q.nested": "nested.clause",
     "q.nested.internes": "nested.clauses_internes",
     "q.nested.score_mode": "nested.score_mode",
@@ -860,7 +871,8 @@ class Generateur:
         if nesteds and profondeur == 0:
             choix += ["nested", "nested"]
         if profondeur < 2:
-            choix += ["bool", "bool", "constant_score", "dis_max"]
+            choix += ["bool", "bool", "constant_score", "dis_max",
+                      "function_score", "boosting"]
 
         for _ in range(8):
             quoi = rng.choice(choix)
@@ -1161,6 +1173,118 @@ class Generateur:
         if self.rng.random() < 0.5:
             q["tie_breaker"] = self.rng.choice([0.0, 0.3, 1.0])
         return {"dis_max": q}
+
+    # -- function_score / boosting ------------------------------------------
+
+    # Les modificateurs de `field_value_factor`. Ceux dont le domaine s'arrete
+    # (`log`, `ln`, `sqrt`, `reciprocal`) sont dedans exprès : c'est la que les
+    # deux serveurs doivent refuser **ensemble**, et le corpus tire des valeurs
+    # nulles et negatives.
+    MODIFICATEURS = ["none", "log", "log1p", "log2p", "ln", "ln1p", "ln2p",
+                     "square", "sqrt", "reciprocal"]
+    DECROISSANCES = ["gauss", "exp", "linear"]
+
+    def _fonction_de_score(self, champs, docs, prof):
+        """Une entree de `functions[]`, ou la fonction unique du corps."""
+        rng = self.rng
+        quoi = rng.choice(["poids", "valeur", "decroissance"])
+        if quoi == "valeur" and self.brique("q.function_score.valeur"):
+            c = self._champ_sauf(champs, ("boolean", "date") + tuple(NUMERIQUES))
+            if c is not None:
+                f = {"field": c.chemin}
+                if rng.random() < 0.5:
+                    f["factor"] = rng.choice([0.5, 2, 1.5])
+                if rng.random() < 0.7:
+                    f["modifier"] = rng.choice(self.MODIFICATEURS)
+                # Sans `missing`, un document sans valeur fait echouer la
+                # recherche **des deux cotes** : c'est un cas a exercer, pas un
+                # cas a eviter, mais pas a chaque tirage.
+                if rng.random() < 0.8:
+                    f["missing"] = rng.choice([0, 1, 2.5, -1])
+                return {"field_value_factor": f}
+        if quoi == "decroissance" and self.brique("q.function_score.decroissance"):
+            c = self._champ_sauf(champs, ("boolean", "date") + tuple(NUMERIQUES))
+            if c is not None:
+                nom = rng.choice(self.DECROISSANCES)
+                spec = {}
+                if c.ty == "date":
+                    # Sur une date, `origin` est une expression et `scale` une
+                    # duree — ES a deux parseurs, et il n'accepte pas l'un a la
+                    # place de l'autre.
+                    if rng.random() < 0.8:
+                        spec["origin"] = self._instant_lisible(c, docs)
+                    spec["scale"] = rng.choice(["1d", "30d", "12h", "3600000ms"])
+                    if rng.random() < 0.4:
+                        spec["offset"] = rng.choice(["0", "1d", "2h"])
+                else:
+                    v = self._valeur_pour(c, docs)
+                    if isinstance(v, bool):
+                        v = int(v)
+                    if not isinstance(v, (int, float)):
+                        return None
+                    spec["origin"] = v
+                    spec["scale"] = rng.choice([1, 2.5, 10, 1000])
+                    if rng.random() < 0.4:
+                        spec["offset"] = rng.choice([0, 1, 5])
+                if rng.random() < 0.4:
+                    spec["decay"] = rng.choice([0.1, 0.5, 0.9, 0.333])
+                return {nom: {c.chemin: spec}}
+        return {"weight": rng.choice([0, 1, 2, 0.5, 3.5])}
+
+    def _instant_lisible(self, c, docs):
+        """Un `origin` de date : une valeur du corpus, ou du date math."""
+        rng = self.rng
+        if rng.random() < 0.3:
+            return rng.choice(["now", "now-1d", "now/d"])
+        v = self._valeur_pour(c, docs)
+        return v if isinstance(v, str) else "now"
+
+    def _q_function_score(self, champs, docs, prof):
+        if not self.brique("q.function_score"):
+            return None
+        rng = self.rng
+        q = {"query": self.feuille(champs, docs, prof + 1)}
+        fonctions = [f for f in (self._fonction_de_score(champs, docs, prof)
+                                 for _ in range(rng.randint(1, 3))) if f]
+        if not fonctions:
+            return None
+        # Les deux formes du corps. Celle a fonction unique n'est pas une
+        # abreviation de l'autre : elle fait **ignorer** `score_mode` chez ES
+        # (mesure), et c'est precisement ce que cette branche exerce.
+        if len(fonctions) == 1 and rng.random() < 0.5:
+            q.update(fonctions[0])
+        else:
+            for f in fonctions:
+                if rng.random() < 0.4:
+                    f["filter"] = self.feuille(champs, docs, prof + 1)
+                if rng.random() < 0.4:
+                    f["weight"] = rng.choice([0, 1, 2, 0.5])
+            q["functions"] = fonctions
+        if rng.random() < 0.5:
+            q["score_mode"] = rng.choice(
+                ["multiply", "sum", "avg", "first", "max", "min"])
+        if rng.random() < 0.5:
+            q["boost_mode"] = rng.choice(
+                ["multiply", "replace", "sum", "avg", "max", "min"])
+        # Les trois bornes : elles ne changent pas le score, elles changent ce
+        # que la reponse **contient**. `min_score` retire des documents, et son
+        # total avec.
+        if rng.random() < 0.3 and self.brique("q.function_score.bornes"):
+            q["max_boost"] = rng.choice([0.5, 2, 10])
+        if rng.random() < 0.25 and self.brique("q.function_score.bornes"):
+            q["min_score"] = rng.choice([0, 0.5, 1, 2])
+        if rng.random() < 0.2:
+            q["boost"] = rng.choice([0.5, 2.0])
+        return {"function_score": q}
+
+    def _q_boosting(self, champs, docs, prof):
+        if not self.brique("q.boosting"):
+            return None
+        return {"boosting": {
+            "positive": self.feuille(champs, docs, prof + 1),
+            "negative": self.feuille(champs, docs, prof + 1),
+            "negative_boost": self.rng.choice([0, 0.2, 0.5, 1.0, 2.0]),
+        }}
 
     def _q_nested(self, champs, docs, prof):
         if not self.brique("q.nested"):
@@ -2111,6 +2235,33 @@ def _es_deux_lectures(e, requete=None):
     return bool(colonnes) and bool(stockes & colonnes or "*" in stockes)
 
 
+# Les deux garde-fous que `function_score` leve **a l'execution** chez ES, et
+# que ferrite leve aussi — quand il y arrive.
+GARDES_DE_SCORE = ("returned an invalid score", "Missing value for field")
+
+
+def _refus_declare_avant_le_scoring(e, _requete=None):
+    """ferrite refuse une capacite declaree **avant** d'arriver au scoring, la
+    ou ES arrive au scoring et s'y casse.
+
+    `FunctionScoreQuery` verifie a l'execution que le score n'est ni negatif ni
+    `NaN`, et `FieldValueFactorFunction` qu'un document a bien une valeur ; les
+    deux jettent, en 500. ferrite a les memes garde-fous — mais quand la meme
+    requete porte en plus une agregation qu'il annonce refusee, il refuse
+    d'abord et n'arrive jamais au scoring.
+
+    Les deux serveurs refusent donc, avec des mots differents. Un 500 n'est pas
+    une reponse de reference : il dit qu'ES n'a pas su rendre cette requete, pas
+    ce que ferrite aurait du en faire. Le predicat reste etroit — un des deux
+    messages d'ES **et** la phrase de refus declare du cote de ferrite, jamais
+    un resultat rendu en silence."""
+    if e.get("chemin") != "statut":
+        return False
+    if not any(m in e["texte"] for m in GARDES_DE_SCORE):
+        return False
+    return "gauche ferrite ne supporte pas" in e["texte"]
+
+
 def _ordre_des_copies(e, _requete=None, ecarts=()):
     """Les memes valeurs dans la cible d'un `copy_to`, dans un autre ordre.
 
@@ -2212,6 +2363,68 @@ def _ordre_par_pertinence(e, requete):
         return False
 
 
+# Les deux serveurs de la campagne, pour les predicats qui **mesurent** au lieu
+# de supposer. Posé une fois au demarrage — un predicat n'a pas d'autre moyen
+# de reposer une question, et supposer sans reposer la question est exactement
+# ce que ce depot s'interdit ailleurs.
+SERVEURS = []
+
+
+def _sous_requete_avec_min_score(v):
+    """La `query` du premier `function_score` porteur d'un `min_score`."""
+    if isinstance(v, list):
+        for x in v:
+            trouve = _sous_requete_avec_min_score(x)
+            if trouve is not None:
+                return trouve
+        return None
+    if not isinstance(v, dict):
+        return None
+    fs = v.get("function_score")
+    if isinstance(fs, dict) and fs.get("min_score") is not None:
+        return fs.get("query", {"match_all": {}})
+    for x in v.values():
+        trouve = _sous_requete_avec_min_score(x)
+        if trouve is not None:
+            return trouve
+    return None
+
+
+def _min_score_sur_un_bm25_divergent(e, requete):
+    """Un `min_score` pose sur une requete dont le score de base n'est **deja**
+    pas le meme des deux cotes.
+
+    `min_score` est le seul endroit ou le score cesse d'etre un ordre pour
+    devenir un **seuil** : deux scores separes de 15 % ne changent rien tant
+    qu'on trie, et changent l'ensemble des documents des qu'on coupe. Or ferrite
+    et ES ne calculent pas le meme BM25 des qu'un champ `text` est facultatif —
+    c'est la divergence de l'`avgdl` deja declaree dans `docs/compat.md`
+    (Lucene le calcule sur les documents **qui ont le champ**, tantivy sur tous
+    les documents de l'index).
+
+    Le predicat ne le suppose pas : il **repose la sous-requete seule** aux deux
+    serveurs, et n'accepte l'ecart que si leurs scores y different deja. Un vrai
+    defaut de `min_score` — un seuil compare au mauvais endroit, un `boost`
+    applique quand il ne devrait pas — laisse les scores de base identiques, et
+    ne passe donc pas."""
+    if e.get("chemin") not in ("hits.total.value", "hits.hits", "hits.ordre",
+                               "hits.max_score"):
+        return False
+    if not isinstance(requete, dict) or not SERVEURS:
+        return False
+    sous = _sous_requete_avec_min_score(requete.get("query"))
+    if sous is None:
+        return False
+    scores = []
+    for base in SERVEURS:
+        st, r = http(base, "POST", f"/{INDEX}/_search",
+                     {"size": 50, "_source": False, "query": sous})
+        if st != 200:
+            return False
+        scores.append([h.get("_score") for h in r["hits"]["hits"]])
+    return scores[0] != scores[1]
+
+
 def _refus_declare(e, _requete=None, ecarts=()):
     """Un refus que `compat.yaml` annonce, prononce la ou ES sait repondre.
 
@@ -2274,9 +2487,12 @@ DIVERGENCES_ASSUMEES = [
     ("exists sur un text sans terme", _exists_sur_text),
     ("ES 8.15 casse sur epoch_millis", _es_casse),
     ("ES 8.15 casse sur deux lectures du meme champ", _es_deux_lectures),
+    ("refus declare avant le scoring", _refus_declare_avant_le_scoring),
     ("ordre des valeurs copiees par copy_to", _ordre_des_copies),
     ("fragment choisi parmi des valeurs sans ordre (copy_to)", _fragments_de_copie),
     ("ordre par pertinence (BM25)", _ordre_par_pertinence),
+    ("min_score sur un score de base deja divergent (BM25)",
+     _min_score_sur_un_bm25_divergent),
 ]
 
 
@@ -3133,6 +3349,10 @@ def main():
         print("# etalonnage : la meme batterie contre deux Elasticsearch. Tant "
               "qu'elle n'est\n#   pas a zero, ce que le fuzzer dit de ferrite "
               "ne vaut rien.")
+
+    # Les predicats qui **mesurent** ont besoin des deux cibles (voir
+    # `_min_score_sur_un_bm25_divergent`).
+    SERVEURS[:] = urls[:2]
 
     graines = [a.rejouer] if a.rejouer is not None else \
         list(range(a.seed, a.seed + a.cas))

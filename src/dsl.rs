@@ -20,6 +20,10 @@ use crate::dateformat::DateFormat;
 use crate::datemath::{self, Arrondi};
 use crate::dismax::DisMaxQuery;
 use crate::error::{EsError, EsResult};
+use crate::fonction_score::{
+    Attenuation, Calcul, Combinaison, Decroissance, Fonction, FonctionScore, ModeDeScore,
+    Modificateur, Retrograde, ValeurDeChamp,
+};
 use crate::mapping::{self, FieldKind, Fields, MappedField, TypedValue};
 use crate::nested::{Clause, NestedQuery, Predicat, Valeur};
 
@@ -76,6 +80,11 @@ pub struct QueryCtx<'a> {
     /// sortir n'est pas une politesse : elle masquerait tout ce qui est
     /// **sous** la clause, qui est justement ce qu'on vient valider.
     pub aucun_index_vise: bool,
+    /// Ce que l'**execution** rencontrera et qu'ES traite en erreur : un
+    /// `field_value_factor` sur un document sans valeur, un score de fonction
+    /// negatif. `Scorer::score` ne peut pas echouer ; l'incident est pose ici et
+    /// relu apres la recherche (voir [`crate::fonction_score::Incidents`]).
+    pub incidents: std::sync::Arc<crate::fonction_score::Incidents>,
 }
 
 /// L'ensemble vide, pour les appels qui ne visent qu'un index.
@@ -95,7 +104,18 @@ impl<'a> QueryCtx<'a> {
             // [`QueryCtx::selon_le_mapping`].
             champs_inconnus_toleres: true,
             aucun_index_vise: false,
+            incidents: std::sync::Arc::new(crate::fonction_score::Incidents::anonymes()),
         }
+    }
+
+    /// Ou poser les incidents que l'execution rencontrera, et sous quel nom
+    /// d'index les rendre.
+    pub fn avec_incidents(
+        mut self,
+        incidents: std::sync::Arc<crate::fonction_score::Incidents>,
+    ) -> Self {
+        self.incidents = incidents;
+        self
     }
 
     /// Marque le contexte comme « aucun index vise » : la traduction ne sert
@@ -229,6 +249,8 @@ fn build_une(v: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         "fuzzy" => fuzzy_query(body, ctx),
         "constant_score" => constant_score_query(body, ctx),
         "dis_max" => dis_max_query(body, ctx),
+        "function_score" => function_score_query(body, ctx),
+        "boosting" => boosting_query(body, ctx),
         "term" => term_query(body, ctx),
         "terms" => terms_query(body, ctx),
         "range" => range_query(body, ctx),
@@ -240,8 +262,8 @@ fn build_une(v: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         other => Err(EsError::parsing(format!(
             "unknown query [{other}] : ferrite supporte [match_all, match_none, match, \
              multi_match, match_phrase, match_phrase_prefix, exists, ids, prefix, wildcard, \
-             regexp, fuzzy, term, terms, range, bool, constant_score, dis_max, nested, \
-             has_child, has_parent, parent_id]"
+             regexp, fuzzy, term, terms, range, bool, constant_score, dis_max, function_score, \
+             boosting, nested, has_child, has_parent, parent_id]"
         ))),
     }
 }
@@ -1698,6 +1720,553 @@ fn dis_max_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
             as f32,
     };
     boost(Box::new(DisMaxQuery::new(sous, tie)), obj.get("boost"))
+}
+
+// ---------------------------------------------------------------------------
+// function_score / boosting : le reglage de la pertinence
+// ---------------------------------------------------------------------------
+
+/// Les noms de fonction qu'ES reconnait, servis ou refuses.
+///
+/// Ils sont listes ensemble parce que le parseur d'ES les traite ensemble : une
+/// de ces cles au premier niveau interdit `functions`, et reciproquement. Un nom
+/// refuse doit donc etre reconnu **comme un nom de fonction** avant d'etre
+/// refuse, sinon le refus se deguise en faute de frappe.
+const NOMS_DE_FONCTION: &[&str] = &[
+    "weight",
+    "field_value_factor",
+    "gauss",
+    "exp",
+    "linear",
+    "random_score",
+    "script_score",
+];
+
+/// `function_score` : la meme requete, mais les documents recents devant.
+fn function_score_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
+    let obj = as_object(body, "function_score")?;
+    let mut sous: Option<Box<dyn Query>> = None;
+    let mut mode = ModeDeScore::default();
+    let mut combinaison = Combinaison::default();
+    // Le defaut d'ES est `Float.MAX_VALUE` : un plafond qui ne plafonne rien.
+    let mut plafond = f64::from(f32::MAX);
+    let mut minimum: Option<f32> = None;
+    let mut valeur_boost: Option<&Value> = None;
+    let mut fonctions: Vec<Fonction> = Vec::new();
+    // ES refuse de melanger `functions` et une fonction unique, et nomme la cle
+    // qu'il a rencontree **en premier**. Le corps est donc lu dans son ordre —
+    // `serde_json` le preserve ici (`preserve_order`).
+    let mut deja: Option<String> = None;
+    let conflit = |deja: &str, cle: &str| {
+        EsError::parsing(format!(
+            "failed to parse [function_score] query. [you can either define [functions] array or \
+             a single function, not both. already found [{deja}], now encountering [{cle}].]"
+        ))
+    };
+
+    for (cle, valeur) in obj {
+        match cle.as_str() {
+            "query" => sous = Some(build_query(valeur, ctx)?),
+            "score_mode" => {
+                let nom = lit_chaine(valeur, "score_mode")?;
+                mode = ModeDeScore::lit(&nom).ok_or_else(|| {
+                    EsError::illegal_argument(format!(
+                        "[function_score.score_mode] : [{nom}] inconnu ; valeurs acceptees : \
+                         [multiply, sum, avg, first, max, min]"
+                    ))
+                })?;
+            }
+            "boost_mode" => {
+                let nom = lit_chaine(valeur, "boost_mode")?;
+                combinaison = Combinaison::lit(&nom).ok_or_else(|| {
+                    EsError::illegal_argument(format!(
+                        "[function_score.boost_mode] : [{nom}] inconnu ; valeurs acceptees : \
+                         [multiply, replace, sum, avg, max, min]"
+                    ))
+                })?;
+            }
+            "max_boost" => plafond = lit_reel(valeur, "max_boost")?,
+            "min_score" => minimum = Some(lit_reel(valeur, "min_score")? as f32),
+            "boost" => valeur_boost = Some(valeur),
+            "functions" => {
+                if let Some(d) = &deja {
+                    return Err(conflit(d, "functions"));
+                }
+                deja = Some("functions] array".to_string());
+                let liste = valeur.as_array().ok_or_else(|| {
+                    EsError::parsing("[function_score.functions] : une liste est attendue")
+                })?;
+                for entree in liste {
+                    fonctions.push(lit_fonction(entree, ctx)?);
+                }
+            }
+            nom if NOMS_DE_FONCTION.contains(&nom) => {
+                match &deja {
+                    Some(d) if d == "functions] array" => return Err(conflit(d, nom)),
+                    Some(d) => {
+                        return Err(EsError::parsing(format!(
+                            "failed to parse [function_score] query. already found function \
+                             [{d}], now encountering [{nom}]. use [functions] array if you want \
+                             to define several functions."
+                        )))
+                    }
+                    None => {}
+                }
+                deja = Some(nom.to_string());
+                let mut entree = Map::new();
+                entree.insert(nom.to_string(), valeur.clone());
+                fonctions.push(lit_fonction(&Value::Object(entree), ctx)?);
+            }
+            autre => {
+                // Deux phrases, et c'est ES qui les separe : une cle inconnue
+                // **avant** toute fonction est une cle inconnue ; apres une
+                // fonction, c'est une seconde fonction qu'il croit lire.
+                // `boost_factor` tombe dans la premiere, et ce n'est pas un
+                // oubli : ES 8.15 le refuse lui aussi (mesure) — le servir
+                // serait accepter une requete qu'un vrai Elasticsearch rejette.
+                return Err(EsError::parsing(match &deja {
+                    Some(d) if d != "functions] array" => format!(
+                        "failed to parse [function_score] query. already found function [{d}], \
+                         now encountering [{autre}]. use [functions] array if you want to define \
+                         several functions."
+                    ),
+                    Some(d) => conflit(d, autre).reason,
+                    None => format!(
+                        "failed to parse [function_score] query. field [{autre}] is not supported"
+                    ),
+                }));
+            }
+        }
+    }
+
+    // Le piege de `score_mode`, et il ne se devine pas : **une seule** fonction
+    // sans filtre (ou dont le filtre est un `match_all` litteral) fait
+    // construire a ES son autre constructeur, celui qui pose `ScoreMode.FIRST`
+    // — le `score_mode` demande est alors purement ignore. Ca ne se voit que
+    // sur `avg`, le seul mode qui differe de `first` a une fonction : sur un
+    // `weight: 2`, ES rend le score de base x2 alors qu'une moyenne ponderee
+    // rendrait x1. Mesure contre ES 8.15, sur les quatre formes
+    // (`weight` au premier niveau, `functions` a un element avec et sans
+    // filtre, `functions` a deux elements).
+    let mode = if fonctions.len() == 1 && fonctions[0].filtre.is_none() {
+        ModeDeScore::Premiere
+    } else {
+        mode
+    };
+    let sous = sous.unwrap_or_else(|| Box::new(AllQuery) as Box<dyn Query>);
+    // Le `boost` entre **dans** la clause au lieu de l'envelopper : voir
+    // [`FonctionScore::boost_clause`], c'est le total des hits qui en depend.
+    let facteur = match valeur_boost {
+        None | Some(Value::Null) => 1.0f32,
+        Some(v) => lit_reel(v, "boost")? as f32,
+    };
+    Ok(Box::new(FonctionScore::new(
+        sous,
+        fonctions,
+        mode,
+        combinaison,
+        plafond,
+        minimum,
+        facteur,
+        ctx.incidents.clone(),
+    )))
+}
+
+/// Une entree de `functions[]` — ou la fonction unique du premier niveau,
+/// enveloppee pour passer par ici.
+fn lit_fonction(entree: &Value, ctx: &QueryCtx) -> EsResult<Fonction> {
+    let obj = as_object(entree, "function_score.functions")?;
+    let mut filtre = None;
+    let mut poids = None;
+    let mut calcul: Option<(String, Calcul)> = None;
+    for (cle, valeur) in obj {
+        match cle.as_str() {
+            // Un `filter` qui est un `match_all` **litteral** ne filtre rien —
+            // et ES le traite comme absent pour decider s'il prend son
+            // constructeur a une fonction (voir `function_score_query`). Le
+            // laisser tomber ici reproduit les deux moities a la fois.
+            "filter" => {
+                filtre = match valeur.as_object().and_then(|o| o.keys().next()) {
+                    Some(k) if k == "match_all" && valeur.as_object().unwrap().len() == 1 => {
+                        build_query(valeur, ctx)?;
+                        None
+                    }
+                    _ => Some(build_query(valeur, ctx)?),
+                };
+            }
+            "weight" => {
+                let p = lit_reel(valeur, "weight")?;
+                if p < 0.0 {
+                    return Err(EsError::illegal_argument(
+                        "[weight] cannot be negative for a filtering function",
+                    ));
+                }
+                poids = Some(p);
+            }
+            "random_score" | "script_score" => {
+                return Err(EsError::unsupported(format!(
+                    "ferrite ne supporte pas [{cle}] dans [function_score] ; fonctions \
+                     acceptees : [weight, field_value_factor, gauss, exp, linear]"
+                )));
+            }
+            nom @ ("field_value_factor" | "gauss" | "exp" | "linear") => {
+                if let Some((deja, _)) = &calcul {
+                    return Err(EsError::parsing(format!(
+                        "failed to parse function_score functions. already found [{deja}], now \
+                         encountering [{nom}]."
+                    )));
+                }
+                calcul = Some((
+                    nom.to_string(),
+                    if nom == "field_value_factor" {
+                        Calcul::Valeur(lit_valeur_de_champ(valeur, ctx)?)
+                    } else {
+                        Calcul::Decroit(lit_attenuation(nom, valeur, ctx)?)
+                    },
+                ));
+            }
+            autre => {
+                return Err(EsError::parsing(format!(
+                    "failed to parse [function_score] query. field [{autre}] is not supported"
+                )));
+            }
+        }
+    }
+    // `weight` seul **est** une fonction ; un `filter` seul n'en est pas une.
+    let calcul =
+        match calcul {
+            Some((_, c)) => c,
+            None if poids.is_some() => Calcul::Poids,
+            None => return Err(EsError::parsing(
+                "failed to parse [function_score] query. an entry in functions list is missing a \
+                 function.",
+            )),
+        };
+    Ok(Fonction {
+        filtre,
+        poids,
+        calcul,
+    })
+}
+
+/// Un refus qu'ES prononce **a l'execution du shard**, et non a la lecture du
+/// corps.
+///
+/// La distinction n'est pas cosmetique : elle decide de ce qu'une recherche
+/// multi-index rend. Un `scale` negatif est refuse par le shard, donc les
+/// autres index repondent quand meme — c'est ce que fait ES, et c'est ce que le
+/// marqueur [`EsError::sur_un_shard`] reproduit ici.
+fn refus_de_shard(ty: &str, reason: impl Into<String>) -> EsError {
+    EsError::new(axum::http::StatusCode::BAD_REQUEST, ty, reason).sur_un_shard()
+}
+
+/// `field_value_factor` : le score est une valeur du document.
+fn lit_valeur_de_champ(body: &Value, ctx: &QueryCtx) -> EsResult<ValeurDeChamp> {
+    let obj = obj_de_fonction(body, "field_value_factor")?;
+    expect_only(
+        obj,
+        &["field", "factor", "modifier", "missing"],
+        "field_value_factor",
+    )?;
+    let champ = obj
+        .get("field")
+        .and_then(Value::as_str)
+        .ok_or_else(|| EsError::parsing("[field_value_factor] required field 'field' missing"))?;
+    let modificateur = match obj.get("modifier") {
+        None | Some(Value::Null) => Modificateur::default(),
+        Some(v) => {
+            let nom = lit_chaine(v, "modifier")?;
+            Modificateur::lit(&nom).ok_or_else(|| {
+                EsError::illegal_argument(format!(
+                    "[field_value_factor.modifier] : [{nom}] inconnu ; valeurs acceptees : \
+                     [none, log, log1p, log2p, ln, ln1p, ln2p, square, sqrt, reciprocal]"
+                ))
+            })?
+        }
+    };
+    Ok(ValeurDeChamp {
+        champ: champ.to_string(),
+        genre: genre_numerique(champ, "field_value_factor", ctx)?,
+        facteur: match obj.get("factor") {
+            None | Some(Value::Null) => 1.0,
+            Some(v) => lit_reel(v, "factor")?,
+        },
+        modificateur,
+        manquant: match obj.get("missing") {
+            None | Some(Value::Null) => None,
+            Some(v) => Some(lit_reel(v, "missing")?),
+        },
+    })
+}
+
+/// `gauss` / `exp` / `linear` : le score decroit avec la distance a `origin`.
+fn lit_attenuation(nom: &str, body: &Value, ctx: &QueryCtx) -> EsResult<Attenuation> {
+    let fonction = Decroissance::lit(nom).expect("nom deja filtre");
+    let obj = obj_de_fonction(body, nom)?;
+    let mut champ: Option<(&str, &Value)> = None;
+    for (cle, valeur) in obj {
+        match cle.as_str() {
+            // `multi_value_mode` est refuse en le nommant : son defaut (`min`,
+            // pose sur la **distance** et non sur la valeur) est celui que
+            // ferrite applique, et servir les trois autres sans les mesurer
+            // rendrait des scores silencieusement differents.
+            "multi_value_mode" => {
+                return Err(EsError::unsupported(format!(
+                    "ferrite ne supporte pas [multi_value_mode] dans [{nom}] ; seul le defaut \
+                     d'Elasticsearch ([min], applique a la distance) est servi"
+                )))
+            }
+            // ES accepte plusieurs champs dans une meme decroissance et n'en
+            // applique **qu'un**, sans dire lequel (mesure). Le reproduire
+            // demanderait de deviner lequel ; ferrite refuse en le nommant.
+            _ if champ.is_some() => {
+                return Err(EsError::unsupported(format!(
+                    "ferrite ne supporte pas plusieurs champs dans un [{nom}] (deja [{}], puis \
+                     [{cle}]) ; Elasticsearch en applique un seul sans dire lequel",
+                    champ.expect("verifie juste au-dessus").0
+                )));
+            }
+            _ => champ = Some((cle.as_str(), valeur)),
+        }
+    }
+    let Some((champ, spec)) = champ else {
+        return Err(EsError::parsing(
+            "malformed score function score parameters.",
+        ));
+    };
+    let spec = as_object(spec, nom)?;
+    expect_only(spec, &["origin", "scale", "offset", "decay"], nom)?;
+    let decay = match spec.get("decay") {
+        None | Some(Value::Null) => 0.5,
+        Some(v) => lit_reel(v, "decay")?,
+    };
+    if !(decay > 0.0 && decay < 1.0) {
+        // NaN compris
+        return Err(refus_de_shard(
+            "query_shard_exception",
+            "failed to create query: function_score : decay must be in the range [0..1].",
+        ));
+    }
+    let genre = genre_numerique(champ, nom, ctx)?;
+    // Une decroissance sur un champ que le mapping ne connait pas est refusee
+    // par ES (mesure) — la ou son `field_value_factor` l'accepte et sert son
+    // `missing`. Les deux fonctions ne lisent pas le mapping au meme moment.
+    //
+    // Le refus est marque **echec de shard** bien qu'ES lui donne le type
+    // `parsing_exception` : c'est un verdict de mapping, pas de forme. Sans
+    // cette marque, `_validate/query` le prendrait pour une erreur de
+    // coordinateur et rendrait `valid: false` sur une requete qu'ES declare
+    // valide — le piege deja paye sur `nested`, retrouve par le fuzzer.
+    if genre.is_none() {
+        return Err(refus_de_shard(
+            "parsing_exception",
+            format!("unknown field [{champ}]"),
+        ));
+    }
+    // Sur une date, `origin` est une **expression** (`now`, `2026-03-15||+1M`)
+    // et `scale` / `offset` sont des durees ; ailleurs, ce sont des nombres.
+    // ES a deux parseurs, et il n'accepte pas l'un a la place de l'autre.
+    let sur_date = genre == Some(crate::fonction_score::GenreNumerique::Date);
+    let (origine, echelle, offset) = if sur_date {
+        let origine = match spec.get("origin") {
+            // Le defaut d'ES sur une date est `now` — et c'est le seul type ou
+            // `origin` est facultatif.
+            None | Some(Value::Null) => ctx.maintenant as f64,
+            Some(v) => datemath::borne_dans(
+                v,
+                ctx.fields.format_ou_defaut(champ),
+                ctx.maintenant,
+                Arrondi::Bas,
+                &crate::fuseau::Fuseau::utc(),
+            )? as f64,
+        };
+        (
+            origine,
+            lit_duree(spec.get("scale"), "scale", nom)?,
+            match spec.get("offset") {
+                None | Some(Value::Null) => 0.0,
+                v => lit_duree(v, "offset", nom)?,
+            },
+        )
+    } else {
+        let Some(o) = spec.get("origin").filter(|v| !v.is_null()) else {
+            return Err(refus_de_shard(
+                "parse_exception",
+                "both [scale] and [origin] must be set for numeric fields.",
+            ));
+        };
+        let Some(s) = spec.get("scale").filter(|v| !v.is_null()) else {
+            return Err(refus_de_shard(
+                "parse_exception",
+                "both [scale] and [origin] must be set for numeric fields.",
+            ));
+        };
+        (
+            lit_reel(o, "origin")?,
+            lit_reel(s, "scale")?,
+            match spec.get("offset") {
+                None | Some(Value::Null) => 0.0,
+                Some(v) => lit_reel(v, "offset")?,
+            },
+        )
+    };
+    // `NaN` compris : une echelle illisible n'est pas une echelle valide.
+    if !matches!(echelle.partial_cmp(&0.0), Some(std::cmp::Ordering::Greater)) {
+        return Err(refus_de_shard(
+            "query_shard_exception",
+            "failed to create query: function_score : scale must be > 0.0.",
+        ));
+    }
+    if offset < 0.0 {
+        return Err(refus_de_shard(
+            "query_shard_exception",
+            "failed to create query: function_score : offset must be > 0.0",
+        ));
+    }
+    Ok(Attenuation {
+        champ: champ.to_string(),
+        genre,
+        fonction,
+        origine,
+        // `processScale` une fois pour toutes : la formule ne le refait pas par
+        // document.
+        echelle: fonction.echelle(echelle, decay),
+        offset,
+    })
+}
+
+/// Le corps d'une fonction, qui doit etre un objet.
+///
+/// ES range la forme courte (`"field_value_factor": "vues"`) dans « field
+/// [field_value_factor] is not supported » plutot que dans une erreur de type :
+/// c'est son parseur de fonctions qui n'a rien a lire.
+fn obj_de_fonction<'a>(body: &'a Value, nom: &str) -> EsResult<&'a Map<String, Value>> {
+    body.as_object().ok_or_else(|| {
+        EsError::parsing(format!(
+            "failed to parse [function_score] query. field [{nom}] is not supported"
+        ))
+    })
+}
+
+/// De quelle colonne une fonction lit ses valeurs.
+///
+/// Un champ que le mapping ne connait pas n'a pas de colonne, et ce n'est pas
+/// une erreur : ES sert le `field_value_factor` d'un champ inexistant (avec son
+/// `missing`) et rend une distance nulle sur une decroissance. Un champ textuel,
+/// lui, est refuse — ES le refuse aussi, par un message qui cite une classe
+/// Java.
+fn genre_numerique(
+    champ: &str,
+    clause: &str,
+    ctx: &QueryCtx,
+) -> EsResult<Option<crate::fonction_score::GenreNumerique>> {
+    use crate::fonction_score::GenreNumerique as G;
+    let f = match ctx.field(champ, clause) {
+        Ok(f) => f,
+        Err(e) if ctx.champ_inconnu_tolere(&e) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    Ok(Some(match f.ty.kind() {
+        FieldKind::I64 => G::I64,
+        FieldKind::F64 => G::F64,
+        FieldKind::Date => G::Date,
+        FieldKind::Bool => G::Bool,
+        FieldKind::Text | FieldKind::Keyword => {
+            return Err(refus_de_shard(
+                "query_shard_exception",
+                format!(
+                    "failed to create query: le champ [{champ}] n'est pas numerique (clause \
+                     [{clause}]) ; [function_score] lit une colonne de nombres, de dates ou de \
+                     booleens — Elasticsearch le refuse aussi"
+                ),
+            ))
+        }
+    }))
+}
+
+/// Une duree d'ES (`10d`, `500ms`, `0`) en millisecondes.
+fn lit_duree(v: Option<&Value>, cle: &str, clause: &str) -> EsResult<f64> {
+    let refus = |valeur: &str| {
+        refus_de_shard(
+            "query_shard_exception",
+            format!(
+                "failed to create query: failed to parse setting [DecayFunctionParser.{cle}] \
+                 with value [{valeur}] as a time value: unit is missing or unrecognized"
+            ),
+        )
+    };
+    match v {
+        None | Some(Value::Null) => Err(EsError::parsing(format!(
+            "[{clause}] : [scale] est obligatoire"
+        ))),
+        Some(Value::String(s)) => {
+            if s.trim() == "0" {
+                return Ok(0.0);
+            }
+            crate::calendrier::lit_fixe(s)
+                .map(|ms| ms as f64)
+                .ok_or_else(|| refus(s))
+        }
+        Some(autre) => Err(refus(&autre.to_string())),
+    }
+}
+
+/// Un nombre, ecrit en nombre ou en chaine — ES lit les deux.
+fn lit_reel(v: &Value, cle: &str) -> EsResult<f64> {
+    match v {
+        Value::Number(n) => n
+            .as_f64()
+            .ok_or_else(|| EsError::illegal_argument(format!("[{cle}] : nombre attendu"))),
+        Value::String(s) => s.parse().map_err(|_| {
+            EsError::illegal_argument(format!("[{cle}] : nombre attendu, recu [{s}]"))
+        }),
+        autre => Err(EsError::illegal_argument(format!(
+            "[{cle}] : nombre attendu, recu {autre}"
+        ))),
+    }
+}
+
+fn lit_chaine(v: &Value, cle: &str) -> EsResult<String> {
+    v.as_str()
+        .map(str::to_string)
+        .ok_or_else(|| EsError::illegal_argument(format!("[{cle}] : une chaine est attendue")))
+}
+
+/// `boosting` : la demotion sans exclusion (voir [`crate::fonction_score`]).
+fn boosting_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
+    let obj = as_object(body, "boosting")?;
+    for cle in obj.keys() {
+        if !["positive", "negative", "negative_boost", "boost"].contains(&cle.as_str()) {
+            return Err(EsError::parsing(format!(
+                "[boosting] query does not support [{cle}]"
+            )));
+        }
+    }
+    let positive = obj
+        .get("positive")
+        .filter(|v| !v.is_null())
+        .ok_or_else(|| EsError::parsing("[boosting] query requires 'positive' query to be set'"))?;
+    let negative = obj
+        .get("negative")
+        .filter(|v| !v.is_null())
+        .ok_or_else(|| EsError::parsing("[boosting] query requires 'negative' query to be set'"))?;
+    // `negative_boost` est **obligatoire** et doit etre positif : ES ne lui
+    // donne pas de defaut, et sa phrase de refus est celle-ci.
+    let poids = match obj.get("negative_boost") {
+        Some(v) if !v.is_null() => lit_reel(v, "negative_boost")?,
+        _ => -1.0,
+    };
+    if poids < 0.0 {
+        return Err(EsError::parsing(
+            "[boosting] query requires 'negative_boost' to be set to be a positive value'",
+        ));
+    }
+    let q: Box<dyn Query> = Box::new(Retrograde::new(
+        build_query(positive, ctx)?,
+        build_query(negative, ctx)?,
+        poids as f32,
+    ));
+    boost(q, obj.get("boost"))
 }
 
 fn boost(query: Box<dyn Query>, value: Option<&Value>) -> EsResult<Box<dyn Query>> {
