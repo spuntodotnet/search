@@ -214,7 +214,14 @@ fn nommer_les_champs(brut: &str, schema: &tantivy::schema::Schema) -> String {
 /// absent, une valeur qui n'a pas le type du champ — n'a de sens que sur un
 /// index donne, et se juge index par index.
 fn erreur_de_forme(e: &EsError) -> bool {
+    // Le type ne suffit pas : ES range en `parsing_exception` des verdicts qui
+    // viennent du **mapping** (une decroissance de `function_score` sur un
+    // champ inconnu). Contre un schema vide, tout champ est inconnu — les
+    // prendre pour des erreurs de forme rendrait `valid: false` sur des
+    // requetes qu'ES declare valides. La marque « echec de shard » est ce qui
+    // les separe (trouve par le fuzzer, deux fois : sur `nested` puis ici).
     e.champ_inconnu.is_none()
+        && !e.de_shard
         && matches!(
             e.ty.as_str(),
             "parsing_exception" | crate::error::UNSUPPORTED

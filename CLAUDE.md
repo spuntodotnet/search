@@ -290,7 +290,7 @@ développement, pas de CI).
 
 | Commande | La question à laquelle elle répond |
 |---|---|
-| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**122/122**, dont l'export par `helpers.scan`, le date math et son `time_zone`, le graphe temporel « par mois » et « par jour à Paris », la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats`, les templates, ce que la réponse transporte — `fields`, `docvalue_fields`, `stored_fields` — la modification par requête, `_delete_by_query` / `_update_by_query`, et les n-grammes de l'autocomplétion, `search_analyzer`, `copy_to` et `store`) |
+| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**123/123**, dont l'export par `helpers.scan`, le date math et son `time_zone`, le graphe temporel « par mois » et « par jour à Paris », la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats`, les templates, ce que la réponse transporte — `fields`, `docvalue_fields`, `stored_fields` — la modification par requête, `_delete_by_query` / `_update_by_query`, et les n-grammes de l'autocomplétion, `search_analyzer`, `copy_to` et `store`, et le **réglage de la pertinence** — `function_score`, `boosting`, et le score qu'ils rendent, assertion par assertion) |
 | `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (212/213, 0 écart réel) |
 | `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (45/46 ; le seul écart est `_cluster/health`, toujours vert par choix) |
 | `tests/compat/diff_aggs.py` | les mêmes agrégations ? (73/73, `filter` comprise, ce qu'un bucket **vide** doit porter, et les deux compteurs d'un `terms` **après** filtrage) |
@@ -300,6 +300,8 @@ développement, pas de CI).
 | `tests/compat/sonde_calendrier.py` | les mêmes seaux sur un **graphe temporel** — `calendar_interval`, `time_zone`, et `time_zone` sur un `range` ? Le bloc entier, seau par seau (`key`, `key_as_string`, `doc_count`), sur un corpus qui traverse les **deux** bascules de l'heure d'été, un 29 février, un minuit qui n'existe pas (Santiago) et une heure d'été d'une demi-heure (Lord Howe) : **231/233 identiques, 2 refus assumés, 0 écart** (`--calibrer` : 233/233 contre deux ES) |
 | `tests/compat/genere_fuseaux.py` | **quelles règles de fuseau, et d'où ?** La table est dumpée du tzdb du **JDK du conteneur de référence** — celles qu'ES applique lui-même, son image n'ayant pas de `/usr/share/zoneinfo` (603 zones, 110 Ko, `--verifie` recompare octet par octet). `--grille` écrit les 25 914 arrondis que **la classe `Rounding` d'ES elle-même** rend, exécutée dans le conteneur avec ses jars : c'est l'oracle de `tests/arrondi_vs_es.rs`, rejoué par `cargo test` sans Docker |
 | `tests/compat/diff_highlight.py` | les mêmes **fragments surlignés** — pas leur nombre, leur contenu exact, balises comprises ? (233 questions, **221 identiques au caractère près, 11 refus assumés, 0 écart** ; `--calibrer` : 233/233 contre deux ES). Le même fichier lancé contre le ferrite d'avant rend **0/233** |
+| `tests/compat/sonde_score.py` | les mêmes **scores** ? Pas le même ordre : la même **valeur**. `function_score` et `boosting` n'existent que pour produire un `_score`, et un ordre juste avec des scores faux serait vert partout ailleurs. 197 questions, comparées sur le score de chaque hit, `max_score`, le total et l'ordre : **183/197 identiques, 14 refus assumés, 0 écart** (`--calibrer` : 196/197 contre deux ES, le seul écart étant `random_score`, tiré au sort). Le même fichier lancé contre le ferrite d'avant rend **0/197** |
+| `tests/compat/genere_scoring.py` | **quelles formules de scoring, et d'où ?** Les trois fonctions de décroissance, les dix `modifier` et les six `boost_mode` sont calculés par **les classes d'ES elles-mêmes**, exécutées dans le conteneur de référence avec ses jars (58 476 points, 1 744 batteries). C'est l'oracle de `tests/scoring_vs_es.rs`, rejoué par `cargo test` sans Docker — et c'est ce qui évite d'avoir à **choisir** une tolérance sur des flottants |
 | `tests/compat/diff_motifs.py` | les mêmes documents sur un **motif** — `regexp`, `wildcard`, `prefix`, `match_phrase_prefix` ? (110/110, dont les neuf formes du `|` sans branche gauche) |
 | `tests/compat/diff_multi_index.py` | `index=["a","b"]`, `logs-*`, les alias : **les mêmes index visés, fusionnés pareil** ? (87/87, 0 écart, plus aucune divergence assumée ; `--calibrer` : 87/87 contre deux ES) |
 | `tests/compat/sonde_facettes.py` | ce qui sépare un `terms` d'une **facette** : `include` / `exclude` (expression régulière de Lucene, liste exacte, partition) et l'**ordre par sous-agrégation**. Compare le **bloc `terms` entier** — seaux dans leur ordre, valeurs des sous-agrégations, `sum_other_doc_count` et `doc_count_error_upper_bound` : **145/170 identiques, 25 refus assumés, 0 écart** (`--calibrer` : 170/170 contre deux ES). Le même fichier lancé contre le ferrite d'avant rend **30/170** |
@@ -311,8 +313,8 @@ développement, pas de CI).
 | `tests/compat/sonde_alias.py` | les mêmes alias sur une **expression de noms** — liste, joker, exclusion, `_all` — et le même 404 ? (21/21, corps et message compris) |
 | `tests/compat/sonde_ecriture_alias.py` | et pour **écrire** un alias ? Les sept URL de `put_alias` (le nom de l'alias, celui de l'index, ou les deux, viennent du corps — qui **remplace** le chemin), `must_exist`, et les deux règles de 404 qui ne sont pas la même : `must_exist: true` se vérifie **par index visé**, le 404 par défaut est **global**. Compare le statut, le message **et l'état laissé derrière** : **57/65 identiques, 7 refus assumés, 1 message non comparé, 0 écart** — et **14/65 contre le ferrite d'avant**. `--calibrer` : 64/65 contre deux ES |
 | `tests/compat/sonde_vide.py` | sur un serveur **sans aucun index**, la même chose qu'ES — et rien accepté en silence ? (28/28 identiques, 0 refus muet ; les deux serveurs doivent être vides, c'est l'état mesuré) |
-| `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **750 cas, 34 864 requêtes, 0 divergence** sur trois plages de graines dont **aucune** n'a servi à corriger : celle sur laquelle on itère ne mesure plus rien, et le générateur ayant changé, les plages du passage précédent ne mesurent plus les mêmes cas. Les mêmes plages contre le **binaire d'avant** rendent 181 divergences : une brique de générateur qui ne fait pas rougir le binaire d'avant ne mesure rien. 21 défauts silencieux trouvés au premier passage, 31 de plus depuis — dont **dix-sept** sur le seul surlignage, tous invisibles aux 233 questions écrites à la main, et le dernier sur le `|` de `regexp`, sans rapport avec la carte qui l'a sorti. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (50 cas, 2 230 requêtes, 0 divergence réelle) |
-| `tests/compat/sonde_fuzz.py` | les écarts trouvés par le fuzzing, **figés** hors d'une graine (100/100, plus 12 refus assumés ; les cinq derniers portent sur le motif **vide**, qui désigne la chaîne vide chez Lucene et que ferrite refusait en 400) |
+| `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **360 cas, 16 835 requêtes, 1 divergence ouverte** sur trois plages de graines dont **aucune** n'a servi à corriger : celle sur laquelle on itère ne mesure plus rien, et le générateur ayant changé, les plages du passage précédent ne mesurent plus les mêmes cas. Les mêmes plages contre le **binaire d'avant** rendent 383 divergences : une brique de générateur qui ne fait pas rougir le binaire d'avant ne mesure rien. 21 défauts silencieux trouvés au premier passage, 36 de plus depuis — dont **dix-sept** sur le seul surlignage, et quatre sur le scoring, dont trois fois le même : `Math.min` de Java propage `NaN`, celui de Rust non. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (50 cas, 2 255 requêtes, 0 divergence réelle) |
+| `tests/compat/sonde_fuzz.py` | les écarts trouvés par le fuzzing, **figés** hors d'une graine (109/109, plus 12 refus assumés ; les cinq derniers portent sur le motif **vide**, qui désigne la chaîne vide chez Lucene et que ferrite refusait en 400) |
 | `tests/compat/appli_reelle.py` | **un logiciel écrit par d'autres démarre-t-il ?** Clone une vraie application à une révision figée, vérifie que rien n'y a bougé, lance sa **propre** suite d'intégration contre un vrai ES puis contre ferrite, et relève tout le trafic HTTP au passage. Gitea v1.27.2 : **34/34 des deux côtés**. Wagtail v7.1 : **83/83 des deux côtés**, et plus un seul refus que ferrite prononce là où ES répond. Voir [`docs/application.md`](docs/application.md) |
 | `tests/compat/tests_clients.py` | **la suite de tests du client officiel passe-t-elle ?** Pas « un client se connecte » : les cas que l'équipe du client a écrits, joués par **son** lanceur, dans **son** langage. Trois clients, licence Apache-2.0 vérifiée **dans le clone**, révision figée, arbre vérifié intact. `go-elasticsearch` v8.13.0 : 28/30 contre un vrai ES, 16/30 contre ferrite, chaque écart rattaché à une capacité. `elasticsearch-py` v8.15.0 : 71/84 *(origine)* · 45/84 *(adapté)* / 43/84 avec le nettoyage de remplacement, **0/84 telle quelle** — sa fixture nettoie par seize routes x-pack, et les deux chiffres sont publiés. Et le **cycle de vie du client**, joué par le client publié : 9/9 en Python, 7/7 en Go, 7/7 en JavaScript, des deux côtés. Voir [`docs/clients.md`](docs/clients.md) |
 | `tests/compat/genere_compat.py` | le périmètre déclaré et la doc disent-ils la **même chose** ? [`compat.yaml`](compat.yaml) est la source (une entrée par capacité : état, paramètres, motif du refus, poids d'usage) ; [`docs/compat.md`](docs/compat.md) et [`docs/compat.json`](docs/compat.json) en sont **générés**, et la CI échoue s'ils divergent |
@@ -623,6 +625,33 @@ bouger**, pas après.
   l'erreur nomme le champ tel que le **second** index le voit (donc
   `__anonymous_`, le mapper anonyme d'ES), et elle ne tombe que si les deux
   index ont **apporté un document** — un `size: 0` rend 200 malgré le conflit.
+- **Un score n'est pas un ordre, c'est une valeur — et son oracle s'exécute.**
+  `function_score` ([`src/fonction_score.rs`](src/fonction_score.rs)) est la
+  seule clause dont le produit soit un nombre que le client lit et compare. Une
+  formule recopiée depuis la documentation d'Elastic rend un nombre plausible,
+  et un nombre plausible ne se distingue pas d'un nombre juste par la lecture.
+  Les trois briques où tout se joue — la décroissance, le `modifier` de
+  `field_value_factor`, la combinaison des scores — sont donc calculées par
+  **les classes d'ES elles-mêmes**, exécutées dans le conteneur de référence
+  (`GaussDecayFunctionBuilder$GaussScoreFunction`,
+  `FieldValueFactorFunction$Modifier`, `CombineFunction`), et
+  `tests/scoring_vs_es.rs` rejoue leurs 58 476 réponses dans `cargo test` sans
+  Docker. C'est le geste de la carte 13 appliqué à une autre classe, et il
+  supprime la question de la tolérance : il n'y a pas d'écart à tolérer, il y a
+  un `f64` à rendre à l'identique (1 ULP au pire sur les `double`, égalité
+  stricte en `float`). Cinq règles en sont sorties qu'aucune documentation ne
+  donne : `min_score` compare le score **après** le `boost` de la clause ; une
+  fonction unique sans `filter` fait **ignorer** `score_mode` (ES construit
+  alors son autre constructeur, qui pose `FIRST`) ; `avg` divise par la **somme
+  des poids** ; un document sans valeur a une distance **nulle**, donc un score
+  de décroissance de 1.0, là où un `field_value_factor` sans `missing` fait
+  échouer la recherche entière ; et sur un champ multivalué c'est la plus
+  petite **distance** qui compte pour une décroissance, la plus petite
+  **valeur** pour un `field_value_factor`.
+- **`boost_factor` est refusé parce qu'ES le refuse.** La carte le demandait ;
+  un ES 8.15 rend `field [boost_factor] is not supported` (il a disparu en 5.0).
+  Le servir aurait rendu acceptable une requête qu'un vrai Elasticsearch
+  rejette — c'est le geste 3 appliqué à un paramètre plutôt qu'à un client.
 - **`minimum_should_match` se calcule, il ne s'approxime pas**
   ([`src/msm.rs`](src/msm.rs)). Ses quatre notations (entier, pourcentage, les
   deux en négatif, et les conditions `3<90%`) tiennent en une trentaine de
@@ -869,6 +898,45 @@ bouger**, pas après.
   fuzzer (2727085), pas par le raisonnement qui avait écrit la première
   version — lequel avait pris pour une garantie ce qui n'était qu'une
   ressemblance entre deux moteurs.
+- **`Math.min` de Java n'est pas `f64::min` de Rust, et la différence est un
+  `NaN`.** Java propage `NaN`, Rust rend l'autre opérande. Un score de fonction
+  `NaN` — un `sqrt` sur une valeur négative, un `log1p` sous -1, ce que produit
+  un `missing: -1` — traversait donc `min(fonction, max_boost)` en devenant le
+  **plafond**, et ferrite rendait un classement inventé **en 200** là où ES
+  refuse en 500. La grille de 47 000 points ne l'avait pas vu : elle ne portait
+  ni `NaN` ni les infinis, et c'est une plage de contrôle du fuzzer qui l'a
+  sorti (graines 7300048 et 7300100). L'oracle en porte maintenant, et il en
+  compte 58 476. La leçon est celle du geste 5, appliquée à une grille plutôt
+  qu'à un corpus de mots : une grille exhaustive **sur les valeurs ordinaires**
+  ne mesure pas les valeurs qui ne le sont pas.
+- **Le `boost` d'une clause ne s'applique que si quelqu'un lit le score.**
+  Lucene comme tantivy laissent tomber leur `BoostQuery` quand le collecteur
+  n'a pas besoin de scores. Ça ne se voit nulle part — un facteur constant ne
+  change pas un ensemble de documents — sauf sous un `min_score`, qui en fait
+  un **seuil** : `min_score: 0.25` avec `boost: 2` garde trois documents en
+  recherche libre et **un seul** dès qu'un `sort` remplace le score. Deux
+  conséquences : ferrite porte le `boost` **dans** la clause plutôt qu'autour
+  (le `Weight::count` de tantivy reconstruit le scorer avec un boost de 1.0, ce
+  qui rendait un total plus petit que le nombre de hits), et le total d'une
+  recherche libre se compte désormais avec un collecteur **qui demande les
+  scores** — sauf à `size: 0`, où personne n'en lit, exactement comme ES.
+  Trouvé par une plage de contrôle du fuzzer (graine 8810020).
+- **Un `_score` arrondi est un `_score` faux.** `round_score` arrondissait à la
+  septième décimale pour « ne pas exposer le bruit du `f32 → f64` » : l'intention
+  était juste et le résultat falsifiait la valeur. Un score de `1e-9` sortait à
+  **`0.0`**, et `12345.6789` à `12345.6787109` là où ES écrit `12345.679`. Sans
+  conséquence tant qu'un score vaut quelques unités — une décroissance `gauss`
+  sur des dates en rend couramment en 1e-26, et le client lisait alors zéro pour
+  chacun de ses documents. La bonne conversion tenait en une ligne : `f32` et
+  `f64` ont tous deux une **plus courte écriture décimale qui les représente
+  sans perte**, et il suffit de faire l'aller-retour par elle. Personne ne
+  l'avait vu parce qu'aucune sonde ne comparait un score en **valeur** — elles
+  comparaient toutes un ordre.
+- **Le parseur de flottants de `serde_json` se trompe d'un ULP.**
+  `1000000.0000000001` y devient le `double` d'en dessous, là où le
+  `str::parse::<f64>` de la bibliothèque standard est exact. La grille de
+  scoring écrit donc **tous** ses nombres en chaîne : une grille qui perd un bit
+  en la lisant ne mesure plus le bit qu'on veut mesurer.
 - **Une divergence déclarée a deux faces, et la seconde est l'inverse de la
   première.** `exists` sur un `text` sans terme rend **moins** de documents
   chez ferrite : c'est déclaré, mesuré, et le prédicat du fuzzer l'absorbe
@@ -1335,9 +1403,23 @@ déplacement qu'une carte ait fait sur ce sous-corpus, et la ligne
 `agg.date_histogram` (première du tableau des manques chez Rally, 25,8 %) tombe
 à **une** requête sur 5 311, qui porte `order`.
 
+**Régler la pertinence** ne demande plus de recalculer les scores côté client :
+`function_score` et `boosting` sont servis — remonter le récent (`gauss` /
+`exp` / `linear` sur une date), le populaire (`field_value_factor` et ses dix
+`modifier`), pondérer par catégorie (`weight` sous un `filter`), combiner
+(`score_mode`, `boost_mode`, `max_boost`, `min_score`), et repousser sans
+exclure (`boosting`). C'était le **rang 9 mesuré** du corpus d'usage, qui passe
+de 45,9 % à **46,1 %**. Ce que ça a demandé n'est pas d'écrire des formules :
+c'est de ne pas les écrire. Elles viennent des classes d'ES exécutées dans le
+conteneur de référence, et les cinq règles qui les entourent — celles qui
+décident vraiment du résultat — ne sont dans aucune documentation.
+`random_score` et `script_score` sont refusés en les nommant, et `boost_factor`
+aussi : **ES 8.15 le refuse lui-même**.
+
 Ce qui reste, par ordre de gêne pour un projet réel : `rest_total_hits_as_int`,
 `_msearch`, `_reindex`, les templates de **composants** (`_component_template`, et le
 `composed_of` qui les cite — refusé à la pose plutôt qu'appliqué à moitié),
+`random_score` et `script_score`,
 `inner_hits`, `GET /_cat/aliases` et les colonnes `h` / `s` des `_cat`,
 `GET /{index}/_mapping/field/{champs}`, l'agrégation `filters` (la sœur
 plurielle de `filter`), l'`order` d'un `date_histogram` (refusé explicitement),

@@ -277,6 +277,45 @@ struct Hit {
     doc: DocId,
 }
 
+/// Le `Count` de tantivy, mais qui **demande les scores**.
+///
+/// Les deux comptent la meme chose partout ailleurs : un score ne change pas
+/// l'ensemble des documents qui correspondent. Sauf sous un `min_score`, qui en
+/// fait un seuil — et le regime de score decide alors du total (voir
+/// [`crate::fonction_score`]).
+struct CompteAvecScore;
+
+struct CompteAvecScoreSegment(usize);
+
+impl Collector for CompteAvecScore {
+    type Fruit = usize;
+    type Child = CompteAvecScoreSegment;
+
+    fn for_segment(&self, _: SegmentOrdinal, _: &SegmentReader) -> tantivy::Result<Self::Child> {
+        Ok(CompteAvecScoreSegment(0))
+    }
+
+    fn requires_scoring(&self) -> bool {
+        true
+    }
+
+    fn merge_fruits(&self, fruits: Vec<usize>) -> tantivy::Result<usize> {
+        Ok(fruits.into_iter().sum())
+    }
+}
+
+impl SegmentCollector for CompteAvecScoreSegment {
+    type Fruit = usize;
+
+    fn collect(&mut self, _doc: DocId, _score: Score) {
+        self.0 += 1;
+    }
+
+    fn harvest(self) -> usize {
+        self.0
+    }
+}
+
 /// Collecteur qui ramasse tous les documents correspondants avec leurs cles de
 /// tri, puis les ordonne en memoire.
 ///
@@ -636,6 +675,10 @@ pub struct Cible {
     /// generation** comme la requete principale, et rangees par chemin
     /// d'agregation (voir [`crate::aggs`]).
     pub filtres: crate::aggs::Filtres,
+    /// Ce que l'execution a rencontre et qu'ES traite en erreur (voir
+    /// [`crate::fonction_score::Incidents`]). Relu **apres** chaque recherche :
+    /// un `Scorer` ne peut pas echouer, mais son verdict ne doit pas se perdre.
+    pub incidents: Arc<crate::fonction_score::Incidents>,
 }
 
 pub struct SearchRequest {
@@ -744,6 +787,9 @@ pub fn balayer(cibles: Vec<Cible>, req: &SearchRequest) -> EsResult<Balayage> {
             cible: rang,
         };
         let locaux = searcher.search(&cible.query, &collector)?;
+        if let Some(e) = cible.incidents.erreur() {
+            return Err(e);
+        }
         total += locaux.len();
         apporte[rang] = !locaux.is_empty();
         if !trie {
@@ -899,18 +945,38 @@ pub fn execute(cibles: &[Cible], req: &SearchRequest) -> EsResult<SearchOutcome>
                 cible: rang,
             };
             let mut locaux = searcher.search(&cible.query, &collector)?;
+            if let Some(e) = cible.incidents.erreur() {
+                return Err(e);
+            }
             total += locaux.len();
             locaux.sort_by(|a, b| compare(&req.sort_asc, a, b));
             locaux.truncate(fenetre);
             apporte[rang] = !locaux.is_empty();
             candidats.extend(locaux);
         } else {
-            total += searcher.search(&cible.query, &Count)?;
+            // Le total se compte avec le meme regime de score que la page :
+            // `min_score` fait de la valeur du score un **seuil**, et le
+            // `boost` d'une clause ne s'applique que si quelqu'un lit le score
+            // (voir [`crate::fonction_score`]). Compter sans score la ou la
+            // page en demande rendrait un total plus petit que le nombre de
+            // hits — en 200. A `size: 0` personne ne lit de score, et c'est
+            // aussi ce que fait ES.
+            total += if fenetre == 0 {
+                searcher.search(&cible.query, &Count)?
+            } else {
+                searcher.search(&cible.query, &CompteAvecScore)?
+            };
+            if let Some(e) = cible.incidents.erreur() {
+                return Err(e);
+            }
             if fenetre == 0 {
                 continue;
             }
             let top =
                 searcher.search(&cible.query, &TopDocs::with_limit(fenetre).order_by_score())?;
+            if let Some(e) = cible.incidents.erreur() {
+                return Err(e);
+            }
             // ES rapporte le meilleur score de la requete, pas de la page.
             if let Some((score, _)) = top.first() {
                 max_score = Some(max_score.map_or(*score, |m: f32| m.max(*score)));
@@ -1168,11 +1234,25 @@ fn build_hit(
     Ok(Value::Object(hit))
 }
 
-/// ES serialise les scores en `float` : on tronque a la meme precision pour ne
-/// pas exposer le bruit du `f32 -> f64`.
+/// Le `_score` tel qu'ES l'ecrit.
+///
+/// ES serialise un `float`, et Java comme Rust en rendent la **plus courte
+/// ecriture decimale qui le represente sans perte** : le score n'a donc qu'a
+/// faire l'aller-retour par cette ecriture-la pour tomber sur le meme nombre.
+///
+/// Ce qui etait fait avant — arrondir a la septieme decimale — visait la bonne
+/// chose (ne pas exposer le bruit du `f32 -> f64`) et falsifiait la valeur : un
+/// score de `1e-9` sortait a **`0.0`**, et `12345.6789` a `12345.6787109` la ou
+/// ES ecrit `12345.679`. C'est sans consequence tant qu'un score vaut quelques
+/// unites ; une decroissance `gauss` sur des dates en rend couramment en 1e-26,
+/// et le client lisait alors zero pour chacun de ses documents.
 pub fn round_score(score: f32) -> f64 {
-    let v = f64::from(score);
-    (v * 1e7).round() / 1e7
+    // `f32::to_string` est la plus courte ecriture qui round-trip ; le `f64`
+    // qu'elle donne se reserialise a l'identique.
+    score
+        .to_string()
+        .parse()
+        .unwrap_or_else(|_| f64::from(score))
 }
 
 #[cfg(test)]

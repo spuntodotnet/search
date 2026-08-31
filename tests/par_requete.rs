@@ -53,6 +53,7 @@ fn cible(idx: &Arc<FerriteIndex>) -> (Cible, Arc<Generation>) {
             index: idx.clone(),
             gen: gen.clone(),
             query: Box::new(AllQuery),
+            incidents: Default::default(),
         },
         gen,
     )

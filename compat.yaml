@@ -1700,6 +1700,50 @@ tables:
         poids: 0.1
         detail: "`queries`, `tie_breaker`, `boost` — voir [`src/dismax.rs`](../src/dismax.rs)"
 
+      - id: dsl.function_score
+        nom: "`function_score`"
+        etat: partiel
+        poids: 0.4
+        detail: >-
+          le réglage de la pertinence : « le même match, mais les articles
+          récents devant ». Les trois briques de calcul — les fonctions de
+          décroissance, les modificateurs de `field_value_factor` et les six
+          `boost_mode` — sont **verrouillées contre les classes d'Elasticsearch
+          elles-mêmes**, exécutées dans le conteneur de référence
+          ([`genere_scoring.py`](../tests/compat/genere_scoring.py), 47 184
+          points rejoués par `cargo test`). Voir [la section
+          dédiée](#function_score-et-boosting)
+        parametres:
+          supportes:
+            - {nom: "query", note: "facultative ; sans elle, `match_all`"}
+            - {nom: "functions", note: "avec `filter` et `weight` par entrée"}
+            - {nom: "weight"}
+            - {nom: "field_value_factor", note: "`field`, `factor`, `modifier` (les dix), `missing` — sur un champ numérique, `date` ou `boolean`"}
+            - {nom: "gauss", note: "sur un champ numérique, `date` ou `boolean` ; `origin`, `scale`, `offset`, `decay`. Sur une `date`, `origin` accepte le date math et vaut `now` par défaut, `scale` et `offset` sont des durées"}
+            - {nom: "exp", note: "mêmes paramètres que `gauss`"}
+            - {nom: "linear", note: "mêmes paramètres que `gauss`"}
+            - {nom: "score_mode", note: "`multiply`, `sum`, `avg`, `first`, `max`, `min` — **ignoré** quand il n'y a qu'une fonction sans `filter`, comme chez ES (mesuré)"}
+            - {nom: "boost_mode", note: "`multiply`, `replace`, `sum`, `avg`, `max`, `min`"}
+            - {nom: "max_boost"}
+            - {nom: "min_score", note: "comparé au score **après** le `boost` de la clause, comme chez ES (mesuré)"}
+            - {nom: "boost"}
+          refuses:
+            - {nom: "random_score", note: "un score tiré au sort ne se reproduit pas d'un moteur à l'autre : il faudrait reproduire le hachage de Lucene sur des identifiants internes qui ne sont pas les mêmes"}
+            - {nom: "script_score", note: "suppose Painless, un langage à part entière"}
+            - {nom: "boost_factor", note: "**ES 8.15 le refuse aussi** (`field [boost_factor] is not supported`), et ferrite rend la même phrase : il a disparu en 5.0"}
+            - {nom: "multi_value_mode", note: "seul le défaut d'ES est servi — `min`, appliqué à la **distance** et non à la valeur"}
+            - {texte: "plusieurs champs dans une même décroissance", note: "ES en applique **un seul** sans dire lequel (mesuré) ; le reproduire demanderait de deviner"}
+            - {texte: "une décroissance sur un champ non mappé", note: "ES la refuse aussi (`unknown field [x]`) — son `field_value_factor`, lui, l'accepte et sert son `missing`, et ferrite fait pareil"}
+
+      - id: dsl.boosting
+        nom: "`boosting`"
+        etat: supporte
+        poids: 0.0
+        detail: >-
+          la démotion sans exclusion : `positive`, `negative`, `negative_boost`
+          (obligatoire et positif, comme chez ES), `boost`. L'ensemble rendu est
+          **exactement** celui de `positive`
+
       - id: dsl.terms
         nom: "`terms`"
         etat: partiel
@@ -1774,11 +1818,11 @@ tables:
 
       - id: dsl.non_supportees
         nom: >-
-          `query_string`, `simple_query_string`, `function_score`, `boosting`,
-          `intervals`, `terms_set`, `script`…
+          `query_string`, `simple_query_string`, `intervals`, `terms_set`,
+          `script`…
         etat: refuse
         motif: pas_encore
-        poids: 6.5
+        poids: 6.1
         raison: >-
           `parsing_exception: unknown query [...]`, avec la liste des clauses
           connues — la plus regrettée est `query_string`, dont la syntaxe est un
@@ -2128,7 +2172,14 @@ tables:
                 le champ**, tantivy sur **tous** les documents de l'index. Deux
                 scores voisins peuvent alors s'inverser. Mesuré par
                 [`fuzz_vs_es.py`](../tests/compat/fuzz_vs_es.py) ; l'ampleur est
-                mesurée par `diff_relevance.py`
+                mesurée par `diff_relevance.py`. Et depuis `function_score`,
+                cet écart de **valeur** peut devenir un écart d'**ensemble** :
+                `min_score` est le seul endroit où le score cesse d'être un
+                ordre pour devenir un seuil. Un `min_score` réglé sur les
+                scores d'un vrai Elasticsearch ne coupe donc pas exactement au
+                même endroit chez ferrite dès qu'un champ `text` est facultatif
+                (mesuré : 0,998 chez ES contre 1,169 chez ferrite sur le même
+                document, de part et d'autre d'un `min_score: 1`)
             - texte: "le score d'un `fuzzy`"
               note: >-
                 tantivy le rend **constant** ; Lucene pondère chaque terme par sa

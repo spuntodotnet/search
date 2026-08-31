@@ -132,10 +132,16 @@ async fn executer(
     let mut ignore: Option<EsError> = None;
     for (idx, gen) in indices.iter().zip(&generations) {
         let searcher = gen.searcher();
+        let incidents = Arc::new(crate::fonction_score::Incidents::pour(
+            &idx.name,
+            &idx.uuid,
+            &st.catalog.cluster_uuid,
+        ));
         let ctx = QueryCtx::new(&gen.fields, &gen.index, &searcher)
             .avec_champs_ailleurs(&champs_connus)
             .avec_maintenant(maintenant)
-            .selon_le_mapping(&gen.mapping);
+            .selon_le_mapping(&gen.mapping)
+            .avec_incidents(incidents.clone());
         let query = match &requete {
             Some(v) => build_query(v, &ctx),
             None => Ok(Box::new(tantivy::query::AllQuery) as Box<dyn tantivy::query::Query>),
@@ -145,6 +151,7 @@ async fn executer(
                 index: idx.clone(),
                 gen: gen.clone(),
                 query: q,
+                incidents,
             }),
             // Le champ est inconnu de **cet** index : si un autre index vise le
             // connait, la clause ne correspond simplement a rien ici (mapping

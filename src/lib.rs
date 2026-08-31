@@ -47,6 +47,7 @@ pub mod dsl;
 pub mod engine;
 pub mod error;
 pub mod fetch;
+pub mod fonction_score;
 pub mod fuseau;
 pub mod highlight;
 pub mod histodate;

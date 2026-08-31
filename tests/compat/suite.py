@@ -76,8 +76,14 @@ def refused(fn, *, status=400, contains=None):
         assert error["reason"], "error.reason manquant"
         assert exc.body["status"] == status, "status manquant dans le corps"
         if contains:
-            assert contains in error["reason"], \
-                f"reason [{error['reason']}] ne contient pas [{contains}]"
+            # ES groupe un echec de shard sous « all shards failed » et garde
+            # la vraie phrase dans `root_cause` : la chercher aussi la est ce
+            # qui permet de verifier ce que le serveur dit, et pas seulement
+            # l'enveloppe qu'il met autour.
+            phrases = [error["reason"]] + [
+                str(c.get("reason")) for c in error.get("root_cause", [])]
+            assert any(contains in p for p in phrases), \
+                f"aucune des raisons {phrases} ne contient [{contains}]"
         return error
     raise AssertionError("l'appel aurait du etre refuse")
 
@@ -2931,9 +2937,9 @@ def clause_de_dsl_inconnue_refusee(es):
     refused(lambda: es.search(index=INDEX,
                               query={"query_string": {"query": "titre:bel"}}),
             contains="query_string")
-    refused(lambda: es.search(index=INDEX, query={"boosting": {
-        "positive": {"match_all": {}}, "negative": {"term": {"auteur": "Zola"}},
-        "negative_boost": 0.5}}), contains="boosting")
+    refused(lambda: es.search(index=INDEX,
+                              query={"intervals": {"titre": {"match": {}}}}),
+            contains="intervals")
 
 
 @scenario
@@ -4349,6 +4355,118 @@ def graphe_temporel_par_mois_et_par_fuseau(es):
         "field": "d", "calendar_interval": "day",
         "order": {"_key": "desc"}}}}), contains="[order]")
     es.indices.delete(index=CAL)
+
+
+FS = "compat-function-score"
+
+
+@scenario
+def reglage_de_pertinence(es):
+    """Le tuning de pertinence, par le client officiel : remonter le recent, le
+    populaire, le proche — et repousser sans exclure.
+
+    Ce qui est verifie n'est pas seulement l'ordre : c'est le **score**. Une
+    clause dont le seul produit est un nombre ne se teste pas par le classement
+    qu'elle donne, sinon deux formules differentes passent le meme test des que
+    les documents sont assez separes. Le score de base est donc pose exact
+    (`constant_score`), et chaque assertion dit la valeur attendue.
+    """
+    es.options(ignore_status=404).indices.delete(index=FS)
+    es.indices.create(index=FS, mappings={"properties": {
+        "titre": {"type": "text"},
+        "cat": {"type": "keyword"},
+        "vues": {"type": "long"},
+        "publie": {"type": "date"},
+    }})
+    es.bulk(operations=[
+        {"index": {"_index": FS, "_id": "vieux"}},
+        {"titre": "guide complet", "cat": "article", "vues": 1000,
+         "publie": "2026-01-01"},
+        {"index": {"_index": FS, "_id": "recent"}},
+        {"titre": "guide complet", "cat": "article", "vues": 10,
+         "publie": "2026-08-31"},
+        {"index": {"_index": FS, "_id": "archive"}},
+        {"titre": "guide complet", "cat": "archive", "vues": 100,
+         "publie": "2026-08-01"},
+    ], refresh=True)
+
+    # Le score de base : 1.0 pour tout le monde, et exact.
+    base = {"constant_score": {"filter": {"match": {"titre": "guide"}}}}
+
+    def scores(query, **kw):
+        r = es.search(index=FS, size=10, source=False, query=query, **kw)
+        return {h["_id"]: h["_score"] for h in r["hits"]["hits"]}
+
+    # « les plus vus devant », par la valeur du champ.
+    assert scores({"function_score": {
+        "query": base, "field_value_factor": {"field": "vues", "modifier": "log1p"},
+    }}) == {"vieux": 3.0004342, "archive": 2.0043213, "recent": 1.0413927}
+
+    # « les recents devant », par decroissance sur une date : le document du
+    # jour garde son score entier, celui d'il y a 30 jours en garde exactement
+    # la moitie (c'est ce que `scale` veut dire), et celui de janvier n'a plus
+    # rien. La demi-vie n'est pas une approximation : elle tombe au bit pres.
+    s = scores({"function_score": {"query": base, "gauss": {"publie": {
+        "origin": "2026-08-31", "scale": "30d"}}}})
+    assert s == {"recent": 1.0, "archive": 0.5, "vieux": 2.5801426e-20}, s
+
+    # « les archives derriere, mais pas dehors » : les trois documents sont la,
+    # et un seul a ete repousse.
+    assert scores({"boosting": {
+        "positive": base, "negative": {"term": {"cat": "archive"}},
+        "negative_boost": 0.2}}) == {"vieux": 1.0, "recent": 1.0, "archive": 0.2}
+
+    # Plusieurs fonctions, un filtre par fonction, et la combinaison demandee.
+    # `avg` divise par la **somme des poids** : (3 + 5) / (3 + 5) = 1.
+    fonctions = [{"filter": {"term": {"cat": "article"}}, "weight": 3},
+                 {"filter": {"term": {"cat": "archive"}}, "weight": 5}]
+    assert scores({"function_score": {"query": base, "functions": fonctions,
+                                      "score_mode": "sum"}}) == \
+        {"vieux": 3.0, "recent": 3.0, "archive": 5.0}
+    assert scores({"function_score": {"query": base, "functions": fonctions,
+                                      "score_mode": "sum", "boost_mode": "sum"}}) == \
+        {"vieux": 4.0, "recent": 4.0, "archive": 6.0}
+    # `max_boost` plafonne le score des **fonctions**, pas le resultat.
+    assert scores({"function_score": {"query": base, "functions": fonctions,
+                                      "score_mode": "sum", "max_boost": 4}}) == \
+        {"vieux": 3.0, "recent": 3.0, "archive": 4.0}
+    # `min_score` retire des documents — et le total avec.
+    r = es.search(index=FS, size=10, source=False, query={"function_score": {
+        "query": base, "functions": fonctions, "score_mode": "sum",
+        "min_score": 4}})
+    assert [h["_id"] for h in r["hits"]["hits"]] == ["archive"], r["hits"]
+    assert r["hits"]["total"]["value"] == 1, r["hits"]["total"]
+
+    # Le surlignage suit la **requete**, pas les fonctions.
+    r = es.search(index=FS, size=10, source=False,
+                  query={"function_score": {"query": {"match": {"titre": "guide"}},
+                                            "weight": 2}},
+                  highlight={"fields": {"titre": {}}})
+    assert all(h["highlight"]["titre"] == ["<em>guide</em> complet"]
+               for h in r["hits"]["hits"]), r["hits"]["hits"]
+
+    # Et les refus se nomment. `boost_factor` n'est pas un oubli : ES 8.15 le
+    # refuse aussi — il a disparu en 5.0.
+    refused(lambda: es.search(index=FS, query={"function_score": {
+        "query": base, "random_score": {}}}), contains="random_score")
+    refused(lambda: es.search(index=FS, query={"function_score": {
+        "query": base, "script_score": {"script": "1"}}}), contains="script_score")
+    refused(lambda: es.search(index=FS, query={"function_score": {
+        "query": base, "boost_factor": 2}}), contains="boost_factor")
+    refused(lambda: es.search(index=FS, query={"function_score": {
+        "query": base, "gauss": {"vues": {"origin": 1, "scale": 0}}}}),
+        contains="scale must be > 0.0")
+    refused(lambda: es.search(index=FS, query={"function_score": {
+        "query": base, "field_value_factor": {"field": "cat"}}}),
+        contains="n'est pas numerique")
+    # Un document sans valeur et pas de `missing` : ES fait echouer la
+    # recherche, et ferrite aussi — rendre 0 serait un score faux en 200.
+    es.index(index=FS, id="sans", document={"titre": "guide complet"},
+             refresh=True)
+    refused(lambda: es.search(index=FS, query={"function_score": {
+        "query": base, "field_value_factor": {"field": "vues"}}}),
+        status=500, contains="Missing value for field [vues]")
+    es.indices.delete(index=FS)
 
 
 # ---------------------------------------------------------------------------

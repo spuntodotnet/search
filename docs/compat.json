@@ -36,11 +36,11 @@
     }
   },
   "totaux": {
-    "capacites": 203,
-    "supporte": 97,
-    "partiel": 61,
+    "capacites": 205,
+    "supporte": 98,
+    "partiel": 62,
     "refuse": 45,
-    "poids_renseignes": 145
+    "poids_renseignes": 147
   },
   "capacites": [
     {
@@ -1708,6 +1708,48 @@
       "detail": "`queries`, `tie_breaker`, `boost` — voir [`src/dismax.rs`](../src/dismax.rs)"
     },
     {
+      "id": "dsl.function_score",
+      "table": "dsl",
+      "nom": "`function_score`",
+      "nom_texte": "function_score",
+      "etat": "partiel",
+      "poids": 0.4,
+      "detail": "le réglage de la pertinence : « le même match, mais les articles récents devant ». Les trois briques de calcul — les fonctions de décroissance, les modificateurs de `field_value_factor` et les six `boost_mode` — sont **verrouillées contre les classes d'Elasticsearch elles-mêmes**, exécutées dans le conteneur de référence ([`genere_scoring.py`](../tests/compat/genere_scoring.py), 47 184 points rejoués par `cargo test`). Voir [la section dédiée](#function_score-et-boosting)",
+      "parametres": {
+        "supportes": [
+          "query",
+          "functions",
+          "weight",
+          "field_value_factor",
+          "gauss",
+          "exp",
+          "linear",
+          "score_mode",
+          "boost_mode",
+          "max_boost",
+          "min_score",
+          "boost"
+        ],
+        "refuses": [
+          "random_score",
+          "script_score",
+          "boost_factor",
+          "multi_value_mode",
+          "plusieurs champs dans une même décroissance",
+          "une décroissance sur un champ non mappé"
+        ]
+      }
+    },
+    {
+      "id": "dsl.boosting",
+      "table": "dsl",
+      "nom": "`boosting`",
+      "nom_texte": "boosting",
+      "etat": "supporte",
+      "poids": 0.0,
+      "detail": "la démotion sans exclusion : `positive`, `negative`, `negative_boost` (obligatoire et positif, comme chez ES), `boost`. L'ensemble rendu est **exactement** celui de `positive`"
+    },
+    {
       "id": "dsl.terms",
       "table": "dsl",
       "nom": "`terms`",
@@ -1782,10 +1824,10 @@
     {
       "id": "dsl.non_supportees",
       "table": "dsl",
-      "nom": "`query_string`, `simple_query_string`, `function_score`, `boosting`, `intervals`, `terms_set`, `script`…",
-      "nom_texte": "query_string, simple_query_string, function_score, boosting, intervals, terms_set, script…",
+      "nom": "`query_string`, `simple_query_string`, `intervals`, `terms_set`, `script`…",
+      "nom_texte": "query_string, simple_query_string, intervals, terms_set, script…",
       "etat": "refuse",
-      "poids": 6.5,
+      "poids": 6.1,
       "motif": "pas_encore",
       "raison": "`parsing_exception: unknown query [...]`, avec la liste des clauses connues — la plus regrettée est `query_string`, dont la syntaxe est un langage à part entière."
     },

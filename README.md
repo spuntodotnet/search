@@ -441,6 +441,20 @@ document. Le tout est mesuré fragment par fragment contre un ES 8.15
 reproduit est refusé en le nommant : `type`, `highlight_query`,
 `matched_fields`, `boundary_scanner`, `encoder`, `order: score`.
 
+**Le tuning de pertinence** — « le même match, mais les articles récents
+devant », « les produits en stock devant », « ne pas exclure les archives,
+juste les repousser » — passe désormais : `function_score` (avec `weight`,
+`field_value_factor` et ses dix `modifier`, les décroissances `gauss` / `exp` /
+`linear` sur un champ numérique ou une date, `score_mode`, `boost_mode`,
+`max_boost`, `min_score`) et `boosting`. Ces deux clauses ne rendent pas un
+ensemble de documents : elles rendent une **valeur**, et une formule recopiée
+depuis la documentation rend un nombre plausible qu'aucune lecture ne distingue
+d'un nombre juste. Les trois briques de calcul sont donc verrouillées contre
+**les classes d'Elasticsearch elles-mêmes**, exécutées dans le conteneur de
+référence : 58 476 points rejoués par `cargo test`, sans Docker
+([`genere_scoring.py`](tests/compat/genere_scoring.py)). `random_score` et
+`script_score` sont refusés en les nommant.
+
 **Ce qui n'y est pas encore** : `search_after`, `_msearch`,
 `_reindex`, `query_string`, les templates de composants
 (`_component_template`), les champs calculés par un script Painless

@@ -712,6 +712,32 @@ fn extraire(v: &Value, gen: &Generation) -> EsResult<Noeud> {
             Some(f) => extraire(f, gen)?,
             None => Noeud::Opaque,
         },
+        // `function_score` ne marque que ce que **sa requete** a fait
+        // correspondre : ses fonctions changent le score, pas les
+        // correspondances. Les `filter` de ses `functions[]` ne marquent donc
+        // rien non plus (mesure contre ES 8.15). Sans `query`, c'est un
+        // `match_all`, qui ne marque rien.
+        //
+        // Et un `min_score`, meme a zero, fait **taire tout le sous-arbre** :
+        // ES enveloppe alors son scorer d'un `MinScoreScorer`, dont le
+        // `Weight` ne sait plus rendre de `Matches` — le surlignage y perd ses
+        // termes, et seulement les siens (les clauses soeurs d'un `bool`
+        // marquent toujours). Mesure contre ES 8.15, trouvee par le fuzzer.
+        "function_score" => match corps.as_object() {
+            Some(o) if o.get("min_score").is_some_and(|v| !v.is_null()) => Noeud::Toujours,
+            Some(o) => match o.get("query") {
+                Some(q) => extraire(q, gen)?,
+                None => Noeud::Toujours,
+            },
+            None => Noeud::Opaque,
+        },
+        // `boosting` ne marque que son `positive` : `negative` deplace le
+        // score, il ne fait correspondre personne. Mesure contre ES 8.15 —
+        // `positive: beta, negative: alpha` ne marque que `beta`.
+        "boosting" => match corps.as_object().and_then(|o| o.get("positive")) {
+            Some(q) => extraire(q, gen)?,
+            None => Noeud::Opaque,
+        },
         "dis_max" => match corps.as_object().and_then(|o| o.get("queries")) {
             Some(Value::Array(a)) => Noeud::Ou {
                 enfants: a
