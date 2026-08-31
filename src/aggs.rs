@@ -58,6 +58,9 @@ struct Info {
     /// ce qu'on lui a demande. On garde donc la demande pour ecarter les
     /// buckets que personne n'a reclames.
     ranges: Vec<Borne>,
+    /// Un `date_histogram` : ferrite calcule ses bornes lui-meme et les passe
+    /// a tantivy sous forme de `range` (voir [`crate::histodate`]).
+    histo: Option<crate::histodate::Histo>,
 }
 
 impl Info {
@@ -74,6 +77,7 @@ impl Info {
             champ: None,
             flottant: false,
             ranges: Vec::new(),
+            histo: None,
         }
     }
 }
@@ -142,6 +146,9 @@ fn allowed(agg: &str) -> Option<&'static [&'static str]> {
         "date_histogram" => &[
             "field",
             "fixed_interval",
+            "calendar_interval",
+            "time_zone",
+            "format",
             "offset",
             "min_doc_count",
             "hard_bounds",
@@ -396,6 +403,16 @@ fn validate_une(
                 .then(|| c.format_ou_defaut(champ))
         });
         verifier_ranges(nom, corps_agg, format)?;
+    }
+
+    // Un `date_histogram` est lu — donc valide — des la validation : c'est ici
+    // que se prononcent les refus d'intervalle, de fuseau et de bornes, avant
+    // qu'aucun document ne soit lu.
+    if type_agg == "date_histogram" {
+        let champ = corps_agg.get("field").and_then(Value::as_str).unwrap_or("");
+        let defaut = crate::dateformat::DateFormat::default();
+        let format = champs.map_or(&defaut, |c| c.format_ou_defaut(champ));
+        crate::histodate::Histo::lire(nom, corps_agg, format)?;
     }
 
     if let Some(sous) = sous {
@@ -1190,6 +1207,7 @@ fn run_natif(parts: &[Part<'_>], aggs: &Value) -> EsResult<Value> {
 
     verifier_cardinalite(parts, &infos)?;
 
+    let demande = calendrier_en_range(parts, demande, &mut infos)?;
     let brut = collecter(parts, demande.clone(), Cible::Recherche)?;
     let vides = formes_vides(parts, &demande, &infos)?;
     Ok(mise_en_forme(
@@ -1200,6 +1218,120 @@ fn run_natif(parts: &[Part<'_>], aggs: &Value) -> EsResult<Value> {
             vides: &vides,
         },
     ))
+}
+
+/// Remplace chaque `date_histogram` de la demande par le `range` **contigu**
+/// qui lui correspond, apres avoir mesure ou commencent et ou finissent ses
+/// seaux.
+///
+/// La pre-passe demande le `min` et le `max` de chaque champ agrege, sur la
+/// meme requete et sur tous les index vises : c'est exactement ce qu'ES connait
+/// au moment de remplir les trous de son histogramme. Un `date_histogram` pose
+/// **sous** un autre seau (un `terms`, une `filter`) partage ces bornes, qui
+/// sont alors plus larges que les siennes : les seaux vides en trop sont
+/// retires seau parent par seau parent a la mise en forme (voir
+/// [`crate::histodate::Histo::seaux`]).
+fn calendrier_en_range(
+    parts: &[Part<'_>],
+    demande: Value,
+    infos: &mut HashMap<String, Info>,
+) -> EsResult<Value> {
+    // Un `date_histogram` dont la relecture a echoue **apres** la validation
+    // n'existe pas — mais s'il existait, la demande partirait telle quelle chez
+    // tantivy, dont le deserialiseur ignore les cles qu'il ne connait pas :
+    // `calendar_interval` et `time_zone` disparaitraient en silence, et le
+    // graphe serait faux en 200. C'est exactement ce que ce module existe pour
+    // empecher, donc le cas est bruyant.
+    if let Some((chemin, info)) = infos
+        .iter()
+        .find(|(_, i)| i.type_agg == "date_histogram" && i.histo.is_none())
+    {
+        return Err(EsError::internal(format!(
+            "[date_histogram] (agregation [{chemin}]) : parametres relus autrement qu'a la \
+             validation ({:?})",
+            info.champ
+        )));
+    }
+    let mut champs: Vec<String> = infos
+        .values()
+        .filter(|i| i.type_agg == "date_histogram")
+        .filter_map(|i| i.histo.as_ref().map(|h| h.champ.clone()))
+        .collect();
+    if champs.is_empty() {
+        return Ok(demande);
+    }
+    champs.sort();
+    champs.dedup();
+
+    let mut mesure = Map::new();
+    for (i, champ) in champs.iter().enumerate() {
+        mesure.insert(format!("min{i}"), json!({"min": {"field": champ}}));
+        mesure.insert(format!("max{i}"), json!({"max": {"field": champ}}));
+    }
+    let brut = collecter(parts, Value::Object(mesure), Cible::Recherche)?;
+    let borne = |cle: &str| -> Option<i64> {
+        brut.get(cle)
+            .and_then(|v| v.get("value"))
+            .and_then(Value::as_f64)
+            // tantivy compte les dates en nanosecondes.
+            .map(|nanos| (nanos / NANOS).round() as i64)
+    };
+
+    for info in infos.values_mut() {
+        let Some(histo) = info.histo.as_mut() else {
+            continue;
+        };
+        let i = champs.iter().position(|c| *c == histo.champ).unwrap_or(0);
+        histo.pose_les_bornes(borne(&format!("min{i}")), borne(&format!("max{i}")))?;
+    }
+
+    Ok(reecrit_date_histogram(&demande, "", infos))
+}
+
+/// La reecriture proprement dite, une fois les bornes connues.
+fn reecrit_date_histogram(aggs: &Value, chemin: &str, infos: &HashMap<String, Info>) -> Value {
+    let Some(obj) = aggs.as_object() else {
+        return aggs.clone();
+    };
+    let mut out = Map::new();
+    for (nom, corps) in obj {
+        let sous_chemin = if chemin.is_empty() {
+            nom.clone()
+        } else {
+            format!("{chemin}{SEP}{nom}")
+        };
+        let Some(corps_obj) = corps.as_object() else {
+            out.insert(nom.clone(), corps.clone());
+            continue;
+        };
+        let histo = infos.get(&sous_chemin).and_then(|i| i.histo.as_ref());
+        let mut nouveau = Map::new();
+        for (cle, valeur) in corps_obj {
+            if cle == "aggs" || cle == "aggregations" {
+                nouveau.insert(
+                    cle.clone(),
+                    reecrit_date_histogram(valeur, &sous_chemin, infos),
+                );
+                continue;
+            }
+            match histo {
+                Some(h) if cle == "date_histogram" => {
+                    nouveau.insert(
+                        "range".into(),
+                        json!({
+                            "field": h.champ,
+                            "ranges": h.intervalles_pour_tantivy(),
+                        }),
+                    );
+                }
+                _ => {
+                    nouveau.insert(cle.clone(), valeur.clone());
+                }
+            }
+        }
+        out.insert(nom.clone(), Value::Object(nouveau));
+    }
+    Value::Object(out)
 }
 
 /// Sur quoi une passe d'agregation est collectee.
@@ -1352,9 +1484,13 @@ fn recenser_sous_aggs(
         else {
             continue;
         };
+        // Un `date_histogram` n'est plus concerne : ferrite le fait executer
+        // comme un `range`, et tantivy execute bien les sous-agregations des
+        // intervalles vides d'un `range` (mesure). Seul l'`histogram`
+        // numerique fabrique encore des seaux sans les remplir.
         let fabrique_des_buckets = infos
             .get(&sous_chemin)
-            .is_some_and(|i| matches!(i.type_agg.as_str(), "histogram" | "date_histogram"));
+            .is_some_and(|i| i.type_agg == "histogram");
         if fabrique_des_buckets {
             for (fils, corps_fils) in sous {
                 plates.insert(format!("{sous_chemin}{SEP}{fils}"), corps_fils.clone());
@@ -1506,6 +1642,18 @@ fn preparer(
                     );
                 }
             }
+            // Un `date_histogram` a deja ete valide ; il est relu ici pour
+            // porter son arrondi jusqu'a l'execution.
+            let histo = (cle == "date_histogram")
+                .then(|| {
+                    crate::histodate::Histo::lire(
+                        nom,
+                        valeur,
+                        gen.fields.format_ou_defaut(champ.unwrap_or("")),
+                    )
+                    .ok()
+                })
+                .flatten();
             infos.insert(
                 sous_chemin.clone(),
                 Info {
@@ -1521,6 +1669,7 @@ fn preparer(
                     champ: champ.map(str::to_string),
                     flottant,
                     ranges,
+                    histo,
                 },
             );
             nouveau.insert(cle.clone(), corps_agg);
@@ -1617,6 +1766,29 @@ fn mise_en_forme_une(valeur: &Value, chemin: &str, info: &Info, forme: &Forme<'_
     // `sum_as_string`. Une somme de zero date n'est pas l'epoque Unix, c'est
     // rien du tout — et ferrite l'annoncait comme « 1970-01-01 ».
     let vide = obj.get("count").and_then(Value::as_u64) == Some(0);
+
+    // Un `date_histogram` : ce que tantivy vient de rendre est le `range`
+    // contigu que ferrite lui a demande a sa place. Les seaux sont donc
+    // renommes, dates, rognes et filtres ici (voir [`crate::histodate`]).
+    if let Some(histo) = &info.histo {
+        let sous = |restant: &Map<String, Value>| -> Map<String, Value> {
+            restant
+                .iter()
+                .map(|(cle, v)| {
+                    let sous_chemin = format!("{chemin}{SEP}{cle}");
+                    let vide = Info::vide();
+                    let sous_info = forme.infos.get(&sous_chemin).unwrap_or(&vide);
+                    (
+                        cle.clone(),
+                        mise_en_forme_une(v, &sous_chemin, sous_info, forme),
+                    )
+                })
+                .collect()
+        };
+        let seaux = histo.seaux(obj.get("buckets").unwrap_or(&Value::Null), &sous);
+        out.insert("buckets".into(), seaux);
+        return Value::Object(out);
+    }
 
     // Les buckets d'abord : la troncature d'un `terms` dit combien de documents
     // partent avec les buckets ecartes, et ce compte doit rejoindre

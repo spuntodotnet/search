@@ -99,7 +99,10 @@ réel est la **couche de compatibilité** au-dessus.
   `histogram` / `filter`, avec sous-agrégations. `terms` filtre ses termes
   (`include` / `exclude`, par expression régulière ou liste exacte) et classe
   ses seaux sur une sous-agrégation (`{"order": {"panier_moyen": "desc"}}`) :
-  de quoi faire une vraie facette de catalogue.
+  de quoi faire une vraie facette de catalogue. `date_histogram` groupe par
+  **mois, trimestre ou année civils** (`calendar_interval`) et dans le fuseau
+  qu'on lui donne (`time_zone`) — un jour de changement d'heure y dure 23 ou
+  25 heures, comme chez Elasticsearch.
 - **Mono-nœud assumé** : les routes de cluster (`_cluster/health`, `_cat/*`,
   `_nodes`) répondent de façon crédible et constante — un shard, zéro réplique,
   toujours `green`.
@@ -318,7 +321,11 @@ supportés : on peut rejouer le mapping d'un Elasticsearch existant, ou indexer
 sans rien déclarer.
 
 Les **agrégations** sont là aussi : métriques, `terms`, `range`, `histogram`,
-`date_histogram`, et sous-agrégations — de quoi construire des facettes. Une
+`date_histogram`, et sous-agrégations — de quoi construire des facettes et des
+graphes temporels. « Par mois » se demande par `calendar_interval` et non par
+« 30 jours », et « par jour à Paris » par `time_zone` : les seaux suivent alors
+l'heure locale, changements d'heure compris — l'arrondi d'Elasticsearch est
+reproduit et mesuré contre le sien sur 25 914 cas et 603 fuseaux. Une
 facette de catalogue, pas seulement un comptage : `terms` filtre ses termes
 (`include` / `exclude`, par expression régulière de Lucene ou par liste exacte)
 et classe ses seaux sur ce qu'ils contiennent — « les dix catégories au panier
@@ -451,9 +458,9 @@ rang qu'un `significant_terms` avec script. Sur un corpus de **5 311 requêtes
 réelles** — la documentation de référence d'ES 8.15, les tracks Rally d'Elastic,
 les tests des clients officiels et le code de 184 dépôts open source — la
 question posée est « celle-ci passerait-elle **entièrement** ? », parce qu'une
-requête supportée à 90 % est une requête qui échoue. Réponse : **96,2 % des
-requêtes trouvées dans du code d'application**, 40,1 % des exemples de la
-documentation, 32,8 % des tracks de benchmark. L'écart entre ces trois nombres
+requête supportée à 90 % est une requête qui échoue. Réponse : **96,4 % des
+requêtes trouvées dans du code d'application**, 40,2 % des exemples de la
+documentation, 46,6 % des tracks de benchmark. L'écart entre ces trois nombres
 est le résultat ; la méthode, les sources et les biais sont dans
 [`docs/usage.md`](docs/usage.md), le corpus est publié avec.
 

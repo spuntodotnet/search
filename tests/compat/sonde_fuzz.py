@@ -202,6 +202,11 @@ DOCS_GRAMMES = [("g1", {"g": "ecole normale"}), ("g2", {"g": "ecologie"}),
 TERMES = {"mappings": {"properties": {"k": {"type": "keyword"}}}}
 DOCS_TERMES = [(f"t{i:02d}", {"k": f"v{i:02d}"}) for i in range(20)]
 
+# Un terme **vide** : le seul corpus ou un motif vide veut dire quelque chose.
+# Aucun corpus ecrit a la main n'indexe la chaine vide ; le fuzzer, lui, la tire.
+VIDE = {"mappings": {"properties": {"k": {"type": "keyword"}}}}
+DOCS_VIDE = [("a", {"k": "a"}), ("b", {"k": "b"}), ("v", {"k": ""})]
+
 # Un champ flottant dont une valeur est **entiere** : c'est la seule forme qui
 # separe la cle `2` de la cle `2.0`, et aucun corpus ecrit a la main n'en
 # contient — le fuzzer, lui, tire `0.0` et `1024.0` expres.
@@ -650,6 +655,32 @@ CAS = [
      {"size": 0, "aggs": {"a": {"terms": {"field": "k", "size": 50,
                                           "order": {"_count": "asc"}}}}},
      lambda r: r["aggregations"]["a"]["doc_count_error_upper_bound"]),
+
+    # -- le motif vide ------------------------------------------------------
+    #
+    # Chez Lucene, un motif vide designe la **chaine vide**, et rien d'autre :
+    # c'est le seul endroit ou son analyseur n'exige pas un atome (`a|` echoue
+    # justement parce qu'il en veut un). ferrite refusait les trois formes en
+    # 400, la ou ES rend 200. Trouve par le fuzzer sur une plage de graines
+    # neuve (9330220), et sans rapport avec la carte qui l'a sorti.
+    (VIDE, DOCS_VIDE, "regexp vide",
+     "400 [regexp] : motif tronque ; ES rend le document dont le terme est vide",
+     {"query": {"regexp": {"k": ""}}, "_source": False, "sort": ["k"]}, hits),
+    (VIDE, DOCS_VIDE, "include vide sur un terms",
+     "meme motif en filtre de termes : ES ne garde que le seau vide",
+     {"size": 0, "aggs": {"a": {"terms": {"field": "k", "include": ""}}}},
+     agg("a")),
+    (VIDE, DOCS_VIDE, "exclude vide sur un terms",
+     "et en exclusion, il ne retire que lui",
+     {"size": 0, "aggs": {"a": {"terms": {"field": "k", "exclude": ""}}}},
+     agg("a")),
+    (VIDE, DOCS_VIDE, "regexp d'un groupe vide",
+     "`()` designe la meme chose, et passait deja",
+     {"query": {"regexp": {"k": "()"}}, "_source": False, "sort": ["k"]}, hits),
+    (VIDE, DOCS_VIDE, "regexp a| reste un refus",
+     "le motif vide ne rend pas les branches vides legales : `a|` echoue des "
+     "deux cotes",
+     {"query": {"regexp": {"k": "a|"}}, "_source": False}, statut),
 
     # -- range sur un booleen ----------------------------------------------
     (SCORES, DOCS_SCORES, "range sur un booleen (lte)",

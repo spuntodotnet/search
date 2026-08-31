@@ -99,6 +99,16 @@ impl Flags {
 /// `insensible` reproduit `case_insensitive` d'Elasticsearch, qui replie
 /// **l'ASCII seulement** : chez Lucene comme ici, `É` ne matche pas `é`.
 pub fn vers_regex(motif: &str, flags: Flags, insensible: bool) -> EsResult<String> {
+    // Le motif **vide** designe la chaine vide, et rien d'autre : mesure contre
+    // ES 8.15, ou `{"regexp": {"k": ""}}` rend le document dont le terme est
+    // vide, `include: ""` ne garde que ce seau-la et `exclude: ""` ne retire
+    // que lui. C'est le seul endroit ou l'analyseur de Lucene n'exige pas un
+    // atome : partout ailleurs, `a|` echoue justement parce qu'il en veut un.
+    // ferrite refusait les trois en 400. Trouve par le fuzzer, plage 9330000,
+    // graine 9330220 — et sans rapport avec la carte qui l'a sorti.
+    if motif.is_empty() {
+        return Ok("(?s)".to_string());
+    }
     let mut p = Parseur {
         c: motif.chars().collect(),
         i: 0,
@@ -693,6 +703,19 @@ mod tests {
         assert!(f.complement && f.interval && !f.anystring);
         assert!(Flags::lire("ALL").unwrap().anystring);
         assert!(Flags::lire("PIRE").is_err());
+    }
+
+    #[test]
+    fn le_motif_vide_designe_la_chaine_vide() {
+        // Mesure contre ES 8.15 : `{"regexp": {"k": ""}}` rend le document dont
+        // le terme est vide, et rien d'autre. `()` dit deja la meme chose.
+        assert!(matche("", ""));
+        assert!(!matche("", "a"));
+        assert!(matche("()", ""));
+        assert!(!matche("()", "a"));
+        // Et le motif vide ne rend pas les branches vides legales pour autant :
+        // l'analyseur de Lucene exige un atome apres un `|`.
+        assert!(vers_regex("a|", Flags::default(), false).is_err());
     }
 
     #[test]

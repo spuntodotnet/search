@@ -1159,10 +1159,27 @@ fn range_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     // [relation], et la clause serait acceptee en silence.
     expect_only(
         spec,
-        &["gte", "gt", "lte", "lt", "boost", "format"],
+        &["gte", "gt", "lte", "lt", "boost", "format", "time_zone"],
         "range",
     )?;
+    // Le fuseau se lit avant le champ pour la meme raison : un fuseau inconnu
+    // doit etre refuse meme si le champ ne l'est pas.
+    let fuseau = match spec.get("time_zone") {
+        None | Some(Value::Null) => crate::fuseau::Fuseau::utc(),
+        Some(Value::String(s)) => crate::fuseau::Fuseau::parse(s)?,
+        Some(autre) => {
+            return Err(EsError::illegal_argument(format!(
+                "[range.time_zone] : une chaine est attendue, pas {autre}"
+            )))
+        }
+    };
     let MappedField { field, ty, .. } = ctx.field(field_name, "range")?;
+    // Sur un champ qui n'est pas une date, `time_zone` ne veut rien dire — et
+    // ES l'accepte quand meme, en 200, sans rien en faire (mesure contre ES
+    // 8.15 : `range` sur un `long` avec un `time_zone` rend les memes
+    // documents). Le refuser ici ferait echouer une requete qu'une instance
+    // reelle sert : c'est le meme genre de demande vide que le `"index": true`
+    // d'un generateur de mapping.
 
     if ty.kind() == FieldKind::Text {
         return Err(EsError::unsupported(format!(
@@ -1185,7 +1202,8 @@ fn range_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
                     "gte" | "lt" => Arrondi::Bas,
                     _ => Arrondi::Haut,
                 };
-                let ms = datemath::borne(v, format.as_ref(), ctx.maintenant, arrondi)?;
+                let ms =
+                    datemath::borne_dans(v, format.as_ref(), ctx.maintenant, arrondi, &fuseau)?;
                 Ok(Some(TypedValue::Date(ms).to_term(field)))
             }
             Some(v) => Ok(Some(

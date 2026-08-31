@@ -37,9 +37,9 @@
   },
   "totaux": {
     "capacites": 203,
-    "supporte": 96,
+    "supporte": 97,
     "partiel": 61,
-    "refuse": 46,
+    "refuse": 45,
     "poids_renseignes": 145
   },
   "capacites": [
@@ -1736,10 +1736,10 @@
           "lte",
           "lt",
           "boost",
-          "format"
+          "format",
+          "time_zone"
         ],
         "refuses": [
-          "time_zone",
           "relation",
           "un range sur un champ text"
         ]
@@ -2291,10 +2291,9 @@
       "table": "datemath",
       "nom": "`time_zone`",
       "nom_texte": "time_zone",
-      "etat": "refuse",
+      "etat": "supporte",
       "poids": null,
-      "motif": "pas_encore",
-      "raison": "il déplace les arrondis, donc les résultats ; l'accepter sans l'appliquer rendrait les mauvais documents en silence."
+      "detail": "la borne est **résolue dans le fuseau**, arrondi compris : une date écrite sans décalage (`2026-03-29`) est minuit **local**, `now/d` arrondit au jour local, et `lte: \"2026-03-29\"` couvre la journée locale — qui ce jour-là, à Paris, dure 23 heures. Une date qui porte déjà son décalage (`…Z`, `+02:00`) ou un nombre d'époque désigne un instant : le fuseau ne la déplace pas (mesuré). Les règles de changement d'heure viennent du tzdb du **JDK d'Elasticsearch** ([`fuseau.rs`](../src/fuseau.rs)), et une heure locale qui n'a jamais existé est décalée de la durée du trou, comme le fait Java"
     },
     {
       "id": "agg.metriques",
@@ -2384,16 +2383,17 @@
       "nom_texte": "date_histogram",
       "etat": "partiel",
       "poids": 5.3,
+      "detail": "les seaux sont **calculés par ferrite** ([`histodate.rs`](../src/histodate.rs)) : une pré-passe mesure le premier et le dernier instant, les bornes sont déroulées par l'arrondi d'Elasticsearch reproduit ([`calendrier.rs`](../src/calendrier.rs)), et tantivy exécute le `range` contigu qui en résulte — donc avec ses sous-agrégations et sa fusion multi-index. C'est ce qui rend `calendar_interval` et `time_zone` possibles : un mois civil n'a pas de durée constante, et un jour à Paris en a deux (23 h et 25 h)",
       "parametres": {
         "supportes": [
           "field",
           "fixed_interval",
-          "offset, min_doc_count, hard_bounds, extended_bounds, keyed"
-        ],
-        "refuses": [
           "calendar_interval",
           "time_zone",
           "format",
+          "offset, min_doc_count, hard_bounds, extended_bounds, keyed"
+        ],
+        "refuses": [
           "order"
         ]
       }

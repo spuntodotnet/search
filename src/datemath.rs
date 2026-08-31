@@ -36,6 +36,7 @@ use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time, UtcOffset};
 
 use crate::dateformat::DateFormat;
 use crate::error::{EsError, EsResult};
+use crate::fuseau::Fuseau;
 
 /// De quel cote arrondir une borne dont la precision est plus grossiere que la
 /// milliseconde.
@@ -53,8 +54,32 @@ pub enum Arrondi {
 /// fois par recherche, pas une fois par clause, sinon deux bornes de la meme
 /// requete ne parleraient pas du meme instant.
 pub fn borne(v: &Value, format: &DateFormat, maintenant: i64, sens: Arrondi) -> EsResult<i64> {
+    borne_dans(v, format, maintenant, sens, &Fuseau::utc())
+}
+
+/// La meme chose **dans un fuseau** — le `time_zone` d'une clause `range`.
+///
+/// Le fuseau ne deplace pas seulement le resultat d'une constante : il change
+/// ce que les operations veulent dire. Tout le calcul se fait donc en heure
+/// **locale** (les millisecondes lues sans decalage, comme ES les compte), et
+/// c'est le resultat qui est repose sur l'axe du temps a la fin :
+///
+/// - une date ecrite sans decalage **est** une heure locale : `2026-03-29` est
+///   minuit a Paris, pas minuit UTC ;
+/// - `now/d` arrondit au debut du jour **local** ;
+/// - `lte: "2026-03-29"` couvre la journee locale, qui ce jour-la dure 23
+///   heures ;
+/// - une date qui porte deja son decalage (`...Z`, `+02:00`) ou un nombre
+///   d'epoque designe un instant : le fuseau ne la deplace pas (mesure).
+pub fn borne_dans(
+    v: &Value,
+    format: &DateFormat,
+    maintenant: i64,
+    sens: Arrondi,
+    fuseau: &Fuseau,
+) -> EsResult<i64> {
     match v {
-        Value::String(s) => expression(s, format, maintenant, sens),
+        Value::String(s) => expression_dans(s, format, maintenant, sens, fuseau),
         // Un nombre ne peut pas porter d'expression : c'est un timestamp, lu
         // par le format du champ comme a l'indexation.
         autre => {
@@ -68,8 +93,21 @@ pub fn borne(v: &Value, format: &DateFormat, maintenant: i64, sens: Arrondi) -> 
 
 /// La meme chose depuis une chaine deja extraite.
 pub fn expression(s: &str, format: &DateFormat, maintenant: i64, sens: Arrondi) -> EsResult<i64> {
+    expression_dans(s, format, maintenant, sens, &Fuseau::utc())
+}
+
+pub fn expression_dans(
+    s: &str,
+    format: &DateFormat,
+    maintenant: i64,
+    sens: Arrondi,
+    fuseau: &Fuseau,
+) -> EsResult<i64> {
     if let Some(math) = s.strip_prefix("now") {
-        return applique_math(math, maintenant, sens);
+        // `now` est un instant : il passe en heure locale avant les
+        // operations, sans quoi `now/d` arrondirait au jour UTC.
+        let local = fuseau.vers_local(maintenant);
+        return Ok(vers_instant(applique_math(math, local, sens)?, fuseau));
     }
     if let Some((ancre, math)) = s.split_once("||") {
         if ancre.is_empty() {
@@ -78,10 +116,46 @@ pub fn expression(s: &str, format: &DateFormat, maintenant: i64, sens: Arrondi) 
         // L'ancre est toujours lue vers le bas, meme sous un `lte` : mesure
         // contre ES 8.15 (`lte: "2026-03-16||-1d"` s'arrete a minuit le 15).
         let (ms, _) = lit(ancre, format, s)?;
-        return applique_math(math, ms, sens);
+        let local = en_local(ms, ancre, format, fuseau);
+        return Ok(vers_instant(applique_math(math, local, sens)?, fuseau));
     }
     let (ms, residu) = lit(s, format, s)?;
-    Ok(applique_residu(ms, residu, sens))
+    if format.est_absolue(&Value::String(s.to_string())) {
+        // Rien a deplacer : la valeur porte deja son instant.
+        return Ok(applique_residu(ms, residu, sens));
+    }
+    Ok(vers_instant(applique_residu(ms, residu, sens), fuseau))
+}
+
+/// L'heure locale d'une ancre : elle-meme si elle a ete ecrite sans decalage,
+/// sinon l'instant qu'elle designe, ramene dans le fuseau.
+fn en_local(ms: i64, ancre: &str, format: &DateFormat, fuseau: &Fuseau) -> i64 {
+    if format.est_absolue(&Value::String(ancre.to_string())) {
+        fuseau.vers_local(ms)
+    } else {
+        ms
+    }
+}
+
+/// Une heure locale posee sur l'axe du temps, comme le fait
+/// `ZonedDateTime.ofLocal` de Java.
+///
+/// Les deux cas qui ne vont pas de soi sont ceux que le changement d'heure
+/// fabrique : une heure locale qui a existe **deux fois** prend la premiere
+/// (le plus grand decalage), une heure locale qui n'a **jamais** existe est
+/// decalee de la duree du trou — donc lue avec le decalage d'**avant** la
+/// bascule.
+fn vers_instant(local_ms: i64, fuseau: &Fuseau) -> i64 {
+    if fuseau.est_fixe() {
+        return local_ms - i64::from(fuseau.decalage(local_ms)) * 1000;
+    }
+    match fuseau.decalages_valides(local_ms).first() {
+        Some(d) => Fuseau::vers_instant(local_ms, *d),
+        None => match fuseau.transition_du_trou(local_ms) {
+            Some(t) => Fuseau::vers_instant(local_ms, t.avant),
+            None => local_ms,
+        },
+    }
 }
 
 /// Lit une date litterale avec le format du champ, en rendant l'erreur d'ES.

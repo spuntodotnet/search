@@ -1453,10 +1453,21 @@ def date_math(es):
             contains="truncated date math")
     refused(lambda: es.search(index="dm", query={"range": {"fin": {"lt": "NOW"}}}),
             contains="failed to parse date field [NOW]")
-    # `time_zone` n'est pas supporte : il change l'arrondi, donc les resultats.
-    refused(lambda: es.search(index="dm", query={"range": {"fin": {"lt": "now/d",
-                                                                   "time_zone": "+02:00"}}}),
-            contains="time_zone")
+    # `time_zone` change l'arrondi, donc les resultats : la journee visee est
+    # la journee **locale**, qui commence une heure plus tot a Berlin — le
+    # document de 23:59:59.999 UTC le 14 y est deja le 15 (mesure contre ES).
+    assert hits({"range": {"fin": {"gte": "2026-03-15", "lt": "2026-03-16",
+                                   "time_zone": "+01:00"}}}) \
+        == ["midi", "minuit", "veille"]
+    assert hits({"range": {"fin": {"gte": "2026-03-15", "lt": "2026-03-16"}}}) \
+        == ["midi", "minuit"]
+    # Une date qui porte deja son decalage n'est pas deplacee par le fuseau.
+    assert hits({"range": {"fin": {"gte": "2026-03-15T00:00:00Z",
+                                   "lt": "2026-03-16T00:00:00Z",
+                                   "time_zone": "+01:00"}}}) == ["midi", "minuit"]
+    refused(lambda: es.search(index="dm", query={"range": {"fin": {
+        "lt": "now/d", "time_zone": "Europe/Nulle_Part"}}}),
+        contains="Unknown time-zone ID")
     # A l'indexation, `now` reste une date invalide — comme chez ES.
     refused(lambda: es.index(index="dm", id="x", document={"fin": "now", "ref": "x"}),
             contains="failed to parse date field")
@@ -2968,15 +2979,14 @@ def refus_de_clause_survit_a_un_champ_non_mappe(es):
     `term`, `terms` et `regexp` resolvaient leur champ avant de lire leurs
     parametres, donc un champ jamais mappe (tolere par
     `allow_unmapped_fields`) court-circuitait la clause **avant** son refus.
-    `time_zone`, `relation`, un *terms lookup*, `case_insensitive` et les
-    operateurs Lucene que ferrite ne construit pas passaient alors en silence
-    — exactement ce que ce projet refuse.
+    `relation`, un *terms lookup*, `case_insensitive` et les operateurs Lucene
+    que ferrite ne construit pas passaient alors en silence — exactement ce que
+    ce projet refuse. (`time_zone` etait de la liste ; il est depuis servi, et
+    c'est la ligne du bas qui le verifie sur un champ non mappe.)
 
     Trouve par le rejeu du corpus d'usage (`tests/compat/ponderation.py`), qui
     posait les memes requetes a ferrite et a un ES 8.15."""
     for clause, contient in (
-            ({"range": {"jamais_mappe": {"gte": "2020-01-01", "time_zone": "+01:00"}}},
-             "time_zone"),
             ({"range": {"jamais_mappe": {"gte": "2020-01-01", "relation": "within"}}},
              "relation"),
             ({"terms": {"jamais_mappe": {"index": "autre", "id": "1", "path": "p"}}},
@@ -2986,9 +2996,18 @@ def refus_de_clause_survit_a_un_champ_non_mappe(es):
             ({"regexp": {"jamais_mappe": "bel~ami"}}, "~"),
     ):
         refused(lambda c=clause: es.search(index=INDEX, query=c), contains=contient)
-    # Et ce qui est supporte continue de ne correspondre a rien, sans erreur.
+    # Et ce qui est supporte continue de ne correspondre a rien, sans erreur —
+    # y compris avec un fuseau, dont le refus vient d'etre leve.
     r = es.search(index=INDEX, query={"range": {"jamais_mappe": {"gte": "2020-01-01"}}})
     assert r["hits"]["total"]["value"] == 0
+    r = es.search(index=INDEX, query={"range": {"jamais_mappe": {
+        "gte": "2020-01-01", "time_zone": "+01:00"}}})
+    assert r["hits"]["total"]["value"] == 0
+    # Mais un fuseau **inconnu** reste refusé, champ non mappé ou pas : c'est
+    # le piège de cette fonction, sur le paramètre qu'elle a fait connaître.
+    refused(lambda: es.search(index=INDEX, query={"range": {"jamais_mappe": {
+        "gte": "2020-01-01", "time_zone": "Europe/Nulle_Part"}}}),
+        contains="Unknown time-zone ID")
     r = es.search(index=INDEX, query={"regexp": {"jamais_mappe": "bel.*"}})
     assert r["hits"]["total"]["value"] == 0
 
@@ -4251,6 +4270,85 @@ def refus_par_requete(es):
         body={"source": {"index": PQ}, "dest": {"index": PQ2}}),
         contains="/_reindex")
     es.indices.delete(index=PQ)
+
+
+CAL = "compat-calendrier"
+
+
+@scenario
+def graphe_temporel_par_mois_et_par_fuseau(es):
+    """« Par mois », « par jour a Paris » : la maille d'un graphe temporel.
+
+    Un mois n'est pas trente jours et un jour n'est pas toujours vingt-quatre
+    heures : `fixed_interval` ne sait dire ni l'un ni l'autre. Ce scenario pose
+    les deux questions par le client officiel, sur un corpus qui traverse la
+    bascule de l'heure d'ete — la ou un jour dure 23 heures.
+    """
+    es.options(ignore_status=404).indices.delete(index=CAL)
+    es.indices.create(index=CAL, mappings={"properties": {
+        "d": {"type": "date"}, "k": {"type": "keyword"}}})
+    # Le 2026-03-29 a 01:00 UTC, Paris passe de +01:00 a +02:00.
+    instants = ["2026-01-15T12:00:00Z", "2026-02-15T12:00:00Z",
+                "2026-03-28T23:30:00Z", "2026-03-29T00:30:00Z",
+                "2026-03-29T05:00:00Z", "2026-03-30T10:00:00Z"]
+    es.bulk(operations=[x for i, iso in enumerate(instants) for x in (
+        {"index": {"_index": CAL, "_id": str(i)}}, {"d": iso, "k": "a"})],
+        refresh=True)
+
+    # Par mois civil : trois seaux, et fevrier n'a pas la meme duree que mars.
+    r = es.search(index=CAL, size=0, aggs={"h": {"date_histogram": {
+        "field": "d", "calendar_interval": "month"}}})
+    seaux = r["aggregations"]["h"]["buckets"]
+    assert [b["key_as_string"] for b in seaux] == [
+        "2026-01-01T00:00:00.000Z", "2026-02-01T00:00:00.000Z",
+        "2026-03-01T00:00:00.000Z"], seaux
+    assert [b["doc_count"] for b in seaux] == [1, 1, 4], seaux
+
+    # Par jour, a Paris : le seau du 29 mars commence a 23:00 UTC la veille et
+    # dure **23 heures**. C'est ce que `key_as_string` doit dire, decalage
+    # compris — et le document de 23:30 UTC le 28 est deja le 29 a Paris.
+    r = es.search(index=CAL, size=0, query={"range": {"d": {"gte": "2026-03-28"}}},
+                  aggs={"h": {"date_histogram": {
+                      "field": "d", "calendar_interval": "day",
+                      "time_zone": "Europe/Paris"}}})
+    seaux = r["aggregations"]["h"]["buckets"]
+    assert [b["key_as_string"] for b in seaux] == [
+        "2026-03-29T00:00:00.000+01:00",
+        "2026-03-30T00:00:00.000+02:00"], seaux
+    assert [b["doc_count"] for b in seaux] == [3, 1], seaux
+    assert seaux[1]["key"] - seaux[0]["key"] == 23 * 3600 * 1000, seaux
+
+    # Une borne de `range` se resout dans le fuseau : « le 29 mars a Paris »
+    # commence a 23:00 UTC la veille et finit a 22:00 UTC le jour meme — les
+    # trois memes documents que le seau ci-dessus, ce qui est bien le sujet.
+    r = es.search(index=CAL, size=0, query={"range": {"d": {
+        "gte": "2026-03-29", "lt": "2026-03-30", "time_zone": "Europe/Paris"}}})
+    assert r["hits"]["total"]["value"] == 3, r["hits"]["total"]
+    r = es.search(index=CAL, size=0, query={"range": {"d": {
+        "gte": "2026-03-29", "lt": "2026-03-30"}}})
+    assert r["hits"]["total"]["value"] == 2, r["hits"]["total"]
+
+    # Une sous-agregation dans chaque seau, seaux vides compris.
+    r = es.search(index=CAL, size=0, aggs={"h": {
+        "date_histogram": {"field": "d", "calendar_interval": "month",
+                           "time_zone": "Europe/Paris"},
+        "aggs": {"t": {"terms": {"field": "k"}}}}})
+    for seau in r["aggregations"]["h"]["buckets"]:
+        assert "t" in seau, seau
+        assert len(seau["t"]["buckets"]) == (1 if seau["doc_count"] else 0), seau
+
+    # Les refus se nomment : un multiple sur `calendar_interval` n'existe pas
+    # chez ES non plus, et l'`order` d'un `date_histogram` est un cout de
+    # perimetre declare.
+    refused(lambda: es.search(index=CAL, size=0, aggs={"h": {"date_histogram": {
+        "field": "d", "calendar_interval": "2d"}}}), contains="[2d]")
+    refused(lambda: es.search(index=CAL, size=0, aggs={"h": {"date_histogram": {
+        "field": "d", "calendar_interval": "day",
+        "time_zone": "Europe/Nulle_Part"}}}), contains="Unknown time-zone ID")
+    refused(lambda: es.search(index=CAL, size=0, aggs={"h": {"date_histogram": {
+        "field": "d", "calendar_interval": "day",
+        "order": {"_key": "desc"}}}}), contains="[order]")
+    es.indices.delete(index=CAL)
 
 
 # ---------------------------------------------------------------------------
