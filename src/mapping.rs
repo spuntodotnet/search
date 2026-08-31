@@ -1788,8 +1788,14 @@ mod tests {
 
     #[test]
     fn refuse_un_parametre_de_champ_non_supporte() {
-        let e = mapping(r#"{"properties":{"t":{"type":"text","analyzer":"german"}}}"#).unwrap_err();
-        assert!(e.reason.contains("analyzer"));
+        // `german` est servi depuis la carte des analyzers de langue ; le
+        // finnois, lui, reste refuse **avec son chiffre**.
+        assert!(mapping(r#"{"properties":{"t":{"type":"text","analyzer":"german"}}}"#).is_ok());
+        let e =
+            mapping(r#"{"properties":{"t":{"type":"text","analyzer":"finnish"}}}"#).unwrap_err();
+        assert!(e.reason.contains("84 399"), "{}", e.reason);
+        let e = mapping(r#"{"properties":{"t":{"type":"text","analyzer":"czech"}}}"#).unwrap_err();
+        assert!(e.reason.contains("analyzer"), "{}", e.reason);
     }
 
     #[test]

@@ -198,8 +198,26 @@ impl Parseur {
         Ok(out)
     }
 
+    /// `ab`, `a(b|c)d` — et le bord qui n'a rien d'evident.
+    ///
+    /// Lucene lit **toujours** au moins un atome ici : son `parseConcatExp`
+    /// appelle `parseRepeatExp` avant de regarder quoi que ce soit. Ce n'est
+    /// pas un detail de forme, c'est ce qui donne son sens au `|` :
+    ///
+    /// - `a|` echoue (`unexpected end-of-string`), parce que l'atome exige
+    ///   apres le `|` n'est pas la ;
+    /// - `|a` et `a||b` **passent**, mais le `|` sans branche gauche y devient
+    ///   un caractere **litteral** — `|a` ne veut pas dire « rien ou a », il
+    ///   veut dire la chaine `|a`.
+    ///
+    /// ferrite laissait `concat` rendre le vide, donc traitait `|` comme une
+    /// vraie alternation a branche vide : `|a` rendait les documents vides
+    /// **et** `a` la ou ES rend ceux qui portent exactement `|a`, et `a|`
+    /// rendait 200 la ou ES rend 400. Des documents faux en 200, sur un motif
+    /// qu'aucun test ecrit ici n'avait posé — trouve par une plage de graines
+    /// neuves du fuzzer (8210220).
     fn concat(&mut self) -> EsResult<String> {
-        let mut out = String::new();
+        let mut out = self.repetition()?;
         while let Some(c) = self.peek() {
             match c {
                 '|' | ')' => break,

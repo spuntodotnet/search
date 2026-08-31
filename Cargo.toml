@@ -18,6 +18,13 @@ unicode-segmentation = "1"
 # la seule facon de ne pas repondre a cote (`src/highlight.rs`). Deja dans
 # l'arbre via tantivy — l'y nommer ne coute pas un octet de plus.
 tantivy-fst = "0.5"
+# Les algorithmes Snowball, mesures identiques a ceux de Lucene sur les
+# vocabulaires du projet Snowball (voir `src/langue.rs`). tantivy les expose
+# deja sous forme de filtre, mais un analyzer de langue a besoin de les appeler
+# **autour** d'autres regles : le prelude russe que rust-stemmers n'applique
+# pas, et le dictionnaire de quatre mots que le neerlandais d'ES pose avant son
+# stemmer. Deja dans l'arbre via tantivy — l'y nommer ne coute pas un octet.
+rust-stemmers = "1.2"
 time = { version = "0.3", features = ["formatting", "parsing", "macros", "large-dates"] }
 # `Content-Encoding: gzip` / `deflate` sur le corps d'une requete : ce que pose
 # tout client officiel a qui on demande de compresser. `rust_backend` (miniz_oxide)

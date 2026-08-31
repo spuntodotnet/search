@@ -147,7 +147,8 @@ remplacées ne sont effacées que lorsque plus aucune recherche ne les tient.
 ### Analyzers
 
 Chaque analyzer intégré est comparé **token par token** à son homonyme d'ES sur
-**217 textes** français et anglais (`tests/compat/diff_analyzers.py`) : des
+**217 textes** français et anglais (`tests/compat/diff_analyzers.py`, 51
+batteries, toutes identiques) : des
 phrases, un vocabulaire qui balaie les familles de suffixes, et des mots plus
 longs que la limite de 255 caractères des tokenizers de Lucene — qui la
 **coupent** au lieu de jeter le mot, et décalent d'autant les positions de tout
@@ -169,9 +170,96 @@ filtre possessif (`Peter's` → `Peter`), mots vides et ordre des filtres de
 garde `est`) ni l'ancienne de Lucene (elle retire `ceci`, `cette`, `avec`,
 `sans`, `ils`), donc la deviner n'était pas une option.
 
-Les autres langues (`german`, `spanish`, `snowball`…) restent refusées : leur
-stemmer n'est pas porté, et livrer sous le nom d'ES un analyzer qui indexe
-autre chose changerait silencieusement les résultats d'un mapping existant.
+#### Les analyzers de langue : d'où venait l'écart
+
+Ils étaient refusés en bloc, sur une raison qui paraissait solide : « le stemmer
+de tantivy (Snowball) n'est pas celui de Lucene ». **Elle est fausse pour la
+plupart des langues**, et c'est une mesure qui l'a dit.
+
+Le corpus n'est pas le nôtre : ce sont les vocabulaires du projet **Snowball**
+(BSD-3-Clause, licence vérifiée dans le dépôt), 20 913 à 96 325 mots par langue,
+**563 000 mots** en tout. Le tableau ci-dessous est le cœur de la mesure : pour
+chaque langue, le nombre de mots dont l'analyse **diffère de celle de
+l'analyzer nommé d'ES**, la chaîne étant arrêtée après chaque étape. La colonne
+« minuscules » est ce que ferrite savait faire avant — `standard` tout seul.
+
+| Langue | mots | minuscules | + élision / apostrophe | + mots vides | + normalisation | + stemmer |
+|---|---:|---:|---:|---:|---:|---:|
+| `danish` | 23 868 | 16 676 | 16 676 | 16 582 | 16 582 | **0** |
+| `dutch` | 45 670 | 24 952 | 24 952 | 24 851 | 24 851 | **0** |
+| `german` | 35 053 | 24 143 | 24 143 | 23 917 | 21 333 | **0** |
+| `hungarian` | 29 881 | 25 574 | 25 574 | 25 503 | 25 503 | **0** |
+| `italian` | 37 426 | 30 018 | 29 612 | 29 323 | 29 323 | **0** |
+| `norwegian` | 20 913 | 14 438 | 14 438 | 14 297 | 14 297 | **0** |
+| `portuguese` | 32 016 | 23 007 | 23 007 | 22 834 | 22 834 | **0** |
+| `romanian` | 87 642 | 76 318 | 76 318 | 76 092 | 76 092 | **0** |
+| `russian` | 49 785 | 45 870 | 45 870 | 45 711 | 45 711 | **0** |
+| `spanish` | 28 378 | 21 465 | 21 465 | 21 247 | 21 247 | **0** |
+| `swedish` | 30 738 | 20 890 | 20 890 | 20 776 | 20 776 | **0** |
+| `turkish` | 96 325 | 71 167 | 67 105 | 66 807 | 66 807 | **0** |
+| `finnish` | 84 399 | 70 288 | 70 288 | 70 115 | 70 115 | **0** |
+
+Trois choses s'y lisent, et la troisième renverse le pari de départ.
+
+- **L'écart brut est énorme** : sans analyzer de langue, 68 % à 87 % des mots
+  d'un vocabulaire s'indexent autrement que chez ES. C'est la marche la plus
+  haute qui restait pour tout contenu non anglais ni français.
+- **Les mots vides n'en expliquent presque rien** — 0,3 % à 0,8 %. C'est
+  attendu sur un *vocabulaire* (un mot vide y compte une fois) et ce serait tout
+  autre chose sur du texte suivi ; mais pour ce que l'index contient, le
+  stemmer fait le travail.
+- **Le stemmer, lui, ferme tout.** Et il n'a pas fallu l'écrire : sur huit de
+  ces langues, le Snowball de tantivy est **identique à l'octet** à celui de
+  Lucene — 0 écart sur 45 670 mots néerlandais, 96 325 turcs, 87 642 roumains.
+
+Ce qui manquait n'était donc pas l'algorithme, mais quatre choses autour :
+
+1. **Les listes de mots vides.** Elles sont désormais **lues dans le
+   `lucene-analysis-common-*.jar` du conteneur de référence** — le fichier
+   qu'Elasticsearch ouvre lui-même — puis vérifiées contre lui dans les deux
+   sens : chaque mot de la liste doit ne rendre aucun token, et sur le
+   vocabulaire complet aucun mot hors liste ne doit disparaître. Le relevé
+   par candidats qui servait au français avait manqué `celà` : un mot qu'ES
+   écarte et que ferrite indexait, en silence.
+2. **Quatre filtres absents de tantivy** : la normalisation allemande (un
+   automate à trois états — `haeuser` perd son `e`, `quelle` le garde),
+   l'élision italienne, l'apostrophe turque (`Diyarbakır'ın` → `Diyarbakır`) et
+   les minuscules turques (`ISTANBUL` → `ıstanbul`, pas `istanbul`).
+3. **Quatre stemmers légers.** L'allemand, l'espagnol, l'italien et le portugais
+   d'ES **n'emploient pas Snowball** mais les stemmers *légers* de Savoy — la
+   même famille que le `french_light` déjà porté. Mesure : sur l'allemand, la
+   chaîne bâtie avec Snowball s'écarte de l'analyzer `german` sur 445 mots,
+   celle bâtie avec le stemmer léger sur **0**.
+4. **Deux règles qui vivent dans le stemmer**, qu'aucun échantillon n'aurait
+   sorties. Le `prélude` de l'algorithme russe (ё → е partout dans le mot) que
+   `rust-stemmers` n'applique pas : 112 écarts sur 49 785 sans lui, 0 avec. Et
+   le dictionnaire de **quatre mots** que `DutchAnalyzer` impose avant son
+   stemmer (`ei` → `eier`, `kind` → `kinder`, `fiets` et `bromfiets` intacts) :
+   quatre sur 45 670, donc invisibles sur les 3 000 mots tirés au sort du
+   premier passage.
+
+Les douze langues sont donc servies, et mesurées **identiques** — suite ordonnée
+`(terme, offsets, position)`, vocabulaire complet plus des phrases écrites pour
+leurs pièges (`tests/compat/sonde_langues.py`, 43/43 batteries).
+
+**Le finnois reste refusé, et il est chiffré.** Le stemmer finnois de
+`rust-stemmers` s'écarte de celui de Lucene sur **13 mots des 84 399** (0,015 %),
+tous des emprunts à diacritique étranger : il coupe la voyelle finale que
+l'algorithme garde (`garcía` → `garcí` au lieu de `garcía`, de même
+`bundesstraße`, `españa`, `musée`). Un analyzer n'est jamais livré sous le nom
+d'ES tant qu'il n'est pas mesuré identique : 0,015 % de documents rendus
+autrement, en 200 et sans un mot, est le pire résultat possible ici. Les autres
+langues d'ES (`arabic`, `czech`, `greek`, `thai`…) demandent des filtres de
+normalisation qui ne sont pas portés, et sont refusées en le nommant.
+
+**Ce que le chantier a corrigé au passage, et qui n'a rien à voir avec les
+langues.** Le `lowercase` de ferrite laissait passer **32 caractères** qu'ES
+replie : les 31 caractères *titre* d'Unicode (`ǅ`, `ᾈ`…), que le `LowerCaser` de
+tantivy ignore parce que `is_uppercase` est faux pour eux, et le `İ` turc, dont
+le repli de Rust fait **deux** caractères là où Java n'en rend qu'un. Sur
+`standard` comme sur tout analyzer sur mesure, en silence et depuis toujours.
+Mesuré caractère par caractère contre ES sur les 1 433 caractères qui ont une
+minuscule.
 
 **Les analyzers sur mesure**, eux, sont supportés — un mapping venu d'une
 instance réelle en déclare presque toujours un, et le plus souvent avec des
@@ -221,9 +309,13 @@ que silencieuse : une phrase de **plusieurs mots** sur un tel champ demanderait
 la `MultiPhraseQuery` de Lucene, qui n'a pas d'équivalent. Un mot seul passe.
 
 **À savoir sur l'élision.** `standard` garde `l'édition` en **un seul terme**,
-des deux côtés : c'est le filtre `elision` de l'analyzer `french` qui le
-couperait, et il n'est pas encore là. Chercher `edition` ne trouve donc pas
-`l'édition` — chez ES non plus, avec le même analyzer.
+des deux côtés : c'est le filtre `elision` qui le couperait, et `standard` ne le
+pose pas. Chercher `edition` ne trouve donc pas `l'édition` — chez ES non plus,
+avec le même analyzer. Les analyzers `french` et `italian` le posent, eux, et le
+filtre se déclare aussi seul (`articles`, `articles_case`). Un piège s'y cache,
+mesuré : `articles_case` veut **l'inverse** de ce que son nom dit — il est passé
+à un `CharArraySet` en guise de `ignoreCase`, donc le défaut (`false`) compare
+**exactement**, et `L'anno` reste entier là où `l'anno` s'élide.
 
 **Ce que la comparaison a corrigé au passage.** `standard` — l'analyzer **par
 défaut** — découpait `l'ascension` en `l` et `ascension`, là où ES garde
@@ -979,6 +1071,15 @@ pas pour être découverts en production.
    **ASCII** là où celles de `regex` sont Unicode, et `case_insensitive` ne
    replie que l'ASCII, et seulement les caractères isolés — `[d-e]` n'y matche
    pas `D`, chez ES comme ici.
+
+   Et un bord de plus, corrigé depuis : **le `|` de Lucene n'a pas de branche
+   vide.** Son analyseur lit toujours un atome après un `|`, et rend un
+   caractère **littéral** devant tout ce qu'il ne reconnaît pas — `|` compris.
+   Donc `|a` cherche la chaîne `|a`, `a||b` cherche `a` ou `|b`, et `a|` échoue
+   en 400 (`unexpected end-of-string`). ferrite en faisait de vraies
+   alternations à branche vide : `|a` rendait les documents vides **et** ceux
+   qui portent `a`, en 200. Trouvé par une plage de graines neuves du fuzzer,
+   figé dans `diff_motifs.py`.
 
 4. **`best_fields` n'utilise pas le `DisjunctionMaxQuery` de tantivy.**
    Dans tantivy 0.26 cette requête rend la **somme** des scores et non leur

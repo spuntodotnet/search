@@ -435,6 +435,239 @@ fn normalise(s: &[char]) -> String {
     out.into_iter().collect()
 }
 
+// ---------------------------------------------------------------------------
+// Les stemmers legers de Savoy, pour les quatre langues ou ES n'emploie pas
+// Snowball
+// ---------------------------------------------------------------------------
+//
+// Les analyzers `german`, `spanish`, `italian` et `portuguese` d'Elasticsearch
+// posent un stemmer **leger** (`light_german`, `light_spanish`...), pas
+// l'algorithme Snowball du meme nom — mesure : sur les 35 053 mots du
+// vocabulaire allemand du projet Snowball, la chaine batie avec Snowball
+// s'ecarte de l'analyzer `german` sur 445 mots, celle batie avec le stemmer
+// leger sur 0.
+//
+// C'est la meme famille que `french_light` ci-dessus (Jacques Savoy), et ils se
+// portent comme lui : quelques dizaines de lignes, mesurees mot a mot contre ES
+// par `tests/compat/sonde_langues.py`.
+
+/// `GermanLightStemmer` de Lucene (`light_german`).
+pub fn german_light(mot: &str) -> String {
+    let mut s: Vec<char> = mot
+        .chars()
+        .map(|c| match c {
+            'ä' | 'à' | 'á' | 'â' => 'a',
+            'ö' | 'ò' | 'ó' | 'ô' => 'o',
+            'ï' | 'ì' | 'í' | 'î' => 'i',
+            'ü' | 'ù' | 'ú' | 'û' => 'u',
+            autre => autre,
+        })
+        .collect();
+    // `stEnding` : les consonnes derriere lesquelles un `s` final tombe.
+    fn st(c: char) -> bool {
+        matches!(c, 'b' | 'd' | 'f' | 'g' | 'h' | 'k' | 'l' | 'm' | 'n' | 't')
+    }
+    let mut n = s.len();
+    // step1
+    if n > 5 && s[n - 3] == 'e' && s[n - 2] == 'r' && s[n - 1] == 'n' {
+        n -= 3;
+    } else if n > 4 && s[n - 2] == 'e' && matches!(s[n - 1], 'm' | 'n' | 'r' | 's') {
+        n -= 2;
+    // Les deux dernieres regles de `step1` retirent une lettre chacune : un
+    // `e` final, ou un `s` final derriere une consonne de `stEnding`.
+    } else if n > 3 && (s[n - 1] == 'e' || (s[n - 1] == 's' && st(s[n - 2]))) {
+        n -= 1;
+    }
+    // step2
+    if n > 5 && s[n - 3] == 'e' && s[n - 2] == 's' && s[n - 1] == 't' {
+        n -= 3;
+    // Meme forme dans `step2` : `er` / `en`, ou `st` derriere une consonne.
+    } else if n > 4
+        && ((s[n - 2] == 'e' && matches!(s[n - 1], 'r' | 'n'))
+            || (s[n - 2] == 's' && s[n - 1] == 't' && st(s[n - 3])))
+    {
+        n -= 2;
+    }
+    s.truncate(n);
+    s.into_iter().collect()
+}
+
+/// Le repliement des accents commun aux trois stemmers legers latins.
+fn replie_latin(c: char) -> char {
+    match c {
+        'à' | 'á' | 'â' | 'ä' => 'a',
+        'ò' | 'ó' | 'ô' | 'ö' => 'o',
+        'è' | 'é' | 'ê' | 'ë' => 'e',
+        'ù' | 'ú' | 'û' | 'ü' => 'u',
+        'ì' | 'í' | 'î' | 'ï' => 'i',
+        autre => autre,
+    }
+}
+
+/// `SpanishLightStemmer` de Lucene (`light_spanish`).
+pub fn spanish_light(mot: &str) -> String {
+    let mut s: Vec<char> = mot.chars().collect();
+    if s.len() < 5 {
+        return mot.to_string();
+    }
+    for c in s.iter_mut() {
+        *c = replie_latin(*c);
+    }
+    let n = s.len();
+    let garde = match s[n - 1] {
+        'o' | 'a' | 'e' => n - 1,
+        's' => {
+            if s[n - 2] == 'e' && s[n - 3] == 's' && s[n - 4] == 'e' {
+                n - 2
+            } else if s[n - 2] == 'e' && s[n - 3] == 'c' {
+                s[n - 3] = 'z';
+                n - 2
+            } else if matches!(s[n - 2], 'o' | 'a' | 'e') {
+                n - 2
+            } else {
+                n
+            }
+        }
+        _ => n,
+    };
+    s.truncate(garde);
+    s.into_iter().collect()
+}
+
+/// `ItalianLightStemmer` de Lucene (`light_italian`).
+pub fn italian_light(mot: &str) -> String {
+    let mut s: Vec<char> = mot.chars().collect();
+    if s.len() < 6 {
+        return mot.to_string();
+    }
+    for c in s.iter_mut() {
+        *c = replie_latin(*c);
+    }
+    let n = s.len();
+    let garde = match (s[n - 1], s[n - 2]) {
+        ('e', 'i') | ('e', 'h') => n - 2,
+        ('e', _) => n - 1,
+        ('i', 'h') | ('i', 'i') => n - 2,
+        ('i', _) => n - 1,
+        ('a', 'i') => n - 2,
+        ('a', _) => n - 1,
+        ('o', 'i') => n - 2,
+        ('o', _) => n - 1,
+        _ => n,
+    };
+    s.truncate(garde);
+    s.into_iter().collect()
+}
+
+/// `PortugueseLightStemmer` de Lucene (`light_portuguese`).
+///
+/// Le seul des quatre a reecrire des lettres en cours de route (`ns` -> `m`,
+/// `ões` -> `ão`, le feminin ramene au masculin), et le seul dont le
+/// repliement des accents vient **apres** les coupes — donc le `ã` qu'il vient
+/// de poser est replie juste apres.
+pub fn portuguese_light(mot: &str) -> String {
+    let mut s: Vec<char> = mot.chars().collect();
+    if s.len() < 4 {
+        return mot.to_string();
+    }
+    let mut n = retire_suffixe(&mut s);
+    if n > 3 && s[n - 1] == 'a' {
+        n = normalise_feminin(&mut s, n);
+    }
+    if n > 4 && matches!(s[n - 1], 'e' | 'a' | 'o') {
+        n -= 1;
+    }
+    s.truncate(n);
+    for c in s.iter_mut() {
+        *c = match *c {
+            'ã' => 'a',
+            'õ' => 'o',
+            'ç' => 'c',
+            autre => replie_latin(autre),
+        };
+    }
+    s.into_iter().collect()
+}
+
+fn finit_a(s: &[char], n: usize, suffixe: &str) -> bool {
+    let f: Vec<char> = suffixe.chars().collect();
+    n >= f.len() && s[n - f.len()..n] == f[..]
+}
+
+fn retire_suffixe(s: &mut [char]) -> usize {
+    let n = s.len();
+    if n > 4 && finit_a(s, n, "es") && matches!(s[n - 3], 'r' | 's' | 'l' | 'z') {
+        return n - 2;
+    }
+    if n > 3 && finit_a(s, n, "ns") {
+        s[n - 2] = 'm';
+        return n - 1;
+    }
+    if n > 4 && (finit_a(s, n, "eis") || finit_a(s, n, "éis")) {
+        s[n - 3] = 'e';
+        s[n - 2] = 'l';
+        return n - 1;
+    }
+    if n > 4 && finit_a(s, n, "ais") {
+        s[n - 2] = 'l';
+        return n - 1;
+    }
+    if n > 4 && finit_a(s, n, "óis") {
+        s[n - 3] = 'o';
+        s[n - 2] = 'l';
+        return n - 1;
+    }
+    if n > 4 && finit_a(s, n, "is") {
+        s[n - 1] = 'l';
+        return n;
+    }
+    if n > 3 && (finit_a(s, n, "ões") || finit_a(s, n, "ães")) {
+        let n = n - 1;
+        s[n - 2] = 'ã';
+        s[n - 1] = 'o';
+        return n;
+    }
+    if n > 6 && finit_a(s, n, "mente") {
+        return n - 5;
+    }
+    if n > 3 && s[n - 1] == 's' {
+        return n - 1;
+    }
+    n
+}
+
+fn normalise_feminin(s: &mut [char], n: usize) -> usize {
+    if n > 7 && (finit_a(s, n, "inha") || finit_a(s, n, "iaca") || finit_a(s, n, "eira")) {
+        s[n - 1] = 'o';
+        return n;
+    }
+    if n > 6 {
+        for suffixe in ["osa", "ica", "ida", "ada", "iva", "ama"] {
+            if finit_a(s, n, suffixe) {
+                s[n - 1] = 'o';
+                return n;
+            }
+        }
+        if finit_a(s, n, "ona") {
+            s[n - 3] = 'ã';
+            s[n - 2] = 'o';
+            return n - 1;
+        }
+        if finit_a(s, n, "ora") {
+            return n - 1;
+        }
+        if finit_a(s, n, "esa") {
+            s[n - 3] = 'ê';
+            return n - 1;
+        }
+        if finit_a(s, n, "na") {
+            s[n - 1] = 'o';
+            return n;
+        }
+    }
+    n
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

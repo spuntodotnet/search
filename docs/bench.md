@@ -104,9 +104,9 @@ définition.
 <!-- chiffres-conteneur:enveloppe — généré depuis docs/container.json par `python3 tests/compat/chiffres_conteneur.py --injecte`, ne pas éditer à la main -->
 | | ferrite 0.7.0 | ES 8.15.0 | × |
 |---|---|---|---|
-| **Image compressée**, telle qu'un registre la sert | **4,1 Mo** | 669,1 Mo | **×163** |
-| Image décompressée, ce que son système de fichiers occupe | 9,7 Mo | 1 266,1 Mo | ×131 |
-| Le binaire seul | 9,7 Mo | — (une JVM) | |
+| **Image compressée**, telle qu'un registre la sert | **4,1 Mo** | 669,1 Mo | **×161** |
+| Image décompressée, ce que son système de fichiers occupe | 9,8 Mo | 1 266,1 Mo | ×129 |
+| Le binaire seul | 9,8 Mo | — (une JVM) | |
 <!-- /chiffres-conteneur:enveloppe -->
 
 Le chiffre publié est le premier — **ce qu'un `docker pull` télécharge**. Les Mo

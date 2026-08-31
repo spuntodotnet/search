@@ -10,14 +10,20 @@ use std::collections::BTreeMap;
 
 use serde_json::{json, Map, Value};
 use tantivy::tokenizer::{
-    AsciiFoldingFilter, Language, LowerCaser, RawTokenizer, StopWordFilter, TextAnalyzer,
-    TokenizerManager, WhitespaceTokenizer,
+    AsciiFoldingFilter, RawTokenizer, StopWordFilter, TextAnalyzer, TokenizerManager,
+    WhitespaceTokenizer,
 };
 
 use crate::error::{EsError, EsResult};
+use crate::langue::{self, Elision, Langue};
 
 /// La longueur maximale d'un token, comme `standard` chez ES.
-const MAX_TOKEN_LEN: usize = 255;
+pub const MAX_TOKEN_LEN: usize = 255;
+
+/// Le filtre de mots vides d'une liste ecrite un mot par ligne.
+pub fn filtre_mots_vides(liste: &str) -> StopWordFilter {
+    StopWordFilter::remove(liste.lines().filter(|l| !l.is_empty()).map(str::to_string))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Analyzer {
@@ -36,6 +42,11 @@ pub enum Analyzer {
     French,
     /// `standard` + possessif + minuscules + mots vides + Porter.
     English,
+    /// `standard` + minuscules + mots vides anglais + Snowball **anglais**
+    /// (`porter2`) — qui n'est pas le Porter de `english`.
+    Snowball,
+    /// Un des douze analyzers de langue mesures identiques a ceux d'ES.
+    Langue(Langue),
     /// Un analyzer declare dans `settings.analysis`, par sa position dans la
     /// liste triee de l'index.
     Custom(u16),
@@ -51,7 +62,8 @@ impl Analyzer {
             "stop" => Self::Stop,
             "french" => Self::French,
             "english" => Self::English,
-            _ => return None,
+            "snowball" => Self::Snowball,
+            autre => Self::Langue(Langue::parse(autre)?),
         })
     }
 
@@ -65,6 +77,8 @@ impl Analyzer {
             Self::Stop => "stop".into(),
             Self::French => "french".into(),
             Self::English => "english".into(),
+            Self::Snowball => "snowball".into(),
+            Self::Langue(l) => l.nom().into(),
             Self::Custom(i) => analysis
                 .sur_mesure
                 .get(i as usize)
@@ -97,21 +111,25 @@ impl Analyzer {
             Self::Stop => "fr_stop".into(),
             Self::French => "fr_french".into(),
             Self::English => "fr_english".into(),
+            Self::Snowball => "fr_snowball".into(),
+            Self::Langue(l) => format!("fr_l_{}", l.nom()),
             Self::Custom(i) => nom_interne(i),
         }
     }
 
     fn build(self) -> TextAnalyzer {
         match self {
+            Self::Snowball => langue::construit_snowball(),
+            Self::Langue(l) => langue::construit(l),
             // Les analyzers sur mesure sont enregistres par `Analysis::register`.
             Self::Custom(_) => TextAnalyzer::builder(RawTokenizer::default()).build(),
             Self::Standard => TextAnalyzer::builder(StandardTokenizer)
                 .filter(DecoupeLong::limit(MAX_TOKEN_LEN))
-                .filter(LowerCaser)
+                .filter(Reecrit(langue::minuscule))
                 .build(),
             Self::Simple => TextAnalyzer::builder(LetterTokenizer)
                 .filter(DecoupeLong::limit(MAX_TOKEN_LEN))
-                .filter(LowerCaser)
+                .filter(Reecrit(langue::minuscule))
                 .build(),
             Self::Whitespace => TextAnalyzer::builder(WhitespaceTokenizer::default())
                 .filter(DecoupeLong::limit(MAX_TOKEN_LEN))
@@ -121,8 +139,8 @@ impl Analyzer {
             // donc des separateurs), pas sur `standard`.
             Self::Stop => TextAnalyzer::builder(LetterTokenizer)
                 .filter(DecoupeLong::limit(MAX_TOKEN_LEN))
-                .filter(LowerCaser)
-                .filter(StopWordFilter::new(Language::English).unwrap())
+                .filter(Reecrit(langue::minuscule))
+                .filter(filtre_mots_vides(crate::mots_vides::ENGLISH))
                 .build(),
             // L'ordre est celui de `FrenchAnalyzer` chez Lucene : l'elision
             // agit **avant** les minuscules (elle est insensible a la casse),
@@ -130,10 +148,8 @@ impl Analyzer {
             Self::French => TextAnalyzer::builder(StandardTokenizer)
                 .filter(DecoupeLong::limit(MAX_TOKEN_LEN))
                 .filter(Reecrit(elision))
-                .filter(LowerCaser)
-                .filter(StopWordFilter::remove(
-                    MOTS_VIDES_FR.iter().map(|s| (*s).to_string()),
-                ))
+                .filter(Reecrit(langue::minuscule))
+                .filter(filtre_mots_vides(crate::mots_vides::FRENCH))
                 .filter(Reecrit(french_light))
                 .build(),
             // `EnglishAnalyzer` : le possessif avant les minuscules, Porter en
@@ -141,10 +157,8 @@ impl Analyzer {
             Self::English => TextAnalyzer::builder(StandardTokenizer)
                 .filter(DecoupeLong::limit(MAX_TOKEN_LEN))
                 .filter(Reecrit(possessif))
-                .filter(LowerCaser)
-                .filter(StopWordFilter::remove(
-                    MOTS_VIDES_EN.iter().map(|s| (*s).to_string()),
-                ))
+                .filter(Reecrit(langue::minuscule))
+                .filter(filtre_mots_vides(crate::mots_vides::ENGLISH))
                 .filter(Reecrit(porter))
                 .build(),
         }
@@ -161,24 +175,37 @@ pub fn register_all(manager: &TokenizerManager) {
         Analyzer::Stop,
         Analyzer::French,
         Analyzer::English,
+        Analyzer::Snowball,
     ] {
+        manager.register(&a.tokenizer(), a.build());
+    }
+    for l in Langue::TOUTES {
+        let a = Analyzer::Langue(l);
         manager.register(&a.tokenizer(), a.build());
     }
 }
 
 /// Les analyzers d'ES que ferrite refuse **volontairement**, avec la raison.
+///
+/// La liste a fondu : le refus portait sur toutes les langues, au motif que le
+/// stemmer de tantivy n'etait pas celui de Lucene. La mesure a montre que c'est
+/// faux pour la plupart (voir [`crate::langue`]). Ce qui reste est chiffre.
 fn refus_explicite(nom: &str) -> Option<&'static str> {
     match nom {
-        "german" | "spanish" | "italian" | "portuguese" | "dutch" | "russian" | "swedish"
-        | "norwegian" | "danish" | "finnish" | "hungarian" | "romanian" | "turkish"
-        | "snowball" => Some(
-            "les analyzers de langue reposent sur un stemmer, et celui de tantivy (Snowball) \
-             n'est pas celui de Lucene (stemmer leger pour le francais, Porter pour l'anglais) : \
-             les termes produits different. Mesure sur 28 textes : 17 donnent des termes \
-             differents en [french], 19 en [english] — par exemple « Horla » devient [horl] chez \
-             tantivy et [horla] chez ES, « mineurs » [mineur] contre [mineu]. Porter le nom d'ES \
-             en indexant autre chose changerait silencieusement les resultats d'un mapping \
-             existant",
+        "finnish" => Some(
+            "le stemmer finnois de rust-stemmers s'ecarte de celui de Lucene sur 13 mots du \
+             vocabulaire finnois du projet Snowball (84 399 mots, soit 0,015 %) : il coupe la \
+             voyelle finale d'un emprunt a diacritique etranger la ou l'algorithme la garde \
+             (« garcía » rend [garcí] chez lui et [garcía] chez ES, de meme « bundesstraße », \
+             « españa », « musée »). Livrer l'analyzer sous le nom d'ES avec un ecart mesure, \
+             c'est rendre des documents differents en 200 et sans un mot",
+        ),
+        "arabic" | "armenian" | "basque" | "bengali" | "brazilian" | "bulgarian" | "catalan"
+        | "cjk" | "czech" | "estonian" | "galician" | "greek" | "hindi" | "indonesian"
+        | "irish" | "latvian" | "lithuanian" | "persian" | "serbian" | "sorani" | "thai" => Some(
+            "son stemmer ou ses filtres de normalisation ne sont pas portes, et n'ont pas \
+                 ete mesures contre ES ; les douze langues servies le sont, elles, mot a mot \
+                 (voir tests/compat/sonde_langues.py)",
         ),
         _ => None,
     }
@@ -212,7 +239,7 @@ pub fn parse_declaration(nom: &str, champ: &str, analysis: &Analysis) -> EsResul
 /// non-alphanumeriques en ferait deux (`l` et `ascension`) — et donnerait donc
 /// des resultats de recherche differents de ceux d'ES sur tout texte francais.
 #[derive(Clone, Default)]
-struct StandardTokenizer;
+pub struct StandardTokenizer;
 
 impl tantivy::tokenizer::Tokenizer for StandardTokenizer {
     type TokenStream<'a> = VecTokenStream;
@@ -468,6 +495,13 @@ enum Filtre {
     Stop(Vec<String>),
     /// `ngram` ou `edge_ngram`, cote filtre.
     Ngram(crate::ngram::NgramFilter),
+    /// Les briques des analyzers de langue, exposees une a une : c'est ainsi
+    /// qu'un mapping reel compose sa propre chaine (`stemmer` est cite 47 fois
+    /// dans le corpus d'usage, `stop` 53, `elision` 7).
+    Stemmer(crate::langue::Stemmer),
+    Elision(Elision),
+    Apostrophe,
+    NormalisationAllemande,
 }
 
 impl Analysis {
@@ -730,7 +764,7 @@ impl CustomAnalyzer {
         };
         // Le tokenizer `lowercase` d'ES, c'est `letter` + minuscules.
         if self.tokenizer == Tok::Lowercase {
-            b = b.filter_dynamic(LowerCaser);
+            b = b.filter_dynamic(Reecrit(langue::minuscule));
         }
         // La limite de 255 est celle des tokenizers de Lucene batis sur
         // `CharTokenizer` — `standard`, `whitespace`, `letter`, `lowercase`.
@@ -742,12 +776,18 @@ impl CustomAnalyzer {
         }
         for f in &self.filtres {
             b = match f {
-                Filtre::Lowercase => b.filter_dynamic(LowerCaser),
+                Filtre::Lowercase => b.filter_dynamic(Reecrit(langue::minuscule)),
                 Filtre::AsciiFolding => b.filter_dynamic(AsciiFoldingFilter),
                 Filtre::Stop(mots) => {
                     b.filter_dynamic(StopWordFilter::remove(mots.iter().cloned()))
                 }
                 Filtre::Ngram(n) => b.filter_dynamic(n.clone()),
+                Filtre::Stemmer(st) => st.pose(b),
+                Filtre::Elision(e) => b.filter_dynamic(e.clone()),
+                Filtre::Apostrophe => b.filter_dynamic(Reecrit(langue::apostrophe)),
+                Filtre::NormalisationAllemande => {
+                    b.filter_dynamic(Reecrit(langue::normalisation_allemande))
+                }
             };
         }
         b.build()
@@ -843,16 +883,23 @@ impl Filtre {
         Ok(match nom {
             "lowercase" => Self::Lowercase,
             "asciifolding" => Self::AsciiFolding,
-            "stop" => Self::Stop(MOTS_VIDES_EN.iter().map(|s| (*s).to_string()).collect()),
+            "stop" => Self::Stop(mots_vides_de(crate::mots_vides::ENGLISH)),
             "ngram" | "edge_ngram" => {
                 Self::Ngram(crate::ngram::NgramFilter::defaut(nom == "edge_ngram"))
             }
+            "apostrophe" => Self::Apostrophe,
+            "german_normalization" => Self::NormalisationAllemande,
+            // `elision` sans articles n'a pas de defaut chez ES : il exige sa
+            // liste. `porter_stem` et `kstem`, eux, sont des filtres a part
+            // entiere qui ne prennent aucun parametre.
+            "porter_stem" => Self::Stemmer(crate::langue::Stemmer::Porter),
             autre => {
                 return Err(EsError::unsupported(format!(
                     "ferrite ne supporte pas le filtre [{autre}] (analyzer [{analyzer}]) ; \
-                     filtres integres : lowercase, asciifolding, stop, ngram, edge_ngram, et ceux \
-                     declares dans [analysis.filter]. Les filtres a base de stemmer restent \
-                     refuses (voir docs/compat.md)"
+                     filtres integres : lowercase, asciifolding, stop, ngram, edge_ngram, \
+                     apostrophe, german_normalization, porter_stem, et ceux declares dans \
+                     [analysis.filter] (dont [stemmer] et [elision], qui prennent des \
+                     parametres)"
                 )))
             }
         })
@@ -869,7 +916,7 @@ impl Filtre {
         Ok(match ty {
             "stop" => {
                 let mots = match obj.get("stopwords") {
-                    None => MOTS_VIDES_EN.iter().map(|s| (*s).to_string()).collect(),
+                    None => mots_vides_de(crate::mots_vides::ENGLISH),
                     Some(Value::Array(a)) => a
                         .iter()
                         .map(|v| {
@@ -880,15 +927,16 @@ impl Filtre {
                             })
                         })
                         .collect::<EsResult<Vec<_>>>()?,
-                    Some(Value::String(s)) if s == "_english_" => {
-                        MOTS_VIDES_EN.iter().map(|s| (*s).to_string()).collect()
-                    }
-                    Some(Value::String(s)) => {
-                        return Err(EsError::unsupported(format!(
-                            "ferrite ne supporte pas la liste de mots vides [{s}] \
-                             (filtre [{nom}]) ; accepte : _english_, ou une liste explicite"
-                        )))
-                    }
+                    Some(Value::String(s)) => match liste_nommee(s) {
+                        Some(l) => l,
+                        None => {
+                            return Err(EsError::unsupported(format!(
+                                "ferrite ne supporte pas la liste de mots vides [{s}] (filtre \
+                                 [{nom}]) ; acceptees : {}, ou une liste explicite",
+                                listes_nommees()
+                            )))
+                        }
+                    },
                     Some(_) => {
                         return Err(EsError::mapper_parsing(format!(
                             "[analysis.filter.{nom}.stopwords] : liste ou nom attendu"
@@ -897,8 +945,71 @@ impl Filtre {
                 };
                 Self::Stop(mots)
             }
-            "lowercase" => Self::Lowercase,
+            "lowercase" => match obj.get("language").and_then(Value::as_str) {
+                None => Self::Lowercase,
+                Some(autre) => {
+                    return Err(EsError::unsupported(format!(
+                        "ferrite ne supporte pas [language: {autre}] sur le filtre [lowercase] \
+                         (filtre [{nom}]) ; les minuscules d'une langue ne se reduisent pas a \
+                         celles d'Unicode (le turc replie [I] en [ı]), et seul l'analyzer \
+                         [turkish] les pose"
+                    )))
+                }
+            },
             "asciifolding" => Self::AsciiFolding,
+            "apostrophe" => Self::Apostrophe,
+            "german_normalization" => Self::NormalisationAllemande,
+            "porter_stem" => Self::Stemmer(crate::langue::Stemmer::Porter),
+            "stemmer" => {
+                let langue = obj
+                    .get("language")
+                    .or_else(|| obj.get("name"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("english");
+                match crate::langue::Stemmer::parse(langue) {
+                    Some(st) => Self::Stemmer(st),
+                    None => {
+                        return Err(EsError::unsupported(format!(
+                            "ferrite ne supporte pas le stemmer [{langue}] (filtre [{nom}]) ; il \
+                             ne sert que les stemmers mesures identiques a ceux d'ES mot a mot \
+                             (tests/compat/sonde_langues.py) : {}",
+                            crate::langue::Stemmer::NOMS.join(", ")
+                        )))
+                    }
+                }
+            }
+            "elision" => {
+                let articles = match obj.get("articles") {
+                    Some(Value::Array(a)) => a
+                        .iter()
+                        .map(|v| {
+                            v.as_str().map(str::to_string).ok_or_else(|| {
+                                EsError::mapper_parsing(format!(
+                                    "[analysis.filter.{nom}.articles] : chaines attendues"
+                                ))
+                            })
+                        })
+                        .collect::<EsResult<Vec<_>>>()?,
+                    None => {
+                        return Err(EsError::mapper_parsing(format!(
+                            "[analysis.filter.{nom}] : le filtre [elision] exige [articles]"
+                        )))
+                    }
+                    Some(_) => {
+                        return Err(EsError::mapper_parsing(format!(
+                            "[analysis.filter.{nom}.articles] : une liste est attendue"
+                        )))
+                    }
+                };
+                // `articles_case` est un `ignoreCase`, pas un
+                // `caseSensitive` : mesure sur ES, `["l"]` laisse `L'anno`
+                // entier par defaut et rend `anno` avec `articles_case: true`.
+                let ignore_casse = obj
+                    .get("articles_case")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                Self::Elision(Elision::declares(articles, ignore_casse))
+            }
             "ngram" | "edge_ngram" => Self::Ngram(crate::ngram::NgramFilter::parse(
                 obj,
                 ty == "edge_ngram",
@@ -908,7 +1019,8 @@ impl Filtre {
             autre => {
                 return Err(EsError::unsupported(format!(
                     "ferrite ne supporte pas un filtre de type [{autre}] (filtre [{nom}]) ; \
-                     types acceptes : stop, lowercase, asciifolding, ngram, edge_ngram"
+                     types acceptes : stop, lowercase, asciifolding, ngram, edge_ngram, \
+                     stemmer, elision, apostrophe, german_normalization, porter_stem"
                 )))
             }
         })
@@ -919,7 +1031,9 @@ impl Filtre {
         match self {
             Self::Lowercase => Some("lowercase"),
             Self::AsciiFolding => Some("asciifolding"),
-            Self::Stop(_) | Self::Ngram(_) => None,
+            Self::Apostrophe => Some("apostrophe"),
+            Self::NormalisationAllemande => Some("german_normalization"),
+            Self::Stop(_) | Self::Ngram(_) | Self::Stemmer(_) | Self::Elision(_) => None,
         }
     }
 
@@ -929,16 +1043,49 @@ impl Filtre {
             Self::AsciiFolding => json!({"type": "asciifolding"}),
             Self::Stop(mots) => json!({"type": "stop", "stopwords": mots}),
             Self::Ngram(n) => n.to_json(),
+            Self::Apostrophe => json!({"type": "apostrophe"}),
+            Self::NormalisationAllemande => json!({"type": "german_normalization"}),
+            Self::Stemmer(st) => json!({"type": "stemmer", "language": st.nom()}),
+            Self::Elision(e) => e.to_json(),
         }
     }
 }
 
-/// Les mots vides anglais de Lucene (`ENGLISH_STOP_WORDS_SET`).
-const MOTS_VIDES_EN: &[&str] = &[
-    "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "if", "in", "into", "is", "it",
-    "no", "not", "of", "on", "or", "such", "that", "the", "their", "then", "there", "these",
-    "they", "this", "to", "was", "will", "with",
-];
+/// La liste de mots vides d'un tableau ecrit un mot par ligne.
+fn mots_vides_de(liste: &str) -> Vec<String> {
+    liste
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Une liste de mots vides citee par son nom (`_english_`, `_german_`...).
+fn liste_nommee(nom: &str) -> Option<Vec<String>> {
+    let interieur = nom.strip_prefix('_')?.strip_suffix('_')?;
+    if interieur == "english" {
+        return Some(mots_vides_de(crate::mots_vides::ENGLISH));
+    }
+    if interieur == "french" {
+        return Some(mots_vides_de(crate::mots_vides::FRENCH));
+    }
+    // `_none_` : ES l'accepte et il veut dire « aucun mot vide ».
+    if interieur == "none" {
+        return Some(Vec::new());
+    }
+    Langue::parse(interieur).map(|l| mots_vides_de(l.mots_vides()))
+}
+
+/// Les noms acceptes, pour le message de refus.
+fn listes_nommees() -> String {
+    let mut noms = vec![
+        "_english_".to_string(),
+        "_french_".to_string(),
+        "_none_".to_string(),
+    ];
+    noms.extend(Langue::TOUTES.iter().map(|l| format!("_{}_", l.nom())));
+    noms.join(", ")
+}
 
 #[cfg(test)]
 mod tests_analysis {
@@ -980,8 +1127,17 @@ mod tests_analysis {
     #[test]
     fn ce_qui_n_est_pas_reproductible_est_refuse() {
         for decl in [
+            // Un stemmer qu'aucune mesure ne couvre : `porter_stem` et les
+            // douze langues servies passent, le reste est nomme et refuse.
             json!({"analyzer": {"x": {"type": "custom", "tokenizer": "standard",
-                                      "filter": ["porter_stem"]}}}),
+                                      "filter": ["czech_stem"]}}}),
+            json!({"filter": {"f": {"type": "stemmer", "language": "finnish"}},
+                   "analyzer": {"x": {"type": "custom", "tokenizer": "standard",
+                                      "filter": ["f"]}}}),
+            // `elision` sans articles : ES l'exige, ferrite aussi.
+            json!({"filter": {"f": {"type": "elision"}},
+                   "analyzer": {"x": {"type": "custom", "tokenizer": "standard",
+                                      "filter": ["f"]}}}),
             // Le nom d'un tokenizer qui n'existe pas.
             json!({"analyzer": {"x": {"type": "custom", "tokenizer": "pattern"}}}),
             json!({"analyzer": {"x": {"type": "french"}}}),
@@ -1028,7 +1184,7 @@ mod tests_analysis {
 /// C'est la brique commune a l'elision, au possessif anglais et aux stemmers :
 /// tous se ramenent a « ce token devient celui-la ».
 #[derive(Clone)]
-pub struct Reecrit(fn(&str) -> Option<String>);
+pub struct Reecrit(pub fn(&str) -> Option<String>);
 
 impl tantivy::tokenizer::TokenFilter for Reecrit {
     type Tokenizer<T: tantivy::tokenizer::Tokenizer> = ReecritFilter<T>;
@@ -1241,24 +1397,3 @@ fn porter(t: &str) -> Option<String> {
 fn french_light(t: &str) -> Option<String> {
     Some(crate::stemmer::french_light(t))
 }
-
-/// Les mots vides francais d'Elasticsearch, **relevés** mot a mot plutot que
-/// reconstitues : ce n'est ni la liste Snowball (qui garde `est`) ni l'ancienne
-/// de Lucene. Le relevé se refait avec `tests/compat/releve_mots_vides.py`, et
-/// `diff_analyzers.py` reste l'arbitre.
-const MOTS_VIDES_FR: &[&str] = &[
-    "ai", "aie", "aient", "aies", "ait", "au", "aurai", "auraient", "aurais", "aurait", "aurez",
-    "auriez", "aurions", "aurons", "auront", "aux", "avaient", "avais", "avait", "avec", "avez",
-    "aviez", "avons", "ayant", "ayez", "ayons", "c", "ce", "ceci", "cela", "ces", "cet", "cette",
-    "d", "dans", "de", "des", "du", "elle", "en", "es", "et", "eu", "eue", "eues", "eurent", "eus",
-    "eusse", "eussent", "eusses", "eussiez", "eussions", "eut", "eux", "eûmes", "eût", "eûtes",
-    "furent", "fus", "fusse", "fussent", "fusses", "fussiez", "fussions", "fut", "fûmes", "fûtes",
-    "ici", "il", "ils", "j", "je", "l", "la", "le", "les", "leur", "leurs", "lui", "m", "ma",
-    "mais", "me", "mes", "moi", "mon", "même", "n", "ne", "nos", "notre", "nous", "on", "ont",
-    "ou", "par", "pas", "pour", "qu", "que", "quel", "quelle", "quelles", "quels", "qui", "s",
-    "sa", "sans", "se", "sera", "serai", "seraient", "serais", "serait", "seras", "serez",
-    "seriez", "serions", "serons", "seront", "ses", "soi", "soient", "sois", "soit", "sont",
-    "soyez", "soyons", "suis", "sur", "t", "ta", "te", "tes", "toi", "ton", "tu", "un", "une",
-    "vos", "votre", "vous", "y", "à", "étaient", "étais", "était", "étant", "étiez", "étions",
-    "étée", "étées", "êtes",
-];

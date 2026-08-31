@@ -114,6 +114,26 @@ def requetes():
     re_("(ab)+")
     re_("a{1,2}b.*")
 
+    # --- le `|` sans branche gauche : ce n'est **pas** une alternation vide
+    #
+    # `parseConcatExp` de Lucene lit toujours au moins un atome, et
+    # `parseSimpleExp` rend un caractere **litteral** devant tout ce qu'il ne
+    # reconnait pas — `|` compris. Donc `|a` cherche la chaine `|a`, `a||b`
+    # cherche `a` ou `|b`, et `a|` echoue (`unexpected end-of-string`) parce que
+    # l'atome exige apres le `|` manque. ferrite en faisait des branches vides :
+    # `|a` rendait les documents vides **et** `a`, en 200. Le corpus porte `a|b`
+    # exprès, donc l'ecart se voit sur des documents et pas seulement sur un
+    # statut. Trouve par une plage de graines neuves du fuzzer (8210220).
+    re_("|a")
+    re_("a||b")
+    re_("|")
+    re_("(|)")
+    re_("()")
+    re_("a|")
+    re_("(a|)")
+    re_("a|b|")
+    re_("x*|y")
+
     # --- classes predefinies : ASCII chez Lucene, Unicode chez `regex`
     re_("\\d+")
     re_("a\\dc")
