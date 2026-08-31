@@ -67,9 +67,9 @@ Toutes depuis la **racine** du repo.
 | `python3 tests/compat/ponderation.py [--json docs/usage.json] [--rejoue ferrite es] [--poids] [--verifie]` | **Ce que ce corpus réclame, et ce que ferrite en sert entièrement.** Croise chaque requête avec `compat.yaml` (une seule clause refusée fait tomber la requête), et `--rejoue` pose la même requête à ferrite et à un vrai ES 8.15 pour étalonner ce croisement. `--poids` écrit les `poids` de `compat.yaml`, `--verifie` est le cliquet de la CI. L'étude : [`usage.md`](usage.md) |
 | `python3 tests/compat/perimetre.py [api] [message]` | Rattache un cas échoué de la suite de conformance à une capacité de `compat.yaml` — et donc dit si c'est une **régression** ou un **coût de périmètre**. Sans argument, imprime l'index tel qu'il est lu |
 | `python3 tests/compat/conformance_es.py [URL] [--source elasticsearch\|opensearch] [--json <fichier>] [--diff <ancien.json>] [--divergences <rapport.json>] [--etat]` | Rejoue la **suite de conformance REST d'un autre moteur** — celle d'Elasticsearch (7.10.2, Apache 2.0, 107 domaines) ou celle d'**OpenSearch** (2.19.1, Apache 2.0, 112 domaines), téléchargées à la demande dans `.es-rest-spec/` et `.opensearch-rest-spec/`. Sans liste blanche : le tri se fait dans le rapport, pas par omission. Les cas ne viennent pas de nous, c'est ce qui attrape ce qu'on ne sait pas qu'on ignore — et deux équipes valent mieux qu'une, la suite d'Elastic étant figée en 2020. `--json` écrit le rapport machine (commité, source de tous les chiffres publiés) ; `--diff` dit ce qui a bougé depuis un rapport et fait du code de sortie un **cliquet** (celui du job CI `conformance`) ; `--divergences` range à part les cas qu'un **vrai** moteur de référence échoue lui aussi, donc qui ne mesurent pas ferrite — mesuré, pas décidé ; `--etat` vérifie entre deux cas qu'aucun index, alias, template ni réglage de cluster n'est **apparu** depuis l'état de départ de la cible (pas depuis le vide : un vrai ES réinstalle ses templates x-pack) et **arrête la campagne** au premier écart — +27 % de durée, payés par la CI |
-| `./tests/compat/measure_container.sh --json docs/container.json` | **La campagne du conteneur** : mesure les **deux** images que le README compare — ferrite et l'Elasticsearch de référence — dans la même campagne, sur la même machine, avec le même outil, et écrit le rapport machine [`docs/container.json`](container.json) (commité). Une entrée par image (référence, tag, digest du manifeste, arguments du `docker run`), et pour chaque valeur **sa définition en une phrase** — c'est elle qui rend le nombre lisible. Le démarrage est la médiane de 5 tours, tous publiés |
-| `python3 tests/compat/chiffres_conteneur.py --injecte \| --verifie` | **Le cliquet** : réécrit (ou vérifie) depuis `docs/container.json` les blocs `<!-- chiffres-conteneur:… -->` du README et de [`bench.md`](bench.md), et les phrases qui citent un de ces nombres. `--verifie` est ce que lance la CI, comme `genere_compat.py --verifie` : plus aucun chiffre de conteneur ne se saisit à la main. Un marqueur ou un motif introuvable est une **erreur** — une vérification qui ne trouve rien à comparer ne rend pas de verdict vert |
-| `./tests/compat/measure_container.sh [tag] [-- args docker run]` | Ne construit rien, mesure une image déjà buildée : **les trois tailles** (compressée telle qu'un registre la sert, décompressée, binaire seul), le RSS au repos et le temps de démarrage. Ne lit aucun champ dont la définition change avec la version de Docker (`{{.Size}}` valait la taille décompressée jusqu'à Docker 28 et vaut la compressée depuis la 29) : il demande l'image par `docker save` et compte les octets. `--tailles IMAGE…` ne mesure que les tailles, de n'importe quelle image — c'est ainsi qu'Elasticsearch est mesuré avec la même définition. Si une couche de l'archive n'est **pas** compressée (le `docker save` du magasin d'images classique), la taille qu'un registre servirait n'est pas déductible : elle est refusée (`NON MESURABLE`, code de retour non nul) et pas remplacée par un nombre plausible. `IMAGE_TAR=…` fait alors lire l'artefact OCI de `docker buildx build --output type=oci` — ce qu'un `docker push` enverrait, et ce que fait la CI |
+| `./tests/compat/measure_container.sh --json docs/container.json` | **La campagne du conteneur** : mesure les **deux** images que le README compare — ferrite et l'Elasticsearch de référence — dans la même campagne, sur la même machine, avec le même outil, et écrit le rapport machine [`docs/container.json`](container.json) (commité). Une entrée par image (référence, tag, digest du manifeste, arguments du `docker run`), et pour chaque valeur **sa définition en une phrase** — c'est elle qui rend le nombre lisible. Le démarrage est la médiane de 5 tours, tous publiés. L'image de ferrite qu'elle mesure est celle que `Cargo.toml` déclare (`ferrite:{version}`) : absente, elle est refusée en nommant le `docker build` qui la produit ; présente mais servie par un binaire d'une autre version (`build_hash`), elle est refusée aussi. Elle est donc à relancer **dans la PR qui bump la version** — voir [Publier une version](#publier-une-version) |
+| `python3 tests/compat/chiffres_conteneur.py --injecte \| --verifie` | **Le cliquet** : réécrit (ou vérifie) depuis `docs/container.json` les blocs `<!-- chiffres-conteneur:… -->` du README et de [`bench.md`](bench.md), et les phrases qui citent un de ces nombres. `--verifie` est ce que lance la CI, comme `genere_compat.py --verifie` : plus aucun chiffre de conteneur ne se saisit à la main. Un marqueur ou un motif introuvable est une **erreur** — une vérification qui ne trouve rien à comparer ne rend pas de verdict vert. Il compare aussi la version : celle de `Cargo.toml`, celle du rapport, le tag de l'image mesurée et le `build_hash` du binaire qui a répondu. C'est lui qui a bloqué la release 0.8.0, et c'est ce qu'on lui demande |
+| `./tests/compat/measure_container.sh [tag] [-- args docker run]` | Ne construit rien, mesure une image déjà buildée (par défaut `ferrite:{la version de Cargo.toml}`) : **les trois tailles** (compressée telle qu'un registre la sert, décompressée, binaire seul), le RSS au repos et le temps de démarrage. Ne lit aucun champ dont la définition change avec la version de Docker (`{{.Size}}` valait la taille décompressée jusqu'à Docker 28 et vaut la compressée depuis la 29) : il demande l'image par `docker save` et compte les octets. `--tailles IMAGE…` ne mesure que les tailles, de n'importe quelle image — c'est ainsi qu'Elasticsearch est mesuré avec la même définition. Si une couche de l'archive n'est **pas** compressée (le `docker save` du magasin d'images classique), la taille qu'un registre servirait n'est pas déductible : elle est refusée (`NON MESURABLE`, code de retour non nul) et pas remplacée par un nombre plausible. `IMAGE_TAR=…` fait alors lire l'artefact OCI de `docker buildx build --output type=oci` — ce qu'un `docker push` enverrait, et ce que fait la CI |
 | `docker build -t ferrite .` | Image minimale (`scratch` + binaire statique musl) |
 
 Le harnais de compat installe le client officiel dans un venv (`.venv-compat/`)
@@ -248,10 +248,58 @@ le worker — rien à faire de plus.
 
 ## Publier une version
 
-Une release = un **tag sur `main`**, rien d'autre :
+Une release = un **tag sur `main`**. Mais le tag vient après une PR de bump, et
+cette PR porte une étape qu'aucune version précédente n'avait écrite : **un bump
+de version invalide par construction la mesure du conteneur.**
+
+`docs/container.json` porte la version qui a été *mesurée* — le tag de l'image
+et le `build_hash` que le binaire a annoncé sur `GET /` ; `Cargo.toml` porte
+celle qu'on *déclare*. Le cliquet `chiffres_conteneur.py --verifie` (job CI « le
+périmètre déclaré ») échoue dès que les deux divergent, et c'est exactement ce
+qu'on lui demande : sans lui, un binaire qui grossit republierait la taille de
+l'ancien sous son nouveau numéro. La release 0.8.0 s'est arrêtée là — le
+garde-fou a fonctionné, rien n'était en panne. Ce qui manquait, c'est que
+personne ne jouait la commande qu'il nomme.
+
+Elle n'est donc pas à assouplir. Elle est à **jouer**, dans la PR de bump :
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0
+# 1) le bump : Cargo.toml, Cargo.lock, et l'archive citée sous « Installer »
+#    dans le README (`ferrite-v0.8.0-x86_64-…`). Ne PAS toucher aux blocs
+#    <!-- chiffres-conteneur:… --> : ils sont générés, et un remplacement de
+#    version à l'intérieur d'un de ces blocs fait échouer le cliquet.
+
+# 2) la campagne, à la version qu'on vient de déclarer. Elle mesure les DEUX
+#    images (ferrite et l'ES de référence) dans la même campagne, sur la même
+#    machine : c'est la seule façon de tenir « même définition des deux côtés ».
+#    Docker requis, une dizaine de minutes.
+version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+docker build -t "ferrite:$version" .
+./tests/compat/measure_container.sh --json docs/container.json
+
+# 3) publier les chiffres mesurés : README.md, docs/bench.md, CLAUDE.md
+python3 tests/compat/chiffres_conteneur.py --injecte
+
+# 4) le cliquet, celui que la CI relance
+python3 tests/compat/chiffres_conteneur.py --verifie
+```
+
+La campagne refuse de mesurer autre chose que ce qui est déclaré : image absente
+(elle nomme le `docker build`), tag qui ne suit pas `Cargo.toml`, ou `build_hash`
+d'un binaire qui n'est pas celui de la version. Un tag dit ce qu'on a *voulu*
+construire ; c'est le serveur qui répond au `GET /` chronométré qui dit ce qu'on
+a *mesuré*.
+
+Une note sur le RSS et le démarrage, puisqu'ils dépendent de la machine (le
+rapport la nomme, dans `mesure.hote`) : ce qui doit partager une machine, c'est
+la mesure des **deux images d'une même campagne** — pas deux campagnes
+successives. Une release mesurée sur un autre runner reste donc valide ; c'est
+comparer son démarrage à celui de la release précédente qui ne l'est pas.
+
+Puis, la PR de bump mergée :
+
+```bash
+git tag v0.8.0 && git push origin v0.8.0
 ```
 
 `.github/workflows/release.yml` compile alors le binaire statique musl sur un
@@ -261,3 +309,31 @@ depuis les PR mergées depuis le tag précédent.
 
 Le workflow **refuse** un tag posé sur un commit absent de `main` : une release
 publiée depuis une branche de travail serait invérifiable après coup.
+
+### Ce que l'automatisation doit jouer (`coderhammer/automations`)
+
+La PR de release est ouverte par le job `cut-release`, qui vit dans
+`coderhammer/automations` : ce dépôt-ci ne peut que le documenter et nommer ce
+qu'il faut y changer. Ce que le job fait aujourd'hui s'arrête à l'étape 1, et il
+remplace le numéro de version **partout** dans le README — y compris dans le
+bloc généré (le diff de la PR #48 réécrivait la ligne
+`| | Elasticsearch 8.15.0 | ferrite 0.8.0 | × |` à l'intérieur de
+`<!-- chiffres-conteneur:tableau -->`). D'où, précisément :
+
+- **jouer les étapes 2 à 4** entre le bump et le commit, et ajouter au commit
+  `docs/container.json`, `README.md`, `docs/bench.md` et `CLAUDE.md` ;
+- **ne plus remplacer la version dans les blocs `<!-- chiffres-conteneur:… -->`** :
+  ils se régénèrent, ils ne se `sed` pas. Le seul remplacement légitime dans le
+  README est le nom de l'archive citée sous « Installer » ;
+- **donner Docker à son runner**, et le droit de tirer
+  `docker.elastic.co/elasticsearch/elasticsearch:8.15.0` — la campagne mesure
+  les deux images, une seule ne prouverait rien ;
+- **si le runner ne peut pas jouer la campagne** : ouvrir la PR en `draft`, avec
+  les quatre commandes dans son corps. Une PR de release présentée comme prête
+  et rouge sur un garde-fou coûte une enquête à chaque version.
+
+Ce qu'il ne faut **pas** faire, c'est apprendre au cliquet à laisser passer une
+mesure « seulement un peu périmée ». La 0.8.0 le montre en deux nombres :
+l'image a pris 2 028 octets depuis la 0.7.0 (4 149 171 → 4 151 199), et ces deux
+mille octets déplacent le chiffre publié — **4,1 Mo devient 4,2 Mo**, sur le
+premier argument du projet.

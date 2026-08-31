@@ -1111,6 +1111,27 @@ bouger**, pas après.
   à celle du rapport — sans quoi un binaire qui grossit republierait la taille
   de l'ancien sous son nouveau numéro.
 
+  **Un garde-fou qui nomme une commande suppose que quelqu'un la joue.** Celui
+  ci-dessus a bloqué la release suivante, en disant exactement quoi lancer — et
+  personne ne le lançait : un bump de version invalide *par construction* la
+  mesure du conteneur, et la procédure de release ne le savait pas. La réponse
+  n'est pas d'apprendre au cliquet à tolérer une mesure « seulement un peu
+  périmée » : entre 0.7.0 et 0.8.0 l'image a pris 2 028 octets, et ces deux
+  mille octets déplacent le chiffre publié (4,1 → 4,2 Mo). La réponse est
+  d'écrire l'étape là où on la lira — [`docs/dev-workflow.md`](docs/dev-workflow.md),
+  section « Publier une version » — et de nommer ce que l'automatisation qui
+  ouvre la PR de release doit jouer.
+
+  Et relancer la campagne ne suffisait pas, parce que **la campagne portait
+  elle-même la version en dur** (`"reference": "ferrite:0.7.0"`, deux fois).
+  Lancée après le bump, elle aurait mesuré l'image du binaire d'avant en
+  écrivant le numéro du jour dans le rapport : le défaut que le contrôle
+  empêche, par le seul chemin qu'il ne regardait pas. Un contrôle de cohérence
+  se relit donc en se demandant *quel champ dit ce qui a été mesuré* —
+  `mesure.ferrite_version` est lu dans `Cargo.toml` au moment de la campagne, il
+  dit ce qui était **déclaré**. Ce qui dit le reste, c'est le tag de l'image et
+  le `build_hash` que le binaire annonce sur le `GET /` qu'on chronomètre déjà.
+
 ## Où va le projet
 
 **Deux vraies applications tournent dessus sans être modifiées** : Gitea
