@@ -1,10 +1,10 @@
 {
   "schema": 1,
   "mesure": {
-    "date": "2026-08-31T08:09:16Z",
-    "ferrite_version": "0.7.0",
-    "ferrite_sha": "b64367ee8c261498c875d9307c8e307f07fb7752",
-    "ferrite_arbre_modifie": true,
+    "date": "2026-08-31T09:27:39Z",
+    "ferrite_version": "0.8.0",
+    "ferrite_sha": "dd5e6db72613e75e71d88701d9b7b8d02273ebb7",
+    "ferrite_arbre_modifie": false,
     "outil": "./tests/compat/measure_container.sh --json docs/container.json",
     "tours_demarrage": 5,
     "hote": {
@@ -26,13 +26,14 @@
     "demarrage_tours_ms": "Les `mesure.tours_demarrage` demarrages dont `demarrage_ms` est la mediane, dans l'ordre. Publies parce qu'une mediane seule ne dit pas si les tours sont serres.",
     "docker_run": "Les arguments exacts du `docker run` de la mesure. Ils font partie de la definition du RSS et du demarrage : un Elasticsearch lance avec une autre heap ne se compare pas a celui d'hier.",
     "origine": "D'ou vient l'image mesuree : construite ici, ou tiree telle quelle.",
+    "build_hash": "Le `version.build_hash` que le serveur annonce sur `GET /` pendant la campagne — ce que le binaire dit de lui-meme, et la seule chose ici qui ne soit pas un nom qu'on a tape. Pour ferrite c'est `ferrite-{version de Cargo.toml}` : un tag dit ce qu'on a voulu construire, ce champ dit ce qui a repondu.",
     "mesure.ferrite_arbre_modifie": "Vrai si un des fichiers dont l'image est faite (`src/`, `Cargo.toml`, `Cargo.lock`, `Dockerfile`) differait de `mesure.ferrite_sha` pendant la campagne — donc si l'image mesuree pourrait ne pas etre celle que ce commit produit. Un README modifie au meme moment ne compte pas : il ne change pas un octet du binaire."
   },
   "images": [
     {
       "nom": "ferrite",
-      "reference": "ferrite:0.7.0",
-      "tag": "0.7.0",
+      "reference": "ferrite:0.8.0",
+      "tag": "0.8.0",
       "origine": "construite ici depuis le Dockerfile du depot (`scratch` + binaire statique musl)",
       "docker_run": [
         "-p",
@@ -40,21 +41,22 @@
       ],
       "plateforme": "linux/amd64",
       "couches": 1,
-      "digest_manifeste": "sha256:59e6a88d35012dea94b6afef82a804058dbe55529ed326969f4f255443d53d03",
-      "compressee_octets": 4149171,
+      "digest_manifeste": "sha256:c9f0b3263b4bee95ea668e08b000e47e9a33292b0ad6b5c3c78df49374df4088",
+      "compressee_octets": 4151199,
       "couches_nues": [],
       "decompressee_octets": 9818112,
       "entrypoint": "/ferrite",
       "binaire_octets": 9816192,
-      "demarrage_ms": 171,
+      "demarrage_ms": 179,
       "demarrage_tours_ms": [
-        196,
-        171,
+        267,
+        183,
+        179,
         164,
-        175,
-        164
+        160
       ],
-      "rss_repos_ko": 4444
+      "rss_repos_ko": 4616,
+      "build_hash": "ferrite-0.8.0"
     },
     {
       "nom": "elasticsearch",
@@ -79,15 +81,16 @@
       "decompressee_octets": 1266139136,
       "entrypoint": "/bin/tini",
       "binaire_octets": null,
-      "demarrage_ms": 17350,
+      "demarrage_ms": 17426,
       "demarrage_tours_ms": [
-        17399,
-        17350,
-        17188,
-        16907,
-        17928
+        17543,
+        17380,
+        17608,
+        17284,
+        17426
       ],
-      "rss_repos_ko": 1051736
+      "rss_repos_ko": 1104748,
+      "build_hash": "1a77947f34deddb41af25e6f0ddb8e830159c179"
     }
   ]
 }

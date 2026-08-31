@@ -29,7 +29,7 @@ comme un banc.
 | Mapping | celui de la track, **lu** dans son `index.json` — pas retapé ici (six écarts, listés plus bas) |
 | Requêtes | les 31 opérations de recherche de son `operations/default.json`, dont les trois requêtes à 45 586 termes que son `track.py` fabrique depuis `terms.txt` |
 | Indexation | 8 clients en parallèle, lots de 5 000 documents — les défauts de la track |
-| ferrite | image `scratch` du dépôt, `docker run -p 9200:9200 -v …:/data` — **4,1 Mo compressés** au sens de [l'enveloppe](#lenveloppe-de-limage), contre 669,1 Mo pour celle d'Elasticsearch |
+| ferrite | image `scratch` du dépôt, `docker run -p 9200:9200 -v …:/data` — **4,2 Mo compressés** au sens de [l'enveloppe](#lenveloppe-de-limage), contre 669,1 Mo pour celle d'Elasticsearch |
 | Elasticsearch | `docker.elastic.co/elasticsearch/elasticsearch:8.15.0`, `discovery.type=single-node`, `ES_JAVA_OPTS=-Xms2g -Xmx2g` |
 | Machine | la même pour les deux, l'un après l'autre : 8 cœurs, 31 Gio de RAM, disque local |
 
@@ -102,9 +102,9 @@ campagne, [`docs/container.json`](container.json), où chaque valeur porte sa
 définition.
 
 <!-- chiffres-conteneur:enveloppe — généré depuis docs/container.json par `python3 tests/compat/chiffres_conteneur.py --injecte`, ne pas éditer à la main -->
-| | ferrite 0.7.0 | ES 8.15.0 | × |
+| | ferrite 0.8.0 | ES 8.15.0 | × |
 |---|---|---|---|
-| **Image compressée**, telle qu'un registre la sert | **4,1 Mo** | 669,1 Mo | **×161** |
+| **Image compressée**, telle qu'un registre la sert | **4,2 Mo** | 669,1 Mo | **×161** |
 | Image décompressée, ce que son système de fichiers occupe | 9,8 Mo | 1 266,1 Mo | ×129 |
 | Le binaire seul | 9,8 Mo | — (une JVM) | |
 <!-- /chiffres-conteneur:enveloppe -->

@@ -15,9 +15,9 @@ milliers de documents et répondre à des requêtes `bool` + `terms` + un tri.
 <!-- chiffres-conteneur:apercu — généré depuis docs/container.json par `python3 tests/compat/chiffres_conteneur.py --injecte`, ne pas éditer à la main -->
 |  | Elasticsearch 8.15.0 | ferrite |
 |---|---|---|
-| Image compressée, telle qu'un registre la sert | 669,1 Mo | **4,1 Mo** (`scratch`) |
-| RSS au repos | 1,08 Go | **4,6 Mo** |
-| Démarrage | 17,4 s | **171 ms** (`docker run` → premier `GET /` servi) |
+| Image compressée, telle qu'un registre la sert | 669,1 Mo | **4,2 Mo** (`scratch`) |
+| RSS au repos | 1,13 Go | **4,7 Mo** |
+| Démarrage | 17,4 s | **179 ms** (`docker run` → premier `GET /` servi) |
 | Runtime | JVM + tuning heap | un binaire statique |
 <!-- /chiffres-conteneur:apercu -->
 
@@ -156,11 +156,11 @@ de CI échoue si le tableau et le fichier divergent.
 <!-- chiffres-conteneur:tableau — généré depuis docs/container.json par `python3 tests/compat/chiffres_conteneur.py --injecte`, ne pas éditer à la main -->
 | | Elasticsearch 8.15.0 | ferrite 0.8.0 | × |
 |---|---|---|---|
-| **Image compressée**, telle qu'un registre la sert | 669,1 Mo | **4,1 Mo** | **×161** |
+| **Image compressée**, telle qu'un registre la sert | 669,1 Mo | **4,2 Mo** | **×161** |
 | Image décompressée, ce que son système de fichiers occupe | 1 266,1 Mo | 9,8 Mo | ×129 |
 | Le binaire seul | — | 9,8 Mo | |
-| Mémoire au repos (RSS) | 1,08 Go | **4,6 Mo** | **×237** |
-| Démarrage (`docker run` → premier `GET /` servi) | 17,4 s | **171 ms** (médiane de 5 ; l'essentiel est la création du conteneur par Docker) | ×101 |
+| Mémoire au repos (RSS) | 1,13 Go | **4,7 Mo** | **×239** |
+| Démarrage (`docker run` → premier `GET /` servi) | 17,4 s | **179 ms** (médiane de 5 ; l'essentiel est la création du conteneur par Docker) | ×97 |
 <!-- /chiffres-conteneur:tableau -->
 
 L'image finale est un `scratch` qui ne contient que le binaire statique — d'où
@@ -213,16 +213,16 @@ autres outils répondent à la même question.
 
 <!-- chiffres-conteneur:sortie — généré depuis docs/container.json par `python3 tests/compat/chiffres_conteneur.py --injecte`, ne pas éditer à la main -->
 ```
-$ ./tests/compat/measure_container.sh ferrite:0.7.0
+$ ./tests/compat/measure_container.sh ferrite:0.8.0
 docker serveur   : 29.7.2 (magasin d'images : overlayfs)
 
-== image : ferrite:0.7.0  (linux/amd64, 1 couche(s))
-compressee (registre) :     4 149 171 octets      4,1 Mo   <- ce qu'un `docker pull` telecharge
+== image : ferrite:0.8.0  (linux/amd64, 1 couche(s))
+compressee (registre) :     4 151 199 octets      4,2 Mo   <- ce qu'un `docker pull` telecharge
 decompressee (disque) :     9 818 112 octets      9,8 Mo   <- ce que le systeme de fichiers de l'image occupe
 binaire /ferrite      :     9 816 192 octets      9,8 Mo   <- le fichier que le conteneur execute
 
-demarrage        : 171 ms (docker run -> premier GET / servi, mediane de 5 tours)
-RSS au repos     : 4 444 Ko (4,6 Mo)
+demarrage        : 179 ms (docker run -> premier GET / servi, mediane de 5 tours)
+RSS au repos     : 4 616 Ko (4,7 Mo)
 ```
 <!-- /chiffres-conteneur:sortie -->
 
