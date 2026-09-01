@@ -15,7 +15,7 @@ fichier-ci dit **comment penser** dans ce dépôt.
 
 Un moteur de recherche compatible avec l'API Elasticsearch, écrit en Rust
 au-dessus de [tantivy](https://github.com/quickwit-oss/tantivy), tenant dans une
-image de 4,2 Mo compressés — la taille qu'un registre sert, la seule qu'on
+image de 4,3 Mo compressés — la taille qu'un registre sert, la seule qu'on
 publie, et la définition compte : voir [Le conteneur](README.md#le-conteneur).
 Le produit, c'est **« le code client existant ne change pas »**.
 L'index inversé n'est pas réécrit : le travail réel est la couche de
