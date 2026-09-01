@@ -473,8 +473,8 @@ réelles** — la documentation de référence d'ES 8.15, les tracks Rally d'Ela
 les tests des clients officiels et le code de 184 dépôts open source — la
 question posée est « celle-ci passerait-elle **entièrement** ? », parce qu'une
 requête supportée à 90 % est une requête qui échoue. Réponse : **96,4 % des
-requêtes trouvées dans du code d'application**, 40,2 % des exemples de la
-documentation, 46,6 % des tracks de benchmark. L'écart entre ces trois nombres
+requêtes trouvées dans du code d'application**, 40,4 % des exemples de la
+documentation, 47,2 % des tracks de benchmark. L'écart entre ces trois nombres
 est le résultat ; la méthode, les sources et les biais sont dans
 [`docs/usage.md`](docs/usage.md), le corpus est publié avec.
 
@@ -506,11 +506,11 @@ Cet inventaire est aussi ce qui **borne un tirage au sort**. Un fuzzer
 différentiel ([`tests/compat/fuzz_vs_es.py`](tests/compat/fuzz_vs_es.py)) génère
 des mappings, des documents et des requêtes dans le périmètre que `compat.yaml`
 déclare, les pose à ferrite **et** à un vrai Elasticsearch 8.15, et compare les
-réponses champ par champ : **750 cas, 34 864 requêtes, 0 divergence ouverte**
-(un ordre que BM25 sépare et qu'ES rend ex æquo) sur quatre plages de graines,
-dont **aucune** n'a servi à corriger — et **5 divergences** sur les mêmes
-plages contre le binaire d'avant la dernière carte, ce qui est la seule chose
-qui dit que ces plages mesurent quelque chose. Il
+réponses champ par champ : **670 cas, 30 937 requêtes, 4 divergences ouvertes**
+— toutes **antérieures** à la dernière carte, et mesurées telles — sur quatre
+plages de graines dont **aucune** n'a servi à corriger, et **83 divergences**
+sur les mêmes plages contre le binaire d'avant cette carte, ce qui est la seule
+chose qui dit que ces plages mesurent quelque chose. Il
 s'étalonne d'abord contre deux Elasticsearch — tant qu'il n'y est pas à zéro, ce
 qu'il dit de ferrite ne vaut rien. Son premier passage a trouvé vingt et un défauts
 que personne n'avait signalés, tous silencieux ; ils sont racontés dans

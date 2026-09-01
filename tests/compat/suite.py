@@ -607,7 +607,8 @@ def index_vrai_est_le_defaut(es):
     que ferrite fait deja, et ES lui-meme ne la conserve pas dans le mapping
     qu'il rend. La refuser bloquait une application entiere au demarrage, sans
     qu'aucune de ses requetes ne soit hors perimetre. `index: false`, lui,
-    demande un champ absent de l'index : il reste refuse explicitement.
+    demande un champ absent de l'index inverse : il a son propre scenario
+    (`champ_non_indexe`), parce qu'il demande tout autre chose.
     """
     es.options(ignore_status=404).indices.delete(index="param_index")
     es.indices.create(index="param_index", mappings={"properties": {
@@ -629,10 +630,6 @@ def index_vrai_est_le_defaut(es):
     assert ids(es.search(index="param_index", query={"match": {"titre": "bel"}})) == ["1"]
     assert ids(es.search(index="param_index", query={"term": {"id": 7}})) == ["1"]
 
-    refused(lambda: es.indices.create(
-        index="param_index_faux", mappings={"properties": {
-            "t": {"type": "keyword", "index": False}}}),
-        contains="index: false")
     refused(lambda: es.indices.create(
         index="param_index_bizarre", mappings={"properties": {
             "t": {"type": "keyword", "index": "no"}}}))
@@ -4467,6 +4464,138 @@ def reglage_de_pertinence(es):
         "query": base, "field_value_factor": {"field": "vues"}}}),
         status=500, contains="Missing value for field [vues]")
     es.indices.delete(index=FS)
+
+
+# ---------------------------------------------------------------------------
+# `index: false` : garder un champ sans le rendre cherchable
+# ---------------------------------------------------------------------------
+
+IF = "compat-index-false"
+
+
+@scenario
+def champ_non_indexe(es):
+    """`index: false`, par le client officiel — et ce que ca change vraiment.
+
+    Ce qui se verifie ici n'est pas « le mapping est accepte » : c'est ce
+    qu'`index: false` fait ensuite. Sur un champ qui garde sa colonne, ES ne
+    renonce pas a chercher — il retombe sur les *doc values*, et ferrite fait
+    pareil. Le seul effet observable est le **score** : constant, la ou un
+    `term` sur un `keyword` indexe est note par BM25. Sur un `text`, qui n'a
+    pas de colonne, il n'y a rien sur quoi retomber : la clause est refusee,
+    avec la phrase d'ES.
+    """
+    es.options(ignore_status=404).indices.delete(index=IF)
+    es.indices.create(index=IF, mappings={"properties": {
+        "reference": {"type": "keyword", "index": False},
+        "note_interne": {"type": "text", "index": False},
+        "vues": {"type": "long", "index": False},
+        "publie": {"type": "date", "index": False},
+        "actif": {"type": "boolean", "index": False},
+        "titre": {"type": "text"},
+    }})
+    # ES conserve `index: false` dans le mapping qu'il rend (contrairement a
+    # `index: true`) : sans ca, un outil qui relit son mapping pour decider
+    # s'il doit reindexer y lirait le contraire de ce qu'il a pose.
+    props = es.indices.get_mapping(index=IF)[IF]["mappings"]["properties"]
+    assert props["reference"] == {"type": "keyword", "index": False}, props["reference"]
+    assert props["titre"] == {"type": "text"}, props["titre"]
+
+    es.index(index=IF, id="1", refresh=True, document={
+        "reference": "REF-001", "note_interne": "a rappeler avant jeudi",
+        "vues": 12, "publie": "2026-03-15", "actif": True, "titre": "premier"})
+    es.index(index=IF, id="2", refresh=True, document={
+        "reference": "REF-002", "note_interne": "sans suite",
+        "vues": 40, "publie": "2020-01-01", "actif": False, "titre": "second"})
+
+    # Le champ est toujours dans `_source`, et `fields` le rend : c'est ce que
+    # l'utilisateur qui a signale le cas voulait.
+    hit = es.search(index=IF, query={"ids": {"values": ["1"]}},
+                    fields=["reference"])["hits"]["hits"][0]
+    assert hit["_source"]["reference"] == "REF-001", hit["_source"]
+    assert hit["fields"]["reference"] == ["REF-001"], hit["fields"]
+
+    # Et il reste cherchable par sa colonne — a score **constant**.
+    r = es.search(index=IF, query={"term": {"reference": "REF-001"}})
+    assert ids(r) == ["1"], ids(r)
+    assert r["hits"]["hits"][0]["_score"] == 1.0, r["hits"]["hits"][0]["_score"]
+    assert ids(es.search(index=IF, query={"terms": {"reference": ["REF-002"]}})) == ["2"]
+    # Les clauses de motif rendent des scores **egaux** : deux documents ex
+    # aequo ne se departagent pas de la meme facon des deux cotes (le numero
+    # interne d'un document n'est pas l'ordre d'ecriture chez tantivy, ecart
+    # anterieur et vrai sur un champ indexe aussi). Ce qui se verifie ici est
+    # donc l'ensemble.
+    trouves = lambda q: sorted(ids(es.search(index=IF, query=q)))  # noqa: E731
+    assert trouves({"prefix": {"reference": "REF-00"}}) == ["1", "2"]
+    assert trouves({"wildcard": {"reference": "*-002"}}) == ["2"]
+    assert trouves({"regexp": {"reference": "REF-00[12]"}}) == ["1", "2"]
+    # `fuzzy` developpe le meme automate de Levenshtein que sur un champ
+    # indexe : `AUTO` sur sept caracteres autorise deux editions, donc les deux
+    # references (mesure : ES rend les deux aussi).
+    assert trouves({"fuzzy": {"reference": "REF-0O1"}}) == ["1", "2"]
+    assert trouves({"fuzzy": {"reference": {"value": "REF-0O1", "fuzziness": 1}}}) == ["1"]
+    assert ids(es.search(index=IF, query={"range": {"vues": {"gte": 20}}})) == ["2"]
+    assert ids(es.search(index=IF, query={"term": {"actif": True}})) == ["1"]
+    assert ids(es.search(index=IF, query={"range": {
+        "publie": {"gte": "2026-01-01"}}})) == ["1"]
+    assert trouves({"exists": {"field": "reference"}}) == ["1", "2"]
+    # `boost` s'applique au score constant, comme chez ES.
+    r = es.search(index=IF, query={"term": {"reference": {"value": "REF-001", "boost": 3}}})
+    assert r["hits"]["hits"][0]["_score"] == 3.0, r["hits"]["hits"][0]["_score"]
+
+    # Le tri et les agregations lisent la meme colonne.
+    r = es.search(index=IF, sort=[{"vues": "desc"}], source=False)
+    assert ids(r) == ["2", "1"], ids(r)
+    seaux = es.search(index=IF, size=0, aggs={"a": {"terms": {"field": "reference"}}})
+    assert [b["key"] for b in seaux["aggregations"]["a"]["buckets"]] == \
+        ["REF-001", "REF-002"]
+
+    # Un `text` non indexe n'a pas de colonne : ES refuse, et ferrite reprend sa
+    # phrase mot pour mot. `exists`, lui, ne refuse pas — il ne rend rien.
+    refused(lambda: es.search(index=IF, query={"match": {"note_interne": "jeudi"}}),
+            contains="Cannot search on field [note_interne] since it is not indexed.")
+    refused(lambda: es.search(index=IF, query={"term": {"note_interne": "jeudi"}}),
+            contains="since it is not indexed")
+    refused(lambda: es.search(index=IF,
+                              query={"match_phrase": {"note_interne": "a rappeler"}}),
+            contains="was indexed without position data")
+    assert ids(es.search(index=IF, query={"exists": {"field": "note_interne"}})) == []
+    # `lenient` avale ce refus-la, comme chez ES : la barre de recherche cherche
+    # dans les champs qui savent repondre.
+    r = es.search(index=IF, query={"multi_match": {
+        "query": "premier", "fields": ["note_interne", "titre"], "lenient": True}})
+    assert ids(r) == ["1"], ids(r)
+
+    # `_field_caps` doit dire la verite : un outil de decouverte lit
+    # `searchable` avant de proposer un filtre.
+    caps = es.field_caps(index=IF, fields=["reference", "note_interne", "vues"])["fields"]
+    assert caps["reference"]["keyword"]["searchable"] is True
+    assert caps["reference"]["keyword"]["aggregatable"] is True
+    assert caps["note_interne"]["text"]["searchable"] is False
+    assert caps["vues"]["long"]["searchable"] is True
+
+    # Le surlignage ne rend **aucun** fragment sur un champ non indexe : ES
+    # part des `Matches` de Lucene, et une lecture de colonne n'en produit pas.
+    hit = es.search(index=IF, query={"term": {"reference": "REF-001"}},
+                    highlight={"fields": {"reference": {}}})["hits"]["hits"][0]
+    assert "highlight" not in hit, hit
+
+    # Changer `index` sur un champ deja declare est refuse, dans les deux sens.
+    refused(lambda: es.indices.put_mapping(index=IF, properties={
+        "reference": {"type": "keyword", "index": True}}),
+        contains="Cannot update parameter [index]")
+    refused(lambda: es.indices.put_mapping(index=IF, properties={
+        "titre": {"type": "text", "index": False}}),
+        contains="Cannot update parameter [index]")
+    # Ajouter un champ non indexe apres coup, en revanche, passe.
+    es.indices.put_mapping(index=IF, properties={
+        "archive": {"type": "keyword", "index": False}})
+
+    # Un objet n'entre pas dans l'index inverse : le parametre n'y a pas de
+    # sens, et ES le refuse.
+    refused(lambda: es.indices.create(index=IF + "-obj", mappings={"properties": {
+        "o": {"type": "object", "index": False}}}), contains="unsupported parameters")
+    es.indices.delete(index=IF)
 
 
 # ---------------------------------------------------------------------------

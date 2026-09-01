@@ -40,6 +40,7 @@ pub mod alias;
 pub mod analysis;
 pub mod api;
 pub mod calendrier;
+pub mod colonne;
 pub mod dateformat;
 pub mod datemath;
 pub mod dismax;

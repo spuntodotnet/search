@@ -347,6 +347,7 @@ version = "0.8.0"
 dependencies = [
  "axum",
  "flate2",
+ "levenshtein_automata",
  "rust-stemmers",
  "serde",
  "serde_json",

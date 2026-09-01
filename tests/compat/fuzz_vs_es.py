@@ -220,6 +220,7 @@ BRIQUES = {
     "champ.search_analyzer": "type.search_analyzer",
     "champ.copy_to": "type.copy_to",
     "champ.store": "type.store",
+    "champ.index_false": "type.index",
     "champ.tableaux": "type.tableaux",
     "champ.null": "type.null",
     "champ.devine": "index.mapping_dynamique",
@@ -501,6 +502,7 @@ class Generateur:
             champs.extend(ch)
         self._copie_declaree(props, champs)
         self._stockage_declare(props, champs)
+        self._non_indexe(props, champs)
         return props, champs
 
     def _copie_declaree(self, props, champs):
@@ -552,6 +554,28 @@ class Generateur:
         rng.shuffle(feuilles)
         for c in feuilles[:rng.randint(1, 3)]:
             c.mapping["store"] = rng.choice([True, "true"])
+
+    def _non_indexe(self, props, champs):
+        """`index: false` sur quelques feuilles.
+
+        La brique ne mesure pas qu'elle-meme : un champ non indexe reste
+        interroge par **toutes** les clauses que le generateur tire — c'est
+        exactement ce qu'il faut, puisque chez ES la clause ne disparait pas,
+        elle change de chemin (la colonne au lieu de l'index inverse) et de
+        score. Elle est tiree sur les feuilles de tous les types, `text`
+        compris : c'est le seul ou ES **refuse**, et un refus qui ne serait pas
+        prononce au meme endroit se verrait ici."""
+        rng = self.rng
+        if not (rng.random() < 0.25 and self.brique("champ.index_false")):
+            return
+        # Ni un multi-field (son parent decide de sa propre indexation, et les
+        # deux se lisent separement), ni une cible de `copy_to` non declaree.
+        feuilles = [c for c in champs
+                    if c.mapping is not None and c.ty not in ("object", "nested")
+                    and "copy_to" not in c.mapping]
+        rng.shuffle(feuilles)
+        for c in feuilles[:rng.randint(1, 2)]:
+            c.mapping["index"] = rng.choice([False, "false"])
 
     def _analyse_declaree(self):
         """Une section `analysis` tiree au sort — deux analyzers a n-grammes.
@@ -2235,6 +2259,24 @@ def _es_deux_lectures(e, requete=None):
     return bool(colonnes) and bool(stockes & colonnes or "*" in stockes)
 
 
+def _es_casse_sur_exists_stocke(e):
+    """`exists` sur un `text` a la fois `index: false` **et** `store: true`.
+
+    ES 8.15 y rend un **500** : le champ existe dans son index (il y est
+    stocke) mais n'y porte ni colonne, ni norme, ni vecteur, et son
+    `FieldExistsQuery` refuse de se construire — « FieldExistsQuery requires
+    that the field indexes doc values, norms or vectors ». Le meme champ **sans**
+    `store` rend 200 et aucun document, parce que Lucene ne le connait alors pas
+    du tout (mesure contre 8.15.0, les deux formes cote a cote).
+
+    ferrite rend 200 et aucun document dans les deux cas — c'est la reponse
+    qu'ES donne lui-meme des qu'on retire le `store`. Un 500 ne se reproduit
+    pas : c'est deja la raison pour laquelle `_seq_no` nomme dans `fields` est
+    refuse plutot qu'imite. Le predicat porte sur le message d'ES, sinon
+    n'importe quel 500 passerait."""
+    return e.get("chemin") == "statut" and "FieldExistsQuery requires" in e["texte"]
+
+
 # Les deux garde-fous que `function_score` leve **a l'execution** chez ES, et
 # que ferrite leve aussi — quand il y arrive.
 GARDES_DE_SCORE = ("returned an invalid score", "Missing value for field")
@@ -2487,6 +2529,8 @@ DIVERGENCES_ASSUMEES = [
     ("exists sur un text sans terme", _exists_sur_text),
     ("ES 8.15 casse sur epoch_millis", _es_casse),
     ("ES 8.15 casse sur deux lectures du meme champ", _es_deux_lectures),
+    ("ES 8.15 casse sur exists d'un champ non indexe et stocke",
+     _es_casse_sur_exists_stocke),
     ("refus declare avant le scoring", _refus_declare_avant_le_scoring),
     ("ordre des valeurs copiees par copy_to", _ordre_des_copies),
     ("fragment choisi parmi des valeurs sans ordre (copy_to)", _fragments_de_copie),

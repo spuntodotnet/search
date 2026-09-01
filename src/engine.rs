@@ -711,6 +711,13 @@ fn conflit_de_parametre(
     if avant.store != apres.store {
         return refus("store", avant.store.to_string(), apres.store.to_string());
     }
+    // `index` ne se change pas non plus, dans **les deux sens** : les documents
+    // deja ecrits ne sont ni dans l'index inverse ni hors de lui selon ce que
+    // le mapping dira demain. ES refuse avec la meme phrase (mesure contre
+    // 8.15).
+    if avant.indexe != apres.indexe {
+        return refus("index", avant.indexe.to_string(), apres.indexe.to_string());
+    }
     if avant.copy_to != apres.copy_to {
         return refus(
             "copy_to",

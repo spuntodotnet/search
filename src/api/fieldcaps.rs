@@ -6,10 +6,15 @@
 //! besoin de le savoir avant de proposer un filtre qui echouerait sur la
 //! moitie des index.
 //!
-//! `searchable` et `aggregatable` se deduisent du type, parce que ferrite n'a
-//! ni `index: false` ni `doc_values: false` : un `text` n'est pas agregeable,
-//! un `object` (et un `nested`) n'est ni l'un ni l'autre, tout le reste est
-//! les deux. Mesure faite contre un vrai ES 8.15.
+//! `searchable` et `aggregatable` se lisent dans le mapping, et pas seulement
+//! dans le type : un `text` n'est pas agregeable, un `object` (et un `nested`)
+//! n'est ni l'un ni l'autre, et un champ `index: false` n'est plus cherchable
+//! **que s'il n'a pas de colonne** — c'est-a-dire seulement un `text`. C'est
+//! exactement ce que rend un vrai ES 8.15 (mesure : `keyword` non indexe
+//! `searchable: true`, `text` non indexe `searchable: false`), et c'est ce que
+//! cette route doit dire : un outil de decouverte lit `searchable` avant de
+//! proposer un filtre, et lui annoncer `true` sur un champ qui refusera la
+//! clause serait un resultat faux.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -59,10 +64,12 @@ const JOIN: Capacites = Capacites {
     aggregatable: true,
 };
 
-fn capacites_de(ty: FieldType) -> Capacites {
+fn capacites_de(ty: FieldType, indexe: bool) -> Capacites {
     Capacites {
         ty: ty.name(),
-        searchable: true,
+        // Un champ non indexe reste cherchable par sa colonne — sauf un `text`,
+        // qui n'en a pas.
+        searchable: indexe || ty != FieldType::Text,
         // Un `text` est analyse : ES ne l'agrege pas sans `fielddata`, que
         // ferrite n'a pas.
         aggregatable: ty != FieldType::Text,
@@ -251,9 +258,9 @@ async fn filtrer_les_index(
 fn champs_de(mapping: &Mapping) -> Vec<(String, Capacites)> {
     let mut out: BTreeMap<String, Capacites> = BTreeMap::new();
     for (chemin, fm) in &mapping.properties {
-        out.insert(chemin.clone(), capacites_de(fm.ty));
+        out.insert(chemin.clone(), capacites_de(fm.ty, fm.indexe));
         for (sous, sfm) in &fm.fields {
-            out.insert(format!("{chemin}.{sous}"), capacites_de(sfm.ty));
+            out.insert(format!("{chemin}.{sous}"), capacites_de(sfm.ty, sfm.indexe));
         }
         // Les prefixes du chemin sont les objets qui le contiennent.
         let parts: Vec<&str> = chemin.split('.').collect();

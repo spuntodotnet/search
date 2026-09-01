@@ -434,13 +434,6 @@ def traits_mapping(corps, prefixe=""):
                 if param in ("type", "properties"):
                     continue
                 vus.add(f"champ:{param}")
-                # `index` est le seul parametre de champ dont la **valeur**
-                # decide : `true` est le defaut d'ES (ferrite l'accepte),
-                # `false` demande un champ hors de l'index (refuse). Compter
-                # les deux ensemble ferait passer pour refusee la requete qui
-                # ne demande rien.
-                if param == "index" and str(valeur).lower() == "false":
-                    vus.add("champ:index=false")
                 if param in ("analyzer", "search_analyzer") and isinstance(valeur, str):
                     vus.add(f"analyzer:{valeur}")
             if "properties" in definition:
@@ -576,7 +569,6 @@ TRAITS_REFUSES = {
     "dsl:multi_match.fields=motif": "dsl.multi_match",   # « les motifs de champ (`tit*`) »
     "agg:filter.sous_bucket": "agg.filter",              # « sous une agregation de buckets »
     "champ:reserve": "type.noms_reserves",               # `_type`, `_tsid`, `_ignored`…
-    "champ:index=false": "type.index",                   # « le champ serait indexe quand meme »
     # la jointure rend un score constant : tout `score_mode` autre que `none`
     # est refuse, et c'est une note de compat.yaml qu'aucun nom ne porte
     "dsl:has_child.score_mode=min": "join.has_child",

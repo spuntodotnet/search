@@ -16,6 +16,7 @@ use tantivy::schema::IndexRecordOption;
 use tantivy::{Index, Searcher, Term};
 
 use crate::analysis::Analyzer;
+use crate::colonne::{Automate, ColonneQuery, Predicat as PredicatColonne};
 use crate::dateformat::DateFormat;
 use crate::datemath::{self, Arrondi};
 use crate::dismax::DisMaxQuery;
@@ -268,6 +269,53 @@ fn build_une(v: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     }
 }
 
+/// Le refus qu'Elasticsearch prononce quand une clause vise un champ
+/// `index: false` **sans colonne** — c'est-a-dire un `text`.
+///
+/// Sur tous les autres types, `index: false` ne rend pas le champ inerte : la
+/// clause se joue sur la colonne (voir [`crate::colonne`]). Sur un `text`, il
+/// n'y a rien sur quoi retomber, et ES refuse avec cette phrase-la (mesure
+/// contre 8.15.0).
+///
+/// Marquee « valeur illisible » pour la meme raison que le refus de
+/// `phrase_prefix` sur un `keyword` : c'est une des erreurs que le `lenient`
+/// d'ES avale — mesure faite, un `multi_match` `lenient` sur deux champs dont
+/// l'un n'est pas indexe rend 200 et cherche dans l'autre.
+fn champ_sans_index(champ: &str) -> EsError {
+    EsError::new(
+        axum::http::StatusCode::BAD_REQUEST,
+        "query_shard_exception",
+        format!(
+            "failed to create query: Cannot search on field [{champ}] since it is not indexed."
+        ),
+    )
+    .sur_valeur_illisible()
+}
+
+/// Le refus qu'ES prononce quand une **phrase** est posee sur un champ sans
+/// positions. Ce n'est pas le meme message que [`champ_sans_index`] : celui-ci
+/// vient de Lucene, l'autre du verificateur de mapping d'ES.
+fn phrase_sans_positions(champ: &str) -> EsError {
+    EsError::new(
+        axum::http::StatusCode::BAD_REQUEST,
+        "query_shard_exception",
+        format!(
+            "failed to create query: field:[{champ}] was indexed without position data; cannot \
+             run PhraseQuery"
+        ),
+    )
+    .sur_valeur_illisible()
+}
+
+/// La meme clause, mais lue dans la colonne du champ.
+fn dans_la_colonne(
+    champ: &str,
+    ty: mapping::FieldType,
+    predicat: PredicatColonne,
+) -> Box<dyn Query> {
+    Box::new(ColonneQuery::new(champ, ty.kind(), predicat))
+}
+
 fn match_all(body: &Value) -> EsResult<Box<dyn Query>> {
     let obj = as_object(body, "match_all")?;
     expect_only(obj, &["boost"], "match_all")?;
@@ -394,8 +442,26 @@ fn field_match(
         field,
         ty,
         search_analyzer,
+        indexe,
         ..
     } = ctx.field(field_name, clause)?;
+    if !indexe {
+        // Un `text` non indexe n'a pas de colonne : ES refuse — mais seulement
+        // s'il reste un terme a chercher. Une chaine dont l'analyzer ne tire
+        // rien (`""`, `"!!!"`) ne construit aucune clause, et rend 200 sans
+        // document (mesure contre 8.15).
+        if ty.kind() == FieldKind::Text {
+            let tokens = ctx.analyze(&query_text(field_name, value, clause)?, search_analyzer)?;
+            return if tokens.is_empty() {
+                Ok(Box::new(EmptyQuery))
+            } else {
+                Err(champ_sans_index(field_name))
+            };
+        }
+        // Sur un champ non analyse, `match` se comporte comme `term` : non
+        // indexe, il se lit donc dans la colonne, comme `term`.
+        return colonne_valeur(field_name, ty, value, ctx);
+    }
     Ok(match ty.kind() {
         FieldKind::Text => {
             let tokens = ctx.analyze(&query_text(field_name, value, clause)?, search_analyzer)?;
@@ -694,8 +760,32 @@ fn field_phrase(
         field,
         ty,
         search_analyzer,
+        indexe,
         ..
     } = ctx.field(field_name, clause)?;
+
+    // Une phrase demande des **positions**, et un champ non indexe n'en a pas.
+    // Le refus depend alors du **nombre de termes**, parce que c'est Lucene qui
+    // parle et pas le verificateur de mapping : a un seul terme il n'y a plus
+    // de phrase (c'est un `term`, donc « pas indexe »), a plusieurs c'est la
+    // `PhraseQuery` qui manque de positions, et a zero il n'y a pas de clause
+    // du tout. Les trois sont mesures contre 8.15.
+    if !indexe && ty.kind() == FieldKind::Text {
+        let tokens = ctx.analyze(&query_text(field_name, value, clause)?, search_analyzer)?;
+        return match grouper(&tokens).len() {
+            0 => Ok(Box::new(EmptyQuery)),
+            1 => Err(champ_sans_index(field_name)),
+            _ => Err(phrase_sans_positions(field_name)),
+        };
+    }
+    if !indexe {
+        if slop != 0 {
+            return Err(EsError::illegal_argument(format!(
+                "[{clause}] : [slop] n'a pas de sens sur le champ non analyse [{field_name}]"
+            )));
+        }
+        return colonne_valeur(field_name, ty, value, ctx);
+    }
 
     let inner: Box<dyn Query> = match ty.kind() {
         FieldKind::Text => {
@@ -818,8 +908,22 @@ fn field_phrase_prefix(
         field,
         ty,
         search_analyzer,
+        indexe,
         ..
     } = ctx.field(field_name, clause)?;
+
+    // Sur un `text` non indexe, le dernier mot se developpe sur un
+    // dictionnaire vide : a un seul terme, ES rend donc 200 et aucun document
+    // — c'est la seule clause qui ne refuse pas. A plusieurs, il reste une
+    // phrase, et il n'y a pas de positions (mesure contre 8.15).
+    if !indexe && ty.kind() == FieldKind::Text {
+        let tokens = ctx.analyze(&query_text(field_name, value, clause)?, search_analyzer)?;
+        return if grouper(&tokens).len() > 1 {
+            Err(phrase_sans_positions(field_name))
+        } else {
+            Ok(Box::new(EmptyQuery))
+        };
+    }
 
     let inner: Box<dyn Query> = match ty.kind() {
         FieldKind::Text => {
@@ -1019,9 +1123,16 @@ fn exists_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         .get("field")
         .and_then(Value::as_str)
         .ok_or_else(|| EsError::illegal_argument("[exists] : cle [field] manquante"))?;
-    let MappedField { field, ty, .. } = ctx.field(name, "exists")?;
+    let MappedField {
+        field, ty, indexe, ..
+    } = ctx.field(name, "exists")?;
 
     let inner: Box<dyn Query> = match ty.kind() {
+        // Un `text` non indexe n'a ni index inverse ni colonne : ES y rend 200
+        // et **aucun** document, sans erreur (mesure : `exists` y est le seul
+        // qui ne refuse pas). Il y construit un `FieldExistsQuery` sur un champ
+        // dont rien ne temoigne.
+        FieldKind::Text if !indexe => Box::new(EmptyQuery),
         // Les champs `text` n'ont pas de fast field (ce serait doubler le
         // stockage du texte) : « avoir une valeur » s'y lit dans l'index
         // inverse, comme « avoir au moins un terme ».
@@ -1055,8 +1166,16 @@ fn term_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         }
         v => (v.clone(), None),
     };
-    let MappedField { field, ty, .. } = ctx.field(field_name, "term")?;
+    let MappedField {
+        field, ty, indexe, ..
+    } = ctx.field(field_name, "term")?;
 
+    if !indexe {
+        return boost(
+            colonne_valeur(field_name, ty, &value, ctx)?,
+            boost_value.as_ref(),
+        );
+    }
     if ty.kind() == FieldKind::Date {
         return boost(
             periode_date(field_name, field, &value, ctx)?,
@@ -1084,6 +1203,48 @@ fn term_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     boost(interne, boost_value.as_ref())
 }
 
+/// Une valeur exacte cherchee dans la **colonne** d'un champ `index: false`.
+///
+/// Le decoupage est celui de l'index inverse — une date designe une periode,
+/// tout le reste une valeur — pour que les deux chemins rendent les memes
+/// documents.
+fn colonne_valeur(
+    field_name: &str,
+    ty: mapping::FieldType,
+    value: &Value,
+    ctx: &QueryCtx,
+) -> EsResult<Box<dyn Query>> {
+    if ty.kind() == FieldKind::Text {
+        return Err(champ_sans_index(field_name));
+    }
+    let predicat = if ty.kind() == FieldKind::Date {
+        let (bas, haut) = periode_ms(field_name, value, ctx)?;
+        PredicatColonne::Intervalle {
+            bas: Bound::Included(TypedValue::Date(bas)),
+            haut: Bound::Included(TypedValue::Date(haut)),
+        }
+    } else {
+        PredicatColonne::Valeurs(vec![mapping::coerce_avec(
+            field_name,
+            ty,
+            value,
+            ctx.fields.format_de(field_name),
+        )
+        .map_err(EsError::sur_valeur_illisible)?])
+    };
+    Ok(dans_la_colonne(field_name, ty, predicat))
+}
+
+/// Les deux instants qu'une valeur de date designe : le premier et le dernier
+/// de la periode qu'elle couvre.
+fn periode_ms(field_name: &str, v: &Value, ctx: &QueryCtx) -> EsResult<(i64, i64)> {
+    let format = ctx.fields.format_ou_defaut(field_name);
+    Ok((
+        datemath::borne(v, format, ctx.maintenant, Arrondi::Bas)?,
+        datemath::borne(v, format, ctx.maintenant, Arrondi::Haut)?,
+    ))
+}
+
 /// Ce qu'une valeur de date designe hors d'un `range` (`term`, `terms`,
 /// `match`) : la **periode** qu'elle couvre, pas un instant.
 ///
@@ -1096,9 +1257,7 @@ fn periode_date(
     v: &Value,
     ctx: &QueryCtx,
 ) -> EsResult<Box<dyn Query>> {
-    let format = ctx.fields.format_ou_defaut(field_name);
-    let bas = datemath::borne(v, format, ctx.maintenant, Arrondi::Bas)?;
-    let haut = datemath::borne(v, format, ctx.maintenant, Arrondi::Haut)?;
+    let (bas, haut) = periode_ms(field_name, v, ctx)?;
     Ok(Box::new(RangeQuery::new(
         Bound::Included(TypedValue::Date(bas).to_term(field)),
         Bound::Included(TypedValue::Date(haut).to_term(field)),
@@ -1128,7 +1287,26 @@ fn terms_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
              termes ne sont pas supportes par ferrite)"
         ))
     })?;
-    let MappedField { field, ty, .. } = ctx.field(field_name, "terms")?;
+    let MappedField {
+        field, ty, indexe, ..
+    } = ctx.field(field_name, "terms")?;
+
+    // Sur un champ non indexe, chaque valeur devient une lecture de colonne, et
+    // l'union se fait comme au-dessus : le `terms` d'ES est un `should` de
+    // `term`, la ou qu'il lise.
+    if !indexe {
+        let clauses: Vec<(Occur, Box<dyn Query>)> = list
+            .iter()
+            .map(|v| Ok((Occur::Should, colonne_valeur(field_name, ty, v, ctx)?)))
+            .collect::<EsResult<_>>()?;
+        return boost(
+            Box::new(ConstScoreQuery::new(
+                Box::new(BooleanQuery::new(clauses)),
+                1.0,
+            )),
+            boost_value.as_ref(),
+        );
+    }
 
     let clauses: Vec<(Occur, Box<dyn Query>)> = list
         .iter()
@@ -1195,7 +1373,9 @@ fn range_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
             )))
         }
     };
-    let MappedField { field, ty, .. } = ctx.field(field_name, "range")?;
+    let MappedField {
+        field, ty, indexe, ..
+    } = ctx.field(field_name, "range")?;
     // Sur un champ qui n'est pas une date, `time_zone` ne veut rien dire — et
     // ES l'accepte quand meme, en 200, sans rien en faire (mesure contre ES
     // 8.15 : `range` sur un `long` avec un `time_zone` rend les memes
@@ -1204,6 +1384,11 @@ fn range_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     // d'un generateur de mapping.
 
     if ty.kind() == FieldKind::Text {
+        // Non indexe, c'est ES lui-meme qui refuse, et sa phrase nomme la vraie
+        // raison : il n'y a plus rien a interroger.
+        if !indexe {
+            return Err(champ_sans_index(field_name));
+        }
         return Err(EsError::unsupported(format!(
             "ferrite ne supporte pas [range] sur un champ [text] (champ [{field_name}]) ; \
              utilise un champ [keyword]"
@@ -1211,7 +1396,7 @@ fn range_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     }
     let format = format_de_requete(spec.get("format"), field_name, ctx)?;
 
-    let to_term = |key: &str| -> EsResult<Option<tantivy::Term>> {
+    let to_valeur = |key: &str| -> EsResult<Option<TypedValue>> {
         match spec.get(key) {
             None | Some(Value::Null) => Ok(None),
             // Sur une date, la borne n'est pas une valeur mais une
@@ -1226,16 +1411,18 @@ fn range_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
                 };
                 let ms =
                     datemath::borne_dans(v, format.as_ref(), ctx.maintenant, arrondi, &fuseau)?;
-                Ok(Some(TypedValue::Date(ms).to_term(field)))
+                Ok(Some(TypedValue::Date(ms)))
             }
-            Some(v) => Ok(Some(
-                mapping::coerce_avec(field_name, ty, v, ctx.fields.format_de(field_name))?
-                    .to_term(field),
-            )),
+            Some(v) => Ok(Some(mapping::coerce_avec(
+                field_name,
+                ty,
+                v,
+                ctx.fields.format_de(field_name),
+            )?)),
         }
     };
 
-    let lower = match (to_term("gte")?, to_term("gt")?) {
+    let lower = match (to_valeur("gte")?, to_valeur("gt")?) {
         (Some(_), Some(_)) => {
             return Err(EsError::illegal_argument(
                 "[range] : [gte] et [gt] sont mutuellement exclusifs",
@@ -1245,7 +1432,7 @@ fn range_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         (None, Some(t)) => Bound::Excluded(t),
         (None, None) => Bound::Unbounded,
     };
-    let upper = match (to_term("lte")?, to_term("lt")?) {
+    let upper = match (to_valeur("lte")?, to_valeur("lt")?) {
         (Some(_), Some(_)) => {
             return Err(EsError::illegal_argument(
                 "[range] : [lte] et [lt] sont mutuellement exclusifs",
@@ -1261,6 +1448,44 @@ fn range_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         )));
     }
 
+    // Sur un champ non indexe, l'intervalle se lit dans la colonne — y compris
+    // sur un `boolean`, ou il n'a plus besoin d'etre enumere.
+    if !indexe {
+        // Un bord d'ES qu'aucune documentation ne donne, et qui ne vaut que
+        // la : sur un `boolean` **non indexe**, un `lt` efface le reste de
+        // l'intervalle. La table des 24 combinaisons, mesuree contre 8.15.0,
+        // ne laisse pas d'autre lecture — des que `lt` est present, la reponse
+        // est « toutes les valeurs <= la borne », **borne basse comprise** :
+        //
+        //     {"lt": false}                  -> false
+        //     {"lt": true}                   -> false, true
+        //     {"gt": true, "lt": false}      -> false        (!)
+        //     {"gte": true, "lt": true}      -> false, true  (!)
+        //     {"gt": false, "lte": true}     -> true         (avec `lte`, correct)
+        //     {"gte": true, "lte": false}    -> rien         (avec `lte`, correct)
+        //
+        // Les entiers, les flottants, les dates et les chaines n'ont pas ce
+        // bord (mesure type par type) : il est propre au booleen sans index.
+        // Ca ressemble a un defaut d'Elasticsearch, et c'est quand meme ce que
+        // ferrite rend — rendre **moins** de documents que lui, en silence, est
+        // le resultat que ce depot refuse en premier. Trouve par le fuzzer,
+        // graine 5550060, et fige dans `sonde_index_false.py`.
+        let (bas, haut) = match (ty.kind(), &upper) {
+            (FieldKind::Bool, Bound::Excluded(v)) => (Bound::Unbounded, Bound::Included(v.clone())),
+            _ => (lower, upper),
+        };
+        return boost(
+            dans_la_colonne(field_name, ty, PredicatColonne::Intervalle { bas, haut }),
+            spec.get("boost"),
+        );
+    }
+
+    let vers_terme = |b: &Bound<TypedValue>| match b {
+        Bound::Unbounded => Bound::Unbounded,
+        Bound::Included(v) => Bound::Included(v.to_term(field)),
+        Bound::Excluded(v) => Bound::Excluded(v.to_term(field)),
+    };
+
     // Un booleen n'a que deux valeurs : le `RangeQuery` de tantivy refuse d'en
     // faire un intervalle (« Expected term with u64, i64, f64 or date ») et
     // rendait un 500. On enumere donc les valeurs que les bornes laissent
@@ -1270,18 +1495,8 @@ fn range_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         let retenues: Vec<bool> = [false, true]
             .into_iter()
             .filter(|v| {
-                let t = TypedValue::Bool(*v).to_term(field);
-                let apres_bas = match &lower {
-                    Bound::Unbounded => true,
-                    Bound::Included(b) => t.value().as_bool() >= b.value().as_bool(),
-                    Bound::Excluded(b) => t.value().as_bool() > b.value().as_bool(),
-                };
-                let avant_haut = match &upper {
-                    Bound::Unbounded => true,
-                    Bound::Included(b) => t.value().as_bool() <= b.value().as_bool(),
-                    Bound::Excluded(b) => t.value().as_bool() < b.value().as_bool(),
-                };
-                apres_bas && avant_haut
+                let t = TypedValue::Bool(*v);
+                crate::colonne::borne_basse(&t, &lower) && crate::colonne::borne_haute(&t, &upper)
             })
             .collect();
         let interne: Box<dyn Query> = match retenues.as_slice() {
@@ -1299,7 +1514,7 @@ fn range_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     }
 
     let inner: Box<dyn Query> = Box::new(ConstScoreQuery::new(
-        Box::new(RangeQuery::new(lower, upper)),
+        Box::new(RangeQuery::new(vers_terme(&lower), vers_terme(&upper))),
         1.0,
     ));
     boost(inner, spec.get("boost"))
@@ -1465,16 +1680,39 @@ fn valeur_et_boost<'a>(
 
 /// Un champ interrogeable par motif doit etre non analyse : sur un `text`, ES
 /// compare au **terme** indexe, ce qui surprend plus souvent que ca n'aide.
-fn champ_de_motif(ctx: &QueryCtx, champ: &str, clause: &str) -> EsResult<tantivy::schema::Field> {
-    let MappedField { field, ty, .. } = ctx.field(champ, clause)?;
-    if ty.kind() != FieldKind::Keyword && ty.kind() != FieldKind::Text {
+fn champ_de_motif(ctx: &QueryCtx, champ: &str, clause: &str) -> EsResult<MappedField> {
+    let mf = ctx.field(champ, clause)?;
+    if mf.ty.kind() != FieldKind::Keyword && mf.ty.kind() != FieldKind::Text {
         return Err(EsError::illegal_argument(format!(
             "[{clause}] ne s'applique qu'a un champ [text] ou [keyword] ; [{champ}] est de type \
              [{}]",
-            ty.name()
+            mf.ty.name()
         )));
     }
-    Ok(field)
+    Ok(mf)
+}
+
+/// Une clause de motif posee sur un champ `index: false`.
+///
+/// Le motif est deja traduit — c'est le meme que celui de l'index inverse — et
+/// il est ici confronte au dictionnaire de la colonne. Sur un `text`, il n'y a
+/// pas de colonne : c'est le refus d'ES.
+fn motif_dans_la_colonne(
+    champ: &str,
+    mf: &MappedField,
+    motif: &str,
+    clause: &str,
+) -> EsResult<Box<dyn Query>> {
+    if mf.ty.kind() == FieldKind::Text {
+        return Err(champ_sans_index(champ));
+    }
+    let regex = tantivy_fst::Regex::new(motif)
+        .map_err(|e| EsError::illegal_argument(format!("[{clause}] : {e}")))?;
+    Ok(dans_la_colonne(
+        champ,
+        mf.ty,
+        PredicatColonne::Automate(Automate::Regex(regex)),
+    ))
 }
 
 /// `prefix` : les termes qui commencent par cette chaine. Non analysee, comme
@@ -1485,12 +1723,18 @@ fn prefix_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         valeur_et_boost(obj, "prefix", &["case_insensitive", "rewrite"])?;
     refuser_rewrite(obj, "prefix")?;
     let insensible = lire_insensible(obj, "prefix")?;
-    let field = champ_de_motif(ctx, champ, "prefix")?;
+    let mf = champ_de_motif(ctx, champ, "prefix")?;
     let motif = format!(
         "(?s){}(?s:.*)",
         crate::regexp::litteral(&valeur, insensible)
     );
-    let q = RegexQuery::from_pattern(&motif, field)
+    if !mf.indexe {
+        return boost(
+            motif_dans_la_colonne(champ, &mf, &motif, "prefix")?,
+            boost_value.as_ref(),
+        );
+    }
+    let q = RegexQuery::from_pattern(&motif, mf.field)
         .map_err(|e| EsError::illegal_argument(format!("[prefix] : {e}")))?;
     boost(
         Box::new(ConstScoreQuery::new(Box::new(q), 1.0)),
@@ -1509,10 +1753,16 @@ fn wildcard_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     )?;
     refuser_rewrite(obj, "wildcard")?;
     let insensible = lire_insensible(obj, "wildcard")?;
-    let field = champ_de_motif(ctx, champ, "wildcard")?;
+    let mf = champ_de_motif(ctx, champ, "wildcard")?;
 
     let motif = format!("(?s){}", crate::regexp::joker(&valeur, insensible));
-    let q = RegexQuery::from_pattern(&motif, field)
+    if !mf.indexe {
+        return boost(
+            motif_dans_la_colonne(champ, &mf, &motif, "wildcard")?,
+            boost_value.as_ref(),
+        );
+    }
+    let q = RegexQuery::from_pattern(&motif, mf.field)
         .map_err(|e| EsError::illegal_argument(format!("[wildcard] : {e}")))?;
     boost(
         Box::new(ConstScoreQuery::new(Box::new(q), 1.0)),
@@ -1570,8 +1820,28 @@ fn regexp_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     // ferrite refuse (`~`, `&`, `<n-m>`, `#`) doivent l'etre aussi sur un champ
     // non mappe, sans quoi la clause passerait en silence.
     let motif = crate::regexp::vers_regex(&valeur, flags, insensible)?;
-    let field = champ_de_motif(ctx, champ, "regexp")?;
-    let q = RegexQuery::from_pattern(&motif, field).map_err(|e| {
+    let mf = champ_de_motif(ctx, champ, "regexp")?;
+    if !mf.indexe {
+        // Le seul motif qu'ES **refuse** sur une colonne : son automate de
+        // `regexp` y est construit sans les drapeaux de correspondance, et
+        // `case_insensitive` en est un. Le servir rendrait acceptable une
+        // requete qu'un vrai Elasticsearch rejette — c'est le raisonnement de
+        // `boost_factor`, applique a un champ plutot qu'a un parametre. Le
+        // message est le sien, mot pour mot (mesure contre 8.15.0 : Lucene
+        // numerote ce drapeau 256).
+        if insensible {
+            return Err(EsError::new(
+                axum::http::StatusCode::BAD_REQUEST,
+                "query_shard_exception",
+                "failed to create query: Match flags not yet implemented [256]",
+            ));
+        }
+        return boost(
+            motif_dans_la_colonne(champ, &mf, &motif, "regexp")?,
+            boost_value.as_ref(),
+        );
+    }
+    let q = RegexQuery::from_pattern(&motif, mf.field).map_err(|e| {
         EsError::illegal_argument(format!(
             "[regexp] : motif [{valeur}] refuse par l'automate : {e}"
         ))
@@ -1631,8 +1901,26 @@ fn fuzzy_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     // and text fields ») ; ferrite construisait un terme texte sur une colonne
     // qui n'en contient pas et rendait **zero document en 200** — un resultat
     // vide qui se fait passer pour une reponse.
-    let field = champ_de_motif(ctx, champ, "fuzzy")?;
-    let terme = tantivy::Term::from_field_text(field, &valeur);
+    let mf = champ_de_motif(ctx, champ, "fuzzy")?;
+    // Non indexe, la distance se mesure contre le dictionnaire de la colonne —
+    // avec le **meme** automate que celui que `FuzzyTermQuery` compile, sans
+    // quoi les deux chemins ne rendraient pas les memes documents.
+    if !mf.indexe {
+        if mf.ty.kind() == FieldKind::Text {
+            return Err(champ_sans_index(champ));
+        }
+        let dfa = levenshtein_automata::LevenshteinAutomatonBuilder::new(distance, transpositions)
+            .build_dfa(&valeur);
+        return boost(
+            dans_la_colonne(
+                champ,
+                mf.ty,
+                PredicatColonne::Automate(Automate::Levenshtein(Box::new(dfa))),
+            ),
+            boost_value.as_ref(),
+        );
+    }
+    let terme = tantivy::Term::from_field_text(mf.field, &valeur);
     let q = FuzzyTermQuery::new(terme, distance, transpositions);
     boost(
         Box::new(ConstScoreQuery::new(Box::new(q), 1.0)),

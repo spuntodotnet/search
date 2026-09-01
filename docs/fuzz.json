@@ -1,7 +1,7 @@
 {
   "assumees": {
     "ES 8.15 casse sur deux lectures du meme champ": {
-      "compte": 2,
+      "compte": 4,
       "exemples": [
         {
           "assumee": "ES 8.15 casse sur deux lectures du meme champ",
@@ -9,66 +9,227 @@
             "gauche 200, droite 500 (search_phase_execution_exception : unsupported_operation_exception)"
           ],
           "etape": "recherche",
-          "graine": 7400222,
+          "graine": 6660032,
           "requete": {
             "docvalue_fields": [
-              "c.keyword",
-              "b"
+              "f.x"
             ],
             "fields": [
-              "*",
-              "e"
+              "e.x",
+              "e.x"
             ],
-            "from": 0,
-            "highlight": {
-              "fields": {
-                "*": {
-                  "fragment_size": 40,
-                  "number_of_fragments": 0
+            "query": {
+              "fuzzy": {
+                "h": {
+                  "fuzziness": 1,
+                  "transpositions": false,
+                  "value": "alpha"
+                }
+              }
+            },
+            "size": 30,
+            "sort": [
+              {
+                "h": {
+                  "mode": "max",
+                  "order": "desc"
                 }
               },
-              "fragment_size": 20,
-              "no_match_size": 200
+              {
+                "fuzz_cle": {
+                  "order": "asc"
+                }
+              }
+            ],
+            "stored_fields": [
+              "*"
+            ],
+            "track_total_hits": true
+          },
+          "verdict": "assume"
+        },
+        {
+          "assumee": "ES 8.15 casse sur deux lectures du meme champ",
+          "detail": [
+            "gauche 200, droite 500 (search_phase_execution_exception : unsupported_operation_exception)"
+          ],
+          "etape": "recherche",
+          "graine": 6660033,
+          "requete": {
+            "aggs": {
+              "a0_0": {
+                "terms": {
+                  "field": "e",
+                  "size": 1
+                }
+              },
+              "a0_1": {
+                "max": {
+                  "field": "e"
+                }
+              }
+            },
+            "docvalue_fields": [
+              "e",
+              "b.x",
+              "g.keyword"
+            ],
+            "highlight": {
+              "fields": {
+                "*": {},
+                "g": {}
+              },
+              "number_of_fragments": 3
             },
             "query": {
-              "bool": {
-                "must": [
+              "range": {
+                "g.keyword": {
+                  "gt": "optique",
+                  "lte": "version rapide etendue ambiant bluetooth"
+                }
+              }
+            },
+            "size": 30,
+            "sort": [
+              "_score",
+              {
+                "g.keyword": {
+                  "missing": "_first",
+                  "mode": "min",
+                  "order": "desc"
+                }
+              },
+              {
+                "fuzz_cle": {
+                  "order": "asc"
+                }
+              }
+            ],
+            "stored_fields": [
+              "c",
+              "e"
+            ],
+            "track_total_hits": true
+          },
+          "verdict": "assume"
+        },
+        {
+          "assumee": "ES 8.15 casse sur deux lectures du meme champ",
+          "detail": [
+            "gauche 200, droite 500 (search_phase_execution_exception : unsupported_operation_exception)"
+          ],
+          "etape": "recherche",
+          "graine": 6660183,
+          "requete": {
+            "docvalue_fields": [
+              "h.keyword",
+              "g"
+            ],
+            "query": {
+              "dis_max": {
+                "queries": [
                   {
-                    "exists": {
-                      "field": "e"
+                    "multi_match": {
+                      "fields": [
+                        "h",
+                        "c",
+                        "champ_jamais_mappe"
+                      ],
+                      "query": "gamma"
                     }
                   },
                   {
-                    "dis_max": {
-                      "queries": [
+                    "boosting": {
+                      "negative": {
+                        "term": {
+                          "h.keyword": "l'ascension"
+                        }
+                      },
+                      "negative_boost": 1.0,
+                      "positive": {
+                        "match_phrase_prefix": {
+                          "h": {
+                            "max_expansions": 50,
+                            "query": "bruit"
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "size": 30,
+            "stored_fields": [
+              "*"
+            ],
+            "track_total_hits": true
+          },
+          "verdict": "assume"
+        }
+      ]
+    },
+    "ES 8.15 casse sur epoch_millis": {
+      "compte": 1,
+      "exemples": [
+        {
+          "assumee": "ES 8.15 casse sur epoch_millis",
+          "detail": [
+            "gauche 200, droite 400 (search_phase_execution_exception : Cannot format stat [max] with format [DocValueFormat.DateTime(format[epoch_millis] locale[], Z, MILLISECONDS)])"
+          ],
+          "etape": "recherche",
+          "graine": 6660123,
+          "requete": {
+            "aggs": {
+              "a0_0": {
+                "avg": {
+                  "field": "a",
+                  "missing": 0
+                }
+              },
+              "a0_1": {
+                "stats": {
+                  "field": "f"
+                }
+              }
+            },
+            "from": 5,
+            "query": {
+              "dis_max": {
+                "queries": [
+                  {
+                    "function_score": {
+                      "functions": [
                         {
-                          "ids": {
-                            "values": [
-                              "d022",
-                              "d017",
-                              "d006"
-                            ]
+                          "gauss": {
+                            "e": {
+                              "offset": 5,
+                              "origin": 1.0,
+                              "scale": 1000
+                            }
                           }
                         },
                         {
-                          "terms": {
-                            "b": [
-                              289.28125,
-                              0.0
-                            ]
-                          }
-                        },
-                        {
-                          "fuzzy": {
-                            "c.keyword": {
-                              "fuzziness": 2,
-                              "transpositions": true,
-                              "value": "edition ambiant aluminium compact ambiant bruit"
+                          "exp": {
+                            "f": {
+                              "offset": "0",
+                              "origin": "now",
+                              "scale": "30d"
                             }
                           }
                         }
                       ],
-                      "tie_breaker": 0.3
+                      "max_boost": 10,
+                      "min_score": 1,
+                      "query": {
+                        "ids": {
+                          "values": [
+                            "d019",
+                            "d012",
+                            "d000"
+                          ]
+                        }
+                      }
                     }
                   }
                 ]
@@ -78,14 +239,7 @@
             "sort": [
               {
                 "e": {
-                  "mode": "median",
                   "order": "desc"
-                }
-              },
-              {
-                "g": {
-                  "mode": "max",
-                  "order": "asc"
                 }
               },
               {
@@ -94,122 +248,221 @@
                 }
               }
             ],
-            "stored_fields": [
-              "*"
-            ],
-            "track_total_hits": true
-          },
-          "verdict": "assume"
-        },
-        {
-          "assumee": "ES 8.15 casse sur deux lectures du meme champ",
-          "detail": [
-            "statuts 400 / 500 (gauche ferrite ne supporte pas [date_histogram] (agregation [a0_0]) sur le champ multivalue [e] : l'agregation de tantivy compt | droite unsupported_operation_exception)"
-          ],
-          "etape": "recherche",
-          "graine": 7400241,
-          "requete": {
-            "_source": [
-              "h",
-              "g"
-            ],
-            "aggs": {
-              "a0_0": {
-                "date_histogram": {
-                  "field": "e",
-                  "fixed_interval": "365d"
-                }
-              }
-            },
-            "docvalue_fields": [
-              "c",
-              "e",
-              "b.keyword"
-            ],
-            "query": {
-              "match_all": {}
-            },
-            "size": 30,
-            "stored_fields": [
-              "*"
-            ],
             "track_total_hits": true
           },
           "verdict": "assume"
         }
       ]
     },
-    "chemin d'ordre non verifie par ES (moins de deux seaux)": {
+    "ES 8.15 casse sur exists d'un champ non indexe et stocke": {
       "compte": 1,
       "exemples": [
         {
-          "assumee": "chemin d'ordre non verifie par ES (moins de deux seaux)",
+          "assumee": "ES 8.15 casse sur exists d'un champ non indexe et stocke",
           "detail": [
-            "gauche 400 (illegal_argument_exception : Invalid aggregation order path [m]. Missing value key in [null] which refers to a multi-value metric aggregation (dans [aggs.a0_1])), droite 200"
+            "gauche 200, droite 500 (search_phase_execution_exception : FieldExistsQuery requires that the field indexes doc values, norms or vectors, but field 'a' exists and indexes neither of these data structures)"
           ],
           "etape": "recherche",
-          "graine": 7400156,
+          "graine": 6660022,
           "requete": {
             "aggs": {
               "a0_0": {
-                "filter": {
-                  "terms": {
-                    "g.x": [
-                      false,
-                      true
-                    ]
+                "min": {
+                  "field": "e"
+                }
+              },
+              "a0_1": {
+                "value_count": {
+                  "field": "e"
+                }
+              }
+            },
+            "query": {
+              "exists": {
+                "field": "a"
+              }
+            },
+            "size": 30,
+            "track_total_hits": true
+          },
+          "verdict": "assume"
+        }
+      ]
+    },
+    "court-circuit d'ES": {
+      "compte": 4,
+      "exemples": [
+        {
+          "assumee": "court-circuit d'ES",
+          "detail": [
+            "gauche 400 (illegal_argument_exception : [fuzzy] ne s'applique qu'a un champ [text] ou [keyword] ; [f.x] est de type [double]), droite 200"
+          ],
+          "etape": "recherche",
+          "graine": 6660094,
+          "requete": {
+            "from": 4,
+            "query": {
+              "bool": {
+                "filter": [
+                  {
+                    "match_phrase": {
+                      "g": "bruit acier"
+                    }
+                  },
+                  {
+                    "match_none": {}
                   }
+                ],
+                "must": [
+                  {
+                    "match_all": {}
+                  },
+                  {
+                    "match_none": {}
+                  }
+                ],
+                "must_not": [
+                  {
+                    "dis_max": {
+                      "queries": [
+                        {
+                          "match_all": {
+                            "boost": 2.0
+                          }
+                        },
+                        {
+                          "match_all": {}
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "fuzzy": {
+                      "f.x": {
+                        "value": "20"
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "size": 10,
+            "sort": [
+              {
+                "g.keyword": {
+                  "mode": "min",
+                  "order": "desc"
+                }
+              },
+              {
+                "fuzz_cle": {
+                  "order": "asc"
+                }
+              }
+            ],
+            "track_total_hits": true
+          },
+          "verdict": "assume"
+        },
+        {
+          "assumee": "court-circuit d'ES",
+          "detail": [
+            "gauche 400 (document_parsing_exception : failed to parse field [e] of type [short] : valeur \"pas_une_valeur_de_ce_type\" non convertible en un entier), droite 200"
+          ],
+          "etape": "recherche",
+          "graine": 6660113,
+          "requete": {
+            "aggs": {
+              "a0_0": {
+                "aggs": {
+                  "m": {
+                    "value_count": {
+                      "field": "e"
+                    }
+                  }
+                },
+                "terms": {
+                  "field": "h",
+                  "min_doc_count": 2,
+                  "order": {
+                    "m": "desc"
+                  },
+                  "size": 10
                 }
               },
               "a0_1": {
                 "aggs": {
                   "a1_0": {
-                    "histogram": {
-                      "field": "h",
-                      "interval": 100,
-                      "offset": 5
+                    "terms": {
+                      "field": "c",
+                      "order": {
+                        "_count": "asc"
+                      },
+                      "size": 10
                     }
                   },
                   "a1_1": {
-                    "min": {
-                      "field": "a"
-                    }
-                  },
-                  "m": {
-                    "stats": {
-                      "field": "a"
+                    "value_count": {
+                      "field": "e"
                     }
                   }
                 },
-                "terms": {
-                  "field": "e.keyword",
-                  "include": "(tissu\\ version\\ rapide|version\\ amovible)",
-                  "order": {
-                    "m": "desc"
-                  }
+                "range": {
+                  "field": "h",
+                  "ranges": [
+                    {
+                      "to": -100
+                    },
+                    {
+                      "from": -100,
+                      "to": 10
+                    },
+                    {
+                      "from": 1000
+                    }
+                  ]
                 }
               }
             },
-            "docvalue_fields": [
-              "c",
-              "a"
-            ],
             "query": {
-              "dis_max": {
-                "queries": [
-                  {
-                    "exists": {
-                      "field": "d.x"
-                    }
-                  },
+              "bool": {
+                "filter": [
                   {
                     "bool": {
-                      "must_not": [
+                      "boost": 1.5,
+                      "filter": [
                         {
-                          "fuzzy": {
-                            "g.y": {
-                              "fuzziness": "AUTO",
-                              "value": "alpha"
+                          "wildcard": {
+                            "f": {
+                              "value": "*et*"
+                            }
+                          }
+                        },
+                        {
+                          "match_none": {}
+                        }
+                      ],
+                      "must": [
+                        {
+                          "exists": {
+                            "field": "b"
+                          }
+                        }
+                      ],
+                      "should": [
+                        {
+                          "terms": {
+                            "h": [
+                              -1,
+                              0,
+                              2147483647
+                            ]
+                          }
+                        },
+                        {
+                          "match": {
+                            "e": {
+                              "query": "pas_une_valeur_de_ce_type"
                             }
                           }
                         }
@@ -218,136 +471,34 @@
                   },
                   {
                     "fuzzy": {
-                      "e.keyword": {
-                        "value": "optique"
+                      "g": {
+                        "fuzziness": 2,
+                        "value": "version"
                       }
                     }
                   }
                 ],
-                "tie_breaker": 0.3
-              }
-            },
-            "size": 30,
-            "sort": [
-              "_score",
-              {
-                "b": {
-                  "missing": "aluminium",
-                  "order": "asc"
-                }
-              },
-              {
-                "fuzz_cle": {
-                  "order": "asc"
-                }
-              }
-            ],
-            "track_total_hits": true
-          },
-          "verdict": "assume"
-        }
-      ]
-    },
-    "court-circuit d'ES": {
-      "compte": 7,
-      "exemples": [
-        {
-          "assumee": "court-circuit d'ES",
-          "detail": [
-            "gauche 500 (internal_server_error : recherche: task 85792 panicked with message \"target (0) should be greater than or equal to doc (9)\"), droite 200"
-          ],
-          "etape": "recherche",
-          "graine": 7400054,
-          "requete": {
-            "aggs": {
-              "a0_0": {
-                "max": {
-                  "field": "h"
-                }
-              },
-              "a0_1": {
-                "filter": {
-                  "match_none": {}
-                }
-              }
-            },
-            "from": 4,
-            "query": {
-              "bool": {
-                "boost": 1.5,
-                "filter": [
-                  {
-                    "exists": {
-                      "field": "c.x"
-                    }
-                  }
-                ],
-                "minimum_should_match": "-25%",
                 "must_not": [
                   {
-                    "prefix": {
-                      "g.keyword": {
-                        "value": "appareil"
+                    "wildcard": {
+                      "f": {
+                        "value": "*lp*"
                       }
                     }
                   }
                 ],
                 "should": [
                   {
-                    "bool": {
-                      "boost": 1.5,
-                      "minimum_should_match": "-1",
-                      "must": [
-                        {
-                          "match_all": {
-                            "boost": 0.5
-                          }
-                        }
-                      ],
-                      "must_not": [
-                        {
-                          "match_phrase": {
-                            "e": "rapide ambiant"
-                          }
-                        },
-                        {
-                          "wildcard": {
-                            "e": {
-                              "value": "*lp*"
-                            }
-                          }
-                        }
-                      ],
-                      "should": [
-                        {
-                          "regexp": {
-                            "g": {
-                              "value": "le.*"
-                            }
-                          }
-                        }
+                    "ids": {
+                      "values": [
+                        "d003"
                       ]
                     }
-                  },
-                  {
-                    "match_none": {}
                   }
                 ]
               }
             },
-            "size": 2,
-            "sort": [
-              {
-                "c.x": {
-                  "order": "desc"
-                }
-              },
-              {
-                "fuzz_cle": {
-                  "order": "asc"
-                }
-              }
-            ],
+            "size": 30,
             "track_total_hits": true
           },
           "verdict": "assume"
@@ -355,187 +506,73 @@
         {
           "assumee": "court-circuit d'ES",
           "detail": [
-            "gauche 400 (illegal_argument_exception : [fuzzy] ne s'applique qu'a un champ [text] ou [keyword] ; [d] est de type [date]), droite 200"
+            "gauche 400 (query_shard_exception : failed to create query: Cannot search on field [e] since it is not indexed.), droite 200"
           ],
           "etape": "recherche",
-          "graine": 7400058,
+          "graine": 6660135,
           "requete": {
-            "aggs": {
-              "a0_0": {
-                "terms": {
-                  "field": "f"
-                }
-              },
-              "a0_1": {
-                "filter": {
-                  "dis_max": {
-                    "queries": [
+            "docvalue_fields": [
+              "c"
+            ],
+            "query": {
+              "function_score": {
+                "functions": [
+                  {
+                    "field_value_factor": {
+                      "field": "g",
+                      "missing": -1,
+                      "modifier": "log"
+                    }
+                  },
+                  {
+                    "field_value_factor": {
+                      "factor": 0.5,
+                      "field": "g",
+                      "missing": -1
+                    }
+                  },
+                  {
+                    "weight": 2
+                  }
+                ],
+                "query": {
+                  "bool": {
+                    "must": [
                       {
-                        "ids": {
-                          "values": [
-                            "d003",
-                            "d000",
-                            "d021"
-                          ]
+                        "match_none": {}
+                      },
+                      {
+                        "match": {
+                          "d": {
+                            "query": "verre"
+                          }
                         }
                       }
                     ],
-                    "tie_breaker": 0.0
+                    "must_not": [
+                      {
+                        "match_phrase_prefix": {
+                          "tout": {
+                            "max_expansions": 50,
+                            "query": "bru"
+                          }
+                        }
+                      },
+                      {
+                        "match_phrase": {
+                          "e": "modele"
+                        }
+                      }
+                    ]
                   }
                 }
               }
             },
-            "fields": [
-              {
-                "field": "f",
-                "format": "epoch_millis"
-              }
-            ],
-            "query": {
-              "bool": {
-                "minimum_should_match": "-25%",
-                "must_not": [
-                  {
-                    "bool": {
-                      "minimum_should_match": "2<70%",
-                      "must": [
-                        {
-                          "exists": {
-                            "field": "c"
-                          }
-                        }
-                      ],
-                      "must_not": [
-                        {
-                          "terms": {
-                            "f": [
-                              "2025-02-11 20:11:06"
-                            ]
-                          }
-                        }
-                      ],
-                      "should": [
-                        {
-                          "term": {
-                            "d": "2026-08-22"
-                          }
-                        },
-                        {
-                          "match_none": {}
-                        }
-                      ]
-                    }
-                  },
-                  {
-                    "dis_max": {
-                      "queries": [
-                        {
-                          "fuzzy": {
-                            "d": {
-                              "value": "20"
-                            }
-                          }
-                        },
-                        {
-                          "terms": {
-                            "b": [
-                              "2025-03-18 08:11:52"
-                            ]
-                          }
-                        }
-                      ]
-                    }
-                  }
-                ],
-                "should": [
-                  {
-                    "match_none": {}
-                  }
-                ]
-              }
-            },
-            "size": 30,
-            "track_total_hits": true
-          },
-          "verdict": "assume"
-        },
-        {
-          "assumee": "court-circuit d'ES",
-          "detail": [
-            "gauche 400 (parse_exception : failed to parse date field [2026-10-25] with format [yyyy-MM-dd HH:mm:ss]: [failed to parse date field [2026-10-25] with format [yyyy-MM-dd HH:mm:ss]]), droite 200"
-          ],
-          "etape": "recherche",
-          "graine": 7400085,
-          "requete": {
-            "fields": [
-              "d"
-            ],
-            "highlight": {
-              "fields": {
-                "*": {},
-                "f*": {}
-              },
-              "fragment_size": 12,
-              "number_of_fragments": 4
-            },
-            "query": {
-              "bool": {
-                "must": [
-                  {
-                    "terms": {
-                      "e": [
-                        "version",
-                        "ecran",
-                        "acier"
-                      ]
-                    }
-                  }
-                ],
-                "must_not": [
-                  {
-                    "bool": {
-                      "filter": [
-                        {
-                          "match": {
-                            "b": {
-                              "lenient": true,
-                              "query": "2026-04-17 20:34:08"
-                            }
-                          }
-                        }
-                      ],
-                      "must": [
-                        {
-                          "match": {
-                            "b": {
-                              "operator": "and",
-                              "query": "2026-10-25"
-                            }
-                          }
-                        },
-                        {
-                          "fuzzy": {
-                            "e": {
-                              "fuzziness": "AUTO",
-                              "value": "bruit"
-                            }
-                          }
-                        }
-                      ]
-                    }
-                  },
-                  {
-                    "match_all": {}
-                  }
-                ]
-              }
-            },
             "size": 30,
             "sort": [
-              "_score",
               {
-                "b": {
-                  "order": "desc"
+                "e.keyword": {
+                  "order": "asc"
                 }
               },
               {
@@ -551,20 +588,31 @@
       ]
     },
     "exists sur un text sans terme": {
-      "compte": 15,
+      "compte": 8,
       "exemples": [
         {
           "assumee": "exists sur un text sans terme",
           "detail": [
             "hits.total.value : 18 / 19",
-            "documents differents \u2014 manquants a gauche : ['d022'], en trop : []"
+            "documents differents \u2014 manquants a gauche : ['d012'], en trop : []"
           ],
           "etape": "recherche",
-          "graine": 7400021,
+          "graine": 6660000,
           "requete": {
+            "docvalue_fields": [
+              "d.keyword",
+              "f.keyword"
+            ],
+            "highlight": {
+              "fields": {
+                "b": {}
+              },
+              "fragment_size": 5,
+              "number_of_fragments": 4
+            },
             "query": {
               "exists": {
-                "field": "b"
+                "field": "d"
               }
             },
             "size": 30,
@@ -575,59 +623,44 @@
         {
           "assumee": "exists sur un text sans terme",
           "detail": [
-            "scroll.documents : 13 elements a gauche, 15 a droite",
-            "scroll.documents[8] : \"d015\" / \"d013\"",
-            "scroll.documents[9] : \"d017\" / \"d015\"",
-            "scroll.documents[10] : \"d019\" / \"d017\"",
-            "scroll.documents[11] : \"d022\" / \"d019\"",
-            "scroll.documents[12] : \"d023\" / \"d021\""
+            "scroll.documents : 21 elements a gauche, 22 a droite",
+            "scroll.documents[12] : \"d016\" / \"d015\"",
+            "scroll.documents[13] : \"d017\" / \"d016\"",
+            "scroll.documents[14] : \"d018\" / \"d017\"",
+            "scroll.documents[15] : \"d019\" / \"d018\"",
+            "scroll.documents[16] : \"d020\" / \"d019\""
           ],
           "etape": "scroll",
-          "graine": 7400023,
+          "graine": 6660016,
           "requete": {
             "query": {
-              "bool": {
-                "must": [
+              "dis_max": {
+                "queries": [
                   {
-                    "bool": {
-                      "must_not": [
-                        {
-                          "fuzzy": {
-                            "a": {
-                              "value": "epsilon"
-                            }
-                          }
-                        }
-                      ],
-                      "should": [
-                        {
-                          "term": {
-                            "f": "l'ascension"
-                          }
-                        },
-                        {
-                          "exists": {
-                            "field": "f"
-                          }
-                        }
-                      ]
+                    "exists": {
+                      "field": "f"
                     }
                   },
                   {
-                    "bool": {
-                      "must_not": [
-                        {
-                          "match_phrase": {
-                            "h": "capteur"
+                    "match_none": {}
+                  },
+                  {
+                    "constant_score": {
+                      "boost": 3.0,
+                      "filter": {
+                        "term": {
+                          "tout": {
+                            "boost": 2.0,
+                            "value": "elevee"
                           }
                         }
-                      ]
+                      }
                     }
                   }
                 ]
               }
             },
-            "size": 7,
+            "size": 3,
             "sort": [
               {
                 "fuzz_cle": {
@@ -641,24 +674,26 @@
         {
           "assumee": "exists sur un text sans terme",
           "detail": [
-            "hits.total.value : 21 / 22",
-            "documents differents \u2014 manquants a gauche : ['d021'], en trop : []"
+            "hits.total.value : 17 / 18",
+            "documents differents \u2014 manquants a gauche : ['d004'], en trop : []"
           ],
           "etape": "recherche",
-          "graine": 7400030,
+          "graine": 6660077,
           "requete": {
-            "_source": [
-              "b",
-              "h"
-            ],
-            "fields": [
-              "e",
-              "e",
-              "e.keyword"
-            ],
+            "highlight": {
+              "fields": {
+                "e": {}
+              },
+              "post_tags": [
+                "</b>"
+              ],
+              "pre_tags": [
+                "<b>"
+              ]
+            },
             "query": {
               "exists": {
-                "field": "e"
+                "field": "b"
               }
             },
             "size": 30,
@@ -669,87 +704,43 @@
       ]
     },
     "float sur 32 bits": {
-      "compte": 53,
+      "compte": 52,
       "exemples": [
         {
           "assumee": "float sur 32 bits",
           "detail": [
-            "hits[d007].fields.h[0] : -1371.765625 / -1371.7656"
+            "hits[d006].fields.e[0] : 1955.640625 / 1955.6406",
+            "hits[d007].fields.e[1] : -3237.046875 / -3237.0469",
+            "hits[d018].fields.e[0] : -2105.90625 / -2105.9062",
+            "hits[d023].fields.e[0] : 698.109375 / 698.1094"
           ],
           "etape": "recherche",
-          "graine": 7400001,
+          "graine": 6660008,
           "requete": {
-            "aggs": {
-              "a0_0": {
-                "filter": {
-                  "match_phrase_prefix": {
-                    "e": {
-                      "query": "UPPE"
-                    }
-                  }
-                }
-              },
-              "a0_1": {
-                "aggs": {
-                  "m": {
-                    "min": {
-                      "field": "h"
-                    }
-                  }
-                },
-                "terms": {
-                  "field": "h",
-                  "order": {
-                    "m.value": "desc"
-                  }
-                }
-              }
-            },
-            "docvalue_fields": [
-              "h",
-              "f"
-            ],
             "fields": [
               {
                 "field": "*",
                 "include_unmapped": true
-              },
-              "e",
-              "h"
-            ],
-            "from": 1,
-            "highlight": {
-              "fields": {
-                "d": {}
               }
-            },
+            ],
             "query": {
-              "terms": {
-                "f": [
-                  0.0
+              "dis_max": {
+                "queries": [
+                  {
+                    "match_all": {}
+                  },
+                  {
+                    "term": {
+                      "g": {
+                        "boost": 2.0,
+                        "value": "appareil"
+                      }
+                    }
+                  }
                 ]
               }
             },
-            "size": 6,
-            "sort": [
-              {
-                "g": {
-                  "order": "asc"
-                }
-              },
-              {
-                "h": {
-                  "missing": "_last",
-                  "mode": "max",
-                  "order": "asc"
-                }
-              },
-              {
-                "fuzz_cle": {
-                  "order": "asc"
-                }
-              }
-            ],
+            "size": 30,
             "track_total_hits": true
           },
           "verdict": "assume"
@@ -757,43 +748,27 @@
         {
           "assumee": "float sur 32 bits",
           "detail": [
-            "hits[d005].sort[1] : -728.984375 / -728.9844"
+            "hits[d007].fields.e[1] : -3237.046875 / -3237.0469"
           ],
           "etape": "recherche",
-          "graine": 7400004,
+          "graine": 6660008,
           "requete": {
-            "_source": false,
+            "_source": [
+              "a",
+              "f"
+            ],
             "fields": [
               "e",
-              "a*"
+              "*"
             ],
             "query": {
               "regexp": {
-                "g": {
-                  "case_insensitive": true,
-                  "value": "[a-z].*"
+                "c": {
+                  "value": "(AlphA|portable)"
                 }
               }
             },
             "size": 30,
-            "sort": [
-              "_score",
-              {
-                "f": {
-                  "order": "desc"
-                }
-              },
-              {
-                "b": {
-                  "order": "asc"
-                }
-              },
-              {
-                "fuzz_cle": {
-                  "order": "asc"
-                }
-              }
-            ],
             "track_total_hits": true
           },
           "verdict": "assume"
@@ -801,30 +776,34 @@
         {
           "assumee": "float sur 32 bits",
           "detail": [
-            "hits[d001].sort[1] : 3631.703125 / 3631.7031",
-            "hits[d005].sort[1] : -728.984375 / -728.9844",
-            "hits[d013].sort[1] : 3263.03125 / 3263.0312",
-            "hits[d019].sort[1] : 341.6666666666667 / 341.66666"
+            "hits[d005].fields.f[1] : 1865.640625 / 1865.6406",
+            "hits[d005].sort[0] : 1865.640625 / 1865.6406"
           ],
           "etape": "recherche",
-          "graine": 7400004,
+          "graine": 6660012,
           "requete": {
+            "fields": [
+              "d",
+              "a",
+              "*"
+            ],
+            "from": 1,
             "query": {
-              "exists": {
-                "field": "b"
+              "function_score": {
+                "boost_mode": "multiply",
+                "min_score": 1,
+                "query": {
+                  "exists": {
+                    "field": "a"
+                  }
+                },
+                "weight": 1
               }
             },
-            "size": 30,
+            "size": 9,
             "sort": [
-              "_score",
               {
-                "c": {
-                  "order": "asc"
-                }
-              },
-              {
-                "b": {
-                  "mode": "avg",
+                "f": {
                   "order": "desc"
                 }
               },
@@ -841,87 +820,93 @@
       ]
     },
     "fragment choisi parmi des valeurs sans ordre (copy_to)": {
-      "compte": 1,
+      "compte": 2,
       "exemples": [
         {
           "assumee": "fragment choisi parmi des valeurs sans ordre (copy_to)",
           "detail": [
-            "hits[d000].highlight.tout[0] : \"ambiant capteur version\" / \"gamma\"",
-            "hits[d003].highlight.tout[0] : \"portable ambiant\" / \"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
-            "hits[d017].highlight.tout[0] : \"UPPER lower\" / \"amovible amovible solaire l'ascension\""
+            "hits[d000].highlight.tout[0] : \"solaire\" / \"capteur\"",
+            "hits[d004].highlight.tout[0] : \"reduction\" / \"tissu\"",
+            "hits[d006].highlight.tout[0] : \"bruit\" / \"compact\"",
+            "hits[d009].highlight.tout[0] : \"tissu\" / \"portable\"",
+            "hits[d011].highlight.tout[0] : \"aluminium\" / \"l'ascension\"",
+            "hits[d012].highlight.tout[0] : \"version\" / \"espaces\""
           ],
           "etape": "recherche",
-          "graine": 7400183,
+          "graine": 6660154,
           "requete": {
-            "aggs": {
-              "a0_0": {
-                "max": {
-                  "field": "h.x"
-                }
-              },
-              "a0_1": {
-                "aggs": {
-                  "m": {
-                    "min": {
-                      "field": "h.x"
-                    }
-                  }
-                },
-                "terms": {
-                  "field": "h.x",
-                  "order": {
-                    "m.value": "asc"
-                  },
-                  "size": 10
-                }
-              }
-            },
-            "from": 1,
+            "_source": true,
+            "docvalue_fields": [
+              "e.x",
+              "d"
+            ],
             "highlight": {
               "fields": {
-                "c.keyword": {},
-                "tout": {}
+                "*": {}
               },
-              "no_match_size": 200,
-              "number_of_fragments": 0
+              "no_match_size": 5,
+              "post_tags": [
+                "</b>"
+              ],
+              "pre_tags": [
+                "<b>"
+              ]
             },
             "query": {
-              "bool": {
-                "minimum_should_match": "2<70%",
-                "should": [
-                  {
-                    "ids": {
-                      "values": [
-                        "d000",
-                        "d017",
-                        "d003",
-                        "d009"
-                      ]
+              "constant_score": {
+                "filter": {
+                  "boosting": {
+                    "negative": {
+                      "terms": {
+                        "e.x": [
+                          -0.5,
+                          3075.5625
+                        ]
+                      }
+                    },
+                    "negative_boost": 0,
+                    "positive": {
+                      "exists": {
+                        "field": "d"
+                      }
                     }
                   }
-                ]
+                }
               }
             },
-            "size": 6,
-            "sort": [
-              {
-                "g.keyword": {
-                  "missing": "_last",
-                  "mode": "max",
-                  "order": "asc"
-                }
+            "size": 30,
+            "track_total_hits": true
+          },
+          "verdict": "assume"
+        },
+        {
+          "assumee": "fragment choisi parmi des valeurs sans ordre (copy_to)",
+          "detail": [
+            "hits[d006].highlight.tout[0] : \"amovible\" / \"tiret-bas\"",
+            "hits[d018].highlight.tout[0] : \"elevee\" / \"tiret-bas\""
+          ],
+          "etape": "recherche",
+          "graine": 6660219,
+          "requete": {
+            "_source": [
+              "f",
+              "b"
+            ],
+            "highlight": {
+              "fields": {
+                "*": {}
               },
-              {
-                "h.x": {
-                  "mode": "avg",
-                  "order": "asc"
-                }
-              },
-              {
-                "fuzz_cle": {
-                  "order": "asc"
-                }
+              "fragment_size": 60,
+              "no_match_size": 5
+            },
+            "query": {
+              "term": {
+                "b": "tiret-bas"
               }
+            },
+            "size": 30,
+            "stored_fields": [
+              "*"
             ],
             "track_total_hits": true
           },
@@ -930,63 +915,39 @@
       ]
     },
     "ordre des valeurs copiees par copy_to": {
-      "compte": 9,
+      "compte": 21,
       "exemples": [
         {
           "assumee": "ordre des valeurs copiees par copy_to",
           "detail": [
-            "hits[d002].fields.tout[0] : \"hotel reduction silencieux ecran\" / \"beta\"",
-            "hits[d002].fields.tout[1] : \"zeta\" / \"hotel reduction silencieux ecran\"",
-            "hits[d002].fields.tout[2] : \"beta\" / \"zeta\"",
-            "hits[d004].fields.tout[0] : \"hotel tissu silencieux amovible acier\" / \"accentue-e\"",
-            "hits[d004].fields.tout[1] : \"compact leger portable ecran ecole\" / \"hotel tissu silencieux amovible acier\"",
-            "hits[d004].fields.tout[2] : \"avec espace\" / \"compact leger portable ecran ecole\""
+            "hits[d020].fields.tout[1] : \"compact\" / \"\"",
+            "hits[d020].fields.tout[2] : \"\" / \"compact\""
           ],
           "etape": "recherche",
-          "graine": 7400018,
+          "graine": 6660016,
           "requete": {
-            "_source": [
-              "g",
-              "b"
-            ],
-            "docvalue_fields": [
-              "b",
-              "d"
-            ],
             "fields": [
-              "f.x",
-              "b",
               {
                 "field": "*",
                 "include_unmapped": true
-              }
+              },
+              "d"
             ],
+            "highlight": {
+              "fields": {
+                "h*": {}
+              },
+              "number_of_fragments": 3
+            },
             "query": {
-              "match_phrase_prefix": {
+              "wildcard": {
                 "tout": {
-                  "query": "hotel"
+                  "case_insensitive": true,
+                  "value": "et*"
                 }
               }
             },
             "size": 30,
-            "sort": [
-              {
-                "g": {
-                  "missing": "_last",
-                  "order": "asc"
-                }
-              },
-              {
-                "d": {
-                  "order": "asc"
-                }
-              },
-              {
-                "fuzz_cle": {
-                  "order": "asc"
-                }
-              }
-            ],
             "track_total_hits": true
           },
           "verdict": "assume"
@@ -994,33 +955,57 @@
         {
           "assumee": "ordre des valeurs copiees par copy_to",
           "detail": [
-            "hits[d004].fields.tout[1] : \"l'ascension hotel capteur rapide bluetooth l'ascension\" / \"accentue-e\"",
-            "hits[d004].fields.tout[2] : \"accentue-e\" / \"\"",
-            "hits[d004].fields.tout[3] : \"\" / \"tiret-bas\"",
-            "hits[d004].fields.tout[4] : \"tiret-bas\" / \"alpha\"",
-            "hits[d004].fields.tout[5] : \"alpha\" / \"\"",
-            "hits[d004].fields.tout[6] : \"\" / \"l'ascension hotel capteur rapide bluetooth l'ascension\""
+            "hits[d011].fields.tout[0] : \"batterie rapide aluminium acier l'ascension acier\" / \"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+            "hits[d011].fields.tout[1] : \"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz / \"batterie rapide aluminium acier l'ascension acier\"",
+            "hits[d012].fields.tout[0] : \"bluetooth capteur\" / \"\"",
+            "hits[d012].fields.tout[1] : \"\" / \"bluetooth capteur\"",
+            "hits[d014].fields.tout[0] : \"appareil acier capteur tissu capteur ecran\" / \"gamma\"",
+            "hits[d014].fields.tout[1] : \"gamma\" / \"appareil acier capteur tissu capteur ecran\""
           ],
           "etape": "recherche",
-          "graine": 7400096,
+          "graine": 6660018,
           "requete": {
+            "_source": true,
             "aggs": {
               "a0_0": {
-                "terms": {
-                  "field": "b",
-                  "order": {
-                    "_count": "asc"
+                "max": {
+                  "field": "a"
+                }
+              },
+              "a0_1": {
+                "filter": {
+                  "terms": {
+                    "tout": [
+                      "portable",
+                      "hotel",
+                      "capteur"
+                    ]
                   }
                 }
               }
             },
             "fields": [
-              "e*",
               "tout"
             ],
             "query": {
-              "match_phrase": {
-                "tout": "solaire"
+              "boosting": {
+                "negative": {
+                  "prefix": {
+                    "b.keyword": {
+                      "case_insensitive": true,
+                      "value": "ra"
+                    }
+                  }
+                },
+                "negative_boost": 0.2,
+                "positive": {
+                  "prefix": {
+                    "d": {
+                      "case_insensitive": true,
+                      "value": "ver"
+                    }
+                  }
+                }
               }
             },
             "size": 30,
@@ -1031,22 +1016,35 @@
         {
           "assumee": "ordre des valeurs copiees par copy_to",
           "detail": [
-            "hits[d019].fields.tout[0] : \"solaire verre l'ascension\" / \"accentue-e\"",
-            "hits[d019].fields.tout[1] : \"accentue-e\" / \"point.non\"",
-            "hits[d019].fields.tout[2] : \"point.non\" / \"solaire verre l'ascension\""
+            "hits[d013].fields.tout[0] : \"aluminium ecran ambiant\" / \"avec espace\"",
+            "hits[d013].fields.tout[1] : \"avec espace\" / \"aluminium ecran ambiant\"",
+            "hits[d013].highlight.tout[0] : \"aluminium ecran ambiant\" / \"avec espace\""
           ],
           "etape": "recherche",
-          "graine": 7400096,
+          "graine": 6660042,
           "requete": {
+            "_source": false,
             "fields": [
-              "h",
-              "e.x",
-              "*"
+              "d",
+              "tout",
+              "tout"
             ],
+            "highlight": {
+              "fields": {
+                "*": {},
+                "tout": {}
+              },
+              "no_match_size": 200
+            },
             "query": {
-              "match": {
-                "b": {
-                  "query": "gamma"
+              "constant_score": {
+                "filter": {
+                  "match_phrase_prefix": {
+                    "c": {
+                      "max_expansions": 1,
+                      "query": "portable verre"
+                    }
+                  }
                 }
               }
             },
@@ -1058,54 +1056,51 @@
       ]
     },
     "ordre par pertinence (BM25)": {
-      "compte": 21,
+      "compte": 20,
       "exemples": [
         {
           "assumee": "ordre par pertinence (BM25)",
           "detail": [
-            "ordre \u2014 gauche place [d006] la ou droite place [d013] (cles [0.92040145, \"verre l'ascension batterie silencieux optique compact\", 9223372036854775807, 'd006'] / [1.2405139, 'silencieux tissu optique', 1, 'd013'])"
+            "ordre \u2014 gauche place [d000] la ou droite place [d002] (cles 1.5119534 / 2.1687646)"
           ],
           "etape": "recherche",
-          "graine": 7400012,
+          "graine": 6660001,
           "requete": {
-            "_source": false,
-            "highlight": {
-              "fields": {
-                "g": {},
-                "g*": {}
-              },
-              "fragment_size": 30,
-              "number_of_fragments": 2
+            "_source": {
+              "includes": [
+                "g*"
+              ]
             },
             "query": {
-              "fuzzy": {
-                "g": {
-                  "fuzziness": "AUTO",
-                  "value": "silencieux"
-                }
+              "dis_max": {
+                "queries": [
+                  {
+                    "match": {
+                      "c": {
+                        "lenient": true,
+                        "query": "2026-04-06 09:36:00"
+                      }
+                    }
+                  },
+                  {
+                    "fuzzy": {
+                      "b": {
+                        "value": "tissu"
+                      }
+                    }
+                  },
+                  {
+                    "ids": {
+                      "values": [
+                        "d008"
+                      ]
+                    }
+                  }
+                ],
+                "tie_breaker": 0.0
               }
             },
             "size": 30,
-            "sort": [
-              "_score",
-              {
-                "g.keyword": {
-                  "missing": "_last",
-                  "mode": "max",
-                  "order": "desc"
-                }
-              },
-              {
-                "h.x": {
-                  "order": "asc"
-                }
-              },
-              {
-                "fuzz_cle": {
-                  "order": "asc"
-                }
-              }
-            ],
             "track_total_hits": true
           },
           "verdict": "assume"
@@ -1113,47 +1108,151 @@
         {
           "assumee": "ordre par pertinence (BM25)",
           "detail": [
-            "ordre \u2014 gauche place [d011] la ou droite place [d017] (cles [1.4134669, 1, 'AlphA', 'd011'] / [1.847569, 1, 'tiret-bas', 'd017'])"
+            "ordre \u2014 gauche place [d002] la ou droite place [d012] (cles 1.7841364 / 2.18649)"
           ],
           "etape": "recherche",
-          "graine": 7400023,
+          "graine": 6660011,
           "requete": {
-            "_source": false,
-            "aggs": {
-              "a0_0": {
-                "filter": {
-                  "match": {
-                    "f": {
-                      "lenient": true,
-                      "query": "appareil"
-                    }
-                  }
-                }
-              }
-            },
-            "fields": [
-              "*",
-              "h"
-            ],
             "query": {
               "fuzzy": {
-                "f": {
-                  "fuzziness": 0,
-                  "value": "ambiant"
+                "c": {
+                  "fuzziness": 1,
+                  "value": "ecole"
                 }
               }
             },
             "size": 30,
+            "track_total_hits": true
+          },
+          "verdict": "assume"
+        },
+        {
+          "assumee": "ordre par pertinence (BM25)",
+          "detail": [
+            "ordre \u2014 gauche place [d001] la ou droite place [d006] (cles 0.5 / 1.0)"
+          ],
+          "etape": "recherche",
+          "graine": 6660015,
+          "requete": {
+            "fields": [
+              "h",
+              "d",
+              "d"
+            ],
+            "query": {
+              "function_score": {
+                "boost": 0.5,
+                "boost_mode": "max",
+                "functions": [
+                  {
+                    "exp": {
+                      "a": {
+                        "origin": 1,
+                        "scale": 1
+                      }
+                    }
+                  }
+                ],
+                "min_score": 0.5,
+                "query": {
+                  "match_all": {}
+                }
+              }
+            },
+            "size": 30,
+            "track_total_hits": true
+          },
+          "verdict": "assume"
+        }
+      ]
+    },
+    "refus declare": {
+      "compte": 481,
+      "exemples": [
+        {
+          "assumee": "refus declare",
+          "detail": [
+            "gauche 400 (not_implemented_in_ferrite_exception : ferrite ne supporte pas [range] (agregation [a0_0]) sur le champ multivalue [c] : l'agregation de tantivy compte les **valeurs**, Elasticsearch compte les **doc), droite 200"
+          ],
+          "etape": "recherche",
+          "graine": 6660000,
+          "requete": {
+            "aggs": {
+              "a0_0": {
+                "range": {
+                  "field": "c",
+                  "keyed": true,
+                  "ranges": [
+                    {
+                      "to": -100
+                    },
+                    {
+                      "from": -100,
+                      "to": 0
+                    },
+                    {
+                      "from": 100
+                    }
+                  ]
+                }
+              }
+            },
+            "query": {
+              "bool": {
+                "must": [
+                  {
+                    "dis_max": {
+                      "queries": [
+                        {
+                          "prefix": {
+                            "d": {
+                              "value": "avec "
+                            }
+                          }
+                        },
+                        {
+                          "terms": {
+                            "b": [
+                              "zeta",
+                              "tiret-bas",
+                              "accentue-e"
+                            ]
+                          }
+                        },
+                        {
+                          "terms": {
+                            "d": [
+                              "bluetooth",
+                              "rapide",
+                              "amovible"
+                            ]
+                          }
+                        }
+                      ],
+                      "tie_breaker": 0.3
+                    }
+                  },
+                  {
+                    "wildcard": {
+                      "d": {
+                        "case_insensitive": true,
+                        "value": "ed*"
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "size": 30,
             "sort": [
-              "_score",
               {
                 "b": {
-                  "missing": "_last",
+                  "mode": "min",
                   "order": "desc"
                 }
               },
               {
-                "c": {
+                "f.keyword": {
                   "missing": "_first",
                   "order": "asc"
                 }
@@ -1169,43 +1268,425 @@
           "verdict": "assume"
         },
         {
-          "assumee": "ordre par pertinence (BM25)",
+          "assumee": "refus declare",
           "detail": [
-            "ordre \u2014 gauche place [d024] la ou droite place [d023] (cles [1.5, 1686873600000, 1713113102000, 'd024'] / [2.9881868, 1697068800000, -9223372036854775808, 'd023'])"
+            "gauche 400 (not_implemented_in_ferrite_exception : ferrite ne filtre les termes d'un [terms] que sur un champ de chaines : [exclude] est ici pose sur [g], de type [double] (agregation [a0_0]). L'agregation de ta), droite 200"
           ],
           "etape": "recherche",
-          "graine": 7400038,
+          "graine": 6660001,
           "requete": {
-            "_source": {
-              "includes": [
-                "b*"
-              ]
+            "_source": [
+              "g",
+              "d"
+            ],
+            "aggs": {
+              "a0_0": {
+                "terms": {
+                  "exclude": [
+                    -0.5
+                  ],
+                  "field": "g",
+                  "order": {
+                    "_count": "asc"
+                  },
+                  "size": 50
+                }
+              }
+            },
+            "from": 5,
+            "query": {
+              "boosting": {
+                "negative": {
+                  "term": {
+                    "b": "amovible"
+                  }
+                },
+                "negative_boost": 2.0,
+                "positive": {
+                  "term": {
+                    "e": "AlphA"
+                  }
+                }
+              }
+            },
+            "size": 3,
+            "sort": [
+              {
+                "g": {
+                  "mode": "min",
+                  "order": "asc"
+                }
+              },
+              {
+                "fuzz_cle": {
+                  "order": "asc"
+                }
+              }
+            ],
+            "track_total_hits": true
+          },
+          "verdict": "assume"
+        },
+        {
+          "assumee": "refus declare",
+          "detail": [
+            "gauche 400 (not_implemented_in_ferrite_exception : ferrite ne supporte pas [date_histogram] (agregation [a0_0]) sur le champ multivalue [c] : l'agregation de tantivy compte les **valeurs**, Elasticsearch compte ), droite 200"
+          ],
+          "etape": "recherche",
+          "graine": 6660001,
+          "requete": {
+            "_source": false,
+            "aggs": {
+              "a0_0": {
+                "date_histogram": {
+                  "calendar_interval": "quarter",
+                  "field": "c",
+                  "time_zone": "Pacific/Chatham"
+                }
+              },
+              "a0_1": {
+                "max": {
+                  "field": "c"
+                }
+              }
             },
             "query": {
-              "bool": {
-                "boost": 1.5,
-                "must": [
+              "match_none": {}
+            },
+            "size": 30,
+            "stored_fields": [
+              "*"
+            ],
+            "track_total_hits": true
+          },
+          "verdict": "assume"
+        }
+      ]
+    },
+    "refus declare avant le scoring": {
+      "compte": 2,
+      "exemples": [
+        {
+          "assumee": "refus declare avant le scoring",
+          "detail": [
+            "statuts 400 / 500 (gauche ferrite ne supporte pas [histogram] (agregation [a0_1]) sur le champ multivalue [f] : l'agregation de tantivy compte les | droite Missing value for field [f])"
+          ],
+          "etape": "recherche",
+          "graine": 6660064,
+          "requete": {
+            "aggs": {
+              "a0_0": {
+                "stats": {
+                  "field": "f"
+                }
+              },
+              "a0_1": {
+                "histogram": {
+                  "field": "f",
+                  "interval": 1
+                }
+              }
+            },
+            "fields": [
+              "a",
+              "b"
+            ],
+            "query": {
+              "function_score": {
+                "functions": [
                   {
-                    "dis_max": {
-                      "queries": [
-                        {
-                          "prefix": {
-                            "b": {
-                              "value": "zzzzz"
+                    "field_value_factor": {
+                      "factor": 2,
+                      "field": "f",
+                      "missing": 2.5,
+                      "modifier": "sqrt"
+                    },
+                    "filter": {
+                      "boosting": {
+                        "negative": {
+                          "wildcard": {
+                            "a": {
+                              "value": "ze*"
                             }
                           }
                         },
-                        {
-                          "fuzzy": {
-                            "d.y": {
-                              "fuzziness": 0,
-                              "transpositions": true,
-                              "value": "tiret-bas"
-                            }
+                        "negative_boost": 0.2,
+                        "positive": {
+                          "match_none": {}
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "field_value_factor": {
+                      "factor": 0.5,
+                      "field": "f",
+                      "modifier": "ln2p"
+                    },
+                    "weight": 2
+                  }
+                ],
+                "min_score": 1,
+                "query": {
+                  "function_score": {
+                    "boost_mode": "multiply",
+                    "functions": [
+                      {
+                        "exp": {
+                          "f": {
+                            "offset": 0,
+                            "origin": -0.5,
+                            "scale": 2.5
+                          }
+                        },
+                        "filter": {
+                          "term": {
+                            "a": "gamma"
+                          }
+                        },
+                        "weight": 0
+                      },
+                      {
+                        "exp": {
+                          "f": {
+                            "decay": 0.1,
+                            "origin": 1024.0,
+                            "scale": 1
                           }
                         }
+                      }
+                    ],
+                    "query": {
+                      "match_phrase": {
+                        "c": "reduction"
+                      }
+                    },
+                    "score_mode": "min"
+                  }
+                },
+                "score_mode": "min"
+              }
+            },
+            "size": 30,
+            "sort": [
+              "_score",
+              {
+                "c.keyword": {
+                  "order": "asc"
+                }
+              },
+              {
+                "g": {
+                  "order": "asc"
+                }
+              },
+              {
+                "fuzz_cle": {
+                  "order": "asc"
+                }
+              }
+            ],
+            "track_total_hits": true
+          },
+          "verdict": "assume"
+        },
+        {
+          "assumee": "refus declare avant le scoring",
+          "detail": [
+            "statuts 400 / 500 (gauche ferrite ne supporte pas [min_doc_count: 2] dans [terms] (agregation [a0_0]) ; seule sa valeur par defaut [1] est reprodu | droite Missing value for field [h])"
+          ],
+          "etape": "recherche",
+          "graine": 6660232,
+          "requete": {
+            "aggs": {
+              "a0_0": {
+                "aggs": {
+                  "a1_0": {
+                    "stats": {
+                      "field": "h"
+                    }
+                  }
+                },
+                "terms": {
+                  "field": "d",
+                  "min_doc_count": 2,
+                  "order": {
+                    "_key": "desc"
+                  },
+                  "size": 3
+                }
+              }
+            },
+            "query": {
+              "function_score": {
+                "field_value_factor": {
+                  "field": "h"
+                },
+                "max_boost": 10,
+                "min_score": 2,
+                "query": {
+                  "ids": {
+                    "values": [
+                      "d006",
+                      "d014",
+                      "d011"
+                    ]
+                  }
+                },
+                "score_mode": "avg"
+              }
+            },
+            "size": 30,
+            "track_total_hits": true
+          },
+          "verdict": "assume"
+        }
+      ]
+    },
+    "somme de dates, a la tolerance des nombres": {
+      "compte": 3,
+      "exemples": [
+        {
+          "assumee": "somme de dates, a la tolerance des nombres",
+          "detail": [
+            "aggregations.a0_0.value_as_string : \"1635373566817\" / \"1635373566818\""
+          ],
+          "etape": "recherche",
+          "graine": 6660015,
+          "requete": {
+            "aggs": {
+              "a0_0": {
+                "min": {
+                  "field": "h"
+                }
+              },
+              "a0_1": {
+                "filter": {
+                  "range": {
+                    "d": {
+                      "gte": "tiret-bas",
+                      "lt": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+                    }
+                  }
+                }
+              }
+            },
+            "from": 4,
+            "query": {
+              "terms": {
+                "a": [
+                  true
+                ]
+              }
+            },
+            "size": 5,
+            "sort": [
+              {
+                "f": {
+                  "missing": "_first",
+                  "order": "desc"
+                }
+              },
+              {
+                "fuzz_cle": {
+                  "order": "asc"
+                }
+              }
+            ],
+            "track_total_hits": true
+          },
+          "verdict": "assume"
+        },
+        {
+          "assumee": "somme de dates, a la tolerance des nombres",
+          "detail": [
+            "aggregations.a0_1.avg_as_string : \"2024-11-29T10:10:20.332Z\" / \"2024-11-29T10:10:20.333Z\"",
+            "aggregations.a0_1.sum_as_string : \"2134-09-27T06:31:00.999Z\" / \"2134-09-27T06:31:01.000Z\""
+          ],
+          "etape": "recherche",
+          "graine": 6660114,
+          "requete": {
+            "aggs": {
+              "a0_0": {
+                "aggs": {
+                  "m": {
+                    "min": {
+                      "field": "g"
+                    }
+                  }
+                },
+                "terms": {
+                  "field": "f.y",
+                  "order": {
+                    "m": "asc"
+                  },
+                  "size": 50
+                }
+              },
+              "a0_1": {
+                "stats": {
+                  "field": "f.x"
+                }
+              }
+            },
+            "query": {
+              "multi_match": {
+                "fields": [
+                  "d",
+                  "tout",
+                  "c.keyword^2"
+                ],
+                "lenient": true,
+                "operator": "or",
+                "query": "epsilon",
+                "type": "phrase"
+              }
+            },
+            "size": 30,
+            "sort": [
+              "_score",
+              {
+                "c.keyword": {
+                  "order": "asc"
+                }
+              },
+              {
+                "fuzz_cle": {
+                  "order": "asc"
+                }
+              }
+            ],
+            "track_total_hits": true
+          },
+          "verdict": "assume"
+        },
+        {
+          "assumee": "somme de dates, a la tolerance des nombres",
+          "detail": [
+            "aggregations.a0_0.sum_as_string : \"2246-06-13T01:04:16.999Z\" / \"2246-06-13T01:04:17.000Z\""
+          ],
+          "etape": "recherche",
+          "graine": 6660121,
+          "requete": {
+            "aggs": {
+              "a0_0": {
+                "stats": {
+                  "field": "a.z"
+                }
+              }
+            },
+            "query": {
+              "dis_max": {
+                "queries": [
+                  {
+                    "multi_match": {
+                      "fields": [
+                        "a.y",
+                        "f",
+                        "champ_jamais_mappe"
                       ],
-                      "tie_breaker": 1.0
+                      "query": "epsilon",
+                      "tie_breaker": 0.3
                     }
                   }
                 ]
@@ -1215,12 +1696,13 @@
             "sort": [
               "_score",
               {
-                "f": {
-                  "order": "asc"
+                "b": {
+                  "missing": "_first",
+                  "order": "desc"
                 }
               },
               {
-                "d.z": {
+                "a.y": {
                   "mode": "min",
                   "order": "desc"
                 }
@@ -1236,339 +1718,6 @@
           "verdict": "assume"
         }
       ]
-    },
-    "refus declare": {
-      "compte": 540,
-      "exemples": [
-        {
-          "assumee": "refus declare",
-          "detail": [
-            "gauche 400 (not_implemented_in_ferrite_exception : ferrite ne supporte pas [date_histogram] (agregation [a0_1]) sur le champ multivalue [f] : l'agregation de tantivy compte les **valeurs**, Elasticsearch compte ), droite 200"
-          ],
-          "etape": "recherche",
-          "graine": 7400000,
-          "requete": {
-            "aggs": {
-              "a0_0": {
-                "range": {
-                  "field": "d.y",
-                  "ranges": [
-                    {
-                      "to": 10
-                    },
-                    {
-                      "from": 10,
-                      "to": 100
-                    },
-                    {
-                      "from": 1000
-                    }
-                  ]
-                }
-              },
-              "a0_1": {
-                "date_histogram": {
-                  "field": "f",
-                  "fixed_interval": "365d"
-                }
-              }
-            },
-            "fields": [
-              "e"
-            ],
-            "query": {
-              "term": {
-                "e": "rapide"
-              }
-            },
-            "size": 30,
-            "sort": [
-              {
-                "d.y": {
-                  "mode": "median",
-                  "order": "desc"
-                }
-              },
-              {
-                "h": {
-                  "order": "asc"
-                }
-              },
-              {
-                "fuzz_cle": {
-                  "order": "asc"
-                }
-              }
-            ],
-            "track_total_hits": true
-          },
-          "verdict": "assume"
-        },
-        {
-          "assumee": "refus declare",
-          "detail": [
-            "gauche 400 (not_implemented_in_ferrite_exception : [c.y] est sous le champ [nested] [c] : ferrite ne l'agrege pas depuis la racine (agregation [a0_0.value_count]). Elasticsearch n'y voit aucun document et rend u), droite 200"
-          ],
-          "etape": "recherche",
-          "graine": 7400001,
-          "requete": {
-            "aggs": {
-              "a0_0": {
-                "value_count": {
-                  "field": "c.y"
-                }
-              }
-            },
-            "query": {
-              "constant_score": {
-                "boost": 3.0,
-                "filter": {
-                  "match": {
-                    "d": {
-                      "query": "bruit"
-                    }
-                  }
-                }
-              }
-            },
-            "size": 30,
-            "track_total_hits": true
-          },
-          "verdict": "assume"
-        },
-        {
-          "assumee": "refus declare",
-          "detail": [
-            "gauche 400 (not_implemented_in_ferrite_exception : ferrite ne supporte pas [histogram] (agregation [a0_0]) sur le champ multivalue [h] : l'agregation de tantivy compte les **valeurs**, Elasticsearch compte les *), droite 200"
-          ],
-          "etape": "recherche",
-          "graine": 7400001,
-          "requete": {
-            "aggs": {
-              "a0_0": {
-                "histogram": {
-                  "field": "h",
-                  "interval": 1,
-                  "min_doc_count": 0,
-                  "offset": 5
-                }
-              }
-            },
-            "docvalue_fields": [
-              "h",
-              "b"
-            ],
-            "from": 1,
-            "highlight": {
-              "fields": {
-                "*": {
-                  "fragment_size": 40,
-                  "number_of_fragments": 3
-                }
-              },
-              "fragment_size": 0,
-              "number_of_fragments": 2
-            },
-            "query": {
-              "match": {
-                "d": {
-                  "lenient": true,
-                  "operator": "or",
-                  "query": "modele"
-                }
-              }
-            },
-            "size": 0,
-            "sort": [
-              {
-                "fuzz_jamais_mappe": {
-                  "order": "asc",
-                  "unmapped_type": "date"
-                }
-              },
-              {
-                "h": {
-                  "missing": "_last",
-                  "order": "desc"
-                }
-              },
-              {
-                "g": {
-                  "order": "desc"
-                }
-              },
-              {
-                "fuzz_cle": {
-                  "order": "asc"
-                }
-              }
-            ],
-            "track_total_hits": true
-          },
-          "verdict": "assume"
-        }
-      ]
-    },
-    "somme de dates, a la tolerance des nombres": {
-      "compte": 5,
-      "exemples": [
-        {
-          "assumee": "somme de dates, a la tolerance des nombres",
-          "detail": [
-            "aggregations.a0_0.buckets[0].a1_0.value_as_string : \"1679784497937\" / \"1679784497938\""
-          ],
-          "etape": "recherche",
-          "graine": 7400043,
-          "requete": {
-            "aggs": {
-              "a0_0": {
-                "aggs": {
-                  "a1_0": {
-                    "min": {
-                      "field": "c"
-                    }
-                  },
-                  "m": {
-                    "stats": {
-                      "field": "a"
-                    }
-                  }
-                },
-                "terms": {
-                  "field": "c",
-                  "order": {
-                    "m.max": "asc"
-                  }
-                }
-              }
-            },
-            "query": {
-              "term": {
-                "b": "hotel"
-              }
-            },
-            "size": 30,
-            "track_total_hits": true
-          },
-          "verdict": "assume"
-        },
-        {
-          "assumee": "somme de dates, a la tolerance des nombres",
-          "detail": [
-            "aggregations.a0_0.buckets[8].a1_0.value_as_string : \"1635550276841\" / \"1635550276842\""
-          ],
-          "etape": "recherche",
-          "graine": 7400063,
-          "requete": {
-            "aggs": {
-              "a0_0": {
-                "aggs": {
-                  "a1_0": {
-                    "max": {
-                      "field": "g"
-                    }
-                  },
-                  "m": {
-                    "stats": {
-                      "field": "c"
-                    }
-                  }
-                },
-                "terms": {
-                  "field": "a",
-                  "order": {
-                    "m.avg": "desc"
-                  },
-                  "size": 50
-                }
-              }
-            },
-            "highlight": {
-              "fields": {
-                "b": {},
-                "f": {}
-              },
-              "fragment_size": 60,
-              "number_of_fragments": 3
-            },
-            "query": {
-              "constant_score": {
-                "boost": 1.0,
-                "filter": {
-                  "bool": {
-                    "must_not": [
-                      {
-                        "terms": {
-                          "h": [
-                            "point.non",
-                            "gamma"
-                          ]
-                        }
-                      },
-                      {
-                        "ids": {
-                          "values": [
-                            "d013"
-                          ]
-                        }
-                      }
-                    ]
-                  }
-                }
-              }
-            },
-            "size": 30,
-            "track_total_hits": true
-          },
-          "verdict": "assume"
-        },
-        {
-          "assumee": "somme de dates, a la tolerance des nombres",
-          "detail": [
-            "aggregations.a0_0.max_as_string : \"1775886454521\" / \"1775886454522\""
-          ],
-          "etape": "recherche",
-          "graine": 7400119,
-          "requete": {
-            "aggs": {
-              "a0_0": {
-                "stats": {
-                  "field": "d"
-                }
-              }
-            },
-            "from": 5,
-            "query": {
-              "exists": {
-                "field": "a.x"
-              }
-            },
-            "size": 8,
-            "sort": [
-              {
-                "a.x": {
-                  "order": "asc"
-                }
-              },
-              {
-                "h.x": {
-                  "missing": "_first",
-                  "mode": "max",
-                  "order": "desc"
-                }
-              },
-              {
-                "fuzz_cle": {
-                  "order": "asc"
-                }
-              }
-            ],
-            "stored_fields": [],
-            "track_total_hits": true
-          },
-          "verdict": "assume"
-        }
-      ]
     }
   },
   "cas": 250,
@@ -1576,8 +1725,234 @@
     "ferrite",
     "ES"
   ],
-  "divergences": [],
-  "graine_debut": 7400000,
+  "divergences": [
+    {
+      "detail": [
+        "gauche 500 (search_phase_execution_exception : Missing value for field [e]), droite 200"
+      ],
+      "etape": "recherche",
+      "graine": 6660176,
+      "requete": {
+        "aggs": {
+          "a0_0": {
+            "terms": {
+              "field": "e",
+              "order": {
+                "_key": "desc"
+              }
+            }
+          },
+          "a0_1": {
+            "filter": {
+              "terms": {
+                "e": [
+                  9223372036854775807
+                ]
+              }
+            }
+          }
+        },
+        "fields": [
+          "e",
+          "tout",
+          "a"
+        ],
+        "from": 2,
+        "query": {
+          "bool": {
+            "boost": 1.5,
+            "filter": [
+              {
+                "function_score": {
+                  "boost_mode": "avg",
+                  "functions": [
+                    {
+                      "linear": {
+                        "e": {
+                          "offset": 5,
+                          "origin": 1,
+                          "scale": 1000
+                        }
+                      }
+                    },
+                    {
+                      "weight": 0.5
+                    },
+                    {
+                      "field_value_factor": {
+                        "factor": 0.5,
+                        "field": "e"
+                      },
+                      "filter": {
+                        "match_all": {}
+                      }
+                    }
+                  ],
+                  "min_score": 0.5,
+                  "query": {
+                    "fuzzy": {
+                      "f": {
+                        "fuzziness": "AUTO",
+                        "transpositions": true,
+                        "value": "appareil"
+                      }
+                    }
+                  },
+                  "score_mode": "min"
+                }
+              },
+              {
+                "function_score": {
+                  "functions": [
+                    {
+                      "filter": {
+                        "wildcard": {
+                          "h": {
+                            "value": "al*"
+                          }
+                        }
+                      },
+                      "weight": 1
+                    },
+                    {
+                      "field_value_factor": {
+                        "factor": 1.5,
+                        "field": "e",
+                        "missing": 2.5
+                      },
+                      "filter": {
+                        "terms": {
+                          "e": [
+                            -2961711956797751697,
+                            -2217990991274287583
+                          ]
+                        }
+                      },
+                      "weight": 0
+                    },
+                    {
+                      "gauss": {
+                        "e": {
+                          "decay": 0.333,
+                          "origin": 9223372036854775807,
+                          "scale": 1000
+                        }
+                      },
+                      "weight": 2
+                    }
+                  ],
+                  "max_boost": 2,
+                  "query": {
+                    "prefix": {
+                      "b": {
+                        "value": "be"
+                      }
+                    }
+                  },
+                  "score_mode": "min"
+                }
+              }
+            ],
+            "must": [
+              {
+                "constant_score": {
+                  "boost": 3.0,
+                  "filter": {
+                    "regexp": {
+                      "a": {
+                        "value": "zeta"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "terms": {
+                  "b": [
+                    "AlphA",
+                    "AlphA",
+                    "delta"
+                  ]
+                }
+              }
+            ],
+            "must_not": [
+              {
+                "bool": {
+                  "filter": [
+                    {
+                      "multi_match": {
+                        "fields": [
+                          "tout",
+                          "f^3"
+                        ],
+                        "operator": "and",
+                        "query": "reduction"
+                      }
+                    },
+                    {
+                      "terms": {
+                        "b": [
+                          "point.non"
+                        ]
+                      }
+                    }
+                  ],
+                  "must": [
+                    {
+                      "regexp": {
+                        "f": {
+                          "case_insensitive": true,
+                          "value": "(ecran|bruit)"
+                        }
+                      }
+                    }
+                  ],
+                  "should": [
+                    {
+                      "match": {
+                        "tout": {
+                          "operator": "and",
+                          "query": "verre"
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "term": {
+                  "e": -1
+                }
+              }
+            ]
+          }
+        },
+        "size": 2,
+        "sort": [
+          {
+            "b": {
+              "mode": "min",
+              "order": "asc"
+            }
+          },
+          {
+            "e": {
+              "order": "asc"
+            }
+          },
+          {
+            "fuzz_cle": {
+              "order": "asc"
+            }
+          }
+        ],
+        "track_total_hits": true
+      },
+      "verdict": "refus"
+    }
+  ],
+  "graine_debut": 6660000,
   "neutralisations": {
     "_ignored": "ES liste dans chaque hit les champs qu'un `ignore_above` a ecartes ; c'est une trace de l'indexation, pas un resultat",
     "_score": "BM25 par tantivy d'un cote, par Lucene de l'autre \u2014 c'est l'ordre qui est compare, pas la valeur",
@@ -1589,5 +1964,5 @@
     "scroll.motif": "le motif d'un scroll refuse, comme tout corps d'erreur : il est joint au rapport pour qu'on voie pourquoi, jamais compare",
     "took": "une duree ne coincide pas entre deux serveurs"
   },
-  "requetes": 11593
+  "requetes": 11546
 }

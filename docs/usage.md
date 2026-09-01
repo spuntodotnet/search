@@ -106,9 +106,9 @@ régression.
 |---|---|---|
 | **`github` — du code d'application open source** | 338 | **96,4 %** |
 | `clients` — tests et exemples des clients officiels | 143 | 81,1 % |
-| `doc` — la documentation de référence | 3 969 | 40,2 % |
-| `rally` — les tracks de benchmark d'Elastic | 861 | 46,6 % |
-| **tout le corpus** | 5 311 | 45,9 % |
+| `doc` — la documentation de référence | 3 969 | 40,4 % |
+| `rally` — les tracks de benchmark d'Elastic | 861 | 47,2 % |
+| **tout le corpus** | 5 311 | 46,2 % |
 
 Ces quatre nombres ne se contredisent pas, ils mesurent quatre choses
 différentes, et l'écart entre eux **est** le résultat :
@@ -118,12 +118,12 @@ différentes, et l'écart entre eux **est** le résultat :
   requêtes sur dix passent telles quelles** ;
 - la documentation de référence consacre **une page par fonctionnalité**, avec au
   moins un exemple chacune : elle sur-représente exactement ce qui est rare. Un
-  taux de 40,2 % s'y lit « ferrite couvre un peu plus d'un tiers de la surface
+  taux de 40,4 % s'y lit « ferrite couvre un peu plus d'un tiers de la surface
   d'API », ce qui est vrai et sans rapport avec la question précédente ;
 - les tracks Rally sont des **bancs d'essai analytiques** : `date_histogram`
   avec `calendar_interval`, `runtime_mappings`, `fields`, `percentiles`. Et le
   track `elastic/logs` rejoue les requêtes de **Kibana**, qui pose
-  systématiquement des `runtime_mappings` et des `fields`. 46,6 % — c'était
+  systématiquement des `runtime_mappings` et des `fields`. 47,2 % — c'était
   17,4 % avant que `fields`, `docvalue_fields` et `stored_fields` ne soient
   livrés, 28,6 % avant les trois paramètres de `sort`, 30,5 % avant que
   `terms` ne sache filtrer ses termes et classer ses seaux sur une

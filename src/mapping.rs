@@ -136,6 +136,17 @@ pub struct FieldMapping {
     /// `store` : la valeur est conservee a part du `_source`, et c'est elle que
     /// `stored_fields` rend.
     pub store: bool,
+    /// `index` : le champ entre-t-il dans l'index inverse ? Le defaut d'ES est
+    /// `true`.
+    ///
+    /// A `false`, ES ne renonce pas a chercher : il **retombe sur la colonne**
+    /// (ses *doc values*) pour tout type qui en a une — `keyword`, numeriques,
+    /// `date`, `boolean` restent donc interrogeables, triables et agregeables,
+    /// au prix d'un balayage et d'un score **constant**. Seul un `text`, qui
+    /// n'a pas de colonne, devient inerte : ES refuse alors la clause en
+    /// `query_shard_exception` (mesure contre 8.15.0, voir
+    /// [`sonde_index_false.py`](../tests/compat/sonde_index_false.py)).
+    pub indexe: bool,
 }
 
 impl FieldMapping {
@@ -149,6 +160,7 @@ impl FieldMapping {
             format: None,
             copy_to: Vec::new(),
             store: false,
+            indexe: true,
         }
     }
 
@@ -190,6 +202,13 @@ impl FieldMapping {
         // `store: false` est le defaut : ES ne le rend pas, seulement `true`.
         if self.store {
             o.insert("store".into(), json!(true));
+        }
+        // `index` est l'exact miroir : `true` est le defaut, donc ES ne le rend
+        // pas ; `false` est conserve. Un mapping qui perdrait le second ne
+        // ferait pas d'aller-retour, et un outil qui relit le mapping pour
+        // decider s'il doit reindexer y lirait le contraire de ce qu'il a pose.
+        if !self.indexe {
+            o.insert("index".into(), json!(false));
         }
         if let Some(n) = self.ignore_above {
             o.insert("ignore_above".into(), json!(n));
@@ -715,6 +734,18 @@ fn parse_propriete(
         obj.get("type").and_then(Value::as_str),
         Some("object") | Some("nested")
     ) {
+        // Un objet n'est pas un champ : il n'entre pas dans l'index inverse, il
+        // n'existe que par ses feuilles. ES refuse donc `index` la (mesure :
+        // « Mapping definition for [o] has unsupported parameters: [index :
+        // false] »). L'accepter sans effet laisserait croire que les feuilles
+        // en heritent.
+        if obj.contains_key("index") {
+            return Err(EsError::mapper_declaration(format!(
+                "Mapping definition for [{chemin}] has unsupported parameters: [index] : un \
+                 [{}] n'entre pas dans l'index inverse, seules ses feuilles y entrent",
+                obj.get("type").and_then(Value::as_str).unwrap_or("object")
+            )));
+        }
         vides.insert(chemin.to_string());
         return Ok(());
     }
@@ -836,6 +867,7 @@ fn parse_field_mapping(
     let mut format = None;
     let mut copy_to = Vec::new();
     let mut store = false;
+    let mut indexe = true;
 
     for (key, val) in obj {
         match key.as_str() {
@@ -938,28 +970,19 @@ fn parse_field_mapping(
                         })?,
                 );
             }
-            // `index: true` est le **defaut** d'Elasticsearch : il ne demande
-            // rien de plus que ce que ferrite fait deja. ES lui-meme ne le
-            // garde pas — un `GET /{index}/_mapping` sur un champ pose avec
+            // `index: true` est le **defaut** d'Elasticsearch : ES lui-meme ne
+            // le garde pas — un `GET /{index}/_mapping` sur un champ pose avec
             // `index: true` rend `{"type": "keyword"}` tout court, la ou il
-            // conserve `index: false` (mesure contre 8.15.0). L'accepter n'est
-            // donc pas un echec silencieux, c'est rendre la meme chose qu'ES
-            // sur la meme demande.
-            //
-            // `index: false` reste refuse : ferrite indexerait quand meme, et
-            // le client croirait le champ hors de l'index.
+            // conserve `index: false` (mesure contre 8.15.0). Le premier ne
+            // demande donc rien, le second demande tout : voir
+            // [`FieldMapping::indexe`].
             "index" => match index_demande(val) {
-                Some(true) => {}
-                Some(false) => {
-                    return Err(EsError::unsupported(format!(
-                        "ferrite ne supporte pas [index: false] (champ [{name}]) : le champ \
-                         serait indexe quand meme ; seul [index: true], qui est le defaut \
-                         d'Elasticsearch, est accepte"
-                    )))
-                }
+                Some(b) => indexe = b,
                 None => {
-                    return Err(EsError::mapper_parsing(format!(
-                        "[{name}.index] : seuls [true] et [false] sont admis"
+                    return Err(EsError::mapper_declaration(format!(
+                        "Failed to parse value [{}] as only [true] or [false] are allowed. \
+                         (champ [{name}])",
+                        brut(val)
                     )))
                 }
             },
@@ -1003,6 +1026,7 @@ fn parse_field_mapping(
         format,
         copy_to,
         store,
+        indexe,
     })
 }
 
@@ -1234,6 +1258,11 @@ pub struct MappedField {
     /// `store: true` : la valeur est conservee a part, et `stored_fields` la
     /// rend.
     pub store: bool,
+    /// `index` du mapping. A `false`, le champ n'est pas dans l'index inverse :
+    /// une clause qui le vise se lit sur sa colonne (voir
+    /// [`crate::colonne`]), et un `text`, qui n'en a pas, n'est plus
+    /// cherchable du tout.
+    pub indexe: bool,
     /// Sous un `nested` : la colonne jumelle qui dit, pour chaque valeur
     /// indexee ici, de quel element du tableau elle vient. Meme arite, par
     /// construction — elle est alimentee dans la meme boucle.
@@ -1355,6 +1384,7 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
             FieldType::Keyword,
             Analyzer::default(),
             false,
+            true,
         );
         // Interrogeable comme un `keyword` sous son propre nom — c'est ce que
         // fait ES : `{"term": {"lien": "article"}}` filtre sur la relation.
@@ -1369,6 +1399,7 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
                 analyzer: Analyzer::default(),
                 search_analyzer: Analyzer::default(),
                 store: false,
+                indexe: true,
                 elem: None,
                 stocke: None,
             },
@@ -1380,6 +1411,7 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
             FieldType::Keyword,
             Analyzer::default(),
             false,
+            true,
         ));
     }
     for racine in &mapping.nested {
@@ -1424,6 +1456,7 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
                     decl.ty,
                     decl.analyzer(),
                     store && stocke.is_none(),
+                    decl.indexe,
                 ),
                 stocke,
                 ty: decl.ty,
@@ -1431,6 +1464,7 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
                 analyzer: decl.analyzer(),
                 search_analyzer: decl.search_analyzer(),
                 store,
+                indexe: decl.indexe,
                 elem: mapping
                     .nested
                     .iter()
@@ -1469,20 +1503,35 @@ pub fn build_schema(mapping: &Mapping) -> (Schema, Fields) {
     )
 }
 
+/// Ajoute un champ au schema tantivy.
+///
+/// `indexe` est le `index` du mapping. A `false`, le champ perd ses options
+/// d'**indexation** et **garde tout le reste** : c'est exactement ce que fait
+/// Lucene, et c'est la raison pour laquelle un `keyword` non indexe reste
+/// cherchable chez ES (par sa colonne) alors qu'un `text` ne l'est plus (il
+/// n'en a pas).
 fn add_field(
     b: &mut SchemaBuilder,
     name: &str,
     ty: FieldType,
     analyzer: Analyzer,
     store: bool,
+    indexe: bool,
 ) -> Field {
     match ty.kind() {
         FieldKind::Text => {
-            let mut opts = TextOptions::default().set_indexing_options(
-                TextFieldIndexing::default()
-                    .set_tokenizer(&analyzer.tokenizer())
-                    .set_index_option(IndexRecordOption::WithFreqsAndPositions),
-            );
+            // Un `text` non indexe n'a ni index inverse ni colonne : il ne
+            // reste que le stockage, s'il est demande. Le champ existe quand
+            // meme dans le schema pour que le mapping, `fields` et les refus
+            // sachent de quoi ils parlent.
+            let mut opts = TextOptions::default();
+            if indexe {
+                opts = opts.set_indexing_options(
+                    TextFieldIndexing::default()
+                        .set_tokenizer(&analyzer.tokenizer())
+                        .set_index_option(IndexRecordOption::WithFreqsAndPositions),
+                );
+            }
             if store {
                 opts = opts.set_stored();
             }
@@ -1498,21 +1547,22 @@ fn add_field(
             // valeurs marquait moins qu'un champ a une seule — ES donne le meme
             // score aux deux, et le classement en dependait. Mesure par
             // `tests/compat/fuzz_vs_es.py`.
-            let mut opts = TextOptions::default()
-                .set_indexing_options(
+            let mut opts = TextOptions::default().set_fast(Some(RAW_TOKENIZER));
+            if indexe {
+                opts = opts.set_indexing_options(
                     TextFieldIndexing::default()
                         .set_tokenizer(RAW_TOKENIZER)
                         .set_index_option(IndexRecordOption::Basic)
                         .set_fieldnorms(false),
-                )
-                .set_fast(Some(RAW_TOKENIZER));
+                );
+            }
             if store {
                 opts = opts.set_stored();
             }
             b.add_text_field(name, opts)
         }
-        FieldKind::I64 => b.add_i64_field(name, numerique(store)),
-        FieldKind::F64 => b.add_f64_field(name, numerique(store)),
+        FieldKind::I64 => b.add_i64_field(name, numerique(store, indexe)),
+        FieldKind::F64 => b.add_f64_field(name, numerique(store, indexe)),
         // Sans fieldnorm : chez Lucene un `boolean` est indexe `omitNorms`, donc
         // deux documents qui portent `true` marquent pareil, que le champ ait
         // une valeur ou trois. Avec les fieldnorms, ferrite les departageait —
@@ -1521,15 +1571,22 @@ fn add_field(
         // seul chemin qui laisse les fieldnorms a `false` (le drapeau `INDEXED`
         // les allume).
         FieldKind::Bool => {
-            let mut opts = NumericOptions::from(FAST).set_indexed();
+            let mut opts = NumericOptions::from(FAST);
+            if indexe {
+                opts = opts.set_indexed();
+            }
             if store {
                 opts = opts.set_stored();
             }
             b.add_bool_field(name, opts)
         }
         FieldKind::Date => {
-            let mut opts =
-                DateOptions::from(INDEXED | FAST).set_precision(DateTimePrecision::Milliseconds);
+            let mut opts = if indexe {
+                DateOptions::from(INDEXED | FAST)
+            } else {
+                DateOptions::from(FAST)
+            }
+            .set_precision(DateTimePrecision::Milliseconds);
             if store {
                 opts = opts.set_stored();
             }
@@ -1564,9 +1621,14 @@ fn stocke_seul(b: &mut SchemaBuilder, name: &str, ty: FieldType) -> Option<Field
     })
 }
 
-/// Les options d'une colonne numerique, avec ou sans stockage a part.
-fn numerique(store: bool) -> NumericOptions {
-    let opts = NumericOptions::from(INDEXED | FAST);
+/// Les options d'une colonne numerique, avec ou sans stockage a part, et avec
+/// ou sans index inverse (`index: false`).
+fn numerique(store: bool, indexe: bool) -> NumericOptions {
+    let opts = if indexe {
+        NumericOptions::from(INDEXED | FAST)
+    } else {
+        NumericOptions::from(FAST)
+    };
     if store {
         opts.set_stored()
     } else {
@@ -1759,14 +1821,23 @@ mod tests {
     }
 
     #[test]
-    fn refuse_index_faux() {
+    fn index_faux_est_lu_et_rendu() {
+        // Les deux ecritures d'ES, le booleen et la chaine. Et ce qui compte
+        // autant : `index: false` **ressort** du mapping, la ou `index: true`
+        // n'y laisse rien (mesure contre 8.15). Sans ca, un outil qui relit son
+        // mapping pour decider s'il doit reindexer y lirait le contraire de ce
+        // qu'il a pose.
         for corps in [
             r#"{"properties":{"k":{"type":"keyword","index":false}}}"#,
             r#"{"properties":{"k":{"type":"keyword","index":"false"}}}"#,
         ] {
-            let e = mapping(corps).unwrap_err();
-            assert_eq!(e.ty, UNSUPPORTED_TY);
-            assert!(e.reason.contains("index: false"), "{}", e.reason);
+            let m = mapping(corps).unwrap();
+            assert!(!m.get("k").unwrap().indexe);
+            let rendu = serde_json::to_string(&m.to_json()).unwrap();
+            assert!(
+                rendu.contains(r#""index":false"#),
+                "rendu inattendu : {rendu}"
+            );
         }
     }
 
@@ -1778,11 +1849,22 @@ mod tests {
             r#"{"properties":{"k":{"type":"keyword","index":null}}}"#,
         ] {
             let e = mapping(corps).unwrap_err();
-            // Le type d'erreur des refus de mapping du depot (ES dit
-            // `mapper_parsing_exception` ; c'est un ecart anterieur a ce
-            // chantier, et le meme pour tous les refus de cette fonction).
-            assert_eq!(e.ty, "document_parsing_exception");
+            assert_eq!(e.ty, "mapper_parsing_exception");
             assert!(e.reason.contains("[true]"), "{}", e.reason);
+        }
+    }
+
+    #[test]
+    fn refuse_index_sur_un_objet() {
+        // Un objet n'entre pas dans l'index inverse : il n'existe que par ses
+        // feuilles. ES refuse le parametre la, en « unsupported parameters ».
+        for corps in [
+            r#"{"properties":{"o":{"type":"object","index":false}}}"#,
+            r#"{"properties":{"o":{"type":"nested","index":false}}}"#,
+        ] {
+            let e = mapping(corps).unwrap_err();
+            assert_eq!(e.ty, "mapper_parsing_exception");
+            assert!(e.reason.contains("unsupported parameters"), "{}", e.reason);
         }
     }
 
