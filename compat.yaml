@@ -951,19 +951,60 @@ tables:
 
       - id: type.index
         nom: "`index`"
-        etat: partiel
+        etat: supporte
         poids: 0.4
         detail: >-
-          `index: true` est **accepté** : c'est le défaut d'Elasticsearch, il ne
-          demande rien de plus que ce que ferrite fait déjà, et ES lui-même ne
-          le garde pas — un `GET /{index}/_mapping` sur un champ posé avec
-          `index: true` rend `{"type": "keyword"}` tout court (mesuré contre
-          8.15.0). `index: false` reste refusé : ferrite indexerait quand même.
-          Les deux écritures d'ES sont admises, le booléen et la chaîne
+          garder un champ **sans le rendre cherchable**. Les deux écritures d'ES
+          sont admises (le booléen et la chaîne), et le rendu du mapping suit le
+          sien : `index: true` ne laisse rien dans `_mapping` (c'est le défaut),
+          `index: false` y est **conservé** — sans quoi un outil qui relit son
+          mapping pour décider s'il doit réindexer y lirait le contraire de ce
+          qu'il a posé.
+
+          Ce que le paramètre fait ensuite n'est pas ce que son nom laisse
+          croire, et ça a été **mesuré avant d'être écrit**
+          ([`sonde_index_false.py`](../tests/compat/sonde_index_false.py), 169
+          questions) : un champ non indexé garde sa **colonne**, et
+          Elasticsearch y retombe. Sur un `keyword`, un `long`, un `double`, une
+          `date` ou un `boolean`, la recherche continue donc de répondre —
+          `term`, `terms`, `range`, `match`, `match_phrase`, `prefix`,
+          `wildcard`, `regexp`, `fuzzy`, `exists` — et le tri, les agrégations,
+          `fields` et `docvalue_fields` aussi. Le prix est un **balayage** de la
+          colonne au lieu d'un saut par l'index, et un **score constant** de 1.0
+          (× `boost`) là où un champ indexé est noté par BM25 : une colonne ne
+          porte ni fréquence de terme ni longueur de champ. C'est exactement ce
+          que rend ES.
+
+          Sur un `text`, il n'y a pas de colonne (ce serait doubler le stockage
+          du texte) : le champ n'est plus cherchable du tout, et la clause est
+          **refusée** avec la phrase d'ES — `Cannot search on field [x] since it
+          is not indexed.`, et sa variante pour une phrase (`was indexed without
+          position data`). Deux exceptions mesurées : `exists` y rend 200 et
+          **aucun** document, `match_phrase_prefix` aussi. Le surlignage ne rend
+          aucun fragment sur un champ non indexé pour un `term`, un `match` ou
+          un `range` — il part des `Matches` de Lucene, et une lecture de
+          colonne n'en produit pas — mais il en rend un pour la famille des
+          **automates** (`terms`, `prefix`, `wildcard`, `regexp`, `fuzzy`), que
+          Lucene extrait de la requête sans rien demander à l'index, et
+          `no_match_size` s'applique dans tous les cas. Deux bords de plus,
+          mesurés parce qu'ils ne se devinent pas : le refus d'une **phrase**
+          dépend du nombre de termes (un seul, c'est « pas indexé » ;
+          plusieurs, c'est « sans positions » ; zéro, c'est 200 sans document),
+          et sur un `boolean` non indexé un `lt` **efface le reste de
+          l'intervalle** chez ES — `{"gt": true, "lt": false}` y rend les
+          documents à `false`. Ce dernier bord n'existe sur aucun autre type ;
+          ferrite le reproduit, parce que rendre **moins** de documents qu'ES
+          en silence est pire
         parametres:
-          supportes: ["true"]
+          supportes:
+            - {texte: "`true` et `false`, en booléen comme en chaîne"}
+            - {texte: "sur un champ ou sur un multi-field"}
+            - {texte: "`copy_to` depuis **et** vers un champ non indexé", note: "la valeur copiée arrive dans la colonne de la cible, donc elle y est cherchable"}
           refuses:
-            - {nom: "false", note: "le champ serait indexé quand même"}
+            - {nom: "index sur un objet ou un nested", note: "ES le refuse aussi (« has unsupported parameters »)  : un objet n'entre pas dans l'index inverse, seules ses feuilles y entrent"}
+            - {texte: "`exists` sur un `text` à la fois `index: false` **et** `store: true`", note: "divergence assumée, et c'est **ES** qui échoue : il y rend un 500 (`FieldExistsQuery requires that the field indexes doc values, norms or vectors`) parce que le champ existe dans son index sans y porter de colonne. Le même champ sans `store` rend 200 et aucun document ; ferrite rend cette réponse-là dans les deux cas. Un 500 ne se reproduit pas"}
+            - {texte: "`case_insensitive` sur un `regexp` posé sur un champ non indexé", note: "**ES le refuse lui-même** (`Match flags not yet implemented [256]`) : son automate de `regexp` sur une colonne est construit sans les drapeaux de correspondance. `prefix` et `wildcard`, qui passent par un autre chemin, les gardent"}
+            - {texte: "changer `index` sur un champ déjà déclaré", note: "dans les deux sens, comme ES (« Cannot update parameter [index] »)"}
 
       - id: type.autres_parametres
         nom: "Autres paramètres de champ (`null_value`, `doc_values`, `norms`…)"
@@ -2311,9 +2352,11 @@ tables:
           par champ, son type, `searchable` et `aggregatable`, et l'agrégation
           **par index** quand plusieurs sont visés — c'est la question que pose
           un outil de découverte avant de proposer un filtre qui échouerait sur
-          la moitié des index. Toute l'information est déjà dans le mapping :
-          ferrite n'a ni `index: false` ni `doc_values: false`, donc les deux
-          drapeaux se déduisent du type
+          la moitié des index. Toute l'information est déjà dans le mapping —
+          mais elle ne se déduit pas du seul **type** : un champ `index: false`
+          reste `searchable` tant qu'il a une colonne, et ne l'est plus quand il
+          n'en a pas (un `text`). C'est ce que rend ES, mesuré, et c'est ce que
+          ferrite rend
         parametres:
           supportes:
             - {nom: "fields", note: "dans l'URL ou dans le corps, jokers compris"}

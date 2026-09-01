@@ -1056,10 +1056,13 @@ template, un tableau de bord qui lit `_stats`.
 et `aggregatable`, et l'**agrégation par index** quand plusieurs sont visés :
 c'est la question que pose un outil de découverte avant de proposer un filtre
 qui échouerait sur la moitié des index. Toute l'information est déjà dans le
-mapping — ferrite n'a ni `index: false` ni `doc_values: false`, donc les deux
-drapeaux se déduisent du type (un `text` n'est pas agrégeable, un `object` et un
-`nested` ne sont ni l'un ni l'autre, tout le reste est les deux ; mesuré contre
-ES 8.15).
+mapping — mais elle ne se déduit pas du seul **type** : un `text` n'est pas
+agrégeable, un `object` et un `nested` ne sont ni l'un ni l'autre, et un champ
+`index: false` reste `searchable` **tant qu'il a une colonne**, donc partout
+sauf sur un `text`. C'est exactement ce que rend ES (mesuré contre 8.15 :
+`keyword` non indexé `searchable: true`, `text` non indexé `searchable: false`),
+et c'est ce que cette route doit dire — un outil de découverte lit `searchable`
+avant de proposer un filtre.
 
 Une règle de la réponse d'ES n'était pas devinable et vient d'une mesure : la
 liste `indices` n'apparaît sur une entrée de type que si le champ a **plusieurs**

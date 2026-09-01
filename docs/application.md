@@ -102,9 +102,15 @@ Elasticsearch lui-même ne conserve pas `index: true` : il le lit comme
 silencieux, c'était refuser une demande vide — le même raisonnement que l'objet
 **vide** de `script_fields`, accepté pour la même raison.
 
-`index: true` (booléen ou chaîne, les deux écritures d'ES) est donc accepté, et
-**`index: false` reste refusé** : ferrite indexerait le champ quand même, et le
-client croirait le contraire. Toute autre valeur est refusée comme chez ES
+`index: true` (booléen ou chaîne, les deux écritures d'ES) est donc accepté.
+`index: false` l'est aussi depuis — mais pour la raison inverse, et il a fallu
+une seconde mesure pour la voir : il ne demande pas *rien*, il demande **tout**
+(le champ sort de l'index inverse et garde sa colonne, sur laquelle ES continue
+de chercher). Le refus qui l'accompagnait ici — « ferrite indexerait le champ
+quand même » — décrivait une implémentation possible, pas le comportement d'ES ;
+voir [`compat.md`](compat.md) et
+[`sonde_index_false.py`](../tests/compat/sonde_index_false.py). Toute autre
+valeur est refusée comme chez ES
 (« seuls `true` et `false` sont admis »). La ligne de
 [`compat.md`](compat.md) est passée de ❌ à 🟡, et le scénario
 `index_vrai_est_le_defaut` de [`suite.py`](../tests/compat/suite.py) l'exerce

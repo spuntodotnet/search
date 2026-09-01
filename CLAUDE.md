@@ -312,15 +312,16 @@ développement, pas de CI).
 | `tests/compat/sonde_par_requete.py` | **modifier ou purger par requête** — `_delete_by_query`, `_update_by_query`. Compare les compteurs de la réponse **et l'état laissé derrière** (documents restants, `_version`, `_source`) : 62/74 identiques, 12 refus assumés écrits, 0 écart. Les conflits sont provoqués pour de vrai, par une écriture non rafraîchie. Refuse de tourner sans ses deux cibles |
 | `tests/compat/sonde_alias.py` | les mêmes alias sur une **expression de noms** — liste, joker, exclusion, `_all` — et le même 404 ? (21/21, corps et message compris) |
 | `tests/compat/sonde_ecriture_alias.py` | et pour **écrire** un alias ? Les sept URL de `put_alias` (le nom de l'alias, celui de l'index, ou les deux, viennent du corps — qui **remplace** le chemin), `must_exist`, et les deux règles de 404 qui ne sont pas la même : `must_exist: true` se vérifie **par index visé**, le 404 par défaut est **global**. Compare le statut, le message **et l'état laissé derrière** : **57/65 identiques, 7 refus assumés, 1 message non comparé, 0 écart** — et **14/65 contre le ferrite d'avant**. `--calibrer` : 64/65 contre deux ES |
+| `tests/compat/sonde_index_false.py` | **`index: false`** : que devient un champ qu'on garde sans le rendre cherchable ? Type par type, opération par opération — ce qui répond, ce qui échoue, avec quel type d'erreur et quelle phrase. C'est la sonde qui a **retourné** le refus d'avant : sur tout type qui a une colonne, ES ne renonce pas à chercher, il retombe sur les *doc values*. **228/244 identiques, 16 refus assumés, 0 écart** (`--calibrer` : 244/244 contre deux ES). Le même fichier lancé contre le ferrite d'avant rend **147/244** |
 | `tests/compat/sonde_vide.py` | sur un serveur **sans aucun index**, la même chose qu'ES — et rien accepté en silence ? (28/28 identiques, 0 refus muet ; les deux serveurs doivent être vides, c'est l'état mesuré) |
-| `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **360 cas, 16 835 requêtes, 1 divergence ouverte** sur trois plages de graines dont **aucune** n'a servi à corriger : celle sur laquelle on itère ne mesure plus rien, et le générateur ayant changé, les plages du passage précédent ne mesurent plus les mêmes cas. Les mêmes plages contre le **binaire d'avant** rendent 383 divergences : une brique de générateur qui ne fait pas rougir le binaire d'avant ne mesure rien. 21 défauts silencieux trouvés au premier passage, 36 de plus depuis — dont **dix-sept** sur le seul surlignage, et quatre sur le scoring, dont trois fois le même : `Math.min` de Java propage `NaN`, celui de Rust non. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (50 cas, 2 255 requêtes, 0 divergence réelle) |
+| `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **670 cas, 30 937 requêtes, 4 divergences ouvertes — toutes antérieures à la carte, mesurées telles** sur quatre plages de graines dont **aucune** n'a servi à corriger : celle sur laquelle on itère ne mesure plus rien, et le générateur ayant changé, les plages du passage précédent ne mesurent plus les mêmes cas. Les mêmes plages contre le **binaire d'avant** rendent 83 divergences : une brique de générateur qui ne fait pas rougir le binaire d'avant ne mesure rien. 21 défauts silencieux trouvés au premier passage, 41 de plus depuis — dont **dix-sept** sur le seul surlignage, quatre sur le scoring (dont trois fois le même : `Math.min` de Java propage `NaN`, celui de Rust non), et cinq sur le voisinage d'`index: false`, qu'une sonde de 244 questions écrites à la main n'avait pas vus. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (50 cas, 2 255 requêtes, 0 divergence réelle) |
 | `tests/compat/sonde_fuzz.py` | les écarts trouvés par le fuzzing, **figés** hors d'une graine (109/109, plus 12 refus assumés ; les cinq derniers portent sur le motif **vide**, qui désigne la chaîne vide chez Lucene et que ferrite refusait en 400) |
 | `tests/compat/appli_reelle.py` | **un logiciel écrit par d'autres démarre-t-il ?** Clone une vraie application à une révision figée, vérifie que rien n'y a bougé, lance sa **propre** suite d'intégration contre un vrai ES puis contre ferrite, et relève tout le trafic HTTP au passage. Gitea v1.27.2 : **34/34 des deux côtés**. Wagtail v7.1 : **83/83 des deux côtés**, et plus un seul refus que ferrite prononce là où ES répond. Voir [`docs/application.md`](docs/application.md) |
 | `tests/compat/tests_clients.py` | **la suite de tests du client officiel passe-t-elle ?** Pas « un client se connecte » : les cas que l'équipe du client a écrits, joués par **son** lanceur, dans **son** langage. Trois clients, licence Apache-2.0 vérifiée **dans le clone**, révision figée, arbre vérifié intact. `go-elasticsearch` v8.13.0 : 28/30 contre un vrai ES, 16/30 contre ferrite, chaque écart rattaché à une capacité. `elasticsearch-py` v8.15.0 : 71/84 *(origine)* · 45/84 *(adapté)* / 43/84 avec le nettoyage de remplacement, **0/84 telle quelle** — sa fixture nettoie par seize routes x-pack, et les deux chiffres sont publiés. Et le **cycle de vie du client**, joué par le client publié : 9/9 en Python, 7/7 en Go, 7/7 en JavaScript, des deux côtés. Voir [`docs/clients.md`](docs/clients.md) |
 | `tests/compat/genere_compat.py` | le périmètre déclaré et la doc disent-ils la **même chose** ? [`compat.yaml`](compat.yaml) est la source (une entrée par capacité : état, paramètres, motif du refus, poids d'usage) ; [`docs/compat.md`](docs/compat.md) et [`docs/compat.json`](docs/compat.json) en sont **générés**, et la CI échoue s'ils divergent |
 | `tests/compat/perimetre.py` | ce cas qui échoue, il porte sur quoi ? Il rattache un échec de conformance à une capacité déclarée : **régression** si elle est annoncée supportée, **coût de périmètre** si elle est annoncée refusée |
 | `tests/compat/recolte_usage.py` | à quoi ressemblent les requêtes que les gens envoient **vraiment** ? Constitue le corpus ([`tests/compat/usage/corpus.jsonl`](tests/compat/usage/corpus.jsonl), 5 311 requêtes) depuis quatre sources citables : doc de référence 8.15, tracks Rally, clients officiels, code open source. Chaque requête porte l'URL d'où elle vient |
-| `tests/compat/ponderation.py` | **quelle part de ces requêtes passe entièrement ?** (45,9 % du corpus, mais **96,4 % du code d'application** et 46,6 % des tracks Rally — l'écart *est* le résultat). Écrit les `poids` de `compat.yaml`, publie [`docs/usage.json`](docs/usage.json) et la table « ce qui manque, par fréquence d'usage ». `--rejoue` pose la même requête à ferrite et à un vrai ES 8.15 : les deux mesures s'accordent sur 98,8 % des cas |
+| `tests/compat/ponderation.py` | **quelle part de ces requêtes passe entièrement ?** (46,2 % du corpus, mais **96,4 % du code d'application** et 47,2 % des tracks Rally — l'écart *est* le résultat). Écrit les `poids` de `compat.yaml`, publie [`docs/usage.json`](docs/usage.json) et la table « ce qui manque, par fréquence d'usage ». `--rejoue` pose la même requête à ferrite et à un vrai ES 8.15 : les deux mesures s'accordent sur 98,8 % des cas |
 | `tests/compat/conformance_es.py` | que disent les suites de tests **d'Elastic** et d'**OpenSearch** ? Deux sources indépendantes (`--source`), Apache-2.0 toutes les deux, **107** et **112 domaines**, sans liste blanche. Leurs rapports sont des fichiers, pas des phrases : [`conformance.json`](docs/conformance.json) et [`conformance-opensearch.json`](docs/conformance-opensearch.json) (totaux, trois taux, exclusions comptées, détail par cas), régénérés par `--json`, tenus par un cliquet en CI (`--diff`). `--divergences` range à part les cas qu'un **vrai ES 8.15 échoue lui aussi** sur la même suite — mesuré ([`conformance-opensearch-es8150.json`](docs/conformance-opensearch-es8150.json)), pas décidé. `--etat` vérifie entre deux cas que rien n'est **apparu** depuis l'état de départ de la cible — index, alias, templates, réglages de cluster — et arrête la campagne au premier écart (+27 %, payés par la CI) : 79 campagnes consécutives rendent le même rapport à l'octet près |
 | `tests/compat/bench_vs_es.py` | mêmes résultats, **et à quel prix** ? Garde-fou de développement : 600 documents et 138 requêtes **écrites ici**, donc un dénominateur qu'on a choisi soi-même — ne sert plus à publier |
 | `tests/compat/bench_echelle.py` | et **à l'échelle**, sur un corpus que nous n'avons pas écrit ? La track Rally `geonames` d'Elastic (Apache-2.0, révision figée, corpus vérifié à l'octet près), 500 000 et 2 000 000 de documents, **ses** 31 requêtes. `term` ×1,7 et `match_phrase` ×2,6 pour ferrite a deux millions de documents (et l'avance **grandit** avec la taille), RSS ×8 en sa faveur — et le **tri jusqu'a ×290 contre lui**, l'indexation ×0,20, le `scroll` ×0,25. 13 requêtes jouables, 18 refusées, toutes rattachées à une capacité déclarée. Voir [`docs/bench.md`](docs/bench.md) |
@@ -488,6 +489,35 @@ bouger**, pas après.
   `PUT /_cluster/settings`. Obéir là où ES refuse ferait de la première
   différence de comportement entre les deux serveurs une suppression de
   données.
+- **`index: false` ne retire pas un champ de la recherche, il le fait changer
+  de chemin.** C'est la deuxième décision de ce fichier qu'une mesure a
+  **renversée**, et elle avait la même forme que la première : un refus dont la
+  raison — « ferrite indexerait le champ quand même, et le client croirait le
+  contraire » — décrivait une implémentation possible, pas le comportement
+  d'Elasticsearch, et n'avait jamais été mesurée là où elle s'appliquait. La
+  mesure ([`sonde_index_false.py`](tests/compat/sonde_index_false.py), 195
+  questions) dit autre chose : un champ non indexé **garde sa colonne**, et
+  Lucene y retombe. Sur un `keyword`, un `long`, un `double`, une `date` ou un
+  `boolean`, `term`, `terms`, `range`, `match`, `prefix`, `wildcard`, `regexp`,
+  `fuzzy` et `exists` répondent toujours — en balayant la colonne, et à score
+  **constant** (1.0 × `boost`) puisqu'une colonne ne porte ni fréquence ni
+  longueur de champ. ferrite fait donc pareil ([`src/colonne.rs`](src/colonne.rs)),
+  et c'est le seul type **sans** colonne — le `text` — qui devient inerte, avec
+  les phrases d'ES. Quatre règles en sont sorties qu'aucune documentation ne
+  donne, et trois viennent du fuzzer : le refus d'une **phrase** dépend du
+  nombre de termes (un seul terme, c'est « pas indexé » ; plusieurs, c'est
+  « sans positions » ; zéro, c'est 200) ; le surlignage ne marque que la famille
+  des **automates** (`terms`, `prefix`, `wildcard`, `regexp`, `fuzzy`) — un
+  `term`, un `match` ou un `range` ne marquent rien, alors qu'ils trouvent le
+  document ; `no_match_size` s'applique quand même ; et `case_insensitive` sur
+  un `regexp` y est **refusé par ES lui-même** (`Match flags not yet implemented
+  [256]`), donc refusé ici, comme `boost_factor`. La cinquième est un bord qu'ES
+  a probablement de travers, et que ferrite reproduit quand même : sur un
+  `boolean` non indexé, un `lt` **efface le reste de l'intervalle**
+  (`{"gt": true, "lt": false}` y rend les documents à `false`), et ce bord
+  n'existe sur aucun autre type — les 24 combinaisons de bornes sont mesurées
+  et figées. Rendre **moins** de documents qu'ES en silence est le résultat que
+  ce dépôt refuse en premier.
 - **Un champ inconnu dans une requête ne correspond à rien, comme chez ES** —
   c'est `index.query.parse.allow_unmapped_fields`, le vrai réglage d'ES, avec
   son défaut (`true`). Ça a longtemps été l'inverse, et la décision était
@@ -1402,6 +1432,19 @@ d'octobre en dure quatre, et `key_as_string` porte le décalage local
 déplacement qu'une carte ait fait sur ce sous-corpus, et la ligne
 `agg.date_histogram` (première du tableau des manques chez Rally, 25,8 %) tombe
 à **une** requête sur 5 311, qui porte `order`.
+
+**Garder un champ sans le rendre cherchable** ne bloque plus une création
+d'index : `index: false` est servi. Ce que la carte demandait tenait en une
+ligne de mapping ; ce qu'elle a coûté est ailleurs, et c'est la mesure qui l'a
+dit — le paramètre ne retire pas le champ de la recherche, il **change son
+chemin**. Un champ non indexé garde sa colonne, et Elasticsearch y retombe : la
+recherche continue de répondre sur un `keyword`, un numérique, une `date` ou un
+`boolean`, en balayant, à score constant. ferrite exécute donc ces clauses sur
+la colonne ([`src/colonne.rs`](src/colonne.rs)), et ne refuse que là où ES
+refuse — sur un `text`, qui n'a pas de colonne. Le corpus d'usage passe de
+46,1 % à **46,2 %** ; le chiffre est petit et l'effet ne l'est pas, parce qu'un
+paramètre de mapping refusé tue une application **avant** sa première recherche,
+comme l'`index: true` de Gitea.
 
 **Régler la pertinence** ne demande plus de recalculer les scores côté client :
 `function_score` et `boosting` sont servis — remonter le récent (`gauss` /

@@ -765,7 +765,7 @@ fn extraire(v: &Value, gen: &Generation) -> EsResult<Noeud> {
             let Some(t) = texte_de(spec) else {
                 return Ok(Noeud::Opaque);
             };
-            pose(gen, champ, |mf| motifs_de_texte(gen, mf, nom, &t))?
+            pose(gen, champ, false, |mf| motifs_de_texte(gen, mf, nom, &t))?
         }
         "multi_match" => {
             let Some(o) = corps.as_object() else {
@@ -790,7 +790,9 @@ fn extraire(v: &Value, gen: &Generation) -> EsResult<Noeud> {
             for spec in champs {
                 let Some(spec) = spec.as_str() else { continue };
                 let champ = spec.split_once('^').map_or(spec, |(n, _)| n);
-                enfants.push(pose(gen, champ, |mf| motifs_de_texte(gen, mf, clause, &t))?);
+                enfants.push(pose(gen, champ, false, |mf| {
+                    motifs_de_texte(gen, mf, clause, &t)
+                })?);
             }
             // Un `multi_match` correspond des qu'**un** de ses champs
             // correspond, quel que soit son type.
@@ -804,7 +806,13 @@ fn extraire(v: &Value, gen: &Generation) -> EsResult<Noeud> {
                 return Ok(Noeud::Opaque);
             };
             match valeur_de(spec) {
-                Some(v) => valeurs_posees(gen, champ, std::slice::from_ref(v))?,
+                // `term` ne marque **rien** sur un champ non indexe (mesure
+                // contre ES 8.15) : le surlignage part des `Matches` de
+                // Lucene, et une lecture de colonne n'en produit pas. `terms`,
+                // lui, marque — c'est un automate, et Lucene l'extrait de la
+                // requete sans passer par l'index. Deux clauses voisines, deux
+                // reponses : c'est mesure, pas deduit.
+                Some(v) => valeurs_posees(gen, champ, std::slice::from_ref(v), false)?,
                 None => Noeud::Opaque,
             }
         }
@@ -812,7 +820,7 @@ fn extraire(v: &Value, gen: &Generation) -> EsResult<Noeud> {
             let Some((champ, Value::Array(vals))) = premiere_cle(corps) else {
                 return Ok(Noeud::Opaque);
             };
-            valeurs_posees(gen, champ, vals)?
+            valeurs_posees(gen, champ, vals, true)?
         }
         "prefix" | "wildcard" | "regexp" => {
             let Some((champ, spec)) = premiere_cle(corps) else {
@@ -850,7 +858,7 @@ fn extraire(v: &Value, gen: &Generation) -> EsResult<Noeud> {
                 )?,
             };
             let re = compile(&brut)?;
-            pose(gen, champ, |_| {
+            pose(gen, champ, true, |_| {
                 Ok(vec![Motif::Simple(Predicat::Motif(re.clone()))])
             })?
         }
@@ -882,7 +890,7 @@ fn extraire(v: &Value, gen: &Generation) -> EsResult<Noeud> {
                 distance,
                 transpositions,
             };
-            pose(gen, champ, |_| Ok(vec![Motif::Simple(p.clone())]))?
+            pose(gen, champ, true, |_| Ok(vec![Motif::Simple(p.clone())]))?
         }
         "range" => {
             let Some((champ, spec)) = premiere_cle(corps) else {
@@ -918,7 +926,13 @@ fn extraire(v: &Value, gen: &Generation) -> EsResult<Noeud> {
             if (bas.is_some() && tb.is_none()) || (haut.is_some() && th.is_none()) {
                 return Ok(Noeud::Opaque);
             }
-            if mf.ty.kind() == FieldKind::Keyword {
+            // Non indexe, un `range` ne marque rien non plus : ES construit
+            // alors une requete sur la colonne, dont le surlignage ne tire
+            // aucun automate (mesure contre 8.15 — c'est la meme regle que le
+            // `term` de [`valeurs_posees`], et elle separe `range` de
+            // `terms`). La clause se tranche quand meme, par
+            // [`Noeud::Intervalle`].
+            if mf.ty.kind() == FieldKind::Keyword && mf.indexe {
                 let chaine_de = |b: &Option<(mapping::TypedValue, bool)>| match b {
                     Some((mapping::TypedValue::Str(s), incl)) => Some((s.clone(), *incl)),
                     _ => None,
@@ -949,12 +963,19 @@ fn extraire(v: &Value, gen: &Generation) -> EsResult<Noeud> {
 /// `term` et `terms` : une feuille de marques si le champ est surlignable, une
 /// feuille de **valeurs** sinon — elle ne marque rien mais elle se tranche, et
 /// c'est ce qui fait taire un `bool` dont le `filter` porte sur une date.
-fn valeurs_posees(gen: &Generation, champ: &str, vals: &[Value]) -> EsResult<Noeud> {
+fn valeurs_posees(
+    gen: &Generation,
+    champ: &str,
+    vals: &[Value],
+    marque_sans_index: bool,
+) -> EsResult<Noeud> {
     let Some(mf) = gen.fields.get(champ) else {
         return Ok(Noeud::Opaque);
     };
     let format = gen.fields.format_de(champ).cloned();
-    if matches!(mf.ty.kind(), FieldKind::Text | FieldKind::Keyword) {
+    if matches!(mf.ty.kind(), FieldKind::Text | FieldKind::Keyword)
+        && (mf.indexe || marque_sans_index)
+    {
         let mut termes: Vec<String> = vals
             .iter()
             .filter_map(|v| chaine(champ, mf.ty, Some(v)))
@@ -973,6 +994,8 @@ fn valeurs_posees(gen: &Generation, champ: &str, vals: &[Value]) -> EsResult<Noe
             motifs,
         });
     }
+    // Un champ non indexe qui ne marque pas se tranche quand meme sur le
+    // `_source`, exactement comme un champ numerique : c'est [`Noeud::Valeurs`].
     let mut attendues: Vec<mapping::TypedValue> = vals
         .iter()
         .filter_map(|v| mapping::coerce_avec(champ, mf.ty, v, format.as_ref()).ok())
@@ -994,12 +1017,22 @@ fn valeurs_posees(gen: &Generation, champ: &str, vals: &[Value]) -> EsResult<Noe
 fn pose(
     gen: &Generation,
     champ: &str,
+    marque_sans_index: bool,
     f: impl FnOnce(&mapping::MappedField) -> EsResult<Vec<Motif>>,
 ) -> EsResult<Noeud> {
     let Some(mf) = gen.fields.get(champ) else {
         return Ok(Noeud::Opaque);
     };
     if !matches!(mf.ty.kind(), FieldKind::Text | FieldKind::Keyword) {
+        return Ok(Noeud::Opaque);
+    }
+    // Sur un champ `index: false`, seule la famille des **automates**
+    // (`terms`, `prefix`, `wildcard`, `regexp`, `fuzzy`) marque : Lucene les
+    // extrait de la requete et les pose sur le texte, sans rien demander a
+    // l'index. Un `term`, un `match` ou un `range` n'y marquent rien, faute de
+    // `Matches`. Mesure contre ES 8.15, trouvee par le fuzzer (graines 9310029
+    // et 9310045).
+    if !mf.indexe && !marque_sans_index {
         return Ok(Noeud::Opaque);
     }
     let motifs = f(&mf)?;

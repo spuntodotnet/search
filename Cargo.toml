@@ -18,6 +18,12 @@ unicode-segmentation = "1"
 # la seule facon de ne pas repondre a cote (`src/highlight.rs`). Deja dans
 # l'arbre via tantivy — l'y nommer ne coute pas un octet de plus.
 tantivy-fst = "0.5"
+# L'automate de Levenshtein que tantivy compile derriere `FuzzyTermQuery`. Une
+# clause `fuzzy` posee sur un champ `index: false` se joue sur le dictionnaire
+# de la colonne : lui opposer le **meme** automate est la seule facon que les
+# deux chemins rendent les memes documents. Deja dans l'arbre via tantivy —
+# l'y nommer ne coute pas un octet de plus.
+levenshtein_automata = "0.2"
 # Les algorithmes Snowball, mesures identiques a ceux de Lucene sur les
 # vocabulaires du projet Snowball (voir `src/langue.rs`). tantivy les expose
 # deja sous forme de filtre, mais un analyzer de langue a besoin de les appeler

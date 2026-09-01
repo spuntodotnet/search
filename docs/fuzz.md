@@ -125,80 +125,91 @@ avec sa raison, et `--tout` les imprime.
 
 ## La mesure du jour
 
-Le générateur a changé — cinq briques de plus, **le réglage de la pertinence** :
-`q.function_score` (les deux formes du corps, celle à fonction unique et celle
-à `functions[]`), `q.function_score.valeur` (un `field_value_factor` avec son
-`factor`, son `modifier` et son `missing`), `q.function_score.decroissance`
-(`gauss` / `exp` / `linear`, sur un numérique comme sur une date),
-`q.function_score.bornes` (`max_boost` et `min_score`) et `q.boosting`. Donc
-**toutes les graines ont changé de sens** : la campagne précédente ne mesurait
-plus les mêmes cas, et ses chiffres ne sont pas reconduits.
+Le générateur a changé — **une brique de plus**, `champ.index_false` : quelques
+feuilles du mapping tirées au sort passent en `index: false`, tous types
+compris, `text` inclus. Donc **toutes les graines ont changé de sens** : la
+campagne précédente ne mesurait plus les mêmes cas, et ses chiffres ne sont pas
+reconduits.
+
+La brique ne mesure pas qu'elle-même, et c'est le but : un champ non indexé
+reste interrogé par **toutes** les clauses que le générateur tire, parce que
+chez Elasticsearch la clause ne disparaît pas — elle change de chemin (la
+colonne au lieu de l'index inverse), de score, et parfois de message d'erreur.
 
 Ce tableau est celui de ce passage, sur des plages **jamais utilisées pour
-corriger** — les quatre plages qui ont servi à trouver les défauts plus bas
-(`5100000+`, `7300000+`, `8810000+`, `9420000+`) sont publiées à part, parce
-qu'une plage sur laquelle on a itéré ne mesure plus rien.
+corriger** — la plage `9310000+`, qui a servi à trouver les défauts plus bas,
+est publiée à part.
 
 ```
 plages de contrôle, jamais regardées avant ce tableau
-graines 1610000+       120 cas,  5 565 requêtes, 0 divergence
-graines 2730000+       120 cas,  5 577 requêtes, 0 divergence
-graines 3840000+       120 cas,  5 693 requêtes, 1 divergence  (ouverte, plus bas)
+graines 4420000+       120 cas,  5 457 requêtes, 0 divergence
+graines 7710000+       150 cas,  6 958 requêtes, 2 divergences (ouvertes, antérieures)
+graines 5550000+       150 cas,  6 976 requêtes, 1 divergence  (ouverte, antérieure)
+graines 6660000+       250 cas, 11 546 requêtes, 1 divergence  (ouverte, antérieure)
+                       ↑ c'est celle-là qui est publiée dans docs/fuzz.json
                      ------------------------------------------------
-                       360 cas, 16 835 requêtes, 1 divergence
+                       670 cas, 30 937 requêtes, 4 divergences
 
 les mêmes plages, contre le binaire d'AVANT la carte
-                       360 cas, 16 914 requêtes, 383 divergences
-                                 (118 + 129 + 136)
+                       420 cas, 15 688 requêtes, 83 divergences
+                                 (24 + 24 + 35)
 
-les quatre plages sur lesquelles on a itéré, une fois corrigées
-                       480 cas, 22 211 requêtes, 0 divergence
+la plage sur laquelle on a itéré, une fois corrigée
+graines 9310000+       120 cas,  5 611 requêtes, 0 divergence
 ```
 
-Les deux colonnes sont mesurées avec des binaires **release** des deux côtés,
-comme les fois précédentes.
+Les deux colonnes sont mesurées avec des binaires **release** des deux côtés.
 
-La ligne du milieu dit que les briques mesurent quelque chose, et elle se lit
-avec la même réserve qu'à chaque carte : `function_score` et `boosting` étaient
-**refusés** avant, donc chaque requête qui en tire un rendait 400 d'un côté et
-200 de l'autre. Ce 383 mesure que les briques sont posées souvent, pas qu'elles
-ont trouvé 383 défauts.
+La ligne du milieu dit que la brique mesure quelque chose, et elle se lit avec
+la même réserve qu'à chaque carte : `index: false` était **refusé** avant, donc
+chaque mapping qui en tire un rendait 400 d'un côté et 200 de l'autre. Ce 83
+mesure que la brique est posée souvent, pas qu'elle a trouvé 83 défauts.
 
-### Ce que ce passage a trouvé : quatre défauts, tous silencieux
-
-Trois d'entre eux sont le **même** défaut vu par trois chemins, et aucun n'était
-visible à la grille de 47 000 points qui verrouille pourtant les formules.
-
-| Graine | Ce qui était faux | Ce que c'était |
-|---|---|---|
-| `7300048`, `7300100` | ferrite rend **200** avec un classement inventé là où ES refuse en **500** (`function score query returned an invalid score: NaN`) | `Math.min` de Java **propage** `NaN` ; le `f64::min` de Rust rend l'autre opérande. Un score de fonction `NaN` — ce que produit un `sqrt` sur une valeur négative ou un `log1p` sous -1, donc un `missing: -1` — traversait `min(fonction, max_boost)` **en devenant le plafond**. La grille ne portait ni `NaN` ni les infinis : elle en porte maintenant, et elle compte 58 476 points |
-| `5100036` | même famille, sous un `score_mode: avg` et un `boost_mode: replace` | même correction |
-| `8810020` | `min_score: 1` avec `boost: 2` : ferrite garde 6 documents, ES 4, dès qu'un `sort` remplace le score | le `boost` d'une clause n'est appliqué **que si le collecteur demande des scores** — Lucene comme tantivy laissent alors tomber leur `BoostQuery`. Invisible partout ailleurs (un facteur constant ne change pas un ensemble de documents), décisif sous un `min_score`, qui fait du score un **seuil**. Deux conséquences : le `boost` est porté **dans** la clause (le `Weight::count` de tantivy reconstruit le scorer à boost 1.0, ce qui rendait un `total` plus petit que le nombre de hits) et le total d'une recherche libre se compte avec un collecteur qui demande les scores — sauf à `size: 0`, où personne n'en lit, exactement comme ES |
-| `5100002`, `5100005`, … | `_validate/query` rend `valid: false` sur des requêtes qu'ES déclare valides | une décroissance sur un champ inconnu est un verdict de **mapping**, et ES lui donne pourtant le type `parsing_exception`. Contre le schéma vide de la validation, tout champ est inconnu — le refus est donc marqué « échec de shard », et c'est cette marque, pas le type, qui le sépare d'une erreur de forme. Le même piège que sur `nested`, deux cartes plus tôt |
-| `5100022` | aucun fragment surligné sous un `function_score` ni sous un `boosting` | le parcours de `highlight` ne connaissait pas les deux clauses. `function_score` marque ce que **sa requête** a fait correspondre (pas ses fonctions, pas les `filter` de ses `functions[]`), `boosting` ne marque que son `positive` — et un `min_score`, même à zéro, fait **taire tout le sous-arbre** : ES y perd ses `Matches`. Une brique nouvelle ne mesure pas qu'elle-même, une fois de plus |
-
-Les neuf cas correspondants sont figés dans
-[`sonde_fuzz.py`](../tests/compat/sonde_fuzz.py), hors d'une graine — et les
-neuf échouent contre le binaire d'avant, ce qui est la seule façon de savoir
-qu'ils mesurent quelque chose.
-
-### La divergence ouverte de ce passage
+Les **trois divergences ouvertes** sont antérieures à cette carte, et c'est
+mesuré et non supposé : les trois graines rendent **la même divergence contre le
+binaire d'avant**, et deux d'entre elles portent sur un mapping qui ne contient
+aucun `index: false`.
 
 | Graine | Ce qui diffère | Ce que c'est |
 |---|---|---|
-| `3840041` | ferrite refuse en 400 (`include` posé sur un `long` dans un `terms`, un refus qu'il déclare), ES échoue en **500** (`Index 0 out of bounds for length 0`) | les deux serveurs refusent, avec leurs propres mots. Le prédicat « refus déclaré » exige que l'autre côté **réponde** (`droite 200`) — sans cette moitié, n'importe quel 500 d'ES passerait pour un coût de périmètre de ferrite, et c'est précisément l'élargissement discret contre lequel ce dépôt s'est déjà fait avoir. La ligne rouge est le bon prix. Elle sort **à l'identique contre le binaire d'avant** : elle n'a rien à voir avec cette carte |
+| `7710025`, `7710082` | ferrite refuse en 400 (`field value function must not produce negative scores`), ES répond 200 | un `field_value_factor` à score négatif placé sous un `filter` qui ne retient personne : ferrite prononce le refus, ES ne l'atteint jamais. Sans rapport avec `index: false` — la même divergence sort du binaire d'avant sur la même graine |
+| `5550051` | 7 documents contre 5, et une métrique à `-0.1` contre `-0.125` | un `dis_max` de `function_score` sur un mapping **sans aucun champ non indexé**. Identique contre le binaire d'avant |
+| `6660176` | même famille que les deux premières (`Missing value for field`) | ferrite prononce le garde-fou du `field_value_factor`, ES ne l'atteint pas. Identique contre le binaire d'avant |
 
-Et une divergence de plus est **absorbée** par un prédicat nouveau, qui
-**mesure** au lieu de supposer : un `min_score` posé sur une requête dont le
-score de base n'est déjà pas le même des deux côtés. `min_score` est le seul
-endroit où le score cesse d'être un ordre pour devenir un seuil, et ferrite et
-ES ne calculent pas le même BM25 dès qu'un champ `text` est facultatif — c'est
-l'`avgdl`, déjà déclaré dans [`compat.md`](compat.md) (0,998 chez ES contre
-1,169 chez ferrite sur le même document, de part et d'autre d'un
-`min_score: 1`). Le prédicat ne le suppose pas : il **repose la sous-requête
-seule** aux deux serveurs et n'accepte l'écart que si leurs scores y diffèrent
-déjà. Un vrai défaut de `min_score` laisse les scores de base identiques, et ne
-passe donc pas.
+### Ce que ce passage a trouvé : quatre défauts, tous silencieux
+
+Aucun n'était visible aux 244 questions écrites à la main de
+[`sonde_index_false.py`](../tests/compat/sonde_index_false.py) — qui avaient
+pourtant servi à **écrire** la fonctionnalité, et qui sont la spécification
+publiée de `index: false`. Tous les quatre sont dans le **voisinage** du
+paramètre, pas dans le paramètre lui-même.
+
+| Graine | Ce qui était faux | Ce que c'était |
+|---|---|---|
+| `9310061` | ferrite rend **200** là où ES refuse en 400 (`field:[a] was indexed without position data; cannot run PhraseQuery`) | le refus d'une **phrase** sur un `text` non indexé dépend du **nombre de termes**, et la première mesure n'avait posé qu'un seul mot : à un terme il n'y a plus de phrase (c'est un `term`, donc « pas indexé »), à plusieurs c'est la `PhraseQuery` qui manque de positions, à zéro il n'y a pas de clause du tout. Trois réponses pour la même clause |
+| `9310045` | aucun fragment surligné là où ES en rend un | la règle « un champ non indexé ne marque rien » était **trop large**. Seule la famille des **automates** marque — `terms`, `prefix`, `wildcard`, `regexp`, `fuzzy` — parce que Lucene les extrait de la requête sans rien demander à l'index ; un `term`, un `match` ou un `range` trouvent le document sans le marquer. `terms` et `term` ne répondent donc pas pareil, à une lettre près |
+| `9310029` | aucun fragment là où ES rend celui de `no_match_size` | le repli `no_match_size` s'applique à un champ non indexé comme à un autre : il ne dépend d'aucune correspondance. C'est le même défaut que la ligne au-dessus, vu par l'autre bout |
+| `5550060` | ferrite rend **moins** de documents qu'ES sur un `range` posé sur un `boolean` non indexé | chez ES, un `lt` y **efface le reste de l'intervalle** : `{"gt": true, "lt": false}` rend les documents à `false`. Le bord n'existe sur aucun autre type (mesure type par type) et ressemble à un défaut d'Elasticsearch — ferrite le reproduit quand même, les 24 combinaisons de bornes étant mesurées et figées |
+
+Et un cinquième, qui n'est pas un défaut de ferrite mais une **divergence
+assumée de plus** : `6660022` a montré qu'`exists` sur un `text` à la fois
+`index: false` **et** `store: true` fait rendre un **500** à ES
+(`FieldExistsQuery requires that the field indexes doc values, norms or
+vectors`) — le champ existe dans son index sans y porter de colonne. Le même
+champ **sans** `store` rend 200 et aucun document ; ferrite rend cette
+réponse-là dans les deux cas, et un 500 ne se reproduit pas. Le prédicat porte
+sur le message d'ES, sinon n'importe quel 500 passerait.
+
+Et un sixième, qui va dans l'autre sens : `9310016` a montré que
+`case_insensitive` sur un `regexp` posé sur un champ non indexé est **refusé par
+ES lui-même** (`Match flags not yet implemented [256]`), alors que ferrite y
+répondait 200. Servir ce qu'un vrai Elasticsearch rejette est le même défaut que
+`boost_factor`, dans l'autre sens : il est donc refusé, avec sa phrase.
+
+Les cas correspondants sont figés dans
+[`sonde_index_false.py`](../tests/compat/sonde_index_false.py), hors d'une
+graine — et le fichier entier rend **147/244 contre le binaire d'avant**, ce qui
+est la seule façon de savoir qu'il mesure quelque chose.
 
 ## Ce que le premier passage a trouvé
 

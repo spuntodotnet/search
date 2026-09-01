@@ -60,10 +60,10 @@
  },
  "totaux": {
   "requetes": 5311,
-  "servies": 2449,
-  "refusees": 2845,
+  "servies": 2452,
+  "refusees": 2842,
   "indeterminees": 17,
-  "taux_servies": 46.1
+  "taux_servies": 46.2
  },
  "par_source": {
   "clients": {
@@ -73,11 +73,11 @@
    "taux_servies": 81.1
   },
   "doc": {
-   "servie": 1601,
+   "servie": 1604,
    "total": 3969,
-   "refusee": 2353,
+   "refusee": 2350,
    "indeterminee": 15,
-   "taux_servies": 40.3
+   "taux_servies": 40.4
   },
   "github": {
    "refusee": 12,
@@ -178,9 +178,9 @@
    "indeterminee": 1
   },
   "indices.create": {
-   "refusee": 207,
+   "refusee": 205,
    "total": 558,
-   "servie": 336,
+   "servie": 338,
    "indeterminee": 15
   },
   "index": {
@@ -269,9 +269,9 @@
    "total": 27
   },
   "indices.put_mapping": {
-   "refusee": 10,
+   "refusee": 9,
    "total": 25,
-   "servie": 15
+   "servie": 16
   },
   "count": {
    "servie": 21,
@@ -2923,11 +2923,6 @@
    },
    {
     "trait": "agg:top_hits.sort",
-    "requetes": 15,
-    "part": 0.3
-   },
-   {
-    "trait": "champ:index=false",
     "requetes": 15,
     "part": 0.3
    },
@@ -12039,30 +12034,6 @@
     {
      "trait": "tri:nested",
      "requetes": 2
-    }
-   ]
-  },
-  {
-   "capacite": "type.index",
-   "nom": "index",
-   "etat": "partiel",
-   "motif": null,
-   "requetes": 15,
-   "part": 0.3,
-   "par_source": {
-    "doc": {
-     "requetes": 7,
-     "part": 0.2
-    },
-    "rally": {
-     "requetes": 8,
-     "part": 0.9
-    }
-   },
-   "traits": [
-    {
-     "trait": "champ:index=false",
-     "requetes": 15
     }
    ]
   },
