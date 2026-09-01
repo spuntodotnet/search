@@ -435,6 +435,34 @@ impl FerriteIndex {
         }))
     }
 
+    /// L'adresse tantivy d'un document, et l'instantane ou elle a un sens.
+    ///
+    /// `_explain` en a besoin : il ne rend pas le document, il rejoue une
+    /// requete **contre lui**. Comme `get_doc`, la lecture est temps reel — un
+    /// document ecrit sans `refresh` doit s'expliquer, sinon la route rendrait
+    /// 404 sur un document que `GET /_doc/{id}` rend.
+    pub fn adresse_de(
+        &self,
+        id: &str,
+    ) -> EsResult<Option<(Arc<Generation>, tantivy::Searcher, tantivy::DocAddress)>> {
+        let meta = { self.docs.read().expect("docs lock").get(id).copied() };
+        if meta.filter(|m| !m.deleted).is_none() {
+            return Ok(None);
+        }
+        self.refresh()?;
+        let gen = self.current();
+        let searcher = gen.searcher();
+        let query = TermQuery::new(
+            Term::from_field_text(gen.fields.id, id),
+            IndexRecordOption::Basic,
+        );
+        let top = searcher.search(&query, &TopDocs::with_limit(1).order_by_score())?;
+        let Some((_, addr)) = top.first().copied() else {
+            return Ok(None);
+        };
+        Ok(Some((gen, searcher, addr)))
+    }
+
     /// Met a jour un document par fusion partielle (`POST /{index}/_update/{id}`).
     ///
     /// `_source` etant conserve, la fusion se fait sur le document existant et

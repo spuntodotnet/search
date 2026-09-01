@@ -211,6 +211,63 @@ Les cas correspondants sont figés dans
 graine — et le fichier entier rend **147/244 contre le binaire d'avant**, ce qui
 est la seule façon de savoir qu'il mesure quelque chose.
 
+## La mesure de la carte suivante (`_name`, `explain`, `_explain`)
+
+Une brique de plus, `corps.nom_de_clause` : elle pose des `_name` au hasard dans
+une requête déjà générée, là où ES les accepte (au niveau du champ pour les
+clauses qui en citent un, au niveau du corps pour les autres), et la comparaison
+porte alors sur le bloc `matched_queries` de chaque hit — **quelles** clauses
+sont citées, et **dans quel ordre**.
+
+Le chiffre publié est celui d'**après** la fusion avec les cartes 40 et 41 : le
+générateur porte désormais quatre briques (`champ.index_false`, celle-ci,
+`q.meta` et `corps.min_score`), et chacune redistribue le tirage. Les plages
+mesurées pendant le développement (`9110000+`, `9610000+`) ne désignent donc
+plus les mêmes cas et ne sont pas reconduites — c'est la règle du fichier,
+appliquée à un rebase plutôt qu'à une carte.
+
+```
+plage de contrôle, jamais regardée avant ce tableau, générateur à quatre briques
+graines 9710000+       100 cas,  4 559 requêtes, 0 divergence
+```
+
+Elle est mesurée avec un binaire **release**, comme les fois précédentes, et
+cette précision vient de servir : la même plage jouée contre un binaire **debug**
+sort une divergence de plus — un `debug_assert` de tantivy
+(`PhraseScorer::seek_danger`, « target (0) should be greater than or equal to
+doc (6) ») que le release compile, et dont la réponse est **juste** des deux
+côtés. Ce n'est pas un défaut de ferrite : c'est une précondition interne que la
+dépendance vérifie plus strictement que son propre contrat. La noter évite de la
+rediagnostiquer à la prochaine campagne lancée en debug.
+
+### Ce que la brique a trouvé : deux défauts, tous les deux silencieux
+
+| Graine | Ce qui était faux | Ce que c'était |
+|---|---|---|
+| `9110050` | ferrite cite le nom d'une clause qu'ES ne cite pas : un `match_all` nommé placé sous un `must_not` | ES **réécrit** un `bool` dont un `must_not` est un `match_all` **nu** en `match_none`, et il le fait au niveau du `QueryBuilder` — donc avant de traduire ses clauses, donc aucun de leurs `_name` n'est enregistré. Pas seulement celui du `match_all` : **tous** ceux du `bool`, y compris son propre `_name`. La règle porte sur la clause exacte — le même `match_all` enveloppé dans un `constant_score` est bien nommé (mesuré). C'est la même réécriture que le surlignage connaissait déjà, sur un autre chemin |
+| `9610018` | ferrite rend **200** là où ES rend **400** (`field value function must not produce negative scores`) | une clause nommée est **rejouée, et notée**. Sous un `sort`, la requête principale ne calcule aucun score : c'est donc le `_name` qui rallume le calcul, et le garde-fou du `field_value_factor` tombe. ferrite rejouait bien la clause mais **perdait l'incident** — il le relisait après la recherche, alors qu'il naissait à la restitution. Trois lignes suffisent à l'isoler : sans `sort` les deux serveurs refusent, avec `sort` les deux répondent, avec `sort` **et** `_name` seul ES refusait |
+
+La seconde n'a été trouvée qu'**après le rebase** sur la carte 40, sur une plage
+de contrôle rejouée parce que le générateur avait changé. C'est le geste 2
+appliqué à un rebase : un cliquet qu'on n'a pas vu passer après une fusion ne
+prouve rien, et ici la fusion a bel et bien démasqué un silence. La branche a
+été rebasée trois fois au total, et la campagne rejouée à chaque fois — c'est
+la seule des trois qui a trouvé quelque chose, ce qui ne rend pas les deux
+autres inutiles : on ne sait laquelle paie qu'après l'avoir jouée.
+
+Cinq cas sont figés dans [`sonde_fuzz.py`](../tests/compat/sonde_fuzz.py) : les
+deux défauts, et surtout leurs **contreparties**, qui interdisent de corriger
+trop large — le même `match_all` sous un `constant_score` *est* nommé, une
+clause nommée sous un `must_not` *est* citée quand elle correspond au document,
+et un `_name` posé sur une **autre** clause ne rallume **pas** le scoring du
+`function_score`.
+
+Et la brique a réveillé un défaut qui n'avait rien à voir avec elle, quatrième
+fois de suite : `_validate/query`, `_count`, `_delete_by_query`,
+`_update_by_query` et l'`index_filter` de `_field_caps` lisaient la requête sans
+en retirer les `_name`, donc rendaient `valid: false` (ou une erreur) sur une
+requête qu'ES accepte. Une clause nommée n'est pas seulement lue par `_search`.
+
 ## Ce que le premier passage a trouvé
 
 **Vingt et un défauts**, tous **silencieux** (ferrite répondait 200 avec un

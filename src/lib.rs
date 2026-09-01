@@ -47,6 +47,7 @@ pub mod dismax;
 pub mod dsl;
 pub mod engine;
 pub mod error;
+pub mod explain;
 pub mod fetch;
 pub mod fonction_score;
 pub mod fuseau;

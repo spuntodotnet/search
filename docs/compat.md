@@ -756,7 +756,7 @@ suppression de données.
 | `terms` | 🟡 | liste de valeurs, score constant comme chez ES. Sur un champ `date`, chaque valeur est une période, comme dans `term`. Refusé : les *terms lookup* (lire la liste des valeurs dans un autre document) |
 | `range` | 🟡 | sur `keyword` / numérique / `date` / `boolean`. Sur un champ `date`, les bornes acceptent le **date math** (`now`, `now-1d/d`, `2026-03-15\|\|+1M`) et sont **arrondies selon leur côté** — voir [la section dédiée](#date-math-et-arrondi-des-bornes). Supporté : `gte`, `gt`, `lte`, `lt`, `boost`, `format` (lecture des bornes), `time_zone` (la borne est résolue **dans le fuseau**, arrondi compris — voir [la section dédiée](#date-math-et-arrondi-des-bornes). Sur un champ qui n'est pas une date, il est accepté sans effet, comme chez ES (mesuré)). Refusé : `relation`, un `range` sur un champ `text` |
 | `bool` | 🟡 | `filter` ne contribue pas au score. Un `bool` qui n'a que des `must_not` matche tous les autres documents, comme chez ES. Supporté : `must`, `should`, `filter`, `must_not`, `mustNot` (l'écriture camelCase **dépréciée**, qu'ES 8.15 sert encore — et la seule du DSL : `minimumShouldMatch`, `adjustPureNegative`, `maxExpansions`, `caseInsensitive`, `tieBreaker`, `scoreMode` sont tous refusés chez lui (mesuré, un par un). ferrite ne rend pas l'en-tête `Warning` de dépréciation qu'ES y ajoute), `boost`, `minimum_should_match` (ses **quatre notations**, voir [la section dédiée](#minimum_should_match)). Refusé : `_name`, `adjust_pure_negative` |
-| `_name` (nommer une clause), `matched_queries`, `include_named_queries_score` | ❌ | **pas encore** — nommer une clause n'a d'interet qu'avec `matched_queries` dans la reponse, qui n'est pas rendu : accepter le nom en le perdant serait promettre une information qui ne reviendra pas. Refuse dans toutes les clauses, `bool` compris — et le parametre `include_named_queries_score` (ES 8.13) avec, puisqu'il ne change **que** la forme de `matched_queries` (un objet `{nom: score}` au lieu d'une liste). Le laisser tomber dans « unrecognized parameter » le deguisait en faute de frappe : c'etait le seul defaut de cette ligne, et il comptait en regression pour la suite d'OpenSearch — la seule des trois sources a pouvoir l'exercer, le parametre etant posterieur a la 7.10.2 comme a la 2.12 d'OpenSearch |
+| `_name` (nommer une clause), `matched_queries`, `include_named_queries_score` | ✅ | `_name` se pose **la ou `boost` se pose** — au niveau du champ pour les clauses qui en citent un (`{"term": {"k": {"value": …, "_name": …}}}`), au niveau du corps pour les autres (`bool`, `nested`, `dis_max`, `terms`…) : une valeur ecrite en raccourci ne peut donc pas etre nommee, et ES ne le permet pas non plus. Chaque clause nommee est **rejouee seule** contre chaque document rendu, comme le fait ES : un `should` place sous un `must_not` ne se nomme pas dans un document qui, lui, correspond. L'ordre de `matched_queries` n'est ni celui de la requete ni l'alphabetique — c'est l'ordre d'iteration d'une `HashMap` de Java, reproductible et reproduit (voir [`src/explain.rs`](../src/explain.rs)) ; deux noms qui tombent dans le **meme seau** sont la seule chose que ferrite ne classe pas comme ES. Un nom pose deux fois ne compte qu'une, le dernier gagnant, comme chez ES. `include_named_queries_score` (ES 8.13) rend le meme bloc en objet `{nom: score}` |
 | `query_string`, `simple_query_string`, `intervals`, `terms_set`, `script`… | ❌ | **pas encore** — `parsing_exception: unknown query [...]`, avec la liste des clauses connues — la plus regrettée est `query_string`, dont la syntaxe est un langage à part entière |
 
 ### La recherche libre (`multi_match`)
@@ -927,7 +927,7 @@ promeut au lieu de repousser, ce qu'ES accepte sans rien dire.
 
 | | État | Détail |
 |---|---|---|
-| `POST\|GET /{index}/_search`, `POST\|GET /_search` | ✅ | `{index}` est une **expression** au sens d'ES (voir [Expressions d'index](#expressions-dindex-listes-motifs-alias)) ; sans index, la recherche porte sur tout, comme `_all`. Une recherche qui ne vise **aucun** index (cluster vide, motif sans correspondance) valide quand même son corps : requête, agrégations et tri sont lus contre un schéma vide avant qu'on conclue qu'il n'y a rien à chercher. Écart connu, trouvé par la suite de conformance d'OpenSearch et **compté en régression** : `include_named_queries_score` (ajouté par ES en 8.13, donc absent de la suite figée d'Elastic) est refusé comme un paramètre inconnu |
+| `POST\|GET /{index}/_search`, `POST\|GET /_search` | ✅ | `{index}` est une **expression** au sens d'ES (voir [Expressions d'index](#expressions-dindex-listes-motifs-alias)) ; sans index, la recherche porte sur tout, comme `_all`. Une recherche qui ne vise **aucun** index (cluster vide, motif sans correspondance) valide quand même son corps : requête, agrégations et tri sont lus contre un schéma vide avant qu'on conclue qu'il n'y a rien à chercher. `explain: true` (corps ou query string) ajoute `_explanation` à chaque hit, et — comme chez ES — `_shard` et `_node`, qu'il n'ajoute pas autrement |
 | `query` | ✅ | |
 | `from` / `size` | ✅ | corps ou query string. `from + size > 10000` ❌ (`max_result_window`) |
 | `sort` | 🟡 | multi-clés, `asc` / `desc`, sur `keyword` / numérique / `date` / `boolean`, plus `_score` et `_doc`. Le tableau `sort` est rendu dans chaque hit, et c'est là que se lisent les valeurs absentes : sur un entier, une date ou un `boolean` ES ne rend pas `null` mais une **vraie valeur** (`9223372036854775807` / `-9223372036854775808`, donc ex æquo avec un document qui la porte pour de bon), sur un flottant `"Infinity"` / `"-Infinity"` en **chaîne**, et seul un `keyword` rend `null`. En multi-index, un champ non mappé par un des index donne un échec **de ce shard** — sauf si `unmapped_type` fournit l'échappatoire. Deux index dont le tri ne tombe pas dans la même **famille** (`LONG` pour `byte`/`short`/`integer`/`long`/`date`/`boolean`, `FLOAT`, `DOUBLE`, `STRING`) ne se fusionnent pas : ES rend 400, et `float` et `double` n'y sont **pas** ensemble. Mesuré par [`sonde_tri.py`](../tests/compat/sonde_tri.py). Supporté : `missing` (`_last` (le défaut), `_first`, ou une valeur de substitution. Les deux mots-clés sont **sensibles à la casse** — `_FIRST` est une valeur, pas un mot-clé. La substitution est lue **au type du champ** : une chaîne suit `Long.parseLong` / `Double.parseDouble` (donc `"+7"` passe et `"7.9"` non), un nombre JSON se tronque (`7.9` vaut 7, `1e300` sature). Une **date** se substitue par un nombre de millisecondes et un `boolean` par `0` / `1` : `"2020-03-01"` et `true` y rendent 400, comme chez ES), `mode` (`min` / `max` / `sum` / `avg` / `median`, insensible à la casse. Le défaut n'est pas un mode mais une règle : le **minimum** en ordre croissant, le **maximum** en décroissant. `sum` sur des entiers **déborde en silence** comme un `long` de Java (`[1, i64::MAX]` se classe sur `i64::MIN`), `avg` arrondit par le `Math.round` de Java (donc vers le haut à la demie), et `median` moyenne les deux valeurs du milieu quand elles sont en nombre pair — la colonne étant triée à l'indexation des deux côtés), `unmapped_type` (le type sous lequel traiter un champ que **cet** index ne mappe pas, plutôt que de faire échouer son shard. Tous ses documents y sont « sans valeur ». Ignoré quand l'index mappe le champ, et refusé en le nommant sur un type que ferrite ne mappe pas (`ip`, `binary`, ...) ou qui n'est pas une feuille (`object`, `nested`)). Refusé : `nested`, `numeric_type`, `format` (sur une clé de tri `date`), `ignore_unmapped` (il fait taire l'échec de shard d'un champ non mappé sous un `nested` ou un `_geo_distance` ; `unmapped_type` couvre le cas mappable, celui-ci ne se pose que sur les deux clés refusées ci-dessous), le tri par script (`_script`, et son `type`), le tri géographique (`_geo_distance`, et avec lui `unit`, `distance_type`, `pin.location`), le tri sur un champ `text` (y compris via `unmapped_type: text` — ES fait échouer le shard (« Fielddata is disabled »), ferrite aussi), les trois paramètres ci-dessus à côté de `_score` (ES les refuse aussi (`[_score] unknown field [mode]`) ; à côté de `_doc` il les **accepte et les ignore**, ferrite comme lui), les trois paramètres ci-dessus en query string (`?sort=` ne connaît que `champ:sens` chez ES comme ici) |
@@ -944,13 +944,14 @@ promeut au lieu de repousser, ce qu'ES accepte sans rien dire.
 | `aggs` / `aggregations` | 🟡 | voir la section dédiée |
 | `scroll` | ✅ | `?scroll=1m` ouvre un contexte figé et rend un `_scroll_id` — voir la section dédiée |
 | `min_score` | ✅ | le seuil de score sous lequel un document ne sort pas. Il ne se confond pas avec le `min_score` de `function_score`, qui vit **dans** la clause : celui-ci est posé sur la recherche entière, et sa place dans la chaîne est tout son intérêt. Mesuré contre ES 8.15 : il filtre **avant** `from` / `size`, donc il change `hits.total` (un filtrage fait côté client après coup ne donne ni le même compte ni la même pagination) ; les **agrégations ne voient pas** les documents qu'il écarte ; `max_score` est celui des documents retenus ; et il s'applique même sous un `sort` par champ, là où la réponse ne porte plus aucun score — c'est le piège déjà payé sur le `boost` d'une clause, tantivy laissant tomber le calcul du score quand personne ne le lit. Une requête purement filtrante note tout à `0.0` : un `min_score: 0.5` sur un `bool.filter` n'y rend donc aucun document. Voir [`src/seuil.rs`](../src/seuil.rs), mesuré par [`sonde_score.py`](../tests/compat/sonde_score.py). Supporté : un nombre, ou la **chaîne** qui en porte un (`"0.135"` filtre comme `0.135`), comme chez ES, un seuil négatif, qui ne filtre rien — ES le prend tel quel, il ne le refuse pas. Refusé : `null` (`parsing_exception` / « Unknown key for a VALUE_NULL in [min_score]. », la phrase d'ES), une chaîne illisible (`number_format_exception` / « For input string: "abc" », la phrase d'ES), reproduire les agrégations qu'**ES** calcule sans tenir compte de son propre seuil (divergence assumée, et c'est ES qui se contredit : avec `{"query": {"match_all": {}}, "min_score": 2}` sur cinq documents, il rend `hits.total: 0` et, **dans la même réponse**, un `value_count` à 0 mais un `terms` avec ses deux seaux pleins. Les deux agrégateurs ne prennent pas le même chemin ; le même seuil sur un `term` ou un `match` est honoré par les deux. ferrite applique le seuil **uniformément** — ses agrégations voient exactement les documents que `hits.total` compte. Reproduire l'écart demanderait une table « quel agrégateur fuit, sous quelle forme de requête » dont la règle n'est écrite nulle part, et qu'ES ne tient pas dans une seule réponse) |
-| `search_after`, `pit`, `collapse`, `knn`, `explain`, `seq_no_primary_term`, `post_filter`, `suggest`, `rescore`, `track_scores`, `q`, `terminate_after`, `version`, `indices_boost`, `profile`, `slice`, `stats`, `ext`, `retriever` | ❌ | **pas encore** — aucun n'est un obstacle de moteur ; `search_after` est celui qui manque le plus, pour paginer au-delà de 10 000 |
+| `search_after`, `pit`, `collapse`, `knn`, `seq_no_primary_term`, `post_filter`, `suggest`, `rescore`, `track_scores`, `q`, `terminate_after`, `version`, `indices_boost`, `profile`, `slice`, `stats`, `ext`, `retriever` | ❌ | **pas encore** — aucun n'est un obstacle de moteur ; `search_after` est celui qui manque le plus, pour paginer au-delà de 10 000 |
 | `timeout` (paramètre et corps) | 🟡 | accepté et **vérifié**, sans objet : chez ES c'est une borne par shard au-delà de laquelle la collecte s'arrête et la réponse sort **partielle** avec `timed_out: true` ; ferrite cherche en un seul morceau, dans le processus, et rend toujours un résultat complet et `timed_out: false` — le sens sûr, puisqu'un `timeout` honoré rendrait *moins* de documents. Ce qui reste juste, c'est la forme : `1` (unité manquante), `1M`, `-2s`, `1.5s` sont refusés avec les phrases d'ES, `0`, `-1`, `1D` et `1MS` acceptés — tous mesurés. C'est le seul des quatre manques de cette famille qui n'a pas été trouvé par une suite de conformance mais par la **suite de tests du client go** |
 | `ignore_unavailable`, `allow_no_indices`, `expand_wildcards` | ✅ | voir [Expressions d'index](#expressions-dindex-listes-motifs-alias) — `expand_wildcards=none` reste ❌ |
 | `routing`, `filter_path`, `typed_keys` | ❌ | **hors périmètre assumé** — ferrite est mono-shard, `routing` n'a rien à choisir ; les deux autres changent la forme de la réponse, et une forme qui dépend d'un paramètre est une seconde API à mesurer |
 | `search_type`, `max_concurrent_shard_requests`, `pre_filter_shard_size`, `batched_reduce_size` | ❌ | **hors périmètre assumé** — ils reglent la façon dont une recherche se distribue entre shards ; il n'y en a qu'un, donc rien à distribuer et rien à régler |
 | `rest_total_hits_as_int` | ❌ | **pas encore** — il change la forme de `hits.total` (nombre au lieu d'objet) ; ES 8 l'accepte encore et du code venu de la 6.x/7.x s'en sert, voir [`compat-es7.md`](compat-es7.md) |
-| `_msearch`, `_search/template`, `_explain` | ❌ | **pas encore** — `_msearch` est le plus regretté : un tableau de bord qui pose six facettes fait six appels au lieu d'un. Les deux autres sont des outils de mise au point |
+| `_msearch`, `_search/template` | ❌ | **pas encore** — `_msearch` est le plus regretté : un tableau de bord qui pose six facettes fait six appels au lieu d'un |
+| `GET\|POST /{index}/_explain/{id}`, `explain: true` | 🟡 | « pourquoi **ce** document, avec ce score ». `matched` est exact des deux côtés, et l'arbre `{value, description, details}` reproduit la **forme** et les **valeurs** de celui d'ES — pas ses phrases, qui sont du texte de Lucene. Là où la phrase diffère, c'est que la quantité diffère, et c'est écrit : `N, total number of documents` ici contre `N, total number of documents **with field**` chez ES. Cet arbre est l'instrument qui chiffre la [divergence de scoring](#scoring--ce-que-le-bm25-de-tantivy-ne-calcule-pas-comme-celui-de-lucene) : `tests/compat/sonde_explain.py --ecart` pose les cinq statistiques du BM25 côte à côte et recalcule les deux scores à partir des deux séries. Supporté : `query` (obligatoire, comme chez ES (`query is missing`)), `_name` (lu ici aussi, mais `matched_queries` n'est pas dans la réponse d'`_explain` — ES non plus), `preference`, `routing`, `realtime` (acceptés, sans objet : un seul shard). Refusé : la **raison** d'une non-correspondance (ES reconstruit l'explication Lucene (`Failure to meet condition(s) of required/prohibited clause(s)`) ; ferrite rend `matched: false` et le dit, plutôt que d'inventer une raison plausible), `q`, `df`, `default_operator`, `analyzer`, `analyze_wildcard`, `lenient` (la recherche par chaîne n'est pas implémentée), `_source`, `stored_fields` (la route rend l'arbre du score, pas le document) |
 | `GET\|POST /{index}/_field_caps` | 🟡 | par champ, son type, `searchable` et `aggregatable`, et l'agrégation **par index** quand plusieurs sont visés — c'est la question que pose un outil de découverte avant de proposer un filtre qui échouerait sur la moitié des index. Toute l'information est déjà dans le mapping — mais elle ne se déduit pas du seul **type** : un champ `index: false` reste `searchable` tant qu'il a une colonne, et ne l'est plus quand il n'en a pas (un `text`). C'est ce que rend ES, mesuré, et c'est ce que ferrite rend. Supporté : `fields` (dans l'URL ou dans le corps, jokers compris), `include_unmapped`, `index_filter` (n'décrire que les index qui ont au moins un document correspondant). Refusé : les champs de métadonnées (`_id`, `_index`, `_seq_no`…) (ES les rend sur `fields=*` ; ferrite ne sait pas les interroger, et les annoncer `searchable` serait un résultat faux), `runtime_mappings` |
 | `GET\|POST /{index}/_validate/query` | 🟡 | le traducteur du Query DSL rendu observable, sans exécuter. Les deux formes de réponse d'ES sont reproduites, et la distinction compte : une requête mal formée (clause inconnue) rend `valid: false` **sans** `_shards`, une requête que ce mapping-là ne sait pas construire rend `_shards` et une explication par index. Supporté : `explain`, `all_shards` (un shard par index : sans objet ici), `ignore_unavailable`, `allow_no_indices`, `expand_wildcards`. Refusé : `rewrite` (il demande la forme **réécrite** de la requête Lucene, que ferrite n'a pas), `q` (la recherche par chaîne (`query_string`) n'est pas implémentée ; `df`, `default_operator`, `analyzer`, `analyze_wildcard` et `lenient` la suivent) |
 
@@ -959,6 +960,144 @@ acceptés partout ; `pretty` est implémenté (indentation de la réponse).
 
 **Tout paramètre de query string non reconnu est refusé** avec
 `request [...] contains unrecognized parameter: [...]`, comme chez ES.
+
+### Savoir pourquoi un document sort : `_name`, `explain`, `_explain`
+
+Trois façons de poser la même question — « pourquoi ce document, avec ce
+score ? » — et la troisième est aussi un instrument de mesure.
+
+- **`_name` et `matched_queries`** disent *laquelle* des clauses a retenu ce
+  document-là. C'est le moins coûteux des trois, et le plus utilisé pendant le
+  développement. Deux règles se mesurent plutôt qu'elles ne se devinent :
+  - `_name` se pose **là où `boost` se pose**. Au niveau du champ pour les
+    clauses qui en citent un (`{"match": {"titre": {"query": …, "_name": …}}}`),
+    au niveau du corps pour les autres. Une valeur écrite en raccourci
+    (`{"term": {"k": "a"}}`) ne peut donc pas être nommée — et ES ne le permet
+    pas non plus (`[term] query doesn't support multiple fields`).
+  - chaque clause nommée est **rejouée seule** contre chaque document rendu.
+    Ce n'est pas une commodité d'implémentation, c'est ce que fait ES, et ça
+    s'observe : un `should` placé sous un `must_not` ne se nomme pas dans un
+    document qui, lui, correspond ; un `filter` nommé se nomme (avec le score
+    `1.0` sous `include_named_queries_score`) ; un `should` qui ne trouve rien
+    ne se nomme nulle part.
+
+  L'**ordre** de la liste n'est ni celui de la requête ni l'alphabétique. ES
+  range ses clauses nommées dans une `HashMap<String, Query>` de Java et rend
+  l'ordre d'itération de cette table : le seau d'un nom vaut
+  `(h ^ (h >>> 16)) & (capacité - 1)` avec `h = String.hashCode()`, la capacité
+  valant 16 tant qu'il y a au plus 12 noms et doublant ensuite. Ce n'est pas
+  une supposition : cinq noms posés dans l'ordre `zzz, aaa, mmm, kkk, bbb`
+  ressortent `aaa, bbb, kkk, zzz, mmm` — ni l'un ni l'autre des deux ordres
+  « évidents » —, et **deux conteneurs différents rendent la même chose**.
+  ferrite reproduit cet ordre. Ce qu'il ne reproduit pas est l'ordre à
+  l'intérieur d'un seau, qui dépend chez ES de l'historique de deux tables
+  chaînées et de leurs redimensionnements : c'est la seule divergence de cette
+  ligne, et `sonde_explain.py` la reconnaît par un prédicat qui vérifie que les
+  deux listes ont bien la **même suite de seaux**.
+
+  Un nom posé deux fois ne compte qu'une, et c'est le **dernier** qui gagne —
+  conséquence de la même table, mesurée.
+
+- **`explain: true`** (corps ou query string) ajoute `_explanation` à chaque
+  hit, et — comme chez ES — `_shard` et `_node`, que la réponse ne porte pas
+  autrement.
+
+- **`GET|POST /{index}/_explain/{id}`** pose une requête à un document nommé.
+  Trois réponses différentes, et c'est tout l'intérêt : `matched: true` avec
+  l'arbre, `matched: false` en 200, et **404 avec un corps** (`{_index, _id,
+  matched: false}`, sans `explanation`) quand le document n'existe pas — un
+  client qui lève sur 404 ne lit pas le même cas qu'un `matched: false`.
+
+Ce que l'arbre reproduit et ce qu'il ne reproduit pas mérite d'être écrit,
+parce que c'est une décision et pas une limite. La `description` d'ES est du
+texte de Lucene : la recopier mot pour mot serait un décor, et surtout ça
+**masquerait** les endroits où les deux moteurs ne calculent pas la même chose.
+Ce qui est reproduit est donc la **forme** de l'arbre et les **valeurs** de
+chaque nœud ; la phrase reprend celle d'ES quand la quantité est la même, et
+s'en écarte quand elle ne l'est pas. Le nœud `N` en est l'exemple :
+
+| | ES | ferrite |
+|---|---|---|
+| | `N, total number of documents with field` | `N, total number of documents` |
+
+Cinq divergences de forme sont assumées et écrites, chacune avec son prédicat
+dans [`sonde_explain.py`](../tests/compat/sonde_explain.py) : l'`idf` d'une
+phrase (ES le détaille terme par terme, tantivy n'en garde que la somme — même
+valeur, un niveau de moins), un `bool` à une seule clause obligatoire (Lucene le
+**réécrit** en cette clause), l'ordre des branches d'un `dis_max` (ES ne les
+rend pas dans l'ordre de la requête), la forme de `boosting` (ES le construit
+comme un `FunctionScoreQuery` et n'explique que la partie positive), et la
+**raison** d'une non-correspondance — ES reconstruit l'explication Lucene
+(`Failure to meet condition(s) of required/prohibited clause(s)`), ferrite rend
+`matched: false` et le dit plutôt que d'inventer une raison plausible.
+
+De bout en bout, `sonde_explain.py` pose 54 questions aux deux serveurs :
+**47 identiques, 7 refus assumés, 0 écart** (`--calibrer` : 54/54 contre deux
+Elasticsearch). Le même fichier lancé contre le ferrite d'avant rend **4/54**.
+
+### Scoring : ce que le BM25 de tantivy ne calcule pas comme celui de Lucene
+
+Cette divergence est déclarée depuis les premières versions, et jusqu'ici la
+seule chose qu'on pouvait en dire était « les nombres diffèrent ». L'arbre
+d'explication permet de dire **de combien, et pourquoi** :
+`sonde_explain.py --ecart` pose les cinq statistiques du BM25 côte à côte, puis
+recalcule le score de chaque serveur à partir de **ses** statistiques.
+
+```
+## match alpha (terme fréquent)
+   doc    côté        n    N  freq     dl     avgdl         score       formule
+   d1     ferrite     3    6     1      5    1.8333      0.406154      0.406154
+   d1     es          3    4     1      5      2.75     0.2672301     0.2672301
+   d2     ferrite     3    6     1      1    1.8333     0.8514803     0.8514803
+   d2     es          3    4     1      1      2.75     0.4822086     0.4822086
+```
+
+Ce que ça montre, et qu'aucune lecture ne donnait :
+
+- **la formule est la même**, jusqu'au facteur `boost = k1 + 1 = 2.2` qu'ES
+  affiche en tête. Le score de chaque côté se recalcule exactement à partir de
+  ses propres statistiques : s'il manquait un terme, le nombre ne retomberait
+  pas ;
+- **`n`, `freq` et `dl` sont identiques partout**. Le nombre de documents qui
+  portent le terme, la fréquence dans le document, la longueur du champ après
+  quantification : trois quantités sur cinq ne divergent pas du tout ;
+- **seuls `N` et `avgdl` diffèrent**, et pour une seule raison : Lucene les
+  calcule sur les documents **qui ont le champ**, tantivy sur **tous** les
+  documents de l'index. Sur le corpus ci-dessus, deux documents n'ont pas de
+  `titre` : ES compte `N = 4` et `avgdl = 2.75`, ferrite `N = 6` et
+  `avgdl = 1.8333` ;
+- **la conséquence chiffrée** : jusqu'à **43 %** d'écart relatif sur le `_score`
+  quand une partie du corpus n'a pas le champ interrogé ; et **zéro** — à un ULP
+  près, l'arrondi du `ln` en `float` — sur un champ que *tous* les documents
+  portent. C'est ce dernier point qui rend la divergence lisible : elle n'est
+  pas un bruit diffus, c'est une différence de dénominateur.
+
+L'exemple le plus net est un `term` sur un `keyword`, parce qu'il n'y a là ni
+analyzer, ni fréquence de terme, ni longueur de champ variable — tout ce qui
+pourrait brouiller la lecture est constant. Deux champs du même type, dans le
+même index, sur les mêmes documents :
+
+| | `n` | `N` | `freq` | `dl` | `avgdl` | `_score` |
+|---|---|---|---|---|---|---|
+| champ que **tous** les documents portent, ferrite | 3 | 6 | 1 | 1 | 1 | 0,6931472 |
+| le même, ES | 3 | 6 | 1 | 1 | 1 | 0,6931471 |
+| champ que **deux** documents n'ont pas, ferrite | 2 | **6** | 1 | 1 | **0,5** | 0,7306977 |
+| le même, ES | 2 | **3** | 1 | 1 | **1** | 0,4700036 |
+
+C'est la réponse à « d'où vient l'écart : l'idf ? la longueur de champ ? la
+norme ? » — **ni la norme ni la longueur de champ**, qui sont identiques au bit
+près, et pas non plus l'idf *en tant que formule*. Une seule cause, `N`, qui
+apparaît à **deux** endroits de la formule : directement dans l'idf, et
+indirectement dans le `tf` par l'`avgdl`, qui divise le nombre total de jetons
+par ce même `N`. Un champ que tous les documents portent annule les deux d'un
+coup, ce qui explique pourquoi la divergence était restée invisible aussi
+longtemps : les corpus écrits à la main remplissent tous leurs champs.
+
+L'ordre des résultats, lui, est comparé à celui d'ES par
+[`diff_relevance.py`](../tests/compat/diff_relevance.py) — 212/213, 0 écart réel
+— parce qu'un facteur qui s'applique à tous les documents d'un même champ ne les
+réordonne pas. C'est quand plusieurs champs se mélangent (`multi_match`,
+`dis_max`) que l'écart peut changer l'ordre.
 
 ### Ce que la réponse transporte : `fields`, `docvalue_fields`, `stored_fields`
 
@@ -1516,10 +1655,14 @@ pas pour être découverts en production.
    texte latin, mais ce n'est pas la même implémentation : sur de l'unicode
    exotique ou du CJK, les tokens peuvent différer.
 
-6. **Les scores ne sont pas identiques à ceux d'ES.** Même formule (BM25), mais
-   statistiques d'index et normalisation de longueur différentes. L'*ordre* des
-   résultats est comparé à celui d'ES par `tests/compat/diff_against_es.py` ;
-   les valeurs absolues, non.
+6. **Les scores ne sont pas identiques à ceux d'ES.** Même formule, et
+   maintenant **chiffrée** : deux des cinq statistiques du BM25 divergent
+   (`N` et `avgdl`, que Lucene calcule sur les documents *qui ont le champ* et
+   tantivy sur tous), les trois autres (`n`, `freq`, `dl`) sont identiques. Voir
+   [Scoring](#scoring--ce-que-le-bm25-de-tantivy-ne-calcule-pas-comme-celui-de-lucene)
+   pour le tableau et la mesure : jusqu'à 43 % d'écart relatif quand une partie
+   du corpus n'a pas le champ interrogé, et zéro sinon. L'*ordre* des résultats
+   est comparé à celui d'ES par `tests/compat/diff_relevance.py`.
 
 7. **`_shards.total` vaut 1** (un shard, zéro réplique) là où un ES par défaut
    annonce 2 dans les réponses d'écriture. En recherche multi-index, il vaut le

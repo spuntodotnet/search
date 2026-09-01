@@ -105,10 +105,10 @@ régression.
 | Sous-corpus | Requêtes | Servies entièrement |
 |---|---|---|
 | **`github` — du code d'application open source** | 338 | **96,4 %** |
-| `clients` — tests et exemples des clients officiels | 143 | 81,1 % |
-| `doc` — la documentation de référence | 3 969 | 40,4 % |
+| `clients` — tests et exemples des clients officiels | 143 | 81,8 % |
+| `doc` — la documentation de référence | 3 969 | 40,6 % |
 | `rally` — les tracks de benchmark d'Elastic | 861 | 47,2 % |
-| **tout le corpus** | 5 311 | 46,2 % |
+| **tout le corpus** | 5 311 | 46,3 % |
 
 Ces quatre nombres ne se contredisent pas, ils mesurent quatre choses
 différentes, et l'écart entre eux **est** le résultat :

@@ -36,11 +36,11 @@
     }
   },
   "totaux": {
-    "capacites": 207,
-    "supporte": 100,
-    "partiel": 62,
-    "refuse": 45,
-    "poids_renseignes": 148
+    "capacites": 208,
+    "supporte": 101,
+    "partiel": 63,
+    "refuse": 44,
+    "poids_renseignes": 149
   },
   "capacites": [
     {
@@ -1846,10 +1846,9 @@
       "table": "dsl",
       "nom": "`_name` (nommer une clause), `matched_queries`, `include_named_queries_score`",
       "nom_texte": "_name (nommer une clause), matched_queries, include_named_queries_score",
-      "etat": "refuse",
+      "etat": "supporte",
       "poids": null,
-      "motif": "pas_encore",
-      "raison": "nommer une clause n'a d'interet qu'avec `matched_queries` dans la reponse, qui n'est pas rendu : accepter le nom en le perdant serait promettre une information qui ne reviendra pas. Refuse dans toutes les clauses, `bool` compris — et le parametre `include_named_queries_score` (ES 8.13) avec, puisqu'il ne change **que** la forme de `matched_queries` (un objet `{nom: score}` au lieu d'une liste). Le laisser tomber dans « unrecognized parameter » le deguisait en faute de frappe : c'etait le seul defaut de cette ligne, et il comptait en regression pour la suite d'OpenSearch — la seule des trois sources a pouvoir l'exercer, le parametre etant posterieur a la 7.10.2 comme a la 2.12 d'OpenSearch."
+      "detail": "`_name` se pose **la ou `boost` se pose** — au niveau du champ pour les clauses qui en citent un (`{\"term\": {\"k\": {\"value\": …, \"_name\": …}}}`), au niveau du corps pour les autres (`bool`, `nested`, `dis_max`, `terms`…) : une valeur ecrite en raccourci ne peut donc pas etre nommee, et ES ne le permet pas non plus. Chaque clause nommee est **rejouee seule** contre chaque document rendu, comme le fait ES : un `should` place sous un `must_not` ne se nomme pas dans un document qui, lui, correspond. L'ordre de `matched_queries` n'est ni celui de la requete ni l'alphabetique — c'est l'ordre d'iteration d'une `HashMap` de Java, reproductible et reproduit (voir [`src/explain.rs`](../src/explain.rs)) ; deux noms qui tombent dans le **meme seau** sont la seule chose que ferrite ne classe pas comme ES. Un nom pose deux fois ne compte qu'une, le dernier gagnant, comme chez ES. `include_named_queries_score` (ES 8.13) rend le meme bloc en objet `{nom: score}`"
     },
     {
       "id": "dsl.non_supportees",
@@ -1942,7 +1941,7 @@
       "nom_texte": "POST|GET /{index}/_search, POST|GET /_search",
       "etat": "supporte",
       "poids": 33.9,
-      "detail": "`{index}` est une **expression** au sens d'ES (voir [Expressions d'index](#expressions-dindex-listes-motifs-alias)) ; sans index, la recherche porte sur tout, comme `_all`. Une recherche qui ne vise **aucun** index (cluster vide, motif sans correspondance) valide quand même son corps : requête, agrégations et tri sont lus contre un schéma vide avant qu'on conclue qu'il n'y a rien à chercher. Écart connu, trouvé par la suite de conformance d'OpenSearch et **compté en régression** : `include_named_queries_score` (ajouté par ES en 8.13, donc absent de la suite figée d'Elastic) est refusé comme un paramètre inconnu"
+      "detail": "`{index}` est une **expression** au sens d'ES (voir [Expressions d'index](#expressions-dindex-listes-motifs-alias)) ; sans index, la recherche porte sur tout, comme `_all`. Une recherche qui ne vise **aucun** index (cluster vide, motif sans correspondance) valide quand même son corps : requête, agrégations et tri sont lus contre un schéma vide avant qu'on conclue qu'il n'y a rien à chercher. `explain: true` (corps ou query string) ajoute `_explanation` à chaque hit, et — comme chez ES — `_shard` et `_node`, qu'il n'ajoute pas autrement"
     },
     {
       "id": "recherche.query",
@@ -2200,8 +2199,8 @@
     {
       "id": "recherche.non_supportes",
       "table": "corps_search",
-      "nom": "`search_after`, `pit`, `collapse`, `knn`, `explain`, `seq_no_primary_term`, `post_filter`, `suggest`, `rescore`, `track_scores`, `q`, `terminate_after`, `version`, `indices_boost`, `profile`, `slice`, `stats`, `ext`, `retriever`",
-      "nom_texte": "search_after, pit, collapse, knn, explain, seq_no_primary_term, post_filter, suggest, rescore, track_scores, q, terminate_after, version, indices_boost, profile, slice, stats, ext, retriever",
+      "nom": "`search_after`, `pit`, `collapse`, `knn`, `seq_no_primary_term`, `post_filter`, `suggest`, `rescore`, `track_scores`, `q`, `terminate_after`, `version`, `indices_boost`, `profile`, `slice`, `stats`, `ext`, `retriever`",
+      "nom_texte": "search_after, pit, collapse, knn, seq_no_primary_term, post_filter, suggest, rescore, track_scores, q, terminate_after, version, indices_boost, profile, slice, stats, ext, retriever",
       "etat": "refuse",
       "poids": 3.0,
       "motif": "pas_encore",
@@ -2258,12 +2257,33 @@
     {
       "id": "recherche.msearch",
       "table": "corps_search",
-      "nom": "`_msearch`, `_search/template`, `_explain`",
-      "nom_texte": "_msearch, _search/template, _explain",
+      "nom": "`_msearch`, `_search/template`",
+      "nom_texte": "_msearch, _search/template",
       "etat": "refuse",
-      "poids": 0.1,
+      "poids": 0.0,
       "motif": "pas_encore",
-      "raison": "`_msearch` est le plus regretté : un tableau de bord qui pose six facettes fait six appels au lieu d'un. Les deux autres sont des outils de mise au point."
+      "raison": "`_msearch` est le plus regretté : un tableau de bord qui pose six facettes fait six appels au lieu d'un."
+    },
+    {
+      "id": "recherche.explain",
+      "table": "corps_search",
+      "nom": "`GET|POST /{index}/_explain/{id}`, `explain: true`",
+      "nom_texte": "GET|POST /{index}/_explain/{id}, explain: true",
+      "etat": "partiel",
+      "poids": 0.1,
+      "detail": "« pourquoi **ce** document, avec ce score ». `matched` est exact des deux côtés, et l'arbre `{value, description, details}` reproduit la **forme** et les **valeurs** de celui d'ES — pas ses phrases, qui sont du texte de Lucene. Là où la phrase diffère, c'est que la quantité diffère, et c'est écrit : `N, total number of documents` ici contre `N, total number of documents **with field**` chez ES. Cet arbre est l'instrument qui chiffre la [divergence de scoring](#scoring--ce-que-le-bm25-de-tantivy-ne-calcule-pas-comme-celui-de-lucene) : `tests/compat/sonde_explain.py --ecart` pose les cinq statistiques du BM25 côte à côte et recalcule les deux scores à partir des deux séries",
+      "parametres": {
+        "supportes": [
+          "query",
+          "_name",
+          "preference, routing, realtime"
+        ],
+        "refuses": [
+          "la raison d'une non-correspondance",
+          "q, df, default_operator, analyzer, analyze_wildcard, lenient",
+          "_source, stored_fields"
+        ]
+      }
     },
     {
       "id": "recherche.field_caps",

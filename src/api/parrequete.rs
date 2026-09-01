@@ -280,7 +280,10 @@ fn lire_corps(corps: &Value, geste: Geste, route: &str) -> EsResult<(Option<Valu
                 ))
             }
         },
-        Some(q) => Some(q.clone()),
+        // `_name` est retire comme sur `_search` : ces routes ne rendent pas de
+        // hits, donc pas de `matched_queries`, mais une requete qui en porte un
+        // doit rester construisible.
+        Some(q) => Some(crate::dsl::extraire_noms(q)?.0),
     };
     Ok((requete, du_corps))
 }

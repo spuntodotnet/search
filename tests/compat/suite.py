@@ -14,7 +14,7 @@ erreur explicite, jamais un resultat partiel presente comme complet.
 import sys
 import traceback
 
-from elasticsearch import ApiError, Elasticsearch
+from elasticsearch import ApiError, Elasticsearch, NotFoundError
 
 URL = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:9200"
 INDEX = "compat_suite"
@@ -2488,22 +2488,26 @@ def recherche_timeout(es):
 
 
 @scenario
-def recherche_requetes_nommees_refusees(es):
-    """`_name` et `include_named_queries_score` : refuses, et nommes.
+def recherche_requete_nommee(es):
+    """`_name` se pose ou `boost` se pose, et pas ailleurs.
 
-    `include_named_queries_score` (ES 8.13) ne change **que** la forme de
-    `matched_queries` — un objet `{nom: score}` au lieu d'une liste. ferrite ne
-    rend pas `matched_queries` et refuse `_name` pour ne pas promettre un nom
-    qui ne reviendra pas ; le parametre est donc refuse de la meme facon, en
-    disant pourquoi. Le laisser tomber dans « unrecognized parameter » le
-    deguisait en faute de frappe.
+    Ce scenario ne mesure pas le contenu de `matched_queries` (voir
+    `clauses_nommees_et_matched_queries`) mais **l'endroit** ou le nom est
+    accepte : au niveau du champ pour les clauses qui en citent un
+    (`{"match": {"titre": {"query": ..., "_name": ...}}}`), au niveau du corps
+    pour les autres. Ecrit ailleurs, ES rend une erreur — et ferrite aussi,
+    sans quoi un nom serait accepte et perdu.
     """
-    refused(lambda: es.perform_request(
-        "GET", f"/{INDEX}/_search?include_named_queries_score=true"),
-        contains="[include_named_queries_score]")
+    r = es.search(index=INDEX, query={
+        "match": {"titre": {"query": "bel", "_name": "sur_le_titre"}}})
+    assert [h["matched_queries"] for h in r["hits"]["hits"]] == \
+        [["sur_le_titre"]], r["hits"]["hits"]
+    # Au niveau du corps d'une clause a champ : ES y voit un second champ.
     refused(lambda: es.search(index=INDEX, query={
-        "match": {"titre": {"query": "bel", "_name": "sur_le_titre"}}}),
-        contains="[_name]")
+        "term": {"auteur": "Zola", "_name": "x"}}))
+    # Un nom qui n'est pas une valeur simple.
+    refused(lambda: es.search(index=INDEX, query={
+        "match_all": {"_name": {"objet": True}}}), contains="[_name]")
 
 
 @scenario
@@ -4743,6 +4747,161 @@ def min_score_filtre_avant_la_pagination(es):
 
 
 # ---------------------------------------------------------------------------
+# Savoir pourquoi un document sort : `_name`, `explain`, `_explain`
+# ---------------------------------------------------------------------------
+
+EX = "compat-explain"
+
+
+@scenario
+def clauses_nommees_et_matched_queries(es):
+    """`_name` sur une clause, et `matched_queries` dans chaque hit.
+
+    C'est le moins couteux des trois mecanismes de mise au point, et le plus
+    utilise : il dit **laquelle** des clauses d'un `bool` a retenu ce
+    document-la. Ce que le scenario verifie, ce n'est pas seulement que les
+    noms sont rendus, c'est **lesquels** — une clause sous un `must_not` ne se
+    nomme pas dans un document qui, lui, correspond, et un `should` qui ne
+    trouve rien ne se nomme nulle part.
+    """
+    es.options(ignore_status=404).indices.delete(index=EX)
+    es.indices.create(index=EX, mappings={"properties": {
+        "titre": {"type": "text"}, "cat": {"type": "keyword"},
+        "vues": {"type": "long"}}})
+    for _id, doc in {
+        "a": {"titre": "guide complet du rust", "cat": "livre", "vues": 10},
+        "b": {"titre": "guide rapide", "cat": "fiche", "vues": 3},
+        "c": {"titre": "roman", "cat": "livre", "vues": 7},
+    }.items():
+        es.index(index=EX, id=_id, document=doc)
+    es.indices.refresh(index=EX)
+
+    r = es.search(index=EX, query={"bool": {
+        "must": [{"match": {"titre": {"query": "guide", "_name": "texte"}}}],
+        "should": [{"term": {"cat": {"value": "livre", "_name": "cat"}}}],
+        "filter": [{"range": {"vues": {"gte": 0, "_name": "vues"}}}]}})
+    noms = {h["_id"]: h["matched_queries"] for h in r["hits"]["hits"]}
+    assert set(noms) == {"a", "b"}, noms
+    assert set(noms["a"]) == {"texte", "cat", "vues"}, noms
+    assert set(noms["b"]) == {"texte", "vues"}, noms
+    # L'ordre n'est ni celui de la requete ni l'alphabetique : c'est celui
+    # d'une table de hachage de Java, et ferrite le reproduit (mesure contre
+    # deux ES).
+    assert noms["a"] == ["cat", "texte", "vues"], noms["a"]
+
+    # Une clause niee ne se nomme pas dans un document qui correspond.
+    r = es.search(index=EX, query={"bool": {
+        "must": [{"match_all": {}}],
+        "must_not": [{"term": {"cat": {"value": "livre", "_name": "nie"}}}]}})
+    assert [h["_id"] for h in r["hits"]["hits"]] == ["b"]
+    assert "matched_queries" not in r["hits"]["hits"][0]
+
+    # `include_named_queries_score` : le meme bloc, en objet `{nom: score}`.
+    # Il etait refuse **en le nommant** tant que `matched_queries` n'existait
+    # pas ; il n'y a plus de raison de le refuser.
+    r = es.perform_request(
+        "POST", f"/{EX}/_search?include_named_queries_score=true",
+        headers={"content-type": "application/json",
+                 "accept": "application/json"},
+        body={"query": {"bool": {"should": [
+            {"term": {"cat": {"value": "livre", "_name": "cat"}}}],
+            "filter": [{"range": {"vues": {"gte": 0, "_name": "vues"}}}]}}})
+    scores = {h["_id"]: h["matched_queries"] for h in r.body["hits"]["hits"]}
+    assert scores["a"]["vues"] == 1.0, scores
+    assert scores["a"]["cat"] > 0, scores
+    assert "cat" not in scores["b"], scores
+
+    # Un nom pose deux fois : ES range ses clauses dans une table, donc la
+    # derniere gagne (mesure).
+    r = es.search(index=EX, query={"bool": {"should": [
+        {"term": {"cat": {"value": "livre", "_name": "d"}}},
+        {"term": {"cat": {"value": "fiche", "_name": "d"}}}]}})
+    noms = {h["_id"]: h.get("matched_queries") for h in r["hits"]["hits"]}
+    assert noms == {"a": None, "b": ["d"], "c": None}, noms
+    es.indices.delete(index=EX)
+
+
+@scenario
+def explain_dans_la_recherche_et_sur_un_document(es):
+    """`explain: true` dans le corps, et la route `GET /{index}/_explain/{id}`.
+
+    L'arbre rendu n'est pas un decor : c'est ce qui permet de dire **ou** un
+    score diverge. Le scenario verifie donc la forme qu'un client lit — les
+    trois cles de chaque noeud, les cinq statistiques du BM25 sous le noeud
+    `tf`, et le fait que la racine vaut bien le `_score` du hit.
+    """
+    es.options(ignore_status=404).indices.delete(index=EX)
+    es.indices.create(index=EX, mappings={"properties": {
+        "titre": {"type": "text"}, "cat": {"type": "keyword"}}})
+    for _id, doc in {"a": {"titre": "guide complet du rust", "cat": "livre"},
+                     "b": {"titre": "guide rapide", "cat": "fiche"},
+                     "c": {"titre": "roman", "cat": "livre"}}.items():
+        es.index(index=EX, id=_id, document=doc)
+    es.indices.refresh(index=EX)
+
+    r = es.search(index=EX, query={"match": {"titre": "guide"}}, explain=True)
+    hit = r["hits"]["hits"][0]
+    # ES ajoute `_shard` et `_node` des que `explain` est demande, et pas
+    # autrement : la reponse change de forme, pas seulement de contenu.
+    assert hit["_shard"] == f"[{EX}][0]", hit["_shard"]
+    assert hit["_node"], hit
+    arbre = hit["_explanation"]
+    assert set(arbre) == {"value", "description", "details"}, arbre
+    assert abs(arbre["value"] - hit["_score"]) < 1e-6, (arbre, hit["_score"])
+
+    # Les cinq statistiques dont depend le BM25, chacune a sa place.
+    def feuilles(n):
+        yield n["description"], n["value"]
+        for e in n["details"]:
+            yield from feuilles(e)
+
+    vues = dict(feuilles(arbre))
+    for attendue in ["boost", "k1, term saturation parameter",
+                     "b, length normalization parameter",
+                     "dl, length of field",
+                     "avgdl, average length of field",
+                     "freq, occurrences of term within document",
+                     "n, number of documents containing term",
+                     "N, total number of documents"]:
+        assert attendue in vues, (attendue, sorted(vues))
+    assert vues["k1, term saturation parameter"] == 1.2
+    assert vues["b, length normalization parameter"] == 0.75
+    # `n` et `N` sont des comptes : ES les rend en entier, pas en flottant.
+    assert isinstance(vues["n, number of documents containing term"], int)
+
+    # Sans `explain`, ni arbre ni `_shard`.
+    r = es.search(index=EX, query={"match": {"titre": "guide"}})
+    assert "_explanation" not in r["hits"]["hits"][0]
+    assert "_shard" not in r["hits"]["hits"][0]
+
+    # La route : le document correspond, ou il ne correspond pas, ou il
+    # n'existe pas — trois reponses differentes, et c'est tout l'interet.
+    r = es.explain(index=EX, id="a", query={"match": {"titre": "guide"}})
+    assert r["matched"] is True, r
+    assert r["explanation"]["value"] > 0, r
+    r = es.explain(index=EX, id="c", query={"match": {"titre": "guide"}})
+    assert r["matched"] is False, r
+    assert r["explanation"]["value"] == 0.0, r
+    # Un document absent : 404, mais avec un corps — et ce corps n'a pas
+    # d'`error`. C'est la forme d'ES, mesuree, et elle compte : un client qui
+    # leve sur 404 ne lit pas le meme cas qu'un `matched: false` en 200.
+    try:
+        es.explain(index=EX, id="zzz", query={"match": {"titre": "guide"}})
+        raise AssertionError("un document absent aurait du rendre 404")
+    except NotFoundError as exc:
+        assert exc.body == {"_index": EX, "_id": "zzz", "matched": False}, \
+            exc.body
+    # Sans requete, ES refuse : la route ne rend pas le document, elle rend ce
+    # qu'une requete en dit.
+    refused(lambda: es.perform_request(
+        "GET", f"/{EX}/_explain/a",
+        headers={"content-type": "application/json",
+                 "accept": "application/json"}, body={}),
+        contains="query is missing")
+    es.indices.delete(index=EX)
+
+
+# ---------------------------------------------------------------------------
 
 def main():
     es = Elasticsearch(URL, request_timeout=30)
@@ -4757,7 +4916,7 @@ def main():
             print(f"[ echec] {name}")
             print("".join("        " + l for l in
                           traceback.format_exc().splitlines(keepends=True)))
-    for index in (INDEX, SCROLL_INDEX, PQ, PQ2):
+    for index in (INDEX, SCROLL_INDEX, PQ, PQ2, IF, EX):
         es.options(ignore_status=404).indices.delete(index=index)
 
     print()

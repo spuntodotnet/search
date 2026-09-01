@@ -738,6 +738,144 @@ acceptés partout ; `pretty` est implémenté (indentation de la réponse).
 **Tout paramètre de query string non reconnu est refusé** avec
 `request [...] contains unrecognized parameter: [...]`, comme chez ES.
 
+### Savoir pourquoi un document sort : `_name`, `explain`, `_explain`
+
+Trois façons de poser la même question — « pourquoi ce document, avec ce
+score ? » — et la troisième est aussi un instrument de mesure.
+
+- **`_name` et `matched_queries`** disent *laquelle* des clauses a retenu ce
+  document-là. C'est le moins coûteux des trois, et le plus utilisé pendant le
+  développement. Deux règles se mesurent plutôt qu'elles ne se devinent :
+  - `_name` se pose **là où `boost` se pose**. Au niveau du champ pour les
+    clauses qui en citent un (`{"match": {"titre": {"query": …, "_name": …}}}`),
+    au niveau du corps pour les autres. Une valeur écrite en raccourci
+    (`{"term": {"k": "a"}}`) ne peut donc pas être nommée — et ES ne le permet
+    pas non plus (`[term] query doesn't support multiple fields`).
+  - chaque clause nommée est **rejouée seule** contre chaque document rendu.
+    Ce n'est pas une commodité d'implémentation, c'est ce que fait ES, et ça
+    s'observe : un `should` placé sous un `must_not` ne se nomme pas dans un
+    document qui, lui, correspond ; un `filter` nommé se nomme (avec le score
+    `1.0` sous `include_named_queries_score`) ; un `should` qui ne trouve rien
+    ne se nomme nulle part.
+
+  L'**ordre** de la liste n'est ni celui de la requête ni l'alphabétique. ES
+  range ses clauses nommées dans une `HashMap<String, Query>` de Java et rend
+  l'ordre d'itération de cette table : le seau d'un nom vaut
+  `(h ^ (h >>> 16)) & (capacité - 1)` avec `h = String.hashCode()`, la capacité
+  valant 16 tant qu'il y a au plus 12 noms et doublant ensuite. Ce n'est pas
+  une supposition : cinq noms posés dans l'ordre `zzz, aaa, mmm, kkk, bbb`
+  ressortent `aaa, bbb, kkk, zzz, mmm` — ni l'un ni l'autre des deux ordres
+  « évidents » —, et **deux conteneurs différents rendent la même chose**.
+  ferrite reproduit cet ordre. Ce qu'il ne reproduit pas est l'ordre à
+  l'intérieur d'un seau, qui dépend chez ES de l'historique de deux tables
+  chaînées et de leurs redimensionnements : c'est la seule divergence de cette
+  ligne, et `sonde_explain.py` la reconnaît par un prédicat qui vérifie que les
+  deux listes ont bien la **même suite de seaux**.
+
+  Un nom posé deux fois ne compte qu'une, et c'est le **dernier** qui gagne —
+  conséquence de la même table, mesurée.
+
+- **`explain: true`** (corps ou query string) ajoute `_explanation` à chaque
+  hit, et — comme chez ES — `_shard` et `_node`, que la réponse ne porte pas
+  autrement.
+
+- **`GET|POST /{index}/_explain/{id}`** pose une requête à un document nommé.
+  Trois réponses différentes, et c'est tout l'intérêt : `matched: true` avec
+  l'arbre, `matched: false` en 200, et **404 avec un corps** (`{_index, _id,
+  matched: false}`, sans `explanation`) quand le document n'existe pas — un
+  client qui lève sur 404 ne lit pas le même cas qu'un `matched: false`.
+
+Ce que l'arbre reproduit et ce qu'il ne reproduit pas mérite d'être écrit,
+parce que c'est une décision et pas une limite. La `description` d'ES est du
+texte de Lucene : la recopier mot pour mot serait un décor, et surtout ça
+**masquerait** les endroits où les deux moteurs ne calculent pas la même chose.
+Ce qui est reproduit est donc la **forme** de l'arbre et les **valeurs** de
+chaque nœud ; la phrase reprend celle d'ES quand la quantité est la même, et
+s'en écarte quand elle ne l'est pas. Le nœud `N` en est l'exemple :
+
+| | ES | ferrite |
+|---|---|---|
+| | `N, total number of documents with field` | `N, total number of documents` |
+
+Cinq divergences de forme sont assumées et écrites, chacune avec son prédicat
+dans [`sonde_explain.py`](../tests/compat/sonde_explain.py) : l'`idf` d'une
+phrase (ES le détaille terme par terme, tantivy n'en garde que la somme — même
+valeur, un niveau de moins), un `bool` à une seule clause obligatoire (Lucene le
+**réécrit** en cette clause), l'ordre des branches d'un `dis_max` (ES ne les
+rend pas dans l'ordre de la requête), la forme de `boosting` (ES le construit
+comme un `FunctionScoreQuery` et n'explique que la partie positive), et la
+**raison** d'une non-correspondance — ES reconstruit l'explication Lucene
+(`Failure to meet condition(s) of required/prohibited clause(s)`), ferrite rend
+`matched: false` et le dit plutôt que d'inventer une raison plausible.
+
+De bout en bout, `sonde_explain.py` pose 54 questions aux deux serveurs :
+**47 identiques, 7 refus assumés, 0 écart** (`--calibrer` : 54/54 contre deux
+Elasticsearch). Le même fichier lancé contre le ferrite d'avant rend **4/54**.
+
+### Scoring : ce que le BM25 de tantivy ne calcule pas comme celui de Lucene
+
+Cette divergence est déclarée depuis les premières versions, et jusqu'ici la
+seule chose qu'on pouvait en dire était « les nombres diffèrent ». L'arbre
+d'explication permet de dire **de combien, et pourquoi** :
+`sonde_explain.py --ecart` pose les cinq statistiques du BM25 côte à côte, puis
+recalcule le score de chaque serveur à partir de **ses** statistiques.
+
+```
+## match alpha (terme fréquent)
+   doc    côté        n    N  freq     dl     avgdl         score       formule
+   d1     ferrite     3    6     1      5    1.8333      0.406154      0.406154
+   d1     es          3    4     1      5      2.75     0.2672301     0.2672301
+   d2     ferrite     3    6     1      1    1.8333     0.8514803     0.8514803
+   d2     es          3    4     1      1      2.75     0.4822086     0.4822086
+```
+
+Ce que ça montre, et qu'aucune lecture ne donnait :
+
+- **la formule est la même**, jusqu'au facteur `boost = k1 + 1 = 2.2` qu'ES
+  affiche en tête. Le score de chaque côté se recalcule exactement à partir de
+  ses propres statistiques : s'il manquait un terme, le nombre ne retomberait
+  pas ;
+- **`n`, `freq` et `dl` sont identiques partout**. Le nombre de documents qui
+  portent le terme, la fréquence dans le document, la longueur du champ après
+  quantification : trois quantités sur cinq ne divergent pas du tout ;
+- **seuls `N` et `avgdl` diffèrent**, et pour une seule raison : Lucene les
+  calcule sur les documents **qui ont le champ**, tantivy sur **tous** les
+  documents de l'index. Sur le corpus ci-dessus, deux documents n'ont pas de
+  `titre` : ES compte `N = 4` et `avgdl = 2.75`, ferrite `N = 6` et
+  `avgdl = 1.8333` ;
+- **la conséquence chiffrée** : jusqu'à **43 %** d'écart relatif sur le `_score`
+  quand une partie du corpus n'a pas le champ interrogé ; et **zéro** — à un ULP
+  près, l'arrondi du `ln` en `float` — sur un champ que *tous* les documents
+  portent. C'est ce dernier point qui rend la divergence lisible : elle n'est
+  pas un bruit diffus, c'est une différence de dénominateur.
+
+L'exemple le plus net est un `term` sur un `keyword`, parce qu'il n'y a là ni
+analyzer, ni fréquence de terme, ni longueur de champ variable — tout ce qui
+pourrait brouiller la lecture est constant. Deux champs du même type, dans le
+même index, sur les mêmes documents :
+
+| | `n` | `N` | `freq` | `dl` | `avgdl` | `_score` |
+|---|---|---|---|---|---|---|
+| champ que **tous** les documents portent, ferrite | 3 | 6 | 1 | 1 | 1 | 0,6931472 |
+| le même, ES | 3 | 6 | 1 | 1 | 1 | 0,6931471 |
+| champ que **deux** documents n'ont pas, ferrite | 2 | **6** | 1 | 1 | **0,5** | 0,7306977 |
+| le même, ES | 2 | **3** | 1 | 1 | **1** | 0,4700036 |
+
+C'est la réponse à « d'où vient l'écart : l'idf ? la longueur de champ ? la
+norme ? » — **ni la norme ni la longueur de champ**, qui sont identiques au bit
+près, et pas non plus l'idf *en tant que formule*. Une seule cause, `N`, qui
+apparaît à **deux** endroits de la formule : directement dans l'idf, et
+indirectement dans le `tf` par l'`avgdl`, qui divise le nombre total de jetons
+par ce même `N`. Un champ que tous les documents portent annule les deux d'un
+coup, ce qui explique pourquoi la divergence était restée invisible aussi
+longtemps : les corpus écrits à la main remplissent tous leurs champs.
+
+L'ordre des résultats, lui, est comparé à celui d'ES par
+[`diff_relevance.py`](../tests/compat/diff_relevance.py) — 212/213, 0 écart réel
+— parce qu'un facteur qui s'applique à tous les documents d'un même champ ne les
+réordonne pas. C'est quand plusieurs champs se mélangent (`multi_match`,
+`dis_max`) que l'écart peut changer l'ordre.
+
 ### Ce que la réponse transporte : `fields`, `docvalue_fields`, `stored_fields`
 
 Trois façons de demander autre chose que le `_source` complet, et elles **ne
@@ -1257,10 +1395,14 @@ pas pour être découverts en production.
    texte latin, mais ce n'est pas la même implémentation : sur de l'unicode
    exotique ou du CJK, les tokens peuvent différer.
 
-6. **Les scores ne sont pas identiques à ceux d'ES.** Même formule (BM25), mais
-   statistiques d'index et normalisation de longueur différentes. L'*ordre* des
-   résultats est comparé à celui d'ES par `tests/compat/diff_against_es.py` ;
-   les valeurs absolues, non.
+6. **Les scores ne sont pas identiques à ceux d'ES.** Même formule, et
+   maintenant **chiffrée** : deux des cinq statistiques du BM25 divergent
+   (`N` et `avgdl`, que Lucene calcule sur les documents *qui ont le champ* et
+   tantivy sur tous), les trois autres (`n`, `freq`, `dl`) sont identiques. Voir
+   [Scoring](#scoring--ce-que-le-bm25-de-tantivy-ne-calcule-pas-comme-celui-de-lucene)
+   pour le tableau et la mesure : jusqu'à 43 % d'écart relatif quand une partie
+   du corpus n'a pas le champ interrogé, et zéro sinon. L'*ordre* des résultats
+   est comparé à celui d'ES par `tests/compat/diff_relevance.py`.
 
 7. **`_shards.total` vaut 1** (un shard, zéro réplique) là où un ES par défaut
    annonce 2 dans les réponses d'écriture. En recherche multi-index, il vaut le
