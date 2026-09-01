@@ -495,7 +495,7 @@ bouger**, pas après.
   raison — « ferrite indexerait le champ quand même, et le client croirait le
   contraire » — décrivait une implémentation possible, pas le comportement
   d'Elasticsearch, et n'avait jamais été mesurée là où elle s'appliquait. La
-  mesure ([`sonde_index_false.py`](tests/compat/sonde_index_false.py), 195
+  mesure ([`sonde_index_false.py`](tests/compat/sonde_index_false.py), 244
   questions) dit autre chose : un champ non indexé **garde sa colonne**, et
   Lucene y retombe. Sur un `keyword`, un `long`, un `double`, une `date` ou un
   `boolean`, `term`, `terms`, `range`, `match`, `prefix`, `wildcard`, `regexp`,

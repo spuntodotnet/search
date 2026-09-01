@@ -963,7 +963,7 @@ tables:
 
           Ce que le paramètre fait ensuite n'est pas ce que son nom laisse
           croire, et ça a été **mesuré avant d'être écrit**
-          ([`sonde_index_false.py`](../tests/compat/sonde_index_false.py), 169
+          ([`sonde_index_false.py`](../tests/compat/sonde_index_false.py), 244
           questions) : un champ non indexé garde sa **colonne**, et
           Elasticsearch y retombe. Sur un `keyword`, un `long`, un `double`, une
           `date` ou un `boolean`, la recherche continue donc de répondre —

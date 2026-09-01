@@ -743,9 +743,9 @@ acceptés partout ; `pretty` est implémenté (indentation de la réponse).
 Trois façons de demander autre chose que le `_source` complet, et elles **ne
 lisent pas au même endroit**. C'est ce qui les sépare, et rien de ce qui suit
 n'était devinable — tout vient de
-[`sonde_fields.py`](../tests/compat/sonde_fields.py), qui pose 107 questions aux
+[`sonde_fields.py`](../tests/compat/sonde_fields.py), qui pose 110 questions aux
 deux serveurs et compare le **hit entier** : le bloc `fields` clé par clé, la
-présence de `_source`, la présence de `_id`. **100/107 identiques, 3 refus
+présence de `_source`, la présence de `_id`. **103/110 identiques, 3 refus
 assumés écrits, 4 différences d'ordre assumées (n° 18 ci-dessous), 0 écart.**
 
 **`fields` lit le `_source`**, puis type chaque valeur selon le mapping. C'est
