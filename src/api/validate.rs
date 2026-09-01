@@ -118,6 +118,7 @@ pub async fn validate(
         let searcher = gen.searcher();
         let ctx = QueryCtx::new(&gen.fields, &gen.index, &searcher)
             .avec_maintenant(maintenant)
+            .avec_nom_index(&idx.name)
             .selon_le_mapping(&gen.mapping);
         let mut e = Map::new();
         e.insert("index".into(), json!(idx.name));

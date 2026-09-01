@@ -298,6 +298,53 @@ def cas():
     q("min_score et boost, en recherche libre", seuil,
       corps={"track_total_hits": True})
 
+    # --- `min_score` **du corps** : ce n'est pas celui de `function_score`.
+    #
+    # Celui-la est pose sur la recherche entiere, et sa place dans la chaine est
+    # tout son interet. Les trois questions dont la reponse ne se devine pas :
+    # est-ce qu'il change `hits.total` ? est-ce qu'il s'applique avant
+    # `from`/`size` ? est-ce que les **agregations** voient les documents qu'il
+    # ecarte ? Mesure contre ES 8.15 : oui, oui, et non — elles ne les voient
+    # pas.
+    q("min_score du corps", BASE, corps={"min_score": 3})
+    q("min_score du corps, qui ne coupe rien", BASE, corps={"min_score": 0})
+    q("min_score du corps, qui coupe tout", BASE, corps={"min_score": 1000})
+    q("min_score du corps, negatif", BASE, corps={"min_score": -1})
+    q("min_score du corps, en chaine", BASE, corps={"min_score": "3"})
+    q("min_score du corps, from/size", BASE,
+      corps={"min_score": 3, "from": 1, "size": 1})
+    q("min_score du corps et une agregation", BASE,
+      corps={"min_score": 3, "aggs": {"parcat": {"terms": {"field": "cat"}},
+                                      "combien": {"value_count": {"field": "toujours"}}}})
+    q("agregation sans min_score (le temoin)", BASE,
+      corps={"aggs": {"parcat": {"terms": {"field": "cat"}},
+                      "combien": {"value_count": {"field": "toujours"}}}})
+    # Sous un tri par champ, la reponse ne porte plus aucun score — et le seuil
+    # s'applique quand meme. C'est le meme piege que le `boost` ci-dessus :
+    # tantivy laisse tomber le calcul du score quand personne ne le lit.
+    q("min_score du corps sous un tri par champ", BASE,
+      corps={"min_score": 3, "sort": [{"cat": "asc"}], "track_total_hits": True})
+    q("min_score du corps a size 0", BASE,
+      corps={"min_score": 3, "size": 0, "track_total_hits": True})
+    # Une requete purement filtrante note tout a 0.0 : le seuil y coupe tout.
+    q("min_score du corps sur un bool.filter", {"bool": {"filter": [ALPHA]}},
+      corps={"min_score": 0.5})
+    q("min_score du corps sur un bool.filter, seuil nul",
+      {"bool": {"filter": [ALPHA]}}, corps={"min_score": 0})
+    # Les deux refus, chacun avec sa phrase et son type d'erreur.
+    q("min_score du corps illisible (refus)", BASE, corps={"min_score": "abc"})
+    q("min_score du corps a null (refus)", BASE, corps={"min_score": None})
+    # Ce qu'ES ne fait **pas** de facon coherente, et qui est donc une
+    # divergence assumee : sous un seuil qui coupe tout, son `terms` rend ses
+    # seaux pleins pendant que son `value_count` rend 0 — dans la meme reponse.
+    q("min_score du corps qui coupe tout, avec deux agregations", BASE,
+      corps={"min_score": 1000, "size": 0,
+             "aggs": {"parcat": {"terms": {"field": "cat"}},
+                      "combien": {"value_count": {"field": "toujours"}}}})
+    # Et les deux `min_score` ensemble : celui de la clause coupe d'abord.
+    q("les deux min_score", fs(field_value_factor={"field": "toujours"}, min_score=3),
+      corps={"min_score": 6})
+
     # --- le boost de la clause
     q("boost", fs(weight=2, boost=3))
 
@@ -396,11 +443,17 @@ def interroge(base, requete, corps_en_plus=None):
         cause = err.get("root_cause", [err])[0] if err.get("root_cause") else err
         return {"statut": st, "type": cause.get("type"),
                 "raison": cause.get("reason")}
-    return {
+    vu = {
         "hits": [(h["_id"], h["_score"]) for h in body["hits"]["hits"]],
         "max_score": body["hits"]["max_score"],
         "total": body["hits"]["total"]["value"],
     }
+    # Les agregations ne comptent que la ou une question en pose : c'est
+    # `min_score` qui les a fait entrer ici, parce que la seule facon de savoir
+    # si elles voient les documents qu'il ecarte est de les regarder.
+    if "aggregations" in body:
+        vu["aggregations"] = body["aggregations"]
+    return vu
 
 
 def ecart_relatif(a, b):
@@ -427,6 +480,13 @@ def compare(gauche, droite, tolerance=TOLERANCE):
     ids_d = [i for i, _ in droite["hits"]]
     if ids_g != ids_d or gauche["total"] != droite["total"]:
         return False, False, math.inf, None
+    # Le bloc d'agregations se compare **entier** : c'est la seule facon de
+    # savoir si un `min_score` a ecarte les documents avant qu'elles ne
+    # comptent, et un `doc_count` faux ne bouge aucun score.
+    if gauche.get("aggregations") != droite.get("aggregations"):
+        return False, True, math.inf, (
+            f"aggregations : {json.dumps(gauche.get('aggregations'), sort_keys=True)[:120]} "
+            f"vs {json.dumps(droite.get('aggregations'), sort_keys=True)[:120]}")
     pire = ecart_relatif(gauche["max_score"], droite["max_score"])
     for (_, sg), (_, sd) in zip(gauche["hits"], droite["hits"]):
         pire = max(pire, ecart_relatif(sg, sd))
@@ -459,6 +519,14 @@ REFUS_ASSUMES = {
         "seul le defaut d'ES (`min`, applique a la **distance** et non a la "
         "valeur) est servi ; les trois autres sont refuses en les nommant "
         "plutot que servis sans avoir ete mesures"),
+    "min_score du corps qui coupe tout, avec deux agregations": ("corps",
+        "les deux repondent, et c'est **ES** qui se contredit : il rend "
+        "`hits.total: 0` et, dans la meme reponse, un `value_count` a 0 mais un "
+        "`terms` avec ses seaux pleins — les deux agregateurs ne prennent pas le "
+        "meme chemin, et celui qui lit des ordinaux globaux ne passe pas par le "
+        "collecteur qui applique le seuil. ferrite l'applique uniformement : ses "
+        "agregations voient exactement les documents que `hits.total` compte. "
+        "Declare dans compat.yaml"),
     "fvf sur keyword (refus)": ("refus",
         "les deux refusent. ES le fait par un message qui cite une classe Java "
         "(`SortedSetOrdinalsIndexFieldData cannot be cast to ...`) ; ferrite dit "
@@ -521,6 +589,11 @@ def assume(libelle, gauche, droite):
                 and gauche["statut"] == droite["statut"])
     if classe == "perimetre":
         return refuse(gauche)
+    if classe == "corps":
+        # Les **deux** repondent, et l'ecart est ecrit un par un. C'est la seule
+        # classe ou une difference de corps est assumee, et elle exige que
+        # personne ne refuse : sans ca, elle couvrirait un refus de trop.
+        return not refuse(gauche) and not refuse(droite)
     return False
 
 

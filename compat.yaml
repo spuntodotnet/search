@@ -961,11 +961,22 @@ tables:
           mapping pour décider s'il doit réindexer y lirait le contraire de ce
           qu'il a posé.
 
+          **Un champ `index: false` reste cherchable s'il a une colonne, et
+          seul son score change.** C'est la première chose à savoir, parce que
+          le nom du paramètre dit le contraire, et parce que c'est ce que rend
+          **Elasticsearch 8.15** — la version que ferrite annonce. Un
+          Elasticsearch **7.10.2** ne fait pas ça : il y refuse la clause
+          (`Cannot search on field [x] since it is not indexed.`) et son
+          `_field_caps` annonce `searchable: false`. Le repli sur les *doc
+          values* est arrivé entre les deux, et la divergence est chiffrée dans
+          [compat-es7.md](compat-es7.md) : **87 cases** sur les 244 de la sonde.
+          ferrite suit la 8.15, comme partout ailleurs.
+
           Ce que le paramètre fait ensuite n'est pas ce que son nom laisse
           croire, et ça a été **mesuré avant d'être écrit**
           ([`sonde_index_false.py`](../tests/compat/sonde_index_false.py), 244
-          questions) : un champ non indexé garde sa **colonne**, et
-          Elasticsearch y retombe. Sur un `keyword`, un `long`, un `double`, une
+          questions, contre un ES **8.15.0**) : un champ non indexé garde sa
+          **colonne**, et Elasticsearch y retombe. Sur un `keyword`, un `long`, un `double`, une
           `date` ou un `boolean`, la recherche continue donc de répondre —
           `term`, `terms`, `range`, `match`, `match_phrase`, `prefix`,
           `wildcard`, `regexp`, `fuzzy`, `exists` — et le tri, les agrégations,
@@ -1729,6 +1740,43 @@ tables:
             - {nom: "boost"}
           refuses: ["prefix_length", "max_expansions", "rewrite"]
 
+      - id: dsl.meta_champs
+        nom: "les champs de **métadonnées** en clause (`_id`, `_index`, …)"
+        etat: partiel
+        poids: null
+        detail: >-
+          `{"term": {"_id": "…"}}` rendait `hits.total: 0` **sans erreur** pour
+          un document qui existe : le nom n'était dans aucun mapping, la clause
+          tombait donc dans « champ non mappé », que le défaut d'ES
+          (`allow_unmapped_fields`) transforme en « ne correspond à rien ». Un
+          vide indiscernable d'un document absent, en 200. Ce que fait ES n'est
+          pas « répondre partout » : les 203 questions de
+          [`sonde_meta_champs.py`](../tests/compat/sonde_meta_champs.py) rangent
+          chaque case dans **trois** issues — il répond, il refuse, il rend vide
+          — et ferrite suit les trois. Deux règles mesurées qu'aucune
+          documentation ne donne : `match` sur `_id` **n'analyse pas** la valeur
+          (`"a b"` y rend zéro document), et une clause sur `_index` lit une
+          **expression de nom d'index** (`{"term": {"_index": "logs-*"}}` rend
+          les documents de `logs-2026`), où seule l'étoile est un joker —
+          `?` y est un caractère ordinaire et `\` n'échappe rien. Voir
+          [`src/meta.rs`](../src/meta.rs)
+        parametres:
+          supportes:
+            - {nom: "_id", note: "`term`, `terms`, `match`, `match_phrase`, `multi_match` et `exists` répondent, à score **constant** (1.0 × `boost`) ; `prefix`, `wildcard`, `regexp`, `fuzzy`, `match_phrase_prefix` et `range` y sont **refusés avec la phrase d'ES** (« not on [_id] which is of type [_id] »), parce qu'ES les refuse. `fields` rend l'identifiant"}
+            - {nom: "_index", note: "les mêmes clauses, plus `prefix` et `wildcard` : la valeur est une expression de nom d'index, donc la clause vaut « tous les documents de cet index » ou « aucun ». C'est son seul usage réel — filtrer un index dans une recherche qui en vise plusieurs. Une valeur qui commence par `_` n'est **pas** un nom valide et ES la refuse (`invalid_index_name_exception` / « Invalid index name [_doc], must not start with '_'. ») ; la seule exception est `_all` **exactement**, qui désigne tous les index. Mesuré, et trouvé par le fuzzer : ferrite y rendait vide"}
+            - {nom: "_type", note: "rend **vide** en 200, comme ES depuis la 8.0 : la parité y est le vide, et en faire une erreur serait une divergence introduite"}
+            - {nom: "_source", note: "refusé avec les phrases d'ES (« The _source field is not searchable », « does not support match queries »)"}
+            - {nom: "_field_names", note: "les clauses de terme y rendent vide, `exists` y est refusé par la phrase d'ES (« Cannot run exists query on _field_names »)"}
+            - {nom: "_version", note: "refusé en clause avec la phrase d'ES (« The _version field is not searchable ») ; `exists` rend tous les documents"}
+          refuses:
+            - {nom: "_routing", note: "ferrite est mono-shard et refuse `?routing=` à l'indexation : **aucun** document n'en porte, donc rendre vide serait indiscernable d'un document sans routage. ES y répond en `term`, `terms`, `match`, les motifs, `range` et `exists`"}
+            - {nom: "_seq_no", note: "le numéro de séquence est tenu (il sert de condition de concurrence) mais n'est pas interrogeable ; ES y répond en `term`, `range`, tri et agrégation. `exists` seul est servi — chaque document en porte un"}
+            - {nom: "_ignored", note: "ferrite ne tient pas la liste des valeurs qu'un `ignore_above` a écartées ; ES y répond sur toutes les clauses"}
+            - {texte: "le **tri**, l'**agrégation** et `docvalue_fields` sur un champ de métadonnées", note: "ES les sert sur `_index`, `_seq_no`, `_version` et `_ignored` (et les refuse sur `_id`, `_source` et `_field_names`) ; ferrite les refuse tous en les nommant. Ce sont les clauses de requête qui sont servies, pas les lectures de colonne"}
+        conformance:
+          erreurs:
+            - "ferrite ne supporte pas le champ de metadonnees \\[_[a-z_]+\\]"
+
       - id: dsl.constant_score
         nom: "`constant_score`"
         etat: supporte
@@ -2254,16 +2302,45 @@ tables:
         poids: null
         detail: "`?scroll=1m` ouvre un contexte figé et rend un `_scroll_id` — voir la section dédiée"
 
+      - id: recherche.min_score
+        nom: "`min_score`"
+        etat: supporte
+        poids: 0.0
+        detail: >-
+          le seuil de score sous lequel un document ne sort pas. Il ne se
+          confond pas avec le `min_score` de `function_score`, qui vit **dans**
+          la clause : celui-ci est posé sur la recherche entière, et sa place
+          dans la chaîne est tout son intérêt. Mesuré contre ES 8.15 : il filtre
+          **avant** `from` / `size`, donc il change `hits.total` (un filtrage
+          fait côté client après coup ne donne ni le même compte ni la même
+          pagination) ; les **agrégations ne voient pas** les documents qu'il
+          écarte ; `max_score` est celui des documents retenus ; et il
+          s'applique même sous un `sort` par champ, là où la réponse ne porte
+          plus aucun score — c'est le piège déjà payé sur le `boost` d'une
+          clause, tantivy laissant tomber le calcul du score quand personne ne
+          le lit. Une requête purement filtrante note tout à `0.0` : un
+          `min_score: 0.5` sur un `bool.filter` n'y rend donc aucun document.
+          Voir [`src/seuil.rs`](../src/seuil.rs), mesuré par
+          [`sonde_score.py`](../tests/compat/sonde_score.py)
+        parametres:
+          supportes:
+            - {texte: "un nombre, ou la **chaîne** qui en porte un (`\"0.135\"` filtre comme `0.135`), comme chez ES"}
+            - {texte: "un seuil négatif, qui ne filtre rien — ES le prend tel quel, il ne le refuse pas"}
+          refuses:
+            - {texte: "`null`", note: "`parsing_exception` / « Unknown key for a VALUE_NULL in [min_score]. », la phrase d'ES"}
+            - {texte: "une chaîne illisible", note: "`number_format_exception` / « For input string: \"abc\" », la phrase d'ES"}
+            - {texte: "reproduire les agrégations qu'**ES** calcule sans tenir compte de son propre seuil", note: "divergence assumée, et c'est ES qui se contredit : avec `{\"query\": {\"match_all\": {}}, \"min_score\": 2}` sur cinq documents, il rend `hits.total: 0` et, **dans la même réponse**, un `value_count` à 0 mais un `terms` avec ses deux seaux pleins. Les deux agrégateurs ne prennent pas le même chemin ; le même seuil sur un `term` ou un `match` est honoré par les deux. ferrite applique le seuil **uniformément** — ses agrégations voient exactement les documents que `hits.total` compte. Reproduire l'écart demanderait une table « quel agrégateur fuit, sous quelle forme de requête » dont la règle n'est écrite nulle part, et qu'ES ne tient pas dans une seule réponse"}
+
       - id: recherche.non_supportes
         nom: >-
           `search_after`, `pit`, `collapse`, `knn`, `explain`,
-          `seq_no_primary_term`, `post_filter`, `min_score`, `suggest`,
+          `seq_no_primary_term`, `post_filter`, `suggest`,
           `rescore`, `track_scores`, `q`, `terminate_after`,
           `version`, `indices_boost`, `profile`, `slice`, `stats`, `ext`,
           `retriever`
         etat: refuse
         motif: pas_encore
-        poids: 3.1
+        poids: 3.0
         raison: >-
           aucun n'est un obstacle de moteur ; `search_after` est celui qui
           manque le plus, pour paginer au-delà de 10 000.
@@ -2272,8 +2349,8 @@ tables:
             # Le meme refus arrive par deux chemins : dans le corps (« ferrite
             # ne supporte pas [search_after] dans [_search] ») et en query
             # string (« unrecognized parameter: [docvalue_fields] »).
-            - "ferrite ne supporte pas \\[(search_after|collapse|knn|explain|post_filter|min_score|suggest|rescore|track_scores|q|pit|profile|terminate_after|version|indices_boost|slice|stats|ext|retriever)\\] dans \\[_search\\]"
-            - "unrecognized parameter: \\[(search_after|collapse|knn|explain|fields|seq_no_primary_term|post_filter|min_score|suggest|rescore|track_scores|q)\\]"
+            - "ferrite ne supporte pas \\[(search_after|collapse|knn|explain|post_filter|suggest|rescore|track_scores|q|pit|profile|terminate_after|version|indices_boost|slice|stats|ext|retriever)\\] dans \\[_search\\]"
+            - "unrecognized parameter: \\[(search_after|collapse|knn|explain|fields|seq_no_primary_term|post_filter|suggest|rescore|track_scores|q)\\]"
 
       - id: recherche.timeout
         nom: "`timeout` (paramètre et corps)"
@@ -2793,7 +2870,14 @@ tables:
         poids: null
         detail: >-
           le score est celui de la requête interne évaluée à plat, il n'y a pas
-          de score par élément
+          de score par élément — sauf `none`, qui **est** un score et vaut
+          **zéro** : ES y construit un filtre, pas une jointure notée. ferrite
+          rendait le score du pré-filtre (1.0 sur un `exists`), et ça ne se
+          voyait nulle part, puisqu'un facteur constant ne change pas un
+          ensemble de documents. Sauf sous un `min_score`, qui en fait un
+          seuil : `min_score: 1` y gardait 15 documents là où ES n'en rend
+          aucun, en 200. Trouvé par le fuzzer le jour où `min_score` lui a donné
+          de quoi le voir
         parametres:
           supportes: ["none", "avg"]
           refuses: ["max", "min", "sum"]

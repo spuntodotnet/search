@@ -36,11 +36,11 @@
     }
   },
   "totaux": {
-    "capacites": 205,
-    "supporte": 99,
-    "partiel": 61,
+    "capacites": 207,
+    "supporte": 100,
+    "partiel": 62,
     "refuse": 45,
-    "poids_renseignes": 147
+    "poids_renseignes": 148
   },
   "capacites": [
     {
@@ -907,7 +907,7 @@
       "nom_texte": "index",
       "etat": "supporte",
       "poids": 0.4,
-      "detail": "garder un champ **sans le rendre cherchable**. Les deux écritures d'ES sont admises (le booléen et la chaîne), et le rendu du mapping suit le sien : `index: true` ne laisse rien dans `_mapping` (c'est le défaut), `index: false` y est **conservé** — sans quoi un outil qui relit son mapping pour décider s'il doit réindexer y lirait le contraire de ce qu'il a posé. Ce que le paramètre fait ensuite n'est pas ce que son nom laisse croire, et ça a été **mesuré avant d'être écrit** ([`sonde_index_false.py`](../tests/compat/sonde_index_false.py), 244 questions) : un champ non indexé garde sa **colonne**, et Elasticsearch y retombe. Sur un `keyword`, un `long`, un `double`, une `date` ou un `boolean`, la recherche continue donc de répondre — `term`, `terms`, `range`, `match`, `match_phrase`, `prefix`, `wildcard`, `regexp`, `fuzzy`, `exists` — et le tri, les agrégations, `fields` et `docvalue_fields` aussi. Le prix est un **balayage** de la colonne au lieu d'un saut par l'index, et un **score constant** de 1.0 (× `boost`) là où un champ indexé est noté par BM25 : une colonne ne porte ni fréquence de terme ni longueur de champ. C'est exactement ce que rend ES. Sur un `text`, il n'y a pas de colonne (ce serait doubler le stockage du texte) : le champ n'est plus cherchable du tout, et la clause est **refusée** avec la phrase d'ES — `Cannot search on field [x] since it is not indexed.`, et sa variante pour une phrase (`was indexed without position data`). Deux exceptions mesurées : `exists` y rend 200 et **aucun** document, `match_phrase_prefix` aussi. Le surlignage ne rend aucun fragment sur un champ non indexé pour un `term`, un `match` ou un `range` — il part des `Matches` de Lucene, et une lecture de colonne n'en produit pas — mais il en rend un pour la famille des **automates** (`terms`, `prefix`, `wildcard`, `regexp`, `fuzzy`), que Lucene extrait de la requête sans rien demander à l'index, et `no_match_size` s'applique dans tous les cas. Deux bords de plus, mesurés parce qu'ils ne se devinent pas : le refus d'une **phrase** dépend du nombre de termes (un seul, c'est « pas indexé » ; plusieurs, c'est « sans positions » ; zéro, c'est 200 sans document), et sur un `boolean` non indexé un `lt` **efface le reste de l'intervalle** chez ES — `{\"gt\": true, \"lt\": false}` y rend les documents à `false`. Ce dernier bord n'existe sur aucun autre type ; ferrite le reproduit, parce que rendre **moins** de documents qu'ES en silence est pire",
+      "detail": "garder un champ **sans le rendre cherchable**. Les deux écritures d'ES sont admises (le booléen et la chaîne), et le rendu du mapping suit le sien : `index: true` ne laisse rien dans `_mapping` (c'est le défaut), `index: false` y est **conservé** — sans quoi un outil qui relit son mapping pour décider s'il doit réindexer y lirait le contraire de ce qu'il a posé. **Un champ `index: false` reste cherchable s'il a une colonne, et seul son score change.** C'est la première chose à savoir, parce que le nom du paramètre dit le contraire, et parce que c'est ce que rend **Elasticsearch 8.15** — la version que ferrite annonce. Un Elasticsearch **7.10.2** ne fait pas ça : il y refuse la clause (`Cannot search on field [x] since it is not indexed.`) et son `_field_caps` annonce `searchable: false`. Le repli sur les *doc values* est arrivé entre les deux, et la divergence est chiffrée dans [compat-es7.md](compat-es7.md) : **87 cases** sur les 244 de la sonde. ferrite suit la 8.15, comme partout ailleurs. Ce que le paramètre fait ensuite n'est pas ce que son nom laisse croire, et ça a été **mesuré avant d'être écrit** ([`sonde_index_false.py`](../tests/compat/sonde_index_false.py), 244 questions, contre un ES **8.15.0**) : un champ non indexé garde sa **colonne**, et Elasticsearch y retombe. Sur un `keyword`, un `long`, un `double`, une `date` ou un `boolean`, la recherche continue donc de répondre — `term`, `terms`, `range`, `match`, `match_phrase`, `prefix`, `wildcard`, `regexp`, `fuzzy`, `exists` — et le tri, les agrégations, `fields` et `docvalue_fields` aussi. Le prix est un **balayage** de la colonne au lieu d'un saut par l'index, et un **score constant** de 1.0 (× `boost`) là où un champ indexé est noté par BM25 : une colonne ne porte ni fréquence de terme ni longueur de champ. C'est exactement ce que rend ES. Sur un `text`, il n'y a pas de colonne (ce serait doubler le stockage du texte) : le champ n'est plus cherchable du tout, et la clause est **refusée** avec la phrase d'ES — `Cannot search on field [x] since it is not indexed.`, et sa variante pour une phrase (`was indexed without position data`). Deux exceptions mesurées : `exists` y rend 200 et **aucun** document, `match_phrase_prefix` aussi. Le surlignage ne rend aucun fragment sur un champ non indexé pour un `term`, un `match` ou un `range` — il part des `Matches` de Lucene, et une lecture de colonne n'en produit pas — mais il en rend un pour la famille des **automates** (`terms`, `prefix`, `wildcard`, `regexp`, `fuzzy`), que Lucene extrait de la requête sans rien demander à l'index, et `no_match_size` s'applique dans tous les cas. Deux bords de plus, mesurés parce qu'ils ne se devinent pas : le refus d'une **phrase** dépend du nombre de termes (un seul, c'est « pas indexé » ; plusieurs, c'est « sans positions » ; zéro, c'est 200 sans document), et sur un `boolean` non indexé un `lt` **efface le reste de l'intervalle** chez ES — `{\"gt\": true, \"lt\": false}` y rend les documents à `false`. Ce dernier bord n'existe sur aucun autre type ; ferrite le reproduit, parce que rendre **moins** de documents qu'ES en silence est pire",
       "parametres": {
         "supportes": [
           "true et false, en booléen comme en chaîne",
@@ -1695,6 +1695,31 @@
       }
     },
     {
+      "id": "dsl.meta_champs",
+      "table": "dsl",
+      "nom": "les champs de **métadonnées** en clause (`_id`, `_index`, …)",
+      "nom_texte": "les champs de métadonnées en clause (_id, _index, …)",
+      "etat": "partiel",
+      "poids": null,
+      "detail": "`{\"term\": {\"_id\": \"…\"}}` rendait `hits.total: 0` **sans erreur** pour un document qui existe : le nom n'était dans aucun mapping, la clause tombait donc dans « champ non mappé », que le défaut d'ES (`allow_unmapped_fields`) transforme en « ne correspond à rien ». Un vide indiscernable d'un document absent, en 200. Ce que fait ES n'est pas « répondre partout » : les 203 questions de [`sonde_meta_champs.py`](../tests/compat/sonde_meta_champs.py) rangent chaque case dans **trois** issues — il répond, il refuse, il rend vide — et ferrite suit les trois. Deux règles mesurées qu'aucune documentation ne donne : `match` sur `_id` **n'analyse pas** la valeur (`\"a b\"` y rend zéro document), et une clause sur `_index` lit une **expression de nom d'index** (`{\"term\": {\"_index\": \"logs-*\"}}` rend les documents de `logs-2026`), où seule l'étoile est un joker — `?` y est un caractère ordinaire et `\\` n'échappe rien. Voir [`src/meta.rs`](../src/meta.rs)",
+      "parametres": {
+        "supportes": [
+          "_id",
+          "_index",
+          "_type",
+          "_source",
+          "_field_names",
+          "_version"
+        ],
+        "refuses": [
+          "_routing",
+          "_seq_no",
+          "_ignored",
+          "le tri, l'agrégation et docvalue_fields sur un champ de métadonnées"
+        ]
+      }
+    },
+    {
       "id": "dsl.constant_score",
       "table": "dsl",
       "nom": "`constant_score`",
@@ -2153,12 +2178,32 @@
       "detail": "`?scroll=1m` ouvre un contexte figé et rend un `_scroll_id` — voir la section dédiée"
     },
     {
+      "id": "recherche.min_score",
+      "table": "corps_search",
+      "nom": "`min_score`",
+      "nom_texte": "min_score",
+      "etat": "supporte",
+      "poids": 0.0,
+      "detail": "le seuil de score sous lequel un document ne sort pas. Il ne se confond pas avec le `min_score` de `function_score`, qui vit **dans** la clause : celui-ci est posé sur la recherche entière, et sa place dans la chaîne est tout son intérêt. Mesuré contre ES 8.15 : il filtre **avant** `from` / `size`, donc il change `hits.total` (un filtrage fait côté client après coup ne donne ni le même compte ni la même pagination) ; les **agrégations ne voient pas** les documents qu'il écarte ; `max_score` est celui des documents retenus ; et il s'applique même sous un `sort` par champ, là où la réponse ne porte plus aucun score — c'est le piège déjà payé sur le `boost` d'une clause, tantivy laissant tomber le calcul du score quand personne ne le lit. Une requête purement filtrante note tout à `0.0` : un `min_score: 0.5` sur un `bool.filter` n'y rend donc aucun document. Voir [`src/seuil.rs`](../src/seuil.rs), mesuré par [`sonde_score.py`](../tests/compat/sonde_score.py)",
+      "parametres": {
+        "supportes": [
+          "un nombre, ou la chaîne qui en porte un (\"0.135\" filtre comme 0.135), comme chez ES",
+          "un seuil négatif, qui ne filtre rien — ES le prend tel quel, il ne le refuse pas"
+        ],
+        "refuses": [
+          "null",
+          "une chaîne illisible",
+          "reproduire les agrégations qu'ES calcule sans tenir compte de son propre seuil"
+        ]
+      }
+    },
+    {
       "id": "recherche.non_supportes",
       "table": "corps_search",
-      "nom": "`search_after`, `pit`, `collapse`, `knn`, `explain`, `seq_no_primary_term`, `post_filter`, `min_score`, `suggest`, `rescore`, `track_scores`, `q`, `terminate_after`, `version`, `indices_boost`, `profile`, `slice`, `stats`, `ext`, `retriever`",
-      "nom_texte": "search_after, pit, collapse, knn, explain, seq_no_primary_term, post_filter, min_score, suggest, rescore, track_scores, q, terminate_after, version, indices_boost, profile, slice, stats, ext, retriever",
+      "nom": "`search_after`, `pit`, `collapse`, `knn`, `explain`, `seq_no_primary_term`, `post_filter`, `suggest`, `rescore`, `track_scores`, `q`, `terminate_after`, `version`, `indices_boost`, `profile`, `slice`, `stats`, `ext`, `retriever`",
+      "nom_texte": "search_after, pit, collapse, knn, explain, seq_no_primary_term, post_filter, suggest, rescore, track_scores, q, terminate_after, version, indices_boost, profile, slice, stats, ext, retriever",
       "etat": "refuse",
-      "poids": 3.1,
+      "poids": 3.0,
       "motif": "pas_encore",
       "raison": "aucun n'est un obstacle de moteur ; `search_after` est celui qui manque le plus, pour paginer au-delà de 10 000."
     },
@@ -2550,7 +2595,7 @@
       "nom_texte": "score_mode",
       "etat": "partiel",
       "poids": null,
-      "detail": "le score est celui de la requête interne évaluée à plat, il n'y a pas de score par élément",
+      "detail": "le score est celui de la requête interne évaluée à plat, il n'y a pas de score par élément — sauf `none`, qui **est** un score et vaut **zéro** : ES y construit un filtre, pas une jointure notée. ferrite rendait le score du pré-filtre (1.0 sur un `exists`), et ça ne se voyait nulle part, puisqu'un facteur constant ne change pas un ensemble de documents. Sauf sous un `min_score`, qui en fait un seuil : `min_score: 1` y gardait 15 documents là où ES n'en rend aucun, en 200. Trouvé par le fuzzer le jour où `min_score` lui a donné de quoi le voir",
       "parametres": {
         "supportes": [
           "none",

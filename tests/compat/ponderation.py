@@ -486,6 +486,11 @@ CORPS = {
     # la rattacher l'aurait fait tomber dans « aucune capacite ne la reclame »,
     # qui compte contre nous : 94 requetes du corpus la posent.
     "timeout": "recherche.timeout",
+    # Servi depuis la carte 41 : il a sa capacite, donc il quitte la liste des
+    # non supportes. Sans ce rattachement, les requetes du corpus qui le posent
+    # tomberaient dans « aucune capacite ne la reclame », qui compte **contre**
+    # nous — c'est le garde-fou du troisieme verdict.
+    "min_score": "recherche.min_score",
 }
 # La liste des clefs refusees n'est pas recopiee ici : elle se lit dans le
 # `nom` de la capacite `recherche.non_supportes`, qui les cite entre accents

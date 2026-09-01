@@ -140,6 +140,7 @@ async fn executer(
         let ctx = QueryCtx::new(&gen.fields, &gen.index, &searcher)
             .avec_champs_ailleurs(&champs_connus)
             .avec_maintenant(maintenant)
+            .avec_nom_index(&idx.name)
             .selon_le_mapping(&gen.mapping)
             .avec_incidents(incidents.clone());
         let query = match &requete {
