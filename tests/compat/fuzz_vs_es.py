@@ -235,6 +235,12 @@ BRIQUES = {
     "q.term": "dsl.term",
     "q.terms": "dsl.terms",
     "q.ids": "dsl.ids",
+    # Les champs de metadonnees en clause. Quatre des cinq bords d'`index:
+    # false` ont ete trouves par le fuzzer **apres** les questions ecrites a la
+    # main, pas avant — et le defaut de la carte 41 (`term` sur `_id` rendant 0
+    # en silence) etait de la meme famille : un nom qu'aucun mapping ne porte.
+    # La brique tire donc des clauses sur `_id`, `_index` et leurs voisins.
+    "q.meta": "dsl.meta_champs",
     "q.prefix": "dsl.prefix",
     "q.wildcard": "dsl.wildcard",
     "q.regexp": "dsl.regexp",
@@ -276,6 +282,10 @@ BRIQUES = {
     "corps.aggs": "recherche.aggs",
     "corps.scroll": "recherche.scroll",
     "corps.datemath": "datemath.now",
+    # `min_score` a sa propre brique : c'est le seul endroit du corps ou le
+    # score cesse d'etre un ordre pour devenir un **seuil**, donc le seul ou un
+    # score faux change `hits.total`, la pagination et les agregations.
+    "corps.min_score": "recherche.min_score",
     # agregations
     "agg.metriques": "agg.metriques",
     "agg.terms": "agg.terms",
@@ -886,7 +896,7 @@ class Generateur:
         interrogeables = [c for c in champs if c.ty not in ("object", "nested")]
         nesteds = [c for c in champs if c.ty == "nested"]
 
-        choix = ["match_all", "match_none", "exists", "term", "terms", "ids"]
+        choix = ["match_all", "match_none", "exists", "term", "terms", "ids", "meta"]
         if interrogeables:
             choix += ["term", "terms", "range", "prefix", "wildcard", "regexp",
                       "match", "fuzzy"]
@@ -927,6 +937,52 @@ class Generateur:
             return None
         n = min(len(docs), self.rng.randint(1, 4))
         return {"ids": {"values": [i for i, _ in self.rng.sample(docs, n)]}}
+
+    # Les champs de metadonnees, et la clause qu'on leur pose. La table dit ce
+    # que la sonde a mesure : ce qui repond, ce qui refuse, ce qui rend vide —
+    # le fuzzer, lui, ne sait rien de tout ca et tire dans les trois. C'est
+    # justement ce qui le rend utile : il pose les combinaisons auxquelles les
+    # 203 questions ecrites a la main n'ont pas pense (une clause de
+    # metadonnees sous un `must_not`, sous un `nested`, dans un `dis_max`, avec
+    # un `boost`).
+    META_CHAMPS = ["_id", "_index", "_routing", "_seq_no", "_type", "_source",
+                   "_field_names", "_version", "_ignored"]
+    META_CLAUSES = ["term", "terms", "match", "match_phrase", "match_phrase_prefix",
+                    "prefix", "wildcard", "regexp", "fuzzy", "range", "exists"]
+
+    def _q_meta(self, champs, docs, prof):
+        """Une clause sur un champ de **metadonnees**.
+
+        `{"term": {"_id": ...}}` rendait zero document en silence chez ferrite ;
+        le nom n'etait dans aucun mapping, donc la clause tombait dans « champ
+        non mappe ». Rien ne l'exercait — ni les cas ecrits ici, ni les deux
+        suites de conformance. La brique tire donc un champ, une clause, et une
+        valeur qui existe **ou pas** : c'est l'ecart entre les deux qui separe
+        « repond juste » de « rend vide quoi qu'on demande »."""
+        rng = self.rng
+        if not self.brique("q.meta"):
+            return None
+        champ = rng.choice(self.META_CHAMPS)
+        clause = rng.choice(self.META_CLAUSES)
+        if clause == "exists":
+            return {"exists": {"field": champ}}
+        # La valeur : celle d'un vrai document une fois sur deux, une valeur
+        # tiree au sort sinon. Sans la premiere moitie, la brique ne
+        # distinguerait pas un moteur qui repond juste d'un moteur qui rend
+        # toujours vide.
+        if champ == "_id" and docs and rng.random() < 0.7:
+            valeur = rng.choice(docs)[0]
+        elif champ == "_index" and rng.random() < 0.7:
+            valeur = rng.choice([INDEX, INDEX[:4] + "*", "*", "pas-un-index"])
+        else:
+            valeur = rng.choice(["x", "0", "1", INDEX, "_doc", "mon-id"])
+        if clause == "terms":
+            return {"terms": {champ: [valeur]}}
+        if clause == "range":
+            return {"range": {champ: {"gte": valeur}}}
+        if clause == "term" and rng.random() < 0.3:
+            return {"term": {champ: {"value": valeur, "boost": 2.0}}}
+        return {clause: {champ: valeur}}
 
     def _champ_sauf(self, champs, types):
         cs = [c for c in champs if c.ty in types]
@@ -1499,6 +1555,14 @@ class Generateur:
                 [[c.nom for c in champs[:2]], ["*"], []])
         if rng.random() < 0.4 and self.brique("corps.aggs"):
             corps["aggs"] = self.aggs(champs, docs)
+        if rng.random() < 0.15 and self.brique("corps.min_score"):
+            # Les seuils sont tires **autour** des scores que le corpus produit
+            # (des `constant_score` entiers et du BM25 sous 1) : au-dessus de
+            # tout, il coupe tout et ne mesure plus rien ; en dessous de tout,
+            # il ne coupe rien et ne mesure rien non plus. Le zero et le negatif
+            # sont la parce qu'ES ne les refuse pas — un seuil nul garde meme
+            # les documents notes 0.0 d'un `bool.filter`.
+            corps["min_score"] = rng.choice([-1, 0, 0.5, 1, 1.5, 2, 3, 10])
         if rng.random() < 0.25 and self.brique("corps.highlight"):
             hl = self._highlight(champs)
             if hl:
@@ -1986,6 +2050,20 @@ def _court_circuit(e, requete, ecarts=()):
 
     if vide(requete):
         return True
+    # Quatrieme declencheur, et c'est sa **phrase** qui le prouve : quand
+    # ferrite refuse avec un message qu'ES prononce lui-meme mot pour mot, ES
+    # aurait refuse aussi s'il avait construit la clause. Son 200 dit donc
+    # qu'il ne l'a pas construite — c'est le meme court-circuit, vu depuis
+    # l'autre bout. Les phrases listees sont celles des champs de metadonnees,
+    # relevees contre 8.15 (`sonde_meta_champs.py`) : elles n'appartiennent pas
+    # a ferrite, il ne fait que les rendre.
+    if any(m in e["texte"] for m in (
+            "which is of type [_",
+            "Invalid index name [",
+            "The _source field is not searchable",
+            "The _version field is not searchable",
+            "Cannot run exists query on _field_names")):
+        return True
     # Le troisieme declencheur n'est pas syntaxique : une clause qui ne peut
     # correspondre a **aucun document** vide le `bool` a la reecriture, et ES
     # n'a alors jamais construit les clauses suivantes. Aucune lecture de la
@@ -2449,12 +2527,27 @@ def _min_score_sur_un_bm25_divergent(e, requete):
     defaut de `min_score` — un seuil compare au mauvais endroit, un `boost`
     applique quand il ne devrait pas — laisse les scores de base identiques, et
     ne passe donc pas."""
-    if e.get("chemin") not in ("hits.total.value", "hits.hits", "hits.ordre",
-                               "hits.max_score"):
+    chemin = e.get("chemin", "")
+    porte_un_seuil = isinstance(requete, dict) and requete.get("min_score") is not None
+    # Un seuil pose sur le **corps** ne change pas que les hits : les
+    # agregations ne voient pas les documents qu'il ecarte (mesure contre ES
+    # 8.15). Un ensemble de documents different fait donc bouger les seaux
+    # aussi, et s'arreter aux chemins `hits.*` laisserait passer une moitie de
+    # la meme cause. Les chemins d'agregation ne sont acceptes que **sous** un
+    # `min_score` du corps : sans lui, un seau faux reste un seau faux.
+    if chemin not in ("hits.total.value", "hits.hits", "hits.ordre",
+                      "hits.max_score") and not (
+            porte_un_seuil and chemin.startswith("aggregations.")):
         return False
     if not isinstance(requete, dict) or not SERVEURS:
         return False
+    # Deux `min_score` peuvent poser la question : celui d'un `function_score`
+    # (dans la clause) et celui du **corps** (sur la recherche entiere). Le
+    # second est arrive avec la carte 41, et il pose exactement le meme piege :
+    # un seuil ne tolere pas l'ecart de BM25 qu'un ordre absorbe.
     sous = _sous_requete_avec_min_score(requete.get("query"))
+    if sous is None and requete.get("min_score") is not None:
+        sous = requete.get("query", {"match_all": {}})
     if sous is None:
         return False
     scores = []
@@ -2465,6 +2558,40 @@ def _min_score_sur_un_bm25_divergent(e, requete):
             return False
         scores.append([h.get("_score") for h in r["hits"]["hits"]])
     return scores[0] != scores[1]
+
+
+def _min_score_qu_es_n_applique_pas_a_ses_agregations(e, requete):
+    """Une agregation qu'**ES** calcule sans tenir compte de son propre
+    `min_score`.
+
+    Mesure contre 8.15, sur cinq documents et un seuil qui coupe tout :
+    `{"query": {"match_all": {}}, "min_score": 2}` rend `hits.total: 0` — et,
+    dans la **meme reponse**, un `value_count` a 0 mais un `terms` avec ses deux
+    seaux pleins. Les deux agregateurs ne prennent pas le meme chemin : celui
+    qui lit des ordinaux globaux ne passe pas par le collecteur qui applique le
+    seuil. Le meme seuil sur un `term` ou un `match` — une requete qui note
+    vraiment — est honore par les deux.
+
+    ferrite applique le seuil **uniformement** : ses agregations voient
+    exactement les documents que `hits.total` compte. Reproduire l'ecart
+    demanderait une table « quel agregateur fuit, sous quelle forme de
+    requete », dont la regle n'est ecrite nulle part et qu'ES lui-meme ne tient
+    pas dans une seule reponse.
+
+    Le predicat ne le suppose pas : il **repose la meme requete a ES sans le
+    `min_score`** et n'accepte l'ecart que si le bloc d'agregations y est
+    identique — c'est-a-dire seulement si ES a bien ignore son propre seuil."""
+    if not isinstance(requete, dict) or requete.get("min_score") is None:
+        return False
+    if not e.get("chemin", "").startswith("aggregations.") or not SERVEURS:
+        return False
+    sans_seuil = {k: v for k, v in requete.items() if k != "min_score"}
+    st, avec = http(SERVEURS[1], "POST", f"/{INDEX}/_search", requete)
+    st2, sans = http(SERVEURS[1], "POST", f"/{INDEX}/_search", sans_seuil)
+    if st != 200 or st2 != 200:
+        return False
+    return (avec.get("aggregations") == sans.get("aggregations")
+            and avec["hits"]["total"]["value"] != sans["hits"]["total"]["value"])
 
 
 def _refus_declare(e, _requete=None, ecarts=()):
@@ -2512,6 +2639,12 @@ def _refus_declare(e, _requete=None, ecarts=()):
         "ne filtre les termes d'un [terms] que sur un champ de chaines",
         "la forme partitionnee de",
         "et [missing] sur la meme agregation [terms]",
+        # Les trois champs de metadonnees qu'ES sert et pas ferrite
+        # (`_routing`, `_seq_no`, `_ignored`) : le refus les nomme, avec sa
+        # raison. C'est un cout de perimetre declare — `dsl.meta_champs` dans
+        # compat.yaml — et pas un vide, qui etait justement le defaut de la
+        # carte 41.
+        "le champ de metadonnees",
     ))
 
 
@@ -2537,6 +2670,8 @@ DIVERGENCES_ASSUMEES = [
     ("ordre par pertinence (BM25)", _ordre_par_pertinence),
     ("min_score sur un score de base deja divergent (BM25)",
      _min_score_sur_un_bm25_divergent),
+    ("min_score qu'ES n'applique pas a ses propres agregations",
+     _min_score_qu_es_n_applique_pas_a_ses_agregations),
 ]
 
 

@@ -4599,6 +4599,150 @@ def champ_non_indexe(es):
 
 
 # ---------------------------------------------------------------------------
+# Les champs de metadonnees en clause, et `min_score` (carte 41)
+# ---------------------------------------------------------------------------
+
+@scenario
+def chercher_par_identifiant(es):
+    """Retrouver un document **par son `_id`**, avec le client officiel.
+
+    C'est le geste qu'une application consommatrice a signale : `{"term":
+    {"_id": "..."}}` rendait `hits.total: 0` sans erreur pour un document qui
+    existe. Un vide indiscernable d'un document absent, en 200 — la pire des
+    trois categories de ce depot.
+    """
+    idx = "meta-client"
+    es.options(ignore_status=404).indices.delete(index=idx)
+    es.indices.create(index=idx, mappings={"properties": {
+        "titre": {"type": "text"}, "cat": {"type": "keyword"}}})
+    for id_, doc in (("cmd-1", {"titre": "premiere", "cat": "a"}),
+                     ("cmd-2", {"titre": "seconde", "cat": "b"})):
+        es.index(index=idx, id=id_, refresh=True, document=doc)
+
+    # Les quatre clauses qu'ES sert sur `_id`, au **score constant** de 1.0.
+    for clause in ({"term": {"_id": "cmd-1"}},
+                   {"terms": {"_id": ["cmd-1"]}},
+                   {"match": {"_id": "cmd-1"}},
+                   {"match_phrase": {"_id": "cmd-1"}}):
+        r = es.search(index=idx, query=clause)
+        assert ids(r) == ["cmd-1"], f"{clause} -> {ids(r)}"
+        assert r["hits"]["hits"][0]["_score"] == 1.0, clause
+    # Le `boost` multiplie ce score constant, comme chez ES.
+    r = es.search(index=idx, query={"term": {"_id": {"value": "cmd-1", "boost": 3}}})
+    assert r["hits"]["hits"][0]["_score"] == 3.0
+    # Un identifiant absent rend vide — et c'est de **ca** que le defaut etait
+    # indiscernable.
+    assert ids(es.search(index=idx, query={"term": {"_id": "jamais"}})) == []
+    # `match` sur `_id` n'analyse pas la valeur : mesure contre ES 8.15.
+    assert ids(es.search(index=idx, query={"match": {"_id": "cmd-1 cmd-2"}})) == []
+    # `exists` : tous les documents en portent un.
+    assert sorted(ids(es.search(index=idx, query={"exists": {"field": "_id"}}))) \
+        == ["cmd-1", "cmd-2"]
+    # Sous un `filter`, la clause ne note pas — mais elle filtre.
+    assert ids(es.search(index=idx, query={"bool": {"filter": [
+        {"term": {"_id": "cmd-2"}}]}})) == ["cmd-2"]
+
+    # Ce qu'ES **refuse** sur `_id`, et que ferrite refuse avec sa phrase : les
+    # servir aurait ete une divergence de plus, dans l'autre sens.
+    for clause, phrase in (
+            ({"prefix": {"_id": "cmd"}}, "Can only use prefix queries"),
+            ({"wildcard": {"_id": "cmd-*"}}, "Can only use wildcard queries"),
+            ({"regexp": {"_id": "cmd.*"}}, "Can only use regexp queries"),
+            ({"fuzzy": {"_id": "cmd-1"}}, "Can only use fuzzy queries"),
+            ({"range": {"_id": {"gte": "cmd-1"}}}, "does not support range queries")):
+        refused(lambda c=clause: es.search(index=idx, query=c), contains=phrase)
+    es.indices.delete(index=idx)
+
+
+@scenario
+def filtrer_un_index_par_son_nom(es):
+    """`_index` en clause : filtrer un index dans une recherche qui en vise
+    plusieurs — son seul usage reel.
+
+    La valeur n'est pas une chaine exacte mais une **expression de nom
+    d'index**, et seule l'etoile y est un joker (mesure contre ES 8.15 : `?` y
+    est un caractere ordinaire).
+    """
+    a, b = "meta-idx-a", "meta-idx-b"
+    for nom in (a, b):
+        es.options(ignore_status=404).indices.delete(index=nom)
+        es.indices.create(index=nom, mappings={"properties": {"k": {"type": "keyword"}}})
+        es.index(index=nom, id=nom, refresh=True, document={"k": "v"})
+
+    def cherche(clause):
+        return sorted(ids(es.search(index=f"{a},{b}", query=clause)))
+
+    assert cherche({"term": {"_index": a}}) == [a]
+    assert cherche({"terms": {"_index": [a, b]}}) == [a, b]
+    assert cherche({"term": {"_index": "meta-idx-*"}}) == [a, b]
+    assert cherche({"wildcard": {"_index": "*-b"}}) == [b]
+    assert cherche({"prefix": {"_index": "meta-idx-"}}) == [a, b]
+    assert cherche({"term": {"_index": "pas-un-index"}}) == []
+    # Le `?` n'est pas un joker sur `_index`.
+    assert cherche({"term": {"_index": "meta-idx-?"}}) == []
+    assert cherche({"bool": {"must_not": [{"term": {"_index": a}}]}}) == [b]
+    for nom in (a, b):
+        es.indices.delete(index=nom)
+
+
+@scenario
+def min_score_filtre_avant_la_pagination(es):
+    """`min_score` : le seuil qui change `hits.total`.
+
+    Sa place dans la chaine est tout son interet, et c'est ce que le scenario
+    verifie : il filtre **avant** `from` / `size` et **avant** les agregations
+    — un filtrage fait cote client apres coup ne donne ni le meme compte, ni la
+    meme pagination, ni les memes seaux.
+    """
+    idx = "meta-minscore"
+    es.options(ignore_status=404).indices.delete(index=idx)
+    es.indices.create(index=idx, mappings={"properties": {
+        "cat": {"type": "keyword"}}})
+    # Des scores exacts des deux cotes : une somme de `constant_score` entiers.
+    for id_, cat in (("d1", "a"), ("d2", "a"), ("d3", "b")):
+        es.index(index=idx, id=id_, refresh=True, document={"cat": cat})
+    q = {"bool": {"should": [
+        {"constant_score": {"filter": {"term": {"cat": "a"}}, "boost": 3}},
+        {"constant_score": {"filter": {"term": {"cat": "b"}}, "boost": 1}}]}}
+
+    plein = es.search(index=idx, query=q)
+    assert plein["hits"]["total"]["value"] == 3
+    assert plein["hits"]["max_score"] == 3.0
+
+    seuil = es.search(index=idx, query=q, min_score=2)
+    assert seuil["hits"]["total"]["value"] == 2, "le seuil doit changer le total"
+    assert sorted(ids(seuil)) == ["d1", "d2"]
+    assert seuil["hits"]["max_score"] == 3.0
+
+    # `from` / `size` s'appliquent **apres** : la seconde page de deux
+    # documents retenus est vide, pas celle de trois.
+    page = es.search(index=idx, query=q, min_score=2, from_=2, size=2)
+    assert page["hits"]["total"]["value"] == 2 and ids(page) == []
+
+    # Les agregations ne voient pas ce que le seuil ecarte.
+    agg = es.search(index=idx, query=q, min_score=2, size=0,
+                    aggs={"parcat": {"terms": {"field": "cat"}}})
+    seaux = {b["key"]: b["doc_count"] for b in agg["aggregations"]["parcat"]["buckets"]}
+    assert seaux == {"a": 2}, seaux
+
+    # Et il s'applique sous un tri par champ, ou la reponse ne porte plus aucun
+    # score : c'est la que tantivy laisse tomber le calcul si on ne le rallume
+    # pas.
+    trie = es.search(index=idx, query=q, min_score=2, sort=[{"cat": "asc"}])
+    assert trie["hits"]["total"]["value"] == 2 and sorted(ids(trie)) == ["d1", "d2"]
+
+    # Un seuil au-dessus de tout ne rend rien ; un seuil negatif ne coupe rien.
+    assert es.search(index=idx, query=q, min_score=1000)["hits"]["total"]["value"] == 0
+    assert es.search(index=idx, query=q, min_score=-1)["hits"]["total"]["value"] == 3
+
+    # Les deux refus portent les phrases d'ES.
+    refused(lambda: es.perform_request(
+        "POST", f"/{idx}/_search", headers={"content-type": "application/json"},
+        body={"query": q, "min_score": "abc"}), contains='For input string: "abc"')
+    es.indices.delete(index=idx)
+
+
+# ---------------------------------------------------------------------------
 
 def main():
     es = Elasticsearch(URL, request_timeout=30)

@@ -8143,6 +8143,7 @@
   "dsl.match_none": 0.0,
   "dsl.match_phrase": 4.5,
   "dsl.match_phrase_prefix": 0.1,
+  "dsl.meta_champs": null,
   "dsl.multi_match": 0.9,
   "dsl.nom_de_clause": null,
   "dsl.non_supportees": 6.1,
@@ -8233,8 +8234,9 @@
   "recherche.format_reponse": null,
   "recherche.from_size": 16.3,
   "recherche.highlight": 1.9,
+  "recherche.min_score": 0.0,
   "recherche.msearch": 0.1,
-  "recherche.non_supportes": 3.1,
+  "recherche.non_supportes": 3.0,
   "recherche.preference": null,
   "recherche.query": 25.3,
   "recherche.reglages_de_shards": null,
@@ -10835,18 +10837,18 @@
   },
   {
    "capacite": "recherche.non_supportes",
-   "nom": "search_after, pit, collapse, knn, explain, seq_no_primary_term, post_filter, min_score, suggest, rescore, track_scores, q, terminate_after, version, indices_boost, profile, slice, stats, ext, retriever",
+   "nom": "search_after, pit, collapse, knn, explain, seq_no_primary_term, post_filter, suggest, rescore, track_scores, q, terminate_after, version, indices_boost, profile, slice, stats, ext, retriever",
    "etat": "refuse",
    "motif": "pas_encore",
-   "requetes": 162,
-   "part": 3.1,
+   "requetes": 161,
+   "part": 3.0,
    "par_source": {
     "clients": {
      "requetes": 18,
      "part": 12.6
     },
     "doc": {
-     "requetes": 80,
+     "requetes": 79,
      "part": 2.0
     },
     "github": {
@@ -10914,10 +10916,6 @@
     {
      "trait": "corps:seq_no_primary_term",
      "requetes": 2
-    },
-    {
-     "trait": "corps:min_score",
-     "requetes": 1
     },
     {
      "trait": "corps:track_scores",

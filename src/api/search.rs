@@ -135,9 +135,15 @@ pub async fn search(
             "runtime_mappings",
             "highlight",
             "timeout",
+            "min_score",
         ],
         "_search",
     )?;
+
+    // `min_score` se lit **avant** la boucle sur les index : sa forme ne depend
+    // d'aucun mapping, et un `"abc"` doit etre refuse meme quand la recherche
+    // ne vise aucun index.
+    let min_score = lire_min_score(body_obj.get("min_score"))?;
 
     if let Some(v) = body_obj.get("track_total_hits") {
         check_track_total_hits(v)?;
@@ -285,6 +291,7 @@ pub async fn search(
         let ctx = QueryCtx::new(&gen.fields, &gen.index, &searcher)
             .avec_champs_ailleurs(&champs_connus)
             .avec_maintenant(maintenant)
+            .avec_nom_index(&nom)
             .selon_le_mapping(&gen.mapping)
             .avec_incidents(incidents.clone());
         let query = match body_obj.get("query") {
@@ -308,6 +315,14 @@ pub async fn search(
                 continue;
             }
             Err(e) => return Err(e),
+        };
+        // Le seuil enveloppe la requete **avant** tout le reste : c'est ce qui
+        // fait qu'il change `hits.total`, la pagination et les agregations —
+        // les trois mesures qui separent `min_score` d'un filtrage fait cote
+        // client apres coup (voir [`crate::seuil`]).
+        let query: Box<dyn tantivy::query::Query> = match min_score {
+            Some(m) => Box::new(crate::seuil::Seuil::new(query, m)),
+            None => query,
         };
         // Meme raisonnement pour les agregations : un index qui ne mappe pas le
         // champ agrege n'a aucune valeur a y verser.
@@ -826,13 +841,14 @@ pub async fn count(
     if generations.is_empty() {
         valider_sans_index(body_obj.get("query"), None, None, None, maintenant)?;
     }
-    for (_, _, gen) in &generations {
+    for (nom, _, gen) in &generations {
         let gen = gen.clone();
         let query = {
             let searcher = gen.searcher();
             let ctx = QueryCtx::new(&gen.fields, &gen.index, &searcher)
                 .avec_champs_ailleurs(&champs_connus)
                 .avec_maintenant(maintenant)
+                .avec_nom_index(nom)
                 .selon_le_mapping(&gen.mapping);
             match body_obj.get("query") {
                 Some(v) => build_query(v, &ctx),
@@ -964,6 +980,34 @@ fn verifier_timeout(v: Option<&str>) -> EsResult<()> {
 
 /// ferrite compte toujours les hits exactement — `relation` vaut donc toujours
 /// `eq`. Seul `false` (ne pas compter) n'a pas d'equivalent.
+/// `min_score` : le seuil sous lequel un document ne sort pas.
+///
+/// ES le lit comme un `float` et accepte la **chaine** qui en porte un
+/// (`"0.135"` filtre comme `0.135`). Ses deux refus sont mesures contre 8.15 :
+/// `null` est une `parsing_exception` (« Unknown key for a VALUE_NULL in
+/// [min_score]. »), une chaine illisible une `number_format_exception` (« For
+/// input string: "abc" »). Un seuil negatif ne filtre rien, et il ne se refuse
+/// pas : ES le prend tel quel.
+fn lire_min_score(v: Option<&Value>) -> EsResult<Option<f32>> {
+    match v {
+        None => Ok(None),
+        Some(Value::Number(n)) => Ok(n.as_f64().map(|f| f as f32)),
+        Some(Value::String(s)) => s.trim().parse::<f32>().map(Some).map_err(|_| {
+            EsError::new(
+                axum::http::StatusCode::BAD_REQUEST,
+                "number_format_exception",
+                format!("For input string: \"{s}\""),
+            )
+        }),
+        Some(Value::Null) => Err(EsError::parsing(
+            "Unknown key for a VALUE_NULL in [min_score].",
+        )),
+        Some(autre) => Err(EsError::parsing(format!(
+            "[_search] : [min_score] attend un nombre, pas {autre}"
+        ))),
+    }
+}
+
 fn check_track_total_hits(v: &Value) -> EsResult<()> {
     let refused = match v {
         Value::Bool(b) => !*b,
@@ -1065,6 +1109,28 @@ fn parse_source_body(v: &Value) -> EsResult<SourceFilter> {
 // sort
 // ---------------------------------------------------------------------------
 
+/// Un `sort` qui **est** le classement par defaut n'en est pas un.
+///
+/// Mesure contre ES 8.15 : `sort: [{"_score": "desc"}]` (et son ecriture courte
+/// `["_score"]`) rend `max_score` renseigne et **aucun** tableau `sort` dans les
+/// hits — exactement comme une recherche sans `sort`. Des que la cle change de
+/// sens (`asc`) ou qu'une seconde cle l'accompagne, c'est un vrai tri :
+/// `max_score` repasse a `null` et le tableau `sort` apparait.
+///
+/// Sans cette normalisation, ferrite rendait `max_score: null` sur l'ecriture
+/// la plus courante d'un tri par pertinence — un client qui lit `max_score` y
+/// voyait « aucun score » sur des documents scores. Trouve par
+/// `sonde_meta_champs.py`, en mesurant le voisinage de `_id`.
+fn tri_par_defaut(specs: Vec<SortSpec>) -> Vec<SortSpec> {
+    match specs.as_slice() {
+        [SortSpec {
+            key: SortKey::Score,
+            asc: false,
+        }] => Vec::new(),
+        _ => specs,
+    }
+}
+
 fn parse_sort_body(v: &Value, champs: &crate::mapping::Fields) -> EsResult<Vec<SortSpec>> {
     let entries: Vec<&Value> = match v {
         Value::Array(a) => a.iter().collect(),
@@ -1109,7 +1175,7 @@ fn parse_sort_body(v: &Value, champs: &crate::mapping::Fields) -> EsResult<Vec<S
             _ => return Err(EsError::illegal_argument("[sort] : entree invalide")),
         }
     }
-    Ok(specs)
+    Ok(tri_par_defaut(specs))
 }
 
 /// Ce qu'une entree de `sort` peut porter a cote du champ. Les trois derniers
@@ -1140,7 +1206,8 @@ fn parse_sort_params(list: &[String], champs: &crate::mapping::Fields) -> EsResu
                 champs,
             )
         })
-        .collect()
+        .collect::<EsResult<Vec<_>>>()
+        .map(tri_par_defaut)
 }
 
 fn sort_spec(field: &str, opts: &Options, champs: &crate::mapping::Fields) -> EsResult<SortSpec> {

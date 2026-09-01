@@ -120,6 +120,59 @@ fonctionnera aussi bien contre un Elasticsearch 8 que contre ferrite.
 | `es.count(doc_type="_doc", …)` → `/{index}/_doc/_count` | ⚠️ idem | ⚠️ idem | idem |
 | `regexp` avec `\d`, `\w`, `\s` (et leurs négations) | classe prédéfinie (**mesuré** : `\w+` rend 600 documents) | classe prédéfinie | en 7.10 (Lucene 8) le backslash n'échappait que le caractère suivant : `\w` y valait la lettre `w`, et rendait 0 document. Un motif écrit pour une 7.x **change de sens** en migrant — à grepper avant |
 
+### `index: false` : une divergence 7 → 8 que ferrite ne pouvait pas voir
+
+Elle mérite sa section parce qu'elle est la première de cette page qui ne se
+lise pas dans le code client, et parce que le harnais du projet ne pouvait pas
+la trouver : `sonde_index_false.py` s'étalonne contre **deux Elasticsearch
+8.15**, et deux serveurs de la même version sont d'accord par construction. Un
+étalonnage à deux instances prouve qu'une sonde est déterministe ; il ne peut
+pas montrer qu'une réponse dépend de la version majeure.
+
+Un utilisateur en 7.10.2 a signalé qu'un `term` sur un champ `index: false`
+devrait rendre `Cannot search on field [x] since it is not indexed.` Mesure
+contre les deux serveurs, la même sonde jouée sur chacun :
+
+| Question | ES **7.10.2** | ES **8.15.0** (et ferrite) |
+|---|---|---|
+| `term` / `terms` / `match` sur un `keyword` non indexé | 400 `query_shard_exception` | 1 hit, score **1.0** |
+| `range` sur un `long`, un `double`, une `date` non indexés | 400 | répond, score 1.0 |
+| `prefix` / `wildcard` / `regexp` / `fuzzy` sur un `keyword` non indexé | 400 | répond |
+| le surlignage d'une clause sur un champ non indexé | 400 | répond |
+| `_count`, `_delete_by_query`, `_validate/query` sur la même clause | 400 / `valid: false` | 200 / `valid: true` |
+| les mêmes clauses sur un `text` non indexé | 400 | 400 — **identique** |
+| `exists`, le tri, l'agrégation `terms`, `fields`, `docvalue_fields` | répondent | répondent — **identiques** |
+| `_field_caps` sur le `keyword` non indexé | `searchable: false` | `searchable: true` |
+
+La phrase que le signalement citait est **exacte** — pour sa version. Le repli
+sur les *doc values* d'un champ non indexé est arrivé entre la 7.10 et la 8.15 :
+en 7.x, `index: false` retire vraiment le champ de la recherche.
+
+**Combien de cases ?** La sonde entière rejouée contre les deux serveurs
+(`python3 tests/compat/sonde_index_false.py --calibrer <es7> <es8>`) rend
+**92 écarts sur 244 questions**, dont **85** de la forme « la 7.10.2 refuse avec
+`… since it is not indexed.` là où la 8.15 répond », plus `_field_caps` et
+`_validate/query`, qui sont la même règle vue par une autre route : **87 cases**.
+Les 5 restantes sont des différences 7/8 sans rapport (`fields` sur la cible
+d'un `copy_to`, la forme de `GET /_doc`, `docvalue_fields` sur un `text`).
+
+**Ce que ferrite fait, et ce qu'il ne fait pas.** Il suit la 8.15, la version
+qu'il annonce dans son `GET /` — le comportement n'a **pas** été changé par
+cette carte. Les deux comportements sont incompatibles : servir la requête casse
+une application 7.x qui attend l'erreur, la refuser casse la parité 8.15 qui est
+mesurée et publiée. Trois options ont été posées, avec leur prix ; la
+recommandation, chiffrée, est dans la PR de la carte 41. En résumé :
+
+| Option | Ce qu'elle coûte | Ce qu'elle oblige à publier |
+|---|---|---|
+| (a) garder la 8.15, documenter la divergence | rien de plus que cette section | rien de neuf |
+| (b) un drapeau étroit, nommé d'après ce qu'il fait | une campagne CI de plus, avec un **serveur 7.10.2** qui n'existe dans aucun job aujourd'hui, et les **deux** positions rejouées | un second jeu de chiffres pour les 87 cases |
+| (c) un vrai mode 7.x | une seconde API à mesurer (réponses, formes d'erreur, `_type`, `hits.total`, `include_type_name`) | un second jeu de chiffres pour **tout** le périmètre |
+
+La mesure ci-dessus est ce qui tranche entre (b) et (c) : à 3 cases, (b) est
+honnête ; à 87, le drapeau ne serait plus étroit, et son nom promettrait plus
+qu'il ne tient. C'est exactement le reproche que ce dépôt cherche à éviter.
+
 ### ⚠️ Le piège à connaître avant de brancher quoi que ce soit
 
 `search(doc_type=…)` construit l'URL `POST /{index}/_doc/_search`. En 7.10 c'est

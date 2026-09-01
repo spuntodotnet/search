@@ -228,6 +228,7 @@ async fn filtrer_les_index(
             let searcher = gen.searcher();
             let ctx = crate::dsl::QueryCtx::new(&gen.fields, &gen.index, &searcher)
                 .avec_maintenant(maintenant)
+                .avec_nom_index(&idx.name)
                 .selon_le_mapping(&gen.mapping);
             crate::dsl::build_query(filtre, &ctx)
         };

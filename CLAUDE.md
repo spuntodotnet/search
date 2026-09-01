@@ -59,6 +59,19 @@ index en lecture seule côté ES, une fois sur un joker que ferrite refuse), et
 **tout cascadait ensuite en « index already exists »**. Un résultat massivement
 rouge est presque toujours un défaut d'outillage, pas une découverte.
 
+Et il a une limite qu'on n'avait pas écrite : **étalonner contre deux serveurs
+de la même version ne prouve que le déterminisme.** `sonde_index_false.py` est
+étalonnée 244/244 contre deux ES 8.15, et cet étalonnage ne pouvait pas montrer
+qu'une de ses réponses **dépend de la version majeure**. Un utilisateur en
+7.10.2 a signalé qu'un `term` sur un champ `index: false` devait rendre
+`Cannot search on field [x] since it is not indexed.` — il avait raison, pour sa
+version : le repli sur les *doc values* est arrivé entre la 7.10 et la 8.15. La
+même sonde jouée contre les deux serveurs rend **92 écarts sur 244**, dont 87 de
+cette seule forme ([`docs/compat-es7.md`](docs/compat-es7.md)). Deux serveurs
+identiques sont d'accord par construction ; une sonde doit donc **déclarer la
+version de sa référence** dans son rapport, et c'est ce que fait
+`sonde_meta_champs.py`.
+
 Même piège une troisième fois, plus discret, en passant de 22 à 107 domaines :
 un **template** laissé par un cas s'applique aux index que les suivants créent.
 `mget` lisait alors un `_type` là où le cas attendait `null`, et
@@ -290,7 +303,7 @@ développement, pas de CI).
 
 | Commande | La question à laquelle elle répond |
 |---|---|
-| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**123/123**, dont l'export par `helpers.scan`, le date math et son `time_zone`, le graphe temporel « par mois » et « par jour à Paris », la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats`, les templates, ce que la réponse transporte — `fields`, `docvalue_fields`, `stored_fields` — la modification par requête, `_delete_by_query` / `_update_by_query`, et les n-grammes de l'autocomplétion, `search_analyzer`, `copy_to` et `store`, et le **réglage de la pertinence** — `function_score`, `boosting`, et le score qu'ils rendent, assertion par assertion) |
+| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**127/127**, dont la recherche **par `_id`**, le filtrage d'un index par son nom, `min_score` et ce qu'il change (le total, la pagination, les agrégations), l'export par `helpers.scan`, le date math et son `time_zone`, le graphe temporel « par mois » et « par jour à Paris », la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats`, les templates, ce que la réponse transporte — `fields`, `docvalue_fields`, `stored_fields` — la modification par requête, `_delete_by_query` / `_update_by_query`, et les n-grammes de l'autocomplétion, `search_analyzer`, `copy_to` et `store`, et le **réglage de la pertinence** — `function_score`, `boosting`, et le score qu'ils rendent, assertion par assertion) |
 | `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (212/213, 0 écart réel) |
 | `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (45/46 ; le seul écart est `_cluster/health`, toujours vert par choix) |
 | `tests/compat/diff_aggs.py` | les mêmes agrégations ? (73/73, `filter` comprise, ce qu'un bucket **vide** doit porter, et les deux compteurs d'un `terms` **après** filtrage) |
@@ -300,7 +313,7 @@ développement, pas de CI).
 | `tests/compat/sonde_calendrier.py` | les mêmes seaux sur un **graphe temporel** — `calendar_interval`, `time_zone`, et `time_zone` sur un `range` ? Le bloc entier, seau par seau (`key`, `key_as_string`, `doc_count`), sur un corpus qui traverse les **deux** bascules de l'heure d'été, un 29 février, un minuit qui n'existe pas (Santiago) et une heure d'été d'une demi-heure (Lord Howe) : **231/233 identiques, 2 refus assumés, 0 écart** (`--calibrer` : 233/233 contre deux ES) |
 | `tests/compat/genere_fuseaux.py` | **quelles règles de fuseau, et d'où ?** La table est dumpée du tzdb du **JDK du conteneur de référence** — celles qu'ES applique lui-même, son image n'ayant pas de `/usr/share/zoneinfo` (603 zones, 110 Ko, `--verifie` recompare octet par octet). `--grille` écrit les 25 914 arrondis que **la classe `Rounding` d'ES elle-même** rend, exécutée dans le conteneur avec ses jars : c'est l'oracle de `tests/arrondi_vs_es.rs`, rejoué par `cargo test` sans Docker |
 | `tests/compat/diff_highlight.py` | les mêmes **fragments surlignés** — pas leur nombre, leur contenu exact, balises comprises ? (233 questions, **221 identiques au caractère près, 11 refus assumés, 0 écart** ; `--calibrer` : 233/233 contre deux ES). Le même fichier lancé contre le ferrite d'avant rend **0/233** |
-| `tests/compat/sonde_score.py` | les mêmes **scores** ? Pas le même ordre : la même **valeur**. `function_score` et `boosting` n'existent que pour produire un `_score`, et un ordre juste avec des scores faux serait vert partout ailleurs. 197 questions, comparées sur le score de chaque hit, `max_score`, le total et l'ordre : **183/197 identiques, 14 refus assumés, 0 écart** (`--calibrer` : 196/197 contre deux ES, le seul écart étant `random_score`, tiré au sort). Le même fichier lancé contre le ferrite d'avant rend **0/197** |
+| `tests/compat/sonde_score.py` | les mêmes **scores** ? Pas le même ordre : la même **valeur**. `function_score` et `boosting` n'existent que pour produire un `_score`, et un ordre juste avec des scores faux serait vert partout ailleurs. 212 questions, comparées sur le score de chaque hit, `max_score`, le total, l'ordre — et le bloc d'**agrégations**, entré ici avec `min_score` du corps, parce que la seule façon de savoir si elles voient les documents qu'un seuil écarte est de les regarder : **198/212 identiques, 14 refus assumés, 0 écart** (`--calibrer` : 211/212 contre deux ES, le seul écart étant `random_score`, tiré au sort). Le même fichier lancé contre le ferrite d'avant rend **184/212** — et ses 14 écarts sont exactement les 14 questions que `min_score` a ajoutées |
 | `tests/compat/genere_scoring.py` | **quelles formules de scoring, et d'où ?** Les trois fonctions de décroissance, les dix `modifier` et les six `boost_mode` sont calculés par **les classes d'ES elles-mêmes**, exécutées dans le conteneur de référence avec ses jars (58 476 points, 1 744 batteries). C'est l'oracle de `tests/scoring_vs_es.rs`, rejoué par `cargo test` sans Docker — et c'est ce qui évite d'avoir à **choisir** une tolérance sur des flottants |
 | `tests/compat/diff_motifs.py` | les mêmes documents sur un **motif** — `regexp`, `wildcard`, `prefix`, `match_phrase_prefix` ? (110/110, dont les neuf formes du `|` sans branche gauche) |
 | `tests/compat/diff_multi_index.py` | `index=["a","b"]`, `logs-*`, les alias : **les mêmes index visés, fusionnés pareil** ? (87/87, 0 écart, plus aucune divergence assumée ; `--calibrer` : 87/87 contre deux ES) |
@@ -313,6 +326,7 @@ développement, pas de CI).
 | `tests/compat/sonde_alias.py` | les mêmes alias sur une **expression de noms** — liste, joker, exclusion, `_all` — et le même 404 ? (21/21, corps et message compris) |
 | `tests/compat/sonde_ecriture_alias.py` | et pour **écrire** un alias ? Les sept URL de `put_alias` (le nom de l'alias, celui de l'index, ou les deux, viennent du corps — qui **remplace** le chemin), `must_exist`, et les deux règles de 404 qui ne sont pas la même : `must_exist: true` se vérifie **par index visé**, le 404 par défaut est **global**. Compare le statut, le message **et l'état laissé derrière** : **57/65 identiques, 7 refus assumés, 1 message non comparé, 0 écart** — et **14/65 contre le ferrite d'avant**. `--calibrer` : 64/65 contre deux ES |
 | `tests/compat/sonde_index_false.py` | **`index: false`** : que devient un champ qu'on garde sans le rendre cherchable ? Type par type, opération par opération — ce qui répond, ce qui échoue, avec quel type d'erreur et quelle phrase. C'est la sonde qui a **retourné** le refus d'avant : sur tout type qui a une colonne, ES ne renonce pas à chercher, il retombe sur les *doc values*. **228/244 identiques, 16 refus assumés, 0 écart** (`--calibrer` : 244/244 contre deux ES). Le même fichier lancé contre le ferrite d'avant rend **147/244** |
+| `tests/compat/sonde_meta_champs.py` | un champ de **metadonnees** en clause de requete, c'est quoi au juste ? `_id`, `_index`, `_routing`, `_seq_no`, `_type`, `_source`, `_field_names`, `_version`, `_ignored` x les dix-huit clauses qui prennent un nom de champ. Elle range chaque case dans **trois** issues et pas deux — ES **repond**, ES **refuse**, ES rend **vide** — et c'est la troisieme colonne qui empeche de se tromper de regle : `{"term": {"_id": …}}` rendait 0 en silence, mais `{"term": {"champ_absent": …}}` rend 0 des deux cotes et c'est **juste**. 203 questions, `--calibrer` 203/203 contre deux ES. Le meme fichier lance contre le ferrite d'avant rend **32/203**. `--table` ne demande qu'un serveur et sert a mesurer une **autre version** |
 | `tests/compat/sonde_vide.py` | sur un serveur **sans aucun index**, la même chose qu'ES — et rien accepté en silence ? (28/28 identiques, 0 refus muet ; les deux serveurs doivent être vides, c'est l'état mesuré) |
 | `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **670 cas, 30 937 requêtes, 4 divergences ouvertes — toutes antérieures à la carte, mesurées telles** sur quatre plages de graines dont **aucune** n'a servi à corriger : celle sur laquelle on itère ne mesure plus rien, et le générateur ayant changé, les plages du passage précédent ne mesurent plus les mêmes cas. Les mêmes plages contre le **binaire d'avant** rendent 83 divergences : une brique de générateur qui ne fait pas rougir le binaire d'avant ne mesure rien. 21 défauts silencieux trouvés au premier passage, 41 de plus depuis — dont **dix-sept** sur le seul surlignage, quatre sur le scoring (dont trois fois le même : `Math.min` de Java propage `NaN`, celui de Rust non), et cinq sur le voisinage d'`index: false`, qu'une sonde de 244 questions écrites à la main n'avait pas vus. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (50 cas, 2 255 requêtes, 0 divergence réelle) |
 | `tests/compat/sonde_fuzz.py` | les écarts trouvés par le fuzzing, **figés** hors d'une graine (109/109, plus 12 refus assumés ; les cinq derniers portent sur le motif **vide**, qui désigne la chaîne vide chez Lucene et que ferrite refusait en 400) |
@@ -518,6 +532,50 @@ bouger**, pas après.
   n'existe sur aucun autre type — les 24 combinaisons de bornes sont mesurées
   et figées. Rendre **moins** de documents qu'ES en silence est le résultat que
   ce dépôt refuse en premier.
+- **Un champ de métadonnées n'est pas un champ inconnu, et ça se mesure case
+  par case.** `{"term": {"_id": "…"}}` rendait `hits.total: 0` **sans erreur**
+  pour un document qui existe : le nom n'était dans aucun mapping, la clause
+  tombait donc dans « champ non mappé », que le défaut d'ES
+  (`allow_unmapped_fields`) transforme en « ne correspond à rien ». Un vide
+  indiscernable d'un document absent, en 200 — signalé par une application en
+  production. Ce qui a coûté le travail n'est pas de faire répondre `_id` :
+  c'est de savoir **où** répondre. La sonde ([`sonde_meta_champs.py`](tests/compat/sonde_meta_champs.py),
+  203 questions) range chaque case dans **trois** issues, et il fallait les
+  connaître avant d'écrire : ES répond (`term`, `terms`, `match`,
+  `match_phrase`, `exists` sur `_id`, à score **constant**), ES refuse
+  (`prefix`, `wildcard`, `regexp`, `fuzzy`, `match_phrase_prefix`, `range` sur
+  ce même `_id`), et ES rend **vide** (`_type`, que rien ne porte depuis la
+  8.0). La troisième colonne est celle qui empêche de se tromper de règle :
+  `{"term": {"champ_absent": "x"}}` rend 0 des **deux** côtés, et en faire une
+  erreur aurait été une divergence introduite au nom d'une règle mal citée. La
+  règle du projet n'est pas « tout vide est un bug », c'est « jamais un
+  résultat que ferrite sait faux ». Quatre règles en sont sorties qu'aucune
+  documentation ne donne : `match` sur `_id` **n'analyse pas** sa valeur
+  (`"a b"` y rend zéro document) ; une clause sur `_index` lit une
+  **expression de nom d'index** (`{"term": {"_index": "logs-*"}}` rend les
+  documents), où seule l'étoile est un joker — `?` y est un caractère ordinaire
+  et `\` n'échappe rien ; une valeur qui commence par `_` y est **refusée**
+  (`Invalid index name [_doc], must not start with '_'.`) sauf `_all`
+  exactement ; et `sort: [{"_score": "desc"}]` — le tri par défaut écrit à la
+  main — n'est **pas** un tri : ES y rend `max_score` renseigné et aucun
+  tableau `sort`, exactement comme sans `sort`. Ce que ferrite ne sait pas
+  servir (`_routing`, `_seq_no`, `_ignored`) est **refusé en le nommant**,
+  jamais rendu vide : c'est un coût de périmètre, et il se voit.
+- **`min_score` n'est pas un filtre de plus, c'est l'endroit où le score cesse
+  d'être un ordre.** Sa place dans la chaîne *est* sa raison d'être, et les
+  trois questions qui comptent ne se devinaient pas : il filtre **avant**
+  `from` / `size` (donc il change `hits.total`, donc un filtrage fait côté
+  client après coup ne donne ni le même compte ni la même pagination), les
+  **agrégations ne voient pas** ce qu'il écarte, et il s'applique même sous un
+  `sort` par champ — là où la réponse ne porte plus aucun score. Ce dernier
+  point est le piège déjà payé sur le `boost` d'une clause : tantivy laisse
+  tomber le calcul du score quand le collecteur ne le demande pas, et il faut
+  le rallumer. Et il a réveillé un défaut qui n'avait rien à voir avec lui,
+  quatrième fois : un `nested` en `score_mode: none` notait **1.0** chez
+  ferrite contre **0.0** chez ES, invisible depuis toujours puisqu'un score
+  constant ne change pas un ensemble de documents — jusqu'à ce qu'un seuil en
+  fasse un critère. Trouvé par le fuzzer (graine 9410019), pas par les
+  212 questions de `sonde_score.py`.
 - **Un champ inconnu dans une requête ne correspond à rien, comme chez ES** —
   c'est `index.query.parse.allow_unmapped_fields`, le vrai réglage d'ES, avec
   son défaut (`true`). Ça a longtemps été l'inverse, et la décision était
@@ -1458,6 +1516,18 @@ conteneur de référence, et les cinq règles qui les entourent — celles qui
 décident vraiment du résultat — ne sont dans aucune documentation.
 `random_score` et `script_score` sont refusés en les nommant, et `boost_factor`
 aussi : **ES 8.15 le refuse lui-même**.
+
+**Filtrer sur le score** ne demande plus de recalculer côté client : `min_score`
+est servi, et ce qui compte n'est pas qu'il coupe mais **où** il coupe — avant
+`from` / `size`, donc il change `hits.total` ; avant les agrégations, qui ne
+voient pas ce qu'il écarte ; et même sous un `sort` par champ, là où la réponse
+ne porte plus aucun score. Les trois sont mesurés, aucun ne se devinait.
+
+**Retrouver un document par son `_id`** aussi : `{"term": {"_id": "…"}}`
+rendait `hits.total: 0` **sans erreur** pour un document qui existe, signalé par
+une application en production. Ce que la carte a coûté n'est pas de faire
+répondre `_id` — c'est de mesurer **où** ES répond, où il refuse, et où il rend
+vide, sur neuf champs de métadonnées et dix-huit clauses.
 
 Ce qui reste, par ordre de gêne pour un projet réel : `rest_total_hits_as_int`,
 `_msearch`, `_reindex`, les templates de **composants** (`_component_template`, et le

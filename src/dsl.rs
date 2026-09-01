@@ -58,6 +58,12 @@ pub struct QueryCtx<'a> {
     /// entier ferait perdre les documents que les *autres* clauses d'un `bool`
     /// auraient trouves.
     pub champs_ailleurs: &'a std::collections::BTreeSet<String>,
+    /// Le nom de l'index interroge, pour les clauses qui citent `_index`.
+    ///
+    /// `None` quand la requete est traduite sans qu'aucun index ne soit vise
+    /// (une validation) : `_index` n'y designe alors personne, mais la clause
+    /// doit quand meme se construire.
+    pub nom_index: Option<&'a str>,
     /// L'instant que `now` designe dans cette requete.
     ///
     /// Pris **une fois** par recherche, comme ES le fait sur son noeud
@@ -100,6 +106,7 @@ impl<'a> QueryCtx<'a> {
             nested_ouvert: std::cell::RefCell::new(Vec::new()),
             searcher,
             champs_ailleurs: &AUCUN_AUTRE_CHAMP,
+            nom_index: None,
             maintenant: crate::datemath::maintenant(),
             // Le defaut d'Elasticsearch. Le reglage de l'index le resserre, via
             // [`QueryCtx::selon_le_mapping`].
@@ -136,6 +143,13 @@ impl<'a> QueryCtx<'a> {
     /// Les champs qu'un autre index de la meme recherche connait.
     pub fn avec_champs_ailleurs(mut self, champs: &'a std::collections::BTreeSet<String>) -> Self {
         self.champs_ailleurs = champs;
+        self
+    }
+
+    /// Le nom de l'index interroge : c'est la valeur que `_index` porte pour
+    /// **tous** ses documents.
+    pub fn avec_nom_index(mut self, nom: &'a str) -> Self {
+        self.nom_index = Some(nom);
         self
     }
 
@@ -267,6 +281,50 @@ fn build_une(v: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
              boosting, nested, has_child, has_parent, parent_id]"
         ))),
     }
+}
+
+/// Une clause posee sur un champ de **metadonnees** (`_id`, `_index`, ...).
+///
+/// Rend `None` quand le nom n'en est pas un : la clause suit alors son chemin
+/// ordinaire. Sinon, [`crate::meta`] a deja tranche entre les trois issues
+/// mesurees contre ES — repondre, refuser, ou ne rien designer — et il ne reste
+/// qu'a construire la requete.
+///
+/// C'est ici que se ferme le defaut de la carte 41 : `_id` n'etait dans aucun
+/// mapping, la clause tombait dans « champ non mappe », et le defaut d'ES
+/// (`allow_unmapped_fields`) la rendait vide **en 200**.
+fn meta_query(
+    ctx: &QueryCtx,
+    champ: &str,
+    cl: crate::meta::Clause,
+    valeurs: &[Value],
+) -> Option<EsResult<Box<dyn Query>>> {
+    let verdict = crate::meta::clause(champ, cl, valeurs, ctx.nom_index)?;
+    Some(verdict.map(|v| match v {
+        // ES donne un score **constant** a une clause sur un champ de
+        // metadonnees : 1.0 x `boost`, mesure sur `term`, `terms`, `match` et
+        // `exists`. Rien a y noter — il n'y a ni frequence ni longueur de champ.
+        crate::meta::Verdict::Tous => {
+            Box::new(ConstScoreQuery::new(Box::new(AllQuery), 1.0)) as Box<dyn Query>
+        }
+        crate::meta::Verdict::Aucun => Box::new(EmptyQuery),
+        crate::meta::Verdict::Ids(ids) => {
+            let clauses: Vec<(Occur, Box<dyn Query>)> = ids
+                .iter()
+                .map(|id| {
+                    let q: Box<dyn Query> = Box::new(TermQuery::new(
+                        tantivy::Term::from_field_text(ctx.fields.id, id),
+                        IndexRecordOption::Basic,
+                    ));
+                    (Occur::Should, q)
+                })
+                .collect();
+            Box::new(ConstScoreQuery::new(
+                Box::new(BooleanQuery::new(clauses)),
+                1.0,
+            ))
+        }
+    }))
 }
 
 /// Le refus qu'Elasticsearch prononce quand une clause vise un champ
@@ -438,6 +496,19 @@ fn field_match(
     clause: &str,
     ctx: &QueryCtx,
 ) -> EsResult<Box<dyn Query>> {
+    // `match` passe par ici, et `multi_match` avec lui : un champ de
+    // metadonnees cite dans `fields` se resout donc au meme endroit que s'il
+    // etait seul. Mesure contre ES 8.15 : la valeur n'y est **pas** analysee —
+    // `{"match": {"_id": "a b"}}` rend zero document, la ou un `match` analyse
+    // en aurait trouve deux.
+    if let Some(q) = meta_query(
+        ctx,
+        field_name,
+        crate::meta::Clause::Match,
+        std::slice::from_ref(value),
+    ) {
+        return q;
+    }
     let MappedField {
         field,
         ty,
@@ -756,6 +827,14 @@ fn field_phrase(
     clause: &str,
     ctx: &QueryCtx,
 ) -> EsResult<Box<dyn Query>> {
+    if let Some(q) = meta_query(
+        ctx,
+        field_name,
+        crate::meta::Clause::MatchPhrase,
+        std::slice::from_ref(value),
+    ) {
+        return q;
+    }
     let MappedField {
         field,
         ty,
@@ -904,6 +983,16 @@ fn field_phrase_prefix(
     clause: &str,
     ctx: &QueryCtx,
 ) -> EsResult<Box<dyn Query>> {
+    // ES refuse une phrase a prefixe sur **tous** ses champs de metadonnees,
+    // `_id` compris : « Can only use phrase prefix queries on text fields ».
+    if let Some(q) = meta_query(
+        ctx,
+        field_name,
+        crate::meta::Clause::MatchPhrasePrefix,
+        std::slice::from_ref(value),
+    ) {
+        return q;
+    }
     let MappedField {
         field,
         ty,
@@ -1123,6 +1212,16 @@ fn exists_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         .get("field")
         .and_then(Value::as_str)
         .ok_or_else(|| EsError::illegal_argument("[exists] : cle [field] manquante"))?;
+    if let Some(q) = meta_query(ctx, name, crate::meta::Clause::Exists, &[]) {
+        // `exists` est la clause ou les champs de metadonnees se separent le
+        // plus : tous les documents en portent un (`_id`, `_index`, `_seq_no`,
+        // `_version`), aucun n'a de `_type`, et ES **refuse** la question sur
+        // `_field_names` et `_source`. Mesure, pas deduction.
+        return boost(
+            Box::new(ConstScoreQuery::new(q?, 1.0)) as Box<dyn Query>,
+            obj.get("boost"),
+        );
+    }
     let MappedField {
         field, ty, indexe, ..
     } = ctx.field(name, "exists")?;
@@ -1166,6 +1265,14 @@ fn term_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         }
         v => (v.clone(), None),
     };
+    if let Some(q) = meta_query(
+        ctx,
+        field_name,
+        crate::meta::Clause::Term,
+        std::slice::from_ref(&value),
+    ) {
+        return boost(q?, boost_value.as_ref());
+    }
     let MappedField {
         field, ty, indexe, ..
     } = ctx.field(field_name, "term")?;
@@ -1287,6 +1394,9 @@ fn terms_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
              termes ne sont pas supportes par ferrite)"
         ))
     })?;
+    if let Some(q) = meta_query(ctx, field_name, crate::meta::Clause::Terms, list) {
+        return boost(q?, boost_value.as_ref());
+    }
     let MappedField {
         field, ty, indexe, ..
     } = ctx.field(field_name, "terms")?;
@@ -1373,6 +1483,12 @@ fn range_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
             )))
         }
     };
+    // ES refuse un `range` sur **chacun** de ses champs de metadonnees sauf
+    // `_seq_no` et `_version` (mesure) : « Field [_id] of type [_id] does not
+    // support range queries ».
+    if let Some(q) = meta_query(ctx, field_name, crate::meta::Clause::Range, &[]) {
+        return boost(q?, spec.get("boost"));
+    }
     let MappedField {
         field, ty, indexe, ..
     } = ctx.field(field_name, "range")?;
@@ -1723,6 +1839,14 @@ fn prefix_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         valeur_et_boost(obj, "prefix", &["case_insensitive", "rewrite"])?;
     refuser_rewrite(obj, "prefix")?;
     let insensible = lire_insensible(obj, "prefix")?;
+    if let Some(q) = meta_query(
+        ctx,
+        champ,
+        crate::meta::Clause::Prefix,
+        std::slice::from_ref(&Value::String(valeur.clone())),
+    ) {
+        return boost(q?, boost_value.as_ref());
+    }
     let mf = champ_de_motif(ctx, champ, "prefix")?;
     let motif = format!(
         "(?s){}(?s:.*)",
@@ -1753,6 +1877,14 @@ fn wildcard_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     )?;
     refuser_rewrite(obj, "wildcard")?;
     let insensible = lire_insensible(obj, "wildcard")?;
+    if let Some(q) = meta_query(
+        ctx,
+        champ,
+        crate::meta::Clause::Wildcard,
+        std::slice::from_ref(&Value::String(valeur.clone())),
+    ) {
+        return boost(q?, boost_value.as_ref());
+    }
     let mf = champ_de_motif(ctx, champ, "wildcard")?;
 
     let motif = format!("(?s){}", crate::regexp::joker(&valeur, insensible));
@@ -1820,6 +1952,14 @@ fn regexp_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     // ferrite refuse (`~`, `&`, `<n-m>`, `#`) doivent l'etre aussi sur un champ
     // non mappe, sans quoi la clause passerait en silence.
     let motif = crate::regexp::vers_regex(&valeur, flags, insensible)?;
+    if let Some(q) = meta_query(
+        ctx,
+        champ,
+        crate::meta::Clause::Regexp,
+        std::slice::from_ref(&Value::String(valeur.clone())),
+    ) {
+        return boost(q?, boost_value.as_ref());
+    }
     let mf = champ_de_motif(ctx, champ, "regexp")?;
     if !mf.indexe {
         // Le seul motif qu'ES **refuse** sur une colonne : son automate de
@@ -1901,6 +2041,14 @@ fn fuzzy_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     // and text fields ») ; ferrite construisait un terme texte sur une colonne
     // qui n'en contient pas et rendait **zero document en 200** — un resultat
     // vide qui se fait passer pour une reponse.
+    if let Some(q) = meta_query(
+        ctx,
+        champ,
+        crate::meta::Clause::Fuzzy,
+        std::slice::from_ref(&Value::String(valeur.clone())),
+    ) {
+        return boost(q?, boost_value.as_ref());
+    }
     let mf = champ_de_motif(ctx, champ, "fuzzy")?;
     // Non indexe, la distance se mesure contre le dictionnaire de la colonne —
     // avec le **meme** automate que celui que `FuzzyTermQuery` compile, sans
@@ -2635,6 +2783,7 @@ fn nested_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     // Le score d'une clause `nested` est celui du pre-filtre, calcule a plat :
     // ferrite n'a pas de document par element, donc pas de score par element.
     // Le dire plutot que de rendre un classement qui n'est pas celui demande.
+    let mut sans_score = false;
     if let Some(mode) = obj.get("score_mode").and_then(Value::as_str) {
         if mode != "none" && mode != "avg" {
             return Err(EsError::unsupported(format!(
@@ -2642,6 +2791,14 @@ fn nested_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
                  de la requete interne evaluee a plat (voir docs/compat.md)"
             )));
         }
+        // `score_mode: none` **est** un score, et il vaut zero : ES y construit
+        // un filtre, pas une jointure notee. ferrite rendait le score du
+        // pre-filtre (1.0 sur un `exists`), et ca ne se voyait nulle part —
+        // un facteur constant ne change pas un ensemble de documents. Sauf
+        // sous un `min_score`, qui en fait un seuil : `min_score: 1` y gardait
+        // 15 documents la ou ES n'en rend aucun, en 200. Trouve par le fuzzer
+        // (graine 9410019) le jour ou `min_score` lui a donne de quoi le voir.
+        sans_score = mode == "none";
     }
 
     let path = obj
@@ -2673,7 +2830,10 @@ fn nested_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     })();
     ctx.nested_ouvert.borrow_mut().pop();
     let (prefiltre, clause) = construit?;
-    let q: Box<dyn Query> = Box::new(NestedQuery::new(path.to_string(), prefiltre, clause)?);
+    let mut q: Box<dyn Query> = Box::new(NestedQuery::new(path.to_string(), prefiltre, clause)?);
+    if sans_score {
+        q = Box::new(ConstScoreQuery::new(q, 0.0));
+    }
     boost(q, obj.get("boost"))
 }
 
