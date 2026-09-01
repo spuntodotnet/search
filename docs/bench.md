@@ -102,7 +102,7 @@ campagne, [`docs/container.json`](container.json), où chaque valeur porte sa
 définition.
 
 <!-- chiffres-conteneur:enveloppe — généré depuis docs/container.json par `python3 tests/compat/chiffres_conteneur.py --injecte`, ne pas éditer à la main -->
-| | ferrite 0.9.0 | ES 8.15.0 | × |
+| | ferrite 0.10.0 | ES 8.15.0 | × |
 |---|---|---|---|
 | **Image compressée**, telle qu'un registre la sert | **4,3 Mo** | 669,1 Mo | **×157** |
 | Image décompressée, ce que son système de fichiers occupe | 10,1 Mo | 1 266,1 Mo | ×125 |

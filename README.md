@@ -16,8 +16,8 @@ milliers de documents et répondre à des requêtes `bool` + `terms` + un tri.
 |  | Elasticsearch 8.15.0 | ferrite |
 |---|---|---|
 | Image compressée, telle qu'un registre la sert | 669,1 Mo | **4,3 Mo** (`scratch`) |
-| RSS au repos | 1,09 Go | **4,9 Mo** |
-| Démarrage | 17,9 s | **215 ms** (`docker run` → premier `GET /` servi) |
+| RSS au repos | 1,13 Go | **4,9 Mo** |
+| Démarrage | 17,5 s | **177 ms** (`docker run` → premier `GET /` servi) |
 | Runtime | JVM + tuning heap | un binaire statique |
 <!-- /chiffres-conteneur:apercu -->
 
@@ -126,7 +126,7 @@ Sans rien compiler : chaque version publie un binaire statique Linux **x86-64**
 et **arm64** dans les [releases](../../releases) (archive `.tar.gz` + `.sha256`).
 
 ```bash
-tar xzf ferrite-v0.9.0-x86_64-unknown-linux-musl.tar.gz && ./ferrite
+tar xzf ferrite-v0.10.0-x86_64-unknown-linux-musl.tar.gz && ./ferrite
 ```
 
 Puis, avec le client officiel — sans une ligne de code spécifique à ferrite :
@@ -157,13 +157,13 @@ ce tableau est **généré** — chaque valeur y porte sa définition, et un cli
 de CI échoue si le tableau et le fichier divergent.
 
 <!-- chiffres-conteneur:tableau — généré depuis docs/container.json par `python3 tests/compat/chiffres_conteneur.py --injecte`, ne pas éditer à la main -->
-| | Elasticsearch 8.15.0 | ferrite 0.9.0 | × |
+| | Elasticsearch 8.15.0 | ferrite 0.10.0 | × |
 |---|---|---|---|
 | **Image compressée**, telle qu'un registre la sert | 669,1 Mo | **4,3 Mo** | **×157** |
 | Image décompressée, ce que son système de fichiers occupe | 1 266,1 Mo | 10,1 Mo | ×125 |
 | Le binaire seul | — | 10,1 Mo | |
-| Mémoire au repos (RSS) | 1,09 Go | **4,9 Mo** | **×221** |
-| Démarrage (`docker run` → premier `GET /` servi) | 17,9 s | **215 ms** (médiane de 5 ; l'essentiel est la création du conteneur par Docker) | ×83 |
+| Mémoire au repos (RSS) | 1,13 Go | **4,9 Mo** | **×231** |
+| Démarrage (`docker run` → premier `GET /` servi) | 17,5 s | **177 ms** (médiane de 5 ; l'essentiel est la création du conteneur par Docker) | ×99 |
 <!-- /chiffres-conteneur:tableau -->
 
 L'image finale est un `scratch` qui ne contient que le binaire statique — d'où
@@ -216,16 +216,16 @@ autres outils répondent à la même question.
 
 <!-- chiffres-conteneur:sortie — généré depuis docs/container.json par `python3 tests/compat/chiffres_conteneur.py --injecte`, ne pas éditer à la main -->
 ```
-$ ./tests/compat/measure_container.sh ferrite:0.9.0
+$ ./tests/compat/measure_container.sh ferrite:0.10.0
 docker serveur   : 29.7.2 (magasin d'images : overlayfs)
 
-== image : ferrite:0.9.0  (linux/amd64, 1 couche(s))
-compressee (registre) :     4 262 841 octets      4,3 Mo   <- ce qu'un `docker pull` telecharge
-decompressee (disque) :    10 129 408 octets     10,1 Mo   <- ce que le systeme de fichiers de l'image occupe
-binaire /ferrite      :    10 127 616 octets     10,1 Mo   <- le fichier que le conteneur execute
+== image : ferrite:0.10.0  (linux/amd64, 1 couche(s))
+compressee (registre) :     4 269 397 octets      4,3 Mo   <- ce qu'un `docker pull` telecharge
+decompressee (disque) :    10 149 888 octets     10,1 Mo   <- ce que le systeme de fichiers de l'image occupe
+binaire /ferrite      :    10 148 096 octets     10,1 Mo   <- le fichier que le conteneur execute
 
-demarrage        : 215 ms (docker run -> premier GET / servi, mediane de 5 tours)
-RSS au repos     : 4 796 Ko (4,9 Mo)
+demarrage        : 177 ms (docker run -> premier GET / servi, mediane de 5 tours)
+RSS au repos     : 4 756 Ko (4,9 Mo)
 ```
 <!-- /chiffres-conteneur:sortie -->
 

@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "mesure": {
-    "date": "2026-09-01T07:35:59Z",
-    "ferrite_version": "0.9.0",
-    "ferrite_sha": "c2bb49c8c5bf2e2dcf5a6bf4518f5bcf29ba38a4",
+    "date": "2026-09-01T12:19:01Z",
+    "ferrite_version": "0.10.0",
+    "ferrite_sha": "2bb223899d9f99d4ce951ab2b8f7bf18349f69d1",
     "ferrite_arbre_modifie": true,
     "outil": "./tests/compat/measure_container.sh --json docs/container.json",
     "tours_demarrage": 5,
@@ -32,8 +32,8 @@
   "images": [
     {
       "nom": "ferrite",
-      "reference": "ferrite:0.9.0",
-      "tag": "0.9.0",
+      "reference": "ferrite:0.10.0",
+      "tag": "0.10.0",
       "origine": "construite ici depuis le Dockerfile du depot (`scratch` + binaire statique musl)",
       "docker_run": [
         "-p",
@@ -41,22 +41,22 @@
       ],
       "plateforme": "linux/amd64",
       "couches": 1,
-      "digest_manifeste": "sha256:a32d3f128363b89aa82f29663810bce8d75e4057daab2ab38f3e69e5311b11e2",
-      "compressee_octets": 4262841,
+      "digest_manifeste": "sha256:7f35674a40e23fb7161d438eb91f2d837834c295f260d7ef998f86aea87b76ce",
+      "compressee_octets": 4269397,
       "couches_nues": [],
-      "decompressee_octets": 10129408,
+      "decompressee_octets": 10149888,
       "entrypoint": "/ferrite",
-      "binaire_octets": 10127616,
-      "demarrage_ms": 215,
+      "binaire_octets": 10148096,
+      "demarrage_ms": 177,
       "demarrage_tours_ms": [
-        253,
-        199,
-        224,
-        215,
-        202
+        227,
+        177,
+        161,
+        170,
+        179
       ],
-      "rss_repos_ko": 4796,
-      "build_hash": "ferrite-0.9.0"
+      "rss_repos_ko": 4756,
+      "build_hash": "ferrite-0.10.0"
     },
     {
       "nom": "elasticsearch",
@@ -81,15 +81,15 @@
       "decompressee_octets": 1266139136,
       "entrypoint": "/bin/tini",
       "binaire_octets": null,
-      "demarrage_ms": 17921,
+      "demarrage_ms": 17487,
       "demarrage_tours_ms": [
-        20858,
-        17816,
-        18742,
-        17921,
-        17809
+        18148,
+        17440,
+        17703,
+        17487,
+        17473
       ],
-      "rss_repos_ko": 1062268,
+      "rss_repos_ko": 1099300,
       "build_hash": "1a77947f34deddb41af25e6f0ddb8e830159c179"
     }
   ]
