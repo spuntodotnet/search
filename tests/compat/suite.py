@@ -313,10 +313,40 @@ def sous_objets(es):
     # Le mapping rendu est niche, pas pointe.
     props = es.indices.get_mapping(index="imbrique")["imbrique"]["mappings"]["properties"]
     assert props["client"]["properties"]["adr"]["properties"]["cp"]["type"] == "integer"
-    # Un objet declare comme champ, ou l'inverse : refus explicite.
+    # Un objet declare comme champ, ou l'inverse : refus explicite, avec la
+    # phrase d'ES (mesuree contre 8.15.0).
     refused(lambda: es.indices.create(index="conflit", mappings={"properties": {
         "a": {"type": "keyword"}, "a.b": {"type": "keyword"}}}),
-        contains="a la fois comme champ et comme objet")
+        contains="mapper [a] cannot be changed from type [keyword] to "
+                 "[ObjectMapper]")
+    # Et la meme impossibilite par les trois autres portes. Elles ne sont pas
+    # decoratives : chacune faisait **mourir le processus** avant la carte 42
+    # (`panic = "abort"`, donc tous les index avec). La forme du document se
+    # verifie avant `dynamic`, comme chez ES.
+    refused(lambda: es.index(index="imbrique", id="2",
+                             document={"titre": {"x": "y"}}),
+            contains="failed to parse field [titre] of type [text] in document "
+                     "with id '2'. Preview of field's value: '{x=y}'")
+    refused(lambda: es.index(index="imbrique", id="3", document={"client": "x"}),
+            contains="object mapping for [client] tried to parse field [client] "
+                     "as object, but found a concrete value")
+    refused(lambda: es.indices.put_mapping(
+        index="imbrique", properties={"titre.x": {"type": "keyword"}}),
+        contains="can't merge a non object mapping [titre] with an object "
+                 "mapping")
+    # La cible d'un `copy_to` sous une feuille : le mapping passe (ES l'accepte
+    # aussi), c'est le document qui est refuse — et seulement s'il porte le
+    # champ source.
+    es.options(ignore_status=404).indices.delete(index="copiconflit")
+    es.indices.create(index="copiconflit", mappings={"properties": {
+        "a": {"type": "keyword"},
+        "s": {"type": "keyword", "copy_to": "a.b"}}})
+    assert es.index(index="copiconflit", id="1",
+                    document={"a": "z"})["result"] == "created"
+    refused(lambda: es.index(index="copiconflit", id="2", document={"s": "x"}),
+            contains="failed to parse field [a] of type [keyword] in document "
+                     "with id '2'. Preview of field's value: '{b=x}'")
+    es.indices.delete(index="copiconflit")
     es.indices.delete(index="imbrique")
 
 

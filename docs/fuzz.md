@@ -123,6 +123,54 @@ Les divergences assumées sont reconnues par un **prédicat écrit**, pas par un
 code d'état toléré en bloc : chacun est une fonction de `DIVERGENCES_ASSUMEES`
 avec sa raison, et `--tout` les imprime.
 
+## Le quatrième verdict : `mort`
+
+Les trois précédents portent sur une **réponse**. Il en manquait un qui porte
+sur le serveur : le profil de release de ferrite écrit `panic = "abort"`, donc
+une panique atteignable depuis une requête ne rend pas un 500 — elle tue le
+processus, et tous les index qu'il servait deviennent injoignables.
+
+Ce fuzzer *voyait* cette mort depuis toujours, et c'est bien le problème : il la
+voyait comme un écart de statut de plus (`None` contre `200`), rangé avec les
+autres, absorbable par un prédicat de divergence assumée. Une panne générale
+déclenchable par un client n'est pas un écart de plus.
+
+Le prédicat `survivant()` est donc explicite, et il tient en une question :
+
+    GET / doit rendre 200
+
+Il est posé **après chaque cas** — une requête par cas, pas une par requête — et
+trois choses le distinguent du reste du fichier :
+
+* son verdict (`mort`) n'est absorbable par **aucune** divergence assumée ;
+* la campagne **s'arrête** au premier : tout ce qui suivrait mesurerait un
+  serveur absent, c'est-à-dire produirait des centaines de faux écarts (la
+  cascade que ce dépôt a déjà payée trois fois) ;
+* il nomme la **première** requête restée sans réponse, pas la dernière — la
+  dernière serait le nettoyage du cas, et le rapport désignerait un `DELETE`
+  innocent. Mesuré : c'est exactement ce qu'il faisait avant la correction.
+
+Deux briques de générateur l'alimentent, et elles n'existent que pour lui : elles
+posent des entrées que **les deux** moteurs doivent refuser en 400, donc elles ne
+peuvent rien apprendre en comparant deux réponses.
+
+| Brique | Ce qu'elle pose |
+|---|---|
+| `doc.forme` | un objet là où le mapping déclare une feuille (`{"a": {"b": "x"}}` sur un `keyword`), une valeur là où il déclare un objet |
+| `date.decalage_illisible` | une borne de date dont le décalage se découpe en octets (`+aéb` : quatre octets, frontière de caractère au milieu) |
+
+Elles font rougir le binaire d'avant, et c'est la seule chose qui prouve qu'elles
+mesurent quelque chose (voir « une brique de générateur qui ne fait pas rougir le
+binaire d'avant ne mesure rien ») : sur les graines **4200001–4200040**, jamais
+utilisées pour corriger, le binaire 0.10.0 meurt dès la première — le rapport
+nomme le `_bulk` fautif et le document `{"e": {}}` qu'il transporte. Le binaire
+corrigé rend **0 divergence** sur les mêmes graines, et l'étalonnage contre deux
+Elasticsearch reste à zéro.
+
+Le fuzzer n'est pas seul sur cette question : les cas déjà trouvés sont figés,
+hors d'une graine, dans [`sonde_survie.py`](../tests/compat/sonde_survie.py), et
+l'inventaire des points de panique est [`panics.md`](panics.md).
+
 ## La mesure du jour
 
 Le générateur a changé — **une brique de plus**, `champ.index_false` : quelques

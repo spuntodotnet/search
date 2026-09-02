@@ -328,6 +328,7 @@ développement, pas de CI).
 | `tests/compat/sonde_ecriture_alias.py` | et pour **écrire** un alias ? Les sept URL de `put_alias` (le nom de l'alias, celui de l'index, ou les deux, viennent du corps — qui **remplace** le chemin), `must_exist`, et les deux règles de 404 qui ne sont pas la même : `must_exist: true` se vérifie **par index visé**, le 404 par défaut est **global**. Compare le statut, le message **et l'état laissé derrière** : **57/65 identiques, 7 refus assumés, 1 message non comparé, 0 écart** — et **14/65 contre le ferrite d'avant**. `--calibrer` : 64/65 contre deux ES |
 | `tests/compat/sonde_index_false.py` | **`index: false`** : que devient un champ qu'on garde sans le rendre cherchable ? Type par type, opération par opération — ce qui répond, ce qui échoue, avec quel type d'erreur et quelle phrase. C'est la sonde qui a **retourné** le refus d'avant : sur tout type qui a une colonne, ES ne renonce pas à chercher, il retombe sur les *doc values*. **228/244 identiques, 16 refus assumés, 0 écart** (`--calibrer` : 244/244 contre deux ES). Le même fichier lancé contre le ferrite d'avant rend **147/244** |
 | `tests/compat/sonde_meta_champs.py` | un champ de **metadonnees** en clause de requete, c'est quoi au juste ? `_id`, `_index`, `_routing`, `_seq_no`, `_type`, `_source`, `_field_names`, `_version`, `_ignored` x les dix-huit clauses qui prennent un nom de champ. Elle range chaque case dans **trois** issues et pas deux — ES **repond**, ES **refuse**, ES rend **vide** — et c'est la troisieme colonne qui empeche de se tromper de regle : `{"term": {"_id": …}}` rendait 0 en silence, mais `{"term": {"champ_absent": …}}` rend 0 des deux cotes et c'est **juste**. 203 questions, `--calibrer` 203/203 contre deux ES. Le meme fichier lance contre le ferrite d'avant rend **32/203**. `--table` ne demande qu'un serveur et sert a mesurer une **autre version** |
+| `tests/compat/sonde_survie.py` | **le serveur est-il encore là ?** La question qui vient avant toutes les autres sondes : un `panic!` n'est pas un 500, le profil de release porte `panic = "abort"` — le processus meurt, tous les index avec. Le prédicat est explicite et posé **après chaque cas** (`GET /` doit rendre 200), et un cas qui le fait tomber est nommé `MORT` au lieu d'être noyé dans une liste d'écarts. 47 cas : les onze portes du conflit de chemin, les sept routes qui lisent une borne de date, la valeur qui ressemble à un numéro de champ. **47/47 identiques à ES, 0 mort** ; le même fichier contre le binaire 0.10.0 rend **30 cas MORT**. L'inventaire des 87 points de panique est dans [`docs/panics.md`](docs/panics.md) |
 | `tests/compat/sonde_vide.py` | sur un serveur **sans aucun index**, la même chose qu'ES — et rien accepté en silence ? (28/28 identiques, 0 refus muet ; les deux serveurs doivent être vides, c'est l'état mesuré) |
 | `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **670 cas, 30 937 requêtes, 4 divergences ouvertes — toutes antérieures à la carte, mesurées telles** sur quatre plages de graines dont **aucune** n'a servi à corriger : celle sur laquelle on itère ne mesure plus rien, et le générateur ayant changé, les plages du passage précédent ne mesurent plus les mêmes cas. Les mêmes plages contre le **binaire d'avant** rendent 83 divergences : une brique de générateur qui ne fait pas rougir le binaire d'avant ne mesure rien. 21 défauts silencieux trouvés au premier passage, 41 de plus depuis — dont **dix-sept** sur le seul surlignage, quatre sur le scoring (dont trois fois le même : `Math.min` de Java propage `NaN`, celui de Rust non), et cinq sur le voisinage d'`index: false`, qu'une sonde de 244 questions écrites à la main n'avait pas vus. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (50 cas, 2 255 requêtes, 0 divergence réelle) |
 | `tests/compat/sonde_fuzz.py` | les écarts trouvés par le fuzzing, **figés** hors d'une graine (114/114, plus 12 refus assumés ; les cinq derniers portent sur le motif **vide**, qui désigne la chaîne vide chez Lucene et que ferrite refusait en 400) |
@@ -1297,6 +1298,46 @@ bouger**, pas après.
   clause ne rallume rien, et les deux répondent 200. Trouvé par une plage de
   contrôle du fuzzer **rejouée après un rebase** (graine 9610018) : un cliquet
   qu'on n'a pas vu passer après une fusion ne prouve rien.
+
+- **Un `panic!` n'est pas une erreur 500, c'est une panne générale — et il ne se
+  compte pas en grepant `src/`.** Le profil de release porte `panic = "abort"` :
+  une panique atteignable depuis une requête tue le processus, donc *tous* les
+  index qu'il servait. Le défaut signalé (`copy_to` vers le sous-chemin d'une
+  feuille) en est un ; ce qu'il a coûté de mesurer, c'est **combien il y en
+  avait d'autres**, et la réponse a trois moitiés qui ne se ressemblent pas.
+  D'abord, un défaut a plus de portes qu'on ne lui en prête : celui-ci en avait
+  **onze**, dont une qui ne demande aucun `copy_to` — `{"a": {"b": "x"}}` posé
+  sur un mapping où `a` est un `keyword`, c'est-à-dire l'erreur de client la
+  plus banale qui soit. Ensuite, un relevé de `panic!` explicites ne voit pas
+  le code des dépendances : deux des trois familles corrigées paniquaient
+  **dans tantivy** (`Field already exists in schema a.b`, puis
+  `index out of bounds` sur un numéro de champ lu dans une valeur), et aucun
+  grep de `src/` ne les aurait listées. Enfin, comparer deux réponses n'est pas
+  demander si le serveur est là : le fuzzer différentiel *voyait* la mort
+  depuis toujours, mais comme un écart de statut de plus, rangé avec les
+  autres. Il lui manquait un prédicat qui ne compare rien —
+  `survivant()`, posé après chaque cas, dont le verdict n'est absorbable par
+  aucune divergence assumée, et qui nomme la **première** requête restée sans
+  réponse (la dernière serait le nettoyage). Les 87 points de panique sont
+  relevés un par un dans [`docs/panics.md`](docs/panics.md), chacun prouvé
+  inatteignable avec sa raison écrite, ou transformé en erreur.
+
+- **La forme d'un document se vérifie avant `dynamic`, et c'est cette place qui
+  fait la règle.** La carte supposait qu'ES refusait le *mapping* ; la mesure
+  dit le contraire — il l'accepte en 200 et refuse le **document** en 400
+  (`document_parsing_exception`), que `dynamic` vaille `true`, `false` ou
+  `strict`, et même si le champ source d'un `copy_to` porte `null` (mais pas
+  s'il porte `[]`). Le contrôle ne pouvait donc pas se poser au `PUT` : un
+  mapping qu'aucun document ne fait tomber reste valide des deux côtés,
+  mesuré. Deux phrases en sortent, reprises mot pour mot — `failed to parse
+  field [a] of type [keyword] … Preview of field's value: '{b=x}'` (dont
+  l'aperçu est le `toString` d'une `Map` de Java : clés **triées**, valeurs
+  nues) et `object mapping for [a] tried to parse field [a] as object, but
+  found a concrete value` (où, dans un tableau, ES imprime `[null]` faute de
+  nom de champ courant) — plus une troisième pour la fusion de mapping, qui a
+  sa variante `nested`. Ce que ferrite ne reproduit pas est déclaré : le
+  préfixe `[ligne:colonne]`, qui désigne une position dans le JSON brut qu'on
+  n'a plus une fois le corps parsé.
 
 - **Une clause nommée n'est pas lue que par `_search`.** `_name` retiré de la
   requête sur la route de recherche, les cinq autres routes qui lisent une

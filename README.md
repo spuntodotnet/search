@@ -533,6 +533,16 @@ que personne n'avait signalés, tous silencieux ; ils sont racontés dans
 [`docs/fuzz.md`](docs/fuzz.md) et figés dans
 [`tests/compat/sonde_fuzz.py`](tests/compat/sonde_fuzz.py).
 
+Tout ce qui précède compare deux **réponses**. Une question vient avant :
+*y a-t-il encore quelqu'un pour répondre ?* Le binaire est compilé en
+`panic = "abort"`, donc une panique atteignable depuis une requête ne rend pas
+une erreur — elle tue le processus, et tous les index avec. Cette question a
+maintenant son propre prédicat, posé après chaque cas
+([`tests/compat/sonde_survie.py`](tests/compat/sonde_survie.py), 47 cas, et le
+même dans le fuzzer), et les 87 points de panique du code sont relevés un par
+un — chacun prouvé inatteignable avec sa raison écrite, ou transformé en
+erreur : [`docs/panics.md`](docs/panics.md).
+
 Le fonctionnement du pipeline idée→prod est décrit dans
 [`docs/dev-workflow.md`](docs/dev-workflow.md).
 

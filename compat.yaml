@@ -854,7 +854,18 @@ tables:
           n'est pas un champ : il n'existe que par ses feuilles. `GET /_mapping`
           re-niche les chemins. Un tableau d'objets est aplati — comme ES, la
           correspondance entre sous-champs d'un même élément est perdue (c'est ce
-          que `nested` corrige)
+          que `nested` corrige). La **forme** du document est vérifiée contre
+          celle du mapping avant tout le reste, exactement là où ES la vérifie
+          — avant `dynamic`, donc `false` et `strict` n'y changent rien : un
+          objet posé sur une feuille rend `failed to parse field [a] of type
+          [keyword] … Preview of field's value: '{b=x}'`, une valeur posée sur
+          un objet rend `object mapping for [a] tried to parse field [a] as
+          object, but found a concrete value`, et une fusion de mapping qui
+          ferait cohabiter `a` et `a.b` rend `can't merge a non object mapping
+          [a] with an object mapping`. Deux différences déclarées avec ES : le
+          préfixe `[ligne:colonne]` qu'il place devant (une position dans le
+          JSON brut, que ferrite n'a plus une fois le corps parsé) et le
+          `caused_by` qu'il joint
 
       - id: type.nested
         nom: "`nested`"
@@ -914,7 +925,11 @@ tables:
           valeur propre d'abord puis les sources par ordre de nom. Les trois
           refus d'ES sont repris avec ses phrases : copier depuis ou vers un
           multi-field, vers un objet, ou vers un `nested` qui n'est pas celui de
-          la source
+          la source. Copier vers le **sous-chemin d'une feuille** (`copy_to:
+          "a.b"` avec `a` de type `keyword`) est le quatrième, et il ne tombe
+          pas au même endroit : ES accepte le mapping et refuse le **document**,
+          et seulement s'il porte le champ source — une valeur nulle suffit, un
+          tableau vide non (mesure)
 
       - id: type.store
         nom: "`store`"

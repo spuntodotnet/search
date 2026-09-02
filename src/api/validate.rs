@@ -192,25 +192,52 @@ fn rendu(query: &dyn tantivy::query::Query, schema: &tantivy::schema::Schema) ->
 }
 
 fn nommer_les_champs(brut: &str, schema: &tantivy::schema::Schema) -> String {
+    // `brut` est le `Debug` de la requete, et il transporte les **valeurs**
+    // cherchees : `{"term": {"k": "field=999999"}}` y ecrit `field=999999` en
+    // toutes lettres. Un identifiant lu ici n'est donc pas forcement celui d'un
+    // champ, et `get_field_entry` indexe un tableau sans borne — le processus
+    // entier mourait sur `index out of bounds` (mesure : la requete ci-dessus
+    // sur `_validate/query?explain=true` tuait le serveur).
+    let combien = schema.fields().count() as u32;
     let mut out = String::with_capacity(brut.len());
     let mut reste = brut;
+    let mut dedans = false; // dans une valeur citee ?
     while let Some(pos) = reste.find("field=") {
+        // Une valeur est citee dans le `Debug` : ce qui est entre guillemets
+        // est ce que le client a tape, pas un numero de champ. Compter les
+        // guillemets non echappes est ce qui separe les deux.
+        dedans = cite(&reste[..pos + 6], dedans);
         out.push_str(&reste[..pos + 6]);
         reste = &reste[pos + 6..];
         let fin = reste
             .find(|c: char| !c.is_ascii_digit())
             .unwrap_or(reste.len());
         match reste[..fin].parse::<u32>() {
-            Ok(id) if fin > 0 => {
+            Ok(id) if fin > 0 && !dedans && id < combien => {
                 let champ = tantivy::schema::Field::from_field_id(id);
                 out.push_str(schema.get_field_entry(champ).name());
             }
             _ => out.push_str(&reste[..fin]),
         }
+        dedans = cite(&reste[..fin], dedans);
         reste = &reste[fin..];
     }
     out.push_str(reste);
     out
+}
+
+/// L'etat « dans une chaine citee » apres avoir lu ce morceau.
+fn cite(morceau: &str, mut dedans: bool) -> bool {
+    let mut echappe = false;
+    for c in morceau.chars() {
+        match c {
+            _ if echappe => echappe = false,
+            '\\' if dedans => echappe = true,
+            '"' => dedans = !dedans,
+            _ => {}
+        }
+    }
+    dedans
 }
 
 /// Cette erreur porte-t-elle sur la **forme** de la requete, ou sur le mapping
@@ -261,4 +288,42 @@ fn invalide(explain: bool, e: &EsError) -> Json {
         out.insert("error".into(), json!(format!("{}: {}", e.ty, e.reason)));
     }
     Json::ok(Value::Object(out))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tantivy::schema::{Schema, STRING};
+
+    /// Le `Debug` d'une requete transporte la **valeur** cherchee : un client
+    /// qui tape `field=999999` y ecrit un numero de champ qui n'existe pas.
+    /// `get_field_entry` indexe un tableau sans borne — le processus entier
+    /// mourait sur `index out of bounds` (mesure : `_validate/query`
+    /// `?explain=true` avec `{"term": {"k": "field=999999"}}`).
+    #[test]
+    fn une_valeur_qui_ressemble_a_un_numero_de_champ_ne_sort_pas_du_schema() {
+        let mut b = Schema::builder();
+        b.add_text_field("k", STRING);
+        b.add_text_field("t", STRING);
+        let schema = b.build();
+
+        for valeur in ["field=999999", "field=0", "field=1"] {
+            let brut = format!("TermQuery(Term(field=0, type=Str, \"{valeur}\"))");
+            assert_eq!(
+                nommer_les_champs(&brut, &schema),
+                format!("TermQuery(Term(field=k, type=Str, \"{valeur}\"))"),
+                "{valeur}"
+            );
+        }
+        // Deux champs hors guillemets sont bien nommes tous les deux.
+        assert_eq!(
+            nommer_les_champs("(field=0, field=1)", &schema),
+            "(field=k, field=t)"
+        );
+        // Un guillemet echappe dans la valeur ne rouvre pas la citation.
+        assert_eq!(
+            nommer_les_champs(r#"("a\"field=1b", field=1)"#, &schema),
+            r#"("a\"field=1b", field=t)"#
+        );
+    }
 }
