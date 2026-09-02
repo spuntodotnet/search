@@ -151,6 +151,9 @@ def http(base, method, path, body=None, brut=None):
         base + path, data=data, method=method,
         headers={"Content-Type": "application/x-ndjson" if brut is not None
                  else "application/json"})
+    trace = [method, path,
+             (brut.decode(errors="replace") if brut is not None
+              else json.dumps(body, default=str) if body is not None else "")]
     try:
         with urllib.request.urlopen(req, timeout=120) as r:
             return r.status, json.loads(r.read() or b"{}")
@@ -160,6 +163,41 @@ def http(base, method, path, body=None, brut=None):
             return e.code, json.loads(corps or b"{}")
         except json.JSONDecodeError:
             return e.code, {"raw": corps.decode(errors="replace")}
+    except Exception as exc:  # noqa: BLE001
+        # Un serveur qui ne repond pas n'est pas une reponse a comparer : c'est
+        # le predicat de survie qui tranchera (voir `survivant`).
+        #
+        # La **premiere** requete restee sans reponse est gardee : c'est elle
+        # qui a tue la cible. Les suivantes ne font que constater le cadavre, et
+        # un rapport qui nommerait la derniere designerait le nettoyage.
+        PREMIER_ECHEC.setdefault(base, trace)
+        return None, {"injoignable": repr(exc)}
+
+
+# base -> la premiere requete restee sans reponse depuis le debut du cas.
+PREMIER_ECHEC = {}
+
+
+def survivant(base):
+    """Le predicat de survie : le serveur repond-il encore ?
+
+    C'est la question que ce fuzzer ne posait pas. Il compare deux reponses ; si
+    ferrite **meurt**, il voit un ecart de plus — un statut `None` contre un
+    200 — et le range avec les autres. Or ce n'est pas un ecart, c'est une
+    classe de defaut a part : le profil de release porte `panic = "abort"`,
+    donc un `panic!` sur un chemin qui lit une entree utilisateur emporte le
+    processus entier et tous les index qu'il servait.
+
+    Le predicat est donc explicite, il est pose **apres chaque cas**, et son
+    verdict (`mort`) ne peut etre absorbe par aucune divergence assumee."""
+    try:
+        req = urllib.request.Request(base + "/", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status == 200
+    except urllib.error.HTTPError:
+        return True          # il repond : il est vivant, meme s'il refuse
+    except Exception:        # noqa: BLE001
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +260,12 @@ BRIQUES = {
     "champ.store": "type.store",
     "champ.index_false": "type.index",
     "champ.tableaux": "type.tableaux",
+    # Deux briques qui ne visent pas une reponse mais la **survie** du serveur :
+    # elles posent des entrees dont les deux moteurs doivent refuser, et dont
+    # ferrite mourait (voir `survivant`). Elles citent les capacites qu'elles
+    # exercent — la forme d'un objet, la lecture d'une date.
+    "doc.forme": "type.object",
+    "date.decalage_illisible": "type.date",
     "champ.null": "type.null",
     "champ.devine": "index.mapping_dynamique",
     # clauses
@@ -766,6 +810,16 @@ class Generateur:
             return f"{an:04d}-{mois:02d}-{jour:02d} {h:02d}:{mn:02d}:{s:02d}"
         if fmt == "epoch_millis":
             return rng.randint(1_600_000_000_000, 1_800_000_000_000)
+        if rng.random() < 0.03:
+            # Un decalage que les deux serveurs doivent refuser — et qui se
+            # **decoupe en octets** chez ferrite. `+aéb` fait quatre octets avec
+            # une frontiere de caractere au milieu : le decoupage y paniquait,
+            # donc le processus mourait. Comme la brique de forme ci-dessus,
+            # elle n'existe pas pour comparer deux 400 mais pour donner au
+            # predicat de survie de quoi voir.
+            self.brique("date.decalage_illisible")
+            mauvais = rng.choice(["aéb", "é:00", "éé", "\U00010348", "+é"])
+            return f"{an:04d}-{mois:02d}-{jour:02d}T{h:02d}:{mn:02d}:{s:02d}+{mauvais}"
         # `strict_date_optional_time` : les deux formes qu'un client ecrit.
         if rng.random() < 0.5:
             return f"{an:04d}-{mois:02d}-{jour:02d}"
@@ -847,6 +901,22 @@ class Generateur:
                 continue                    # une feuille est ecrite par son parent
             if rng.random() < 0.12:
                 continue                    # champ absent
+            if rng.random() < 0.04:
+                # La **forme** du document contre celle du mapping : un objet
+                # pose sur une feuille, une valeur posee sur un objet. Les deux
+                # serveurs doivent refuser en 400 — c'est ce que la brique
+                # mesure ici — mais ce n'est pas ce pour quoi elle existe : elle
+                # est le seul chemin par lequel le predicat de survie voit
+                # quelque chose. Le binaire d'avant meurt dessus (`panic` dans
+                # le rendu de `_mapping`, qui n'a plus d'objet ou nicher la
+                # feuille), et un fuzzer qui ne pose jamais la question ne
+                # pouvait pas le savoir.
+                self.brique("doc.forme")
+                doc[c.nom] = (rng.choice(["x", 1, True])
+                              if c.ty in ("object", "nested")
+                              else rng.choice([{"sous": "x"}, {},
+                                               [{"sous": "x"}]]))
+                continue
             if c.ty == "object":
                 doc[c.nom] = {s.nom: self.valeur(s) for s in c.sous
                               if rng.random() < 0.8}
@@ -2976,6 +3046,10 @@ class Cas:
              "detail": detail[:6], "requete": requete}
         nom = assumee([e for e in ecarts if isinstance(e, dict)], requete) \
             if all(isinstance(e, dict) for e in ecarts) else None
+        # Une cible morte n'est jamais une divergence assumee : c'est le seul
+        # verdict que rien ne peut absorber.
+        if verdict == "mort":
+            nom = None
         if nom:
             d["verdict"] = "assume"
             d["assumee"] = nom
@@ -3639,15 +3713,52 @@ def main():
     # `_min_score_sur_un_bm25_divergent`).
     SERVEURS[:] = urls[:2]
 
+    # Le predicat de survie, pose avant la campagne : une cible deja morte
+    # rendrait chaque cas suivant « mort », et le premier nom sorti serait faux.
+    for nom, base in zip(noms, urls):
+        if not survivant(base):
+            print(f"# {nom} ne repond pas a GET / : la campagne ne peut rien "
+                  f"mesurer")
+            return 2
+
     graines = [a.rejouer] if a.rejouer is not None else \
         list(range(a.seed, a.seed + a.cas))
-    toutes, requetes = [], 0
+    toutes, requetes, morts = [], 0, []
     for i, graine in enumerate(graines):
+        PREMIER_ECHEC.clear()
         cas = Cas(graine, perimetre, urls[0], urls[1], noms,
                   bavard=a.rejouer is not None)
         divs = cas.jouer()
         requetes += cas.requetes
+        # Le predicat de survie. Il est pose ici, apres le cas, parce qu'il
+        # coute une requete par cas et pas une par requete ; la requete qui a
+        # tue est nommee par `PREMIER_ECHEC`, et `--rejouer <graine>` reproduit
+        # le cas entier.
+        for nom, base in zip(noms, urls):
+            if survivant(base):
+                continue
+            tueuse = PREMIER_ECHEC.get(base, ["?", "?", ""])
+            morts.append({"graine": graine, "cible": nom,
+                          "requete_sans_reponse": tueuse})
+            divs.append({
+                "graine": graine, "verdict": "mort", "etape": "survie",
+                "detail": [
+                    f"{nom} ne repond plus a GET / apres ce cas",
+                    f"premiere requete restee sans reponse : "
+                    f"{tueuse[0]} {tueuse[1]}",
+                    f"corps : {(tueuse[2] or '')[:400]}",
+                ],
+                "requete": None})
         toutes.extend(divs)
+        if morts:
+            print(f"\n# MORT — {morts[-1]['cible']} ne repond plus apres la "
+                  f"graine {graine}. La campagne s'arrete : tout ce qui "
+                  f"suivrait mesurerait un serveur absent.")
+            for x in divs[-1]["detail"]:
+                print(f"#   {x}")
+            print(f"#   rejouer : python3 tests/compat/fuzz_vs_es.py "
+                  f"{'--calibrer ' if a.calibrer else ''}--rejouer {graine}")
+            break
         for d in divs:
             if d["verdict"] == "assume" and not a.tout:
                 continue
@@ -3671,6 +3782,9 @@ def main():
     silences = sum(1 for d in reelles if d["verdict"] == "silence")
     print(f"\n{len(graines)} cas, {requetes} requetes generees, "
           f"{len(reelles)} divergences")
+    if morts:
+        print(f"  dont {len(morts)} ou la cible a CESSE DE REPONDRE — "
+              f"graines {', '.join(str(m['graine']) for m in morts)}")
     if silences:
         print(f"  dont {silences} rendues en silence "
               f"({noms[0]} repond 200 la ou {noms[1]} refuse)")
@@ -3695,7 +3809,7 @@ def main():
         with open(a.json, "w") as f:
             json.dump({
                 "cible": noms, "graine_debut": a.seed, "cas": len(graines),
-                "requetes": requetes,
+                "requetes": requetes, "morts": morts,
                 "divergences": reelles, "assumees": resume,
                 "neutralisations": NEUTRALISATIONS,
             }, f, indent=2, default=str, sort_keys=True)

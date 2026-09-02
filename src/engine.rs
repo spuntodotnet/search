@@ -311,6 +311,12 @@ impl FerriteIndex {
         loop {
             let gen = self.current.read().expect("generation lock");
 
+            // La **forme** du document se verifie avant tout le reste, comme
+            // chez ES : un objet pose sur une feuille (ou l'inverse) est refuse
+            // que `dynamic` vaille `true`, `false` ou `strict`. C'est aussi ce
+            // qui empeche un chemin impossible d'entrer dans le mapping.
+            mapping::verifie_formes(&gen.mapping, id, source)?;
+
             // Le mapping doit accueillir le document. Si des champs manquent,
             // on relache le verrou, on fait evoluer, et on recommence sur la
             // generation neuve.
@@ -552,6 +558,35 @@ impl FerriteIndex {
                     conflit_de_parametre(&nom, existant, &decl, &gen.mapping.analysis)?;
                 }
                 None => {
+                    // `a` feuille et `a.b` feuille ne peuvent pas coexister :
+                    // le rendu de `_mapping` repose les chemins pointes en
+                    // objets, et il n'y aurait pas d'objet ou nicher la
+                    // seconde. ES refuse la fusion des deux cotes, avec cette
+                    // phrase-la (mesure contre 8.15.0) — dans les deux sens, et
+                    // en nommant toujours la **feuille**.
+                    let bloquant = match gen.mapping.forme(&nom) {
+                        mapping::Forme::Objet => Some(nom.clone()),
+                        _ => gen
+                            .mapping
+                            .ancetre_feuille(&nom)
+                            .map(|(anc, _)| anc.to_string()),
+                    };
+                    if let Some(anc) = bloquant {
+                        // Un `nested` a sa propre phrase chez ES, et c'est la
+                        // seule chose qui distingue les deux (mesure).
+                        return Err(EsError::illegal_argument(
+                            if gen.mapping.nested.contains(&anc) {
+                                format!(
+                                    "can't merge a non-nested mapping [{anc}] with a nested mapping"
+                                )
+                            } else {
+                                format!(
+                                    "can't merge a non object mapping [{anc}] with an object \
+                                     mapping"
+                                )
+                            },
+                        ));
+                    }
                     a_creer.insert(nom, decl);
                 }
             }
@@ -668,6 +703,16 @@ impl FerriteIndex {
 
         let mut mapping = courante.mapping.clone();
         for (name, fm) in manquants {
+            // Dernier filet avant que le chemin n'entre dans le mapping : les
+            // appelants verifient deja la forme du document, mais c'est ici
+            // qu'un chemin impossible deviendrait durable — et le rendu de
+            // `_mapping` n'aurait plus d'objet ou le nicher.
+            if let Some((anc, afm)) = mapping.ancetre_feuille(&name) {
+                return Err(EsError::mapper_parsing(format!(
+                    "failed to parse field [{anc}] of type [{}] : [{name}] en ferait un objet",
+                    afm.ty.name()
+                )));
+            }
             mapping.properties.insert(name, fm);
         }
 

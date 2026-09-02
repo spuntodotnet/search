@@ -412,6 +412,15 @@ fn coupe_decalage(s: &str) -> Option<(&str, i32)> {
     };
     let signe = if s.as_bytes()[pos] == b'-' { -1 } else { 1 };
     let brut = &s[pos + 1..];
+    // Le decalage se decoupe **en octets**, et `brut` vient du client : sans
+    // ces deux gardes, `+aéb` (quatre octets, dont une frontiere de caractere
+    // au milieu) faisait paniquer le decoupage — donc mourir le processus
+    // entier, sur un simple `{"d": "2020-01-01T00:00:00+aéb"}` et sur les six
+    // routes qui lisent une borne de date. Un decalage n'a de toute facon que
+    // des chiffres et un `:` : tout le reste est refuse avant d'etre decoupe.
+    if !brut.is_ascii() {
+        return None;
+    }
     let (hh, mm) = match brut.len() {
         2 => (brut, "00"),
         4 => (&brut[..2], &brut[2..]),

@@ -597,6 +597,213 @@ impl Mapping {
             .find(|r| est_sous_chemin(chemin, r))
             .map(String::as_str)
     }
+
+    /// Ce que le mapping declare **exactement** a ce chemin.
+    ///
+    /// Les trois issues ne sont pas symetriques et c'est tout leur objet : un
+    /// chemin inconnu n'a rien en dessous de lui (par construction, une feuille
+    /// declaree plus bas ferait de lui un objet), donc il n'y a rien a verifier
+    /// sous lui.
+    pub fn forme(&self, chemin: &str) -> Forme<'_> {
+        if self.join.as_ref().is_some_and(|j| j.champ == chemin) {
+            return Forme::Join;
+        }
+        if let Some(fm) = self.properties.get(chemin) {
+            return Forme::Feuille(fm);
+        }
+        if self.nested.contains(chemin)
+            || self.objets_vides.contains(chemin)
+            || self.properties.keys().any(|c| est_sous_chemin(c, chemin))
+        {
+            return Forme::Objet;
+        }
+        Forme::Inconnu
+    }
+
+    /// Le plus proche **ancetre strict** de ce chemin qui soit une feuille
+    /// declaree.
+    ///
+    /// C'est la question que posent les trois routes qui font entrer un chemin
+    /// nouveau dans le mapping — un document, une cible de `copy_to`, un
+    /// `PUT /_mapping`. `a.b` sous un `a` de type `keyword` n'est pas un champ
+    /// qu'on peut creer : c'est un objet pose sur une valeur, et ES le refuse.
+    pub fn ancetre_feuille<'c>(&self, chemin: &'c str) -> Option<(&'c str, &FieldMapping)> {
+        let mut reste = chemin;
+        while let Some((tete, _)) = reste.rsplit_once('.') {
+            if let Some(fm) = self.properties.get(tete) {
+                return Some((&chemin[..tete.len()], fm));
+            }
+            reste = tete;
+        }
+        None
+    }
+}
+
+/// Ce que le mapping declare a un chemin donne (voir [`Mapping::forme`]).
+pub enum Forme<'a> {
+    /// Un champ : une valeur y est attendue, pas un objet.
+    Feuille(&'a FieldMapping),
+    /// Un objet — declare vide, `nested`, ou porteur d'au moins une feuille.
+    Objet,
+    /// Le champ `join`, dont la valeur est un objet que le mapping ne decrit
+    /// pas champ par champ.
+    Join,
+    /// Rien de declare ici, ni en dessous.
+    Inconnu,
+}
+
+/// Le `Preview of field's value` d'Elasticsearch : le `toString` d'une `Map`
+/// de Java, dont les cles sortent **triees** (mesure : `{"c":"y","b":"x"}`
+/// s'imprime `{b=x, c=y}`).
+///
+/// Rien n'y est echappe ni cite : une chaine sort nue (`{b=a'b}`), un nombre
+/// tel quel, un tableau entre crochets.
+fn apercu(v: &Value) -> String {
+    match v {
+        Value::Null => "null".to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Number(n) => n.to_string(),
+        Value::String(s) => s.clone(),
+        Value::Array(a) => {
+            let elems: Vec<String> = a.iter().map(apercu).collect();
+            format!("[{}]", elems.join(", "))
+        }
+        Value::Object(o) => {
+            let mut cles: Vec<&String> = o.keys().collect();
+            cles.sort();
+            let elems: Vec<String> = cles
+                .iter()
+                .map(|c| format!("{c}={}", apercu(&o[c.as_str()])))
+                .collect();
+            format!("{{{}}}", elems.join(", "))
+        }
+    }
+}
+
+/// L'objet qu'une valeur pose sur une feuille, s'il y en a un.
+///
+/// Un tableau ne compte que par son **premier** objet : c'est celui sur lequel
+/// ES bute, et c'est lui qu'il donne en apercu (mesure : `[{"b":"x"},{"b":"y"}]`
+/// rend `{b=x}`, et `[1,{"b":"x"}]` aussi).
+fn objet_pose(v: &Value) -> Option<&Value> {
+    match v {
+        Value::Object(_) => Some(v),
+        Value::Array(a) => a.iter().find(|e| e.is_object()),
+        _ => None,
+    }
+}
+
+/// « un objet la ou le mapping attend une valeur » — la phrase d'ES, mesuree
+/// contre 8.15.0.
+///
+/// Le prefixe `[ligne:colonne]` qu'ES place devant n'est pas repris : il
+/// designe une position dans le JSON brut, que ferrite n'a plus une fois le
+/// corps parse. C'est la seule difference, et elle est declaree.
+fn objet_sur_feuille(chemin: &str, ty: &str, id: &str, valeur: &Value) -> EsError {
+    EsError::mapper_parsing(format!(
+        "failed to parse field [{chemin}] of type [{ty}] in document with id '{id}'. Preview of \
+         field's value: '{}'",
+        apercu(valeur)
+    ))
+}
+
+/// L'inverse : une valeur concrete la ou le mapping attend un objet.
+///
+/// `nom` n'est pas toujours `chemin` : dans un tableau, ES n'a plus de nom de
+/// champ courant et imprime `[null]` (mesure).
+fn valeur_sur_objet(nom: &str, chemin: &str) -> EsError {
+    EsError::mapper_parsing(format!(
+        "object mapping for [{chemin}] tried to parse field [{nom}] as object, but found a \
+         concrete value"
+    ))
+}
+
+/// L'apercu d'une valeur **copiee** : la cible est reconstruite en objets
+/// imbriques depuis l'ancetre qui bloque (mesure : `copy_to: "a.b.c"` sur un
+/// `a` de type `keyword` rend `{b={c=x}}`).
+fn apercu_copie(reste: &str, v: &Value) -> String {
+    match reste.split_once('.') {
+        None => format!("{{{reste}={}}}", apercu(v)),
+        Some((tete, suite)) => format!("{{{tete}={}}}", apercu_copie(suite, v)),
+    }
+}
+
+/// Le document tient-il dans la **forme** du mapping ?
+///
+/// Ce controle est celui qu'ES fait dans son parseur de document, et sa place
+/// dans la chaine est mesuree : elle est **avant** `dynamic`. Un `a` de type
+/// `keyword` qui recoit `{"b": "x"}` est refuse en 400 que `dynamic` vaille
+/// `true`, `false` ou `strict` — le champ `a.b` n'est jamais cree, jamais
+/// ignore non plus.
+///
+/// Sans lui, `a.b` entrait dans le mapping a cote de `a`, et le rendu de
+/// `_mapping` — qui repose les chemins pointes en objets — n'avait plus d'objet
+/// ou nicher la feuille. Il paniquait, et le processus entier mourait
+/// (`panic = "abort"`) : un mapping accepte en 200 puis un seul document, et
+/// tous les index du serveur devenaient injoignables.
+pub fn verifie_formes(mapping: &Mapping, id: &str, source: &Value) -> EsResult<()> {
+    let Some(obj) = source.as_object() else {
+        return Ok(());
+    };
+    for (nom, valeur) in obj {
+        descend_formes(mapping, id, nom, valeur)?;
+    }
+    Ok(())
+}
+
+fn descend_formes(mapping: &Mapping, id: &str, chemin: &str, valeur: &Value) -> EsResult<()> {
+    match mapping.forme(chemin) {
+        Forme::Join | Forme::Inconnu => Ok(()),
+        Forme::Feuille(fm) => {
+            if let Some(o) = objet_pose(valeur) {
+                return Err(objet_sur_feuille(chemin, fm.ty.name(), id, o));
+            }
+            // Une feuille qui copie ailleurs pose sa valeur **sous** la cible :
+            // si un ancetre de la cible est lui-meme une feuille, c'est le meme
+            // conflit, et ES le rend avec la meme phrase. Il ne tombe que si la
+            // valeur existe : `[]` ne copie rien, `null` si (mesure).
+            if !fm.copy_to.is_empty() {
+                let copiee = match valeur {
+                    Value::Array(a) => a.first(),
+                    v => Some(v),
+                };
+                if let Some(copiee) = copiee {
+                    for cible in &fm.copy_to {
+                        if let Some((anc, afm)) = mapping.ancetre_feuille(cible) {
+                            return Err(EsError::mapper_parsing(format!(
+                                "failed to parse field [{anc}] of type [{}] in document with id \
+                                 '{id}'. Preview of field's value: '{}'",
+                                afm.ty.name(),
+                                apercu_copie(&cible[anc.len() + 1..], copiee)
+                            )));
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+        Forme::Objet => match valeur {
+            Value::Object(o) => {
+                for (nom, v) in o {
+                    descend_formes(mapping, id, &joins(chemin, nom), v)?;
+                }
+                Ok(())
+            }
+            Value::Array(a) => {
+                for v in a {
+                    match v {
+                        Value::Null => {}
+                        Value::Object(_) => descend_formes(mapping, id, chemin, v)?,
+                        _ => return Err(valeur_sur_objet("null", chemin)),
+                    }
+                }
+                Ok(())
+            }
+            // Un objet absent n'est pas un objet mal forme : ES indexe.
+            Value::Null => Ok(()),
+            _ => Err(valeur_sur_objet(chemin, chemin)),
+        },
+    }
 }
 
 /// Les champs de **metadonnees** d'Elasticsearch : les redeclarer est une
@@ -752,13 +959,22 @@ fn parse_propriete(
 
     let fm = parse_field_mapping(chemin, spec, false, declares)?;
     // `a` feuille et `a.b` objet ne peuvent pas coexister — ES refuse aussi.
-    conflit_de_chemin(chemin, dans)?;
+    conflit_de_chemin(chemin, fm.ty, dans)?;
     dans.insert(chemin.to_string(), fm);
     Ok(())
 }
 
 /// Un chemin ne doit etre ni le prefixe, ni le prolongement d'un autre.
-fn conflit_de_chemin(chemin: &str, dans: &BTreeMap<String, FieldMapping>) -> EsResult<()> {
+///
+/// La phrase est celle d'ES, mesuree contre 8.15.0 : la declaration nomme
+/// toujours la **feuille** et le type qu'elle porte, quel que soit l'ordre dans
+/// lequel les deux champs sont ecrits (`{"a": keyword, "a.b": keyword}` et son
+/// inverse rendent le meme message).
+fn conflit_de_chemin(
+    chemin: &str,
+    ty: FieldType,
+    dans: &BTreeMap<String, FieldMapping>,
+) -> EsResult<()> {
     for existant in dans.keys() {
         let (court, long) = if existant.len() < chemin.len() {
             (existant.as_str(), chemin)
@@ -766,8 +982,11 @@ fn conflit_de_chemin(chemin: &str, dans: &BTreeMap<String, FieldMapping>) -> EsR
             (chemin, existant.as_str())
         };
         if long.strip_prefix(court).is_some_and(|r| r.starts_with('.')) {
-            return Err(EsError::mapper_parsing(format!(
-                "[{court}] est declare a la fois comme champ et comme objet (avec [{long}])"
+            let ty = if court == chemin { ty } else { dans[court].ty };
+            return Err(EsError::mapper_declaration(format!(
+                "Failed to parse mapping: mapper [{court}] cannot be changed from type [{}] to \
+                 [ObjectMapper]",
+                ty.name()
             )));
         }
     }
@@ -802,6 +1021,16 @@ fn pointe_mut<'a>(props: &'a mut Map<String, Value>, chemin: &str) -> Option<&'a
 }
 
 /// Repose un chemin pointe dans l'arbre `properties` d'une reponse `_mapping`.
+///
+/// Un prefixe de chemin **doit** etre un objet : `a` feuille et `a.b` feuille
+/// ne peuvent pas coexister, et trois controles l'interdisent ([`verifie_formes`]
+/// a l'ecriture, [`conflit_de_chemin`] a la declaration, la fusion de
+/// `add_fields`). Cette fonction ne s'en sert pas comme d'une garantie pour
+/// autant : elle a paniqué ici pendant toute la vie du projet, et un rendu de
+/// `_mapping` n'est pas l'endroit ou l'on decide qu'un serveur doit mourir. Si
+/// l'invariant tombe malgre les trois controles, la feuille est reposee sous
+/// son nom pointe — visible dans la reponse, donc diagnosticable, plutot que
+/// silencieusement perdue.
 fn niche(props: &mut Map<String, Value>, chemin: &str, feuille: Value) {
     match chemin.split_once('.') {
         None => {
@@ -811,12 +1040,16 @@ fn niche(props: &mut Map<String, Value>, chemin: &str, feuille: Value) {
             let entree = props
                 .entry(tete.to_string())
                 .or_insert_with(|| json!({"properties": {}}));
-            let sous = entree
+            match entree
                 .as_object_mut()
                 .and_then(|o| o.get_mut("properties"))
                 .and_then(Value::as_object_mut)
-                .expect("un prefixe de chemin est toujours un objet");
-            niche(sous, reste, feuille);
+            {
+                Some(sous) => niche(sous, reste, feuille),
+                None => {
+                    props.insert(chemin.to_string(), feuille);
+                }
+            }
         }
     }
 }
