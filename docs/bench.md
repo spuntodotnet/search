@@ -102,11 +102,11 @@ campagne, [`docs/container.json`](container.json), où chaque valeur porte sa
 définition.
 
 <!-- chiffres-conteneur:enveloppe — généré depuis docs/container.json par `python3 tests/compat/chiffres_conteneur.py --injecte`, ne pas éditer à la main -->
-| | ferrite 0.10.0 | ES 8.15.0 | × |
+| | ferrite 0.11.0 | ES 8.15.0 | × |
 |---|---|---|---|
-| **Image compressée**, telle qu'un registre la sert | **4,3 Mo** | 669,1 Mo | **×157** |
-| Image décompressée, ce que son système de fichiers occupe | 10,1 Mo | 1 266,1 Mo | ×125 |
-| Le binaire seul | 10,1 Mo | — (une JVM) | |
+| **Image compressée**, telle qu'un registre la sert | **4,3 Mo** | 669,1 Mo | **×155** |
+| Image décompressée, ce que son système de fichiers occupe | 10,2 Mo | 1 266,1 Mo | ×124 |
+| Le binaire seul | 10,2 Mo | — (une JVM) | |
 <!-- /chiffres-conteneur:enveloppe -->
 
 Le chiffre publié est le premier — **ce qu'un `docker pull` télécharge**. Les Mo
