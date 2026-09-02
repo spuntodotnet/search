@@ -463,6 +463,7 @@ CLAUSES = {
     "regexp": "dsl.regexp", "fuzzy": "dsl.fuzzy", "constant_score": "dsl.constant_score",
     "dis_max": "dsl.dis_max", "terms": "dsl.terms", "range": "dsl.range", "bool": "dsl.bool",
     "function_score": "dsl.function_score", "boosting": "dsl.boosting",
+    "query_string": "dsl.query_string", "simple_query_string": "dsl.simple_query_string",
     "nested": "nested.clause", "has_child": "join.has_child", "has_parent": "join.has_child",
     "parent_id": "join.parent_id",
 }

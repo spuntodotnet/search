@@ -316,6 +316,7 @@ développement, pas de CI).
 | `tests/compat/sonde_score.py` | les mêmes **scores** ? Pas le même ordre : la même **valeur**. `function_score` et `boosting` n'existent que pour produire un `_score`, et un ordre juste avec des scores faux serait vert partout ailleurs. 212 questions, comparées sur le score de chaque hit, `max_score`, le total, l'ordre — et le bloc d'**agrégations**, entré ici avec `min_score` du corps, parce que la seule façon de savoir si elles voient les documents qu'un seuil écarte est de les regarder : **198/212 identiques, 14 refus assumés, 0 écart** (`--calibrer` : 211/212 contre deux ES, le seul écart étant `random_score`, tiré au sort). Le même fichier lancé contre le ferrite d'avant rend **184/212** — et ses 14 écarts sont exactement les 14 questions que `min_score` a ajoutées |
 | `tests/compat/sonde_explain.py` | **pourquoi ce document, avec ce score — et où le score diverge ?** Les trois mécanismes de mise au point (`_name` / `matched_queries`, `explain: true`, `GET /{index}/_explain/{id}`) comparés à un vrai ES : les noms **et leur ordre**, `matched`, la forme de l'arbre et la valeur de chaque nœud. **47/54 identiques, 7 refus assumés, 0 écart** (`--calibrer` : 54/54 contre deux ES ; le même fichier contre le ferrite d'avant rend **4/54**). `--ecart` est le livrable : il pose les cinq statistiques du BM25 côte à côte et recalcule le score de chaque serveur à partir des siennes |
 | `tests/compat/genere_scoring.py` | **quelles formules de scoring, et d'où ?** Les trois fonctions de décroissance, les dix `modifier` et les six `boost_mode` sont calculés par **les classes d'ES elles-mêmes**, exécutées dans le conteneur de référence avec ses jars (58 476 points, 1 744 batteries). C'est l'oracle de `tests/scoring_vs_es.rs`, rejoué par `cargo test` sans Docker — et c'est ce qui évite d'avoir à **choisir** une tolérance sur des flottants |
+| `tests/compat/diff_query_string.py` | les mêmes documents sur une **expression écrite à la main** — celle de `query_string` et de `simple_query_string` ? Pas une clause JSON : une grammaire, avec ses opérateurs, sa précédence, ses bornes, ses jokers et ses **bords syntaxiques**. Compare les documents rendus dans leur ordre, le total, et la **phrase** du refus (celle du `root_cause`, la seule qu'une exception de client remonte) : **633/687 identiques, 54 refus assumés, 0 écart** (`--calibrer` : 687/687 contre deux ES). Le même fichier lancé contre le ferrite d'avant rend **0/687** |
 | `tests/compat/diff_motifs.py` | les mêmes documents sur un **motif** — `regexp`, `wildcard`, `prefix`, `match_phrase_prefix` ? (110/110, dont les neuf formes du `|` sans branche gauche) |
 | `tests/compat/diff_multi_index.py` | `index=["a","b"]`, `logs-*`, les alias : **les mêmes index visés, fusionnés pareil** ? (87/87, 0 écart, plus aucune divergence assumée ; `--calibrer` : 87/87 contre deux ES) |
 | `tests/compat/sonde_facettes.py` | ce qui sépare un `terms` d'une **facette** : `include` / `exclude` (expression régulière de Lucene, liste exacte, partition) et l'**ordre par sous-agrégation**. Compare le **bloc `terms` entier** — seaux dans leur ordre, valeurs des sous-agrégations, `sum_other_doc_count` et `doc_count_error_upper_bound` : **145/170 identiques, 25 refus assumés, 0 écart** (`--calibrer` : 170/170 contre deux ES). Le même fichier lancé contre le ferrite d'avant rend **30/170** |
@@ -337,7 +338,7 @@ développement, pas de CI).
 | `tests/compat/genere_compat.py` | le périmètre déclaré et la doc disent-ils la **même chose** ? [`compat.yaml`](compat.yaml) est la source (une entrée par capacité : état, paramètres, motif du refus, poids d'usage) ; [`docs/compat.md`](docs/compat.md) et [`docs/compat.json`](docs/compat.json) en sont **générés**, et la CI échoue s'ils divergent |
 | `tests/compat/perimetre.py` | ce cas qui échoue, il porte sur quoi ? Il rattache un échec de conformance à une capacité déclarée : **régression** si elle est annoncée supportée, **coût de périmètre** si elle est annoncée refusée |
 | `tests/compat/recolte_usage.py` | à quoi ressemblent les requêtes que les gens envoient **vraiment** ? Constitue le corpus ([`tests/compat/usage/corpus.jsonl`](tests/compat/usage/corpus.jsonl), 5 311 requêtes) depuis quatre sources citables : doc de référence 8.15, tracks Rally, clients officiels, code open source. Chaque requête porte l'URL d'où elle vient |
-| `tests/compat/ponderation.py` | **quelle part de ces requêtes passe entièrement ?** (46,2 % du corpus, mais **96,4 % du code d'application** et 47,2 % des tracks Rally — l'écart *est* le résultat). Écrit les `poids` de `compat.yaml`, publie [`docs/usage.json`](docs/usage.json) et la table « ce qui manque, par fréquence d'usage ». `--rejoue` pose la même requête à ferrite et à un vrai ES 8.15 : les deux mesures s'accordent sur 98,8 % des cas |
+| `tests/compat/ponderation.py` | **quelle part de ces requêtes passe entièrement ?** (47,4 % du corpus, mais **96,7 % du code d'application** et 50,6 % des tracks Rally — l'écart *est* le résultat). Écrit les `poids` de `compat.yaml`, publie [`docs/usage.json`](docs/usage.json) et la table « ce qui manque, par fréquence d'usage ». `--rejoue` pose la même requête à ferrite et à un vrai ES 8.15 : les deux mesures s'accordent sur 98,8 % des cas |
 | `tests/compat/conformance_es.py` | que disent les suites de tests **d'Elastic** et d'**OpenSearch** ? Deux sources indépendantes (`--source`), Apache-2.0 toutes les deux, **107** et **112 domaines**, sans liste blanche. Leurs rapports sont des fichiers, pas des phrases : [`conformance.json`](docs/conformance.json) et [`conformance-opensearch.json`](docs/conformance-opensearch.json) (totaux, trois taux, exclusions comptées, détail par cas), régénérés par `--json`, tenus par un cliquet en CI (`--diff`). `--divergences` range à part les cas qu'un **vrai ES 8.15 échoue lui aussi** sur la même suite — mesuré ([`conformance-opensearch-es8150.json`](docs/conformance-opensearch-es8150.json)), pas décidé. `--etat` vérifie entre deux cas que rien n'est **apparu** depuis l'état de départ de la cible — index, alias, templates, réglages de cluster — et arrête la campagne au premier écart (+27 %, payés par la CI) : 79 campagnes consécutives rendent le même rapport à l'octet près |
 | `tests/compat/bench_vs_es.py` | mêmes résultats, **et à quel prix** ? Garde-fou de développement : 600 documents et 138 requêtes **écrites ici**, donc un dénominateur qu'on a choisi soi-même — ne sert plus à publier |
 | `tests/compat/bench_echelle.py` | et **à l'échelle**, sur un corpus que nous n'avons pas écrit ? La track Rally `geonames` d'Elastic (Apache-2.0, révision figée, corpus vérifié à l'octet près), 500 000 et 2 000 000 de documents, **ses** 31 requêtes. `term` ×1,7 et `match_phrase` ×2,6 pour ferrite a deux millions de documents (et l'avance **grandit** avec la taille), RSS ×8 en sa faveur — et le **tri jusqu'a ×290 contre lui**, l'indexation ×0,20, le `scroll` ×0,25. 13 requêtes jouables, 18 refusées, toutes rattachées à une capacité déclarée. Voir [`docs/bench.md`](docs/bench.md) |
@@ -803,6 +804,71 @@ bouger**, pas après.
   porter passent. C'est ce qu'un refus écrit doit permettre : être relu, et
   tomber, plutôt que de survivre parce que personne ne se souvient de son
   motif.
+
+- **Une expression écrite à la main est une grammaire, pas une clause.** Le
+  contenu de `query_string` n'est pas du JSON : c'est le langage du
+  `QueryParser` classique de Lucene, et il a deux propriétés qui décident de
+  tout le reste. La première est qu'un parseur *approximativement* juste est le
+  pire résultat possible ici — un opérateur mal lu ne rend pas une erreur, il
+  rend d'autres documents, plausibles. La seconde est que ses règles ne se
+  déduisent d'aucune documentation : elles sont dans les **états lexicaux** de
+  `QueryParser.jj` (après un `^`, le lexer n'accepte qu'un nombre — pas même un
+  blanc, d'où l'erreur sur `chat^ 2`), dans son plus-long-match (`AND` est un
+  opérateur, `ANDx` un terme, `and` un terme), et dans les quatre lignes de son
+  `addClause`, qui font que `a AND b OR c` n'est ni `(a AND b) OR c` ni
+  `a AND (b OR c)` mais une liste plate où `AND` rend obligatoire la clause
+  **précédente**. Ce qui est porté ici est donc la grammaire, règle par règle,
+  et ce qu'elle refuse rend `query_shard_exception` avec la phrase d'ES
+  (`Failed to parse query [...]`) — le détail JavaCC qu'ES range sous
+  `caused_by` est la seule chose qui ne l'est pas, et c'est écrit.
+
+  Trois règles ont été trouvées par la mesure et par le fuzzer, aucune par le
+  raisonnement qui avait écrit le code :
+
+  - **deux mots séparés par un blanc font une seule clause.** C'est
+    `split_on_whitespace: false`, figé chez ES depuis la 7.0. Sur un champ
+    `text` la différence ne se voit pas (l'analyzer redécoupe) ; sur un
+    `keyword`, `edition rapide` cherche le terme `edition rapide`, et sur un
+    numérique la chaîne entière est illisible donc la clause ne correspond à
+    rien au lieu d'en trouver une moitié. Le groupe s'arrête devant `AND`,
+    `OR`, `^`, `~` et `:` — cinq frontières mesurées jeton par jeton, dont
+    aucune ne se devine (`a b NOT c` en fait un, `a b AND c` non) ;
+  - **une clause dont l'analyzer ne tire aucun terme disparaît.** Lucene ne
+    l'ajoute pas au booléen (`if (q == null) return;`) — mais il a *déjà* rendu
+    la précédente obligatoire. `chat AND …` vaut donc `chat`, pas
+    `+chat +rien`, et la clause absente ne compte pas dans le dénominateur d'un
+    `minimum_should_match`. La traiter comme « ne correspond à rien » rendait
+    zéro document là où ES en rend, en 200 ;
+  - **`lenient` a un défaut qui se déduit des champs.** Il vaut `true` quand la
+    clause ne vise que `*`, `false` dès qu'un champ est nommé : `n:abc` rend
+    200 sans `default_field` et 400 avec. Et sous `lenient`, ES écarte le champ
+    sur **toute** exception, pas seulement sur une valeur illisible — la
+    frontière que ferrite garde est ailleurs, et c'est la même que partout
+    ici : un refus de **périmètre** n'est jamais avalé.
+
+  Et une décision d'architecture qui a payé deux fois : la clause n'est pas
+  exécutée directement, elle est **traduite en Query DSL**, puis le traducteur
+  ordinaire la construit. C'est ce que la carte demandait, et ça donne
+  gratuitement le repli sur les colonnes d'un `index: false`, les champs de
+  métadonnées, la tolérance aux champs non mappés — et surtout le
+  **surlignage**, `explain` et `matched_queries`, qui lisent la requête du DSL
+  et ne rendaient rien sur une clause qu'ils ne connaissaient pas (trouvé par
+  le fuzzer, graine 11700020).
+
+- **`simple_query_string` n'est pas `query_string` amputé, c'est un autre
+  arbre.** Sa définition est qu'il ne lève **jamais** : un caractère mal placé y
+  est du texte. Mais la différence qui change les résultats n'est pas là — elle
+  est dans la forme de ce qu'il construit. Son arbre est **binaire**, monté de
+  gauche à droite, et un opérateur qui répète celui du sommet l'**allonge** au
+  lieu de l'emboîter : `a b + c` y vaut `(a OU b) ET c`, quand `query_string`
+  en ferait une liste plate. Une liste plate rendait `+a +b +c` là où ES rend
+  l'union — trouvé par le fuzzer, pas par les questions écrites à la main.
+  Trois autres règles mesurées : une négation se **compte** (`--chat` en annule
+  une), un opérateur posé avant la première clause ne relie rien (`+chat
+  -chien` rend l'**union**), et le `~…` court jusqu'au bout du mot — `~` nu vaut
+  la distance **2** (et non `AUTO`), un nombre est ramené dans `[0, 2]`, et ce
+  qui n'est pas un nombre vaut **0**, donc un terme exact : `chot~x` ne rend
+  aucun document là où `chot~` en rend cinq.
 
 - **`minimum_should_match` se calcule, il ne s'approxime pas**
   ([`src/msm.rs`](src/msm.rs)). Ses quatre notations (entier, pourcentage, les
@@ -1366,6 +1432,18 @@ bouger**, pas après.
   pour les deux premiers. Implémenter la norme donnait « tiret- » là où ES rend
   « tiret-bas ». La seule façon de le savoir a été de poser `no_match_size: 1`
   sur seize mots construits exprès et de lire où tombait la coupure.
+- **Un motif n'est pas analysé, il est *normalisé* — et les deux ne s'appliquent
+  pas aux mêmes filtres.** Sur un `champ:CHA*`, ES ne fait pas passer le motif
+  par l'analyzer du champ : il n'applique que les filtres que Lucene marque
+  « multi-term aware », ceux qui réécrivent un caractère sans découper ni jeter.
+  Mesure, filtre par filtre, contre ES 8.15 : `lowercase`, `asciifolding`,
+  `german_normalization` et `elision` y passent (`LÉCOL*` rend `lecol*`,
+  `STRAß*` rend `strass*`, `L\'ÉCOL*` rend `ecol*`), `porter_stem`, les
+  stemmers, `stop` et les n-grammes non (`RUNNIN*` reste `runnin*`). C'est
+  exactement ce que `analyze_wildcard: true` bascule, et la différence n'est pas
+  cosmétique : sur un champ à stemmer français, `fr:CHATTES*` ne rend **aucun**
+  document sans lui et quatre avec. Le paramètre est cité 52 fois dans le corpus
+  d'usage — plus que `fields`.
 - **Une clé de bucket entière sur un champ flottant.** `terms` sur un `double`
   rendait la clé `2` là où ES rend `2.0` — un client qui type strictement son
   JSON y lit un entier. Défaut antérieur, invisible parce qu'aucun corpus écrit
@@ -1497,6 +1575,18 @@ plus un seul refus que ferrite prononce là où ES sait répondre. Le chemin est
 dans [`docs/application.md`](docs/application.md), et il vaut plus que le
 chiffre : le blocage est tombé d'un cran à chaque carte, et **à chaque fois le
 suivant était un refus de trop** plutôt qu'un manque.
+
+**Écrire sa requête à la main** ne demande plus de la traduire en JSON :
+`query_string` et `simple_query_string` sont servis — la barre de Kibana, un
+panneau Grafana, un filtre « recherche avancée ». C'était le **premier manque
+mesuré** du corpus d'usage, et le corpus passe de 46,3 % à **47,4 %**, les
+tracks Rally de 47,2 % à **50,6 %**. Ce que ça a demandé n'est pas d'écrire un
+parseur : c'est de porter celui de Lucene règle par règle, y compris ses états
+lexicaux et son `addClause`, et de refuser en le nommant tout ce qui n'est pas
+reproduit (`analyzer`, `quote_field_suffix`, la proximité d'une phrase, une
+borne sur un `text`). Les trois règles qui décident vraiment du résultat — le
+groupe de mots, la clause qui disparaît, le défaut de `lenient` — ne sont dans
+aucune documentation.
 
 **Chercher dans une autre langue** ne demande plus de contourner : douze
 analyzers de langue (`danish`, `dutch`, `german`, `hungarian`, `italian`,
@@ -1682,7 +1772,7 @@ côte et recalcule les deux scores : jusqu'à 43 % d'écart relatif quand une
 partie du corpus n'a pas le champ interrogé, **zéro** sinon.
 
 Ce qui reste, par ordre de gêne pour un projet réel : `rest_total_hits_as_int`,
-`_msearch`, `_reindex`, les templates de **composants** (`_component_template`, et le
+`_msearch`, `_reindex`, `intervals`, les templates de **composants** (`_component_template`, et le
 `composed_of` qui les cite — refusé à la pose plutôt qu'appliqué à moitié),
 `random_score` et `script_score`,
 `inner_hits`, `GET /_cat/aliases` et les colonnes `h` / `s` des `_cat`,

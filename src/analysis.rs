@@ -117,6 +117,44 @@ impl Analyzer {
         }
     }
 
+    /// Le nom sous lequel la **normalisation** de cet analyzer est enregistree.
+    ///
+    /// Lucene distingue analyser un texte et *normaliser* un motif : sur un
+    /// `champ:CHA*`, ES n'applique que les filtres « multi-term aware »
+    /// (`Analyzer.normalize`), c'est-a-dire ceux qui reecrivent un caractere
+    /// sans decouper ni jeter. Mesure contre ES 8.15 : `lowercase`,
+    /// `asciifolding`, `german_normalization` et `elision` y passent
+    /// (`LÉCOL*` rend `lecol*`, `STRAß*` rend `strass*`, `L\'ÉCOL*` rend
+    /// `ecol*`), `porter_stem`, les stemmers, `stop` et les n-grammes non
+    /// (`RUNNIN*` reste `runnin*`).
+    ///
+    /// Un tokenizer `keyword` : le motif entre et ressort d'un seul tenant.
+    pub fn normalisateur(self) -> String {
+        format!("{}#n", self.tokenizer())
+    }
+
+    /// La chaine de normalisation : `keyword` + les filtres multi-term aware.
+    fn build_normalisation(self) -> TextAnalyzer {
+        let b = TextAnalyzer::builder(RawTokenizer::default()).dynamic();
+        let b = match self {
+            // Aucun repliement : ces deux-la rendent le motif tel quel.
+            Self::Whitespace | Self::Keyword => b,
+            // `FrenchAnalyzer` pose son elision avant les minuscules.
+            Self::French => b
+                .filter_dynamic(Reecrit(elision))
+                .filter_dynamic(Reecrit(langue::minuscule)),
+            Self::Langue(Langue::Italien) => b
+                .filter_dynamic(Elision::statique(langue::ELISIONS_IT))
+                .filter_dynamic(Reecrit(langue::minuscule)),
+            Self::Langue(Langue::Turc) => b.filter_dynamic(Reecrit(langue::minuscule_turque)),
+            Self::Langue(Langue::Allemand) => b
+                .filter_dynamic(Reecrit(langue::minuscule))
+                .filter_dynamic(Reecrit(langue::normalisation_allemande)),
+            _ => b.filter_dynamic(Reecrit(langue::minuscule)),
+        };
+        b.build()
+    }
+
     fn build(self) -> TextAnalyzer {
         match self {
             Self::Snowball => langue::construit_snowball(),
@@ -178,10 +216,12 @@ pub fn register_all(manager: &TokenizerManager) {
         Analyzer::Snowball,
     ] {
         manager.register(&a.tokenizer(), a.build());
+        manager.register(&a.normalisateur(), a.build_normalisation());
     }
     for l in Langue::TOUTES {
         let a = Analyzer::Langue(l);
         manager.register(&a.tokenizer(), a.build());
+        manager.register(&a.normalisateur(), a.build_normalisation());
     }
 }
 
@@ -621,6 +661,10 @@ impl Analysis {
     pub fn register(&self, manager: &TokenizerManager) {
         for (i, a) in self.sur_mesure.iter().enumerate() {
             manager.register(&nom_interne(i as u16), a.build());
+            manager.register(
+                &Analyzer::Custom(i as u16).normalisateur(),
+                a.build_normalisation(),
+            );
         }
     }
 }
@@ -752,6 +796,27 @@ impl CustomAnalyzer {
     /// Le `TextAnalyzer` correspondant, pour l'exercer hors d'un index.
     pub fn analyseur(&self) -> TextAnalyzer {
         self.build()
+    }
+
+    /// La **normalisation** de cet analyzer sur mesure : `keyword` plus les
+    /// seuls filtres que Lucene marque « multi-term aware », dans leur ordre
+    /// declare (voir [`Analyzer::normalisateur`]).
+    fn build_normalisation(&self) -> TextAnalyzer {
+        let mut b = TextAnalyzer::builder(RawTokenizer::default()).dynamic();
+        for f in &self.filtres {
+            b = match f {
+                Filtre::Lowercase => b.filter_dynamic(Reecrit(langue::minuscule)),
+                Filtre::AsciiFolding => b.filter_dynamic(AsciiFoldingFilter),
+                Filtre::Elision(e) => b.filter_dynamic(e.clone()),
+                Filtre::NormalisationAllemande => {
+                    b.filter_dynamic(Reecrit(langue::normalisation_allemande))
+                }
+                // Mesure contre ES 8.15 : ni les stemmers, ni `stop`, ni les
+                // n-grammes, ni `apostrophe` ne touchent un motif.
+                Filtre::Stop(_) | Filtre::Ngram(_) | Filtre::Stemmer(_) | Filtre::Apostrophe => b,
+            };
+        }
+        b.build()
     }
 
     fn build(&self) -> TextAnalyzer {

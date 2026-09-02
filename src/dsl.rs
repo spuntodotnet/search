@@ -165,7 +165,7 @@ impl<'a> QueryCtx<'a> {
     /// **autre** index de la meme recherche (mapping heterogene), ou l'index
     /// laisse passer les champs non mappes (`allow_unmapped_fields`, le defaut
     /// d'ES).
-    fn champ_inconnu_tolere(&self, e: &EsError) -> bool {
+    pub(crate) fn champ_inconnu_tolere(&self, e: &EsError) -> bool {
         e.champ_inconnu
             .as_deref()
             .is_some_and(|c| self.champs_inconnus_toleres || self.champs_ailleurs.contains(c))
@@ -173,7 +173,7 @@ impl<'a> QueryCtx<'a> {
 }
 
 impl QueryCtx<'_> {
-    fn field(&self, name: &str, clause: &str) -> EsResult<MappedField> {
+    pub(crate) fn field(&self, name: &str, clause: &str) -> EsResult<MappedField> {
         if let Some(racine) = self.fields.racine_nested(name) {
             if !self.nested_ouvert.borrow().iter().any(|r| r == racine) {
                 return Err(EsError::new(
@@ -210,7 +210,7 @@ impl QueryCtx<'_> {
     ///
     /// Rend les positions en plus des termes : `match_phrase` en a besoin, et
     /// elles ne sont pas toujours consecutives (l'analyzer peut jeter un token).
-    fn analyze(&self, text: &str, analyzer: Analyzer) -> EsResult<Vec<(usize, String)>> {
+    pub(crate) fn analyze(&self, text: &str, analyzer: Analyzer) -> EsResult<Vec<(usize, String)>> {
         let mut analyzer = self
             .index
             .tokenizers()
@@ -219,6 +219,27 @@ impl QueryCtx<'_> {
                 EsError::internal(format!("analyzer [{}] introuvable", analyzer.tokenizer()))
             })?;
         let mut stream = analyzer.token_stream(text);
+        let mut out = Vec::new();
+        while stream.advance() {
+            let token = stream.token();
+            out.push((token.position, token.text.clone()));
+        }
+        Ok(out)
+    }
+
+    /// **Normalise** un motif au lieu de l'analyser : les filtres que Lucene
+    /// marque « multi-term aware », et eux seuls (voir
+    /// [`crate::analysis::Analyzer::normalisateur`]).
+    pub(crate) fn analyze_normalise(
+        &self,
+        text: &str,
+        analyzer: Analyzer,
+    ) -> EsResult<Vec<(usize, String)>> {
+        let nom = analyzer.normalisateur();
+        let mut a = self.index.tokenizers().get(&nom).ok_or_else(|| {
+            EsError::internal(format!("normalisation de l'analyzer [{nom}] introuvable"))
+        })?;
+        let mut stream = a.token_stream(text);
         let mut out = Vec::new();
         while stream.advance() {
             let token = stream.token();
@@ -274,11 +295,14 @@ fn build_une(v: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
         "has_child" => join_query(body, ctx, Sens::VersLeParent),
         "has_parent" => join_query(body, ctx, Sens::VersLEnfant),
         "parent_id" => parent_id_query(body, ctx),
+        "query_string" => crate::querystring::query_string(body, ctx),
+        "simple_query_string" => crate::querystring::simple_query_string(body, ctx),
         other => Err(EsError::parsing(format!(
             "unknown query [{other}] : ferrite supporte [match_all, match_none, match, \
              multi_match, match_phrase, match_phrase_prefix, exists, ids, prefix, wildcard, \
              regexp, fuzzy, term, terms, range, bool, constant_score, dis_max, function_score, \
-             boosting, nested, has_child, has_parent, parent_id]"
+             boosting, nested, has_child, has_parent, parent_id, query_string, \
+             simple_query_string]"
         ))),
     }
 }
@@ -384,9 +408,19 @@ fn match_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     let obj = as_object(body, "match")?;
     let (field_name, spec) = single_key(obj, "match")?;
 
-    let (query_value, operator, boost_value, lenient) = match spec {
+    let (query_value, operator, boost_value, lenient, msm) = match spec {
         Value::Object(o) => {
-            expect_only(o, &["query", "operator", "boost", "lenient"], "match")?;
+            expect_only(
+                o,
+                &[
+                    "query",
+                    "operator",
+                    "boost",
+                    "lenient",
+                    "minimum_should_match",
+                ],
+                "match",
+            )?;
             let q = o.get("query").ok_or_else(|| {
                 EsError::parsing(format!(
                     "[match] sur [{field_name}] : cle [query] manquante"
@@ -397,12 +431,20 @@ fn match_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
                 read_operator(o.get("operator"), "match")?,
                 o.get("boost").cloned(),
                 read_lenient(o.get("lenient"))?,
+                o.get("minimum_should_match").cloned(),
             )
         }
-        v => (v.clone(), Occur::Should, None, false),
+        v => (v.clone(), Occur::Should, None, false, None),
     };
 
-    let inner = match field_match(field_name, &query_value, operator, "match", ctx) {
+    let inner = match field_match_msm(
+        field_name,
+        &query_value,
+        operator,
+        msm.as_ref(),
+        "match",
+        ctx,
+    ) {
         // `lenient` : le champ ne sait pas lire cette valeur — la clause ne
         // correspond a rien, au lieu d'echouer (mesure contre ES 8.15 :
         // `match numero: "alice"` avec `lenient` rend 0 document, sans erreur).
@@ -496,6 +538,24 @@ fn field_match(
     clause: &str,
     ctx: &QueryCtx,
 ) -> EsResult<Box<dyn Query>> {
+    field_match_msm(field_name, value, operator, None, clause, ctx)
+}
+
+/// La meme, avec le `minimum_should_match` qu'ES pose sur le booleen des
+/// **positions** analysees.
+///
+/// Il n'a de sens que la : une chaine qui rend un seul terme n'a pas de
+/// booleen, et ES l'ignore alors (mesure). Avec `operator: and` il n'y a plus
+/// aucune clause facultative, et le minimum ne peut pas etre atteint — les deux
+/// serveurs rendent zero document.
+pub(crate) fn field_match_msm(
+    field_name: &str,
+    value: &Value,
+    operator: Occur,
+    msm: Option<&Value>,
+    clause: &str,
+    ctx: &QueryCtx,
+) -> EsResult<Box<dyn Query>> {
     // `match` passe par ici, et `multi_match` avec lui : un champ de
     // metadonnees cite dans `fields` se resout donc au meme endroit que s'il
     // etait seul. Mesure contre ES 8.15 : la valeur n'y est **pas** analysee —
@@ -547,9 +607,19 @@ fn field_match(
             match groupes.len() {
                 0 => Box::new(EmptyQuery),
                 1 => groupes.into_iter().next().expect("un groupe"),
-                _ => Box::new(BooleanQuery::new(
-                    groupes.into_iter().map(|q| (operator, q)).collect(),
-                )),
+                n => {
+                    let facultatives = if operator == Occur::Should { n } else { 0 };
+                    let min = crate::msm::resoudre(msm, facultatives, 0)?;
+                    let clauses: Vec<(Occur, Box<dyn Query>)> =
+                        groupes.into_iter().map(|q| (operator, q)).collect();
+                    if min > facultatives {
+                        Box::new(EmptyQuery)
+                    } else if min > 0 {
+                        Box::new(BooleanQuery::with_minimum_required_clauses(clauses, min))
+                    } else {
+                        Box::new(BooleanQuery::new(clauses))
+                    }
+                }
             }
         }
         // Sur un champ non analyse, `match` se comporte comme `term` (ES fait
@@ -1525,16 +1595,20 @@ fn range_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
                     "gte" | "lt" => Arrondi::Bas,
                     _ => Arrondi::Haut,
                 };
-                let ms =
-                    datemath::borne_dans(v, format.as_ref(), ctx.maintenant, arrondi, &fuseau)?;
+                // Marquee comme dans `field_match` : une borne qu'un champ
+                // `date` ne sait pas lire est la famille que `lenient` ecarte.
+                let ms = datemath::borne_dans(v, format.as_ref(), ctx.maintenant, arrondi, &fuseau)
+                    .map_err(EsError::sur_valeur_illisible)?;
                 Ok(Some(TypedValue::Date(ms)))
             }
-            Some(v) => Ok(Some(mapping::coerce_avec(
-                field_name,
-                ty,
-                v,
-                ctx.fields.format_de(field_name),
-            )?)),
+            // Marquee « valeur illisible » : c'est la famille que `lenient`
+            // ecarte au lieu de faire echouer la recherche, et une borne
+            // qu'un champ ne sait pas lire en fait partie — `query_string`
+            // pose des bornes sur des champs de tous types.
+            Some(v) => Ok(Some(
+                mapping::coerce_avec(field_name, ty, v, ctx.fields.format_de(field_name))
+                    .map_err(EsError::sur_valeur_illisible)?,
+            )),
         }
     };
 
@@ -2023,6 +2097,16 @@ fn fuzzy_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     if params.is_some_and(|o| o.contains_key("prefix_length")) {
         return Err(EsError::unsupported(
             "ferrite ne supporte pas [prefix_length] dans [fuzzy]",
+        ));
+    }
+    // `max_expansions` etait accepte et **ignore** : `docs/compat.md` le
+    // declarait refuse depuis toujours, et il rendait des documents qu'ES
+    // ecarte — en 200, sans un mot. C'est exactement ce que ce depot interdit.
+    if params.is_some_and(|o| o.contains_key("max_expansions")) {
+        return Err(EsError::unsupported(
+            "ferrite ne supporte pas [max_expansions] dans [fuzzy] : l'automate de Levenshtein \
+             que tantivy compile n'expose pas le nombre de termes developpes, et le borner apres \
+             coup ne garderait pas les memes que Lucene",
         ));
     }
     let distance = match params.and_then(|o| o.get("fuzziness")) {
@@ -2735,6 +2819,8 @@ fn as_object<'a>(v: &'a Value, clause: &str) -> EsResult<&'a Map<String, Value>>
 
 /// Les clauses ou `_name` est une cle **du corps** de la clause.
 const NOM_AU_CORPS: &[&str] = &[
+    "query_string",
+    "simple_query_string",
     "match_all",
     "match_none",
     "bool",

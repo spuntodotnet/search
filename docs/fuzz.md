@@ -259,6 +259,47 @@ Les cas correspondants sont figés dans
 graine — et le fichier entier rend **147/244 contre le binaire d'avant**, ce qui
 est la seule façon de savoir qu'il mesure quelque chose.
 
+## La mesure de la carte suivante (`query_string`, `simple_query_string`)
+
+Deux briques de plus, `q.query_string` et `q.simple_query_string` : elles tirent
+une **expression** dans le langage du `QueryParser` de Lucene, bâtie sur le
+mapping et la donnée du cas — un champ nommé, une phrase, un préfixe, un joker,
+un flou, un boost, une borne — puis, une fois sur quatre, la tordent (opérateur
+pendant, guillemet non fermé, `^` sans nombre, borne inachevée). C'est le genre
+de code où une entrée tordue trouve un `unwrap`, et le prédicat `survivant` veille
+après chaque cas.
+
+La brique fait rougir le binaire d'avant, ce qui est la seule façon de savoir
+qu'elle mesure quelque chose : la même plage jouée contre le ferrite 0.11.0 rend
+**35 divergences sur 40 cas** (il refuse la clause entière), contre **0** sur le
+binaire de cette carte.
+
+```
+plages de développement (celles sur lesquelles on a corrigé, donc qui ne mesurent plus rien)
+graines 11400000+       60 cas,  2 735 requêtes
+graines 11700000+      120 cas,  5 507 requêtes
+
+plage de contrôle, jamais regardée avant ce tableau
+graines 12300000+      100 cas,  4 531 requêtes, 0 divergence sur le mini-langage
+```
+
+Les trois divergences que la plage de contrôle rend portent sur autre chose et
+sont antérieures à la carte : un `function_score` à score négatif, une forme de
+document que ferrite accepte et qu'ES refuse, et un `500` d'ES là où ferrite
+rend `400` — aucune ne cite `query_string`. Elles sont laissées telles, mesurées.
+
+### Ce que les briques ont trouvé : trois défauts, tous silencieux
+
+| Graine | Ce qui était faux | Ce que c'était |
+|---|---|---|
+| `11400051` | ferrite refuse (`[prefix] ne s'applique qu'à un champ [text] ou [keyword]`) là où ES rend 200 | sous `lenient`, ES écarte le champ sur **toute** exception, pas seulement sur une valeur illisible. Comme `lenient` vaut `true` par défaut quand la clause ne vise que `*`, un `b:al*` sur une expansion qui contient une date faisait échouer la recherche entière. La frontière que ferrite garde est ailleurs : un refus de **périmètre** n'est jamais avalé |
+| `11400029` | ferrite rend **9** documents, ES en rend **5** | deux mots séparés par un blanc font **une** clause chez ES (`split_on_whitespace: false`, figé depuis la 7.0). Invisible sur un champ `text`, décisif ailleurs : sur un `keyword` c'est le terme entier qui est cherché, sur un numérique la chaîne entière est illisible. Le groupe s'arrête devant `AND`, `OR`, `^`, `~` et `:` — cinq frontières mesurées jeton par jeton |
+| `11400019` | ferrite rend **0** document, ES en rend **20** | l'arbre de `simple_query_string` est **binaire**, monté de gauche à droite, et un opérateur qui répète celui du sommet l'allonge au lieu de l'emboîter. `a b + c` y vaut `(a OU b) ET c` ; une liste plate en faisait `+a +b +c` |
+| `11700020` | ferrite ne rend **aucun** fragment de surlignage là où ES en rend un | le surlignage lit la requête du **Query DSL**, pas la requête tantivy : une clause qu'il ne connaît pas ne marque rien. La clause est donc désormais **traduite** en DSL avant d'être exécutée, ce qui donne aussi `explain` et `matched_queries` sans rien écrire de plus |
+
+Aucun des quatre n'était visible aux 687 questions écrites à la main de
+`diff_query_string.py` — les quatre y sont maintenant figés.
+
 ## La mesure de la carte suivante (`_name`, `explain`, `_explain`)
 
 Une brique de plus, `corps.nom_de_clause` : elle pose des `_name` au hasard dans
@@ -396,6 +437,29 @@ fuzzer, écrit à partir d'une mesure :
 | **`exists` sur un `text` sans terme** | ES tient un `_field_names` ; ferrite lit l'index inversé, où `""` n'a rien laissé. Le corriger demanderait de stocker les valeurs de chaque champ `text` une seconde fois |
 | **court-circuit d'ES** | un `bool` dont une clause obligatoire est `match_none` ne rend rien : ES s'arrête là et ne voit jamais qu'une autre clause est malformée. ferrite valide la requête entière |
 | **chemin d'ordre non vérifié par ES** | le même court-circuit, sur un autre chemin de code, et c'est ce passage qui l'a trouvé. ES ne résout le chemin d'ordre d'un `terms` qu'au moment de comparer deux seaux : à zéro ou un seul seau, il ne trie rien et **ne valide rien** — il rend 200 sur une agrégation d'ordre qui n'existe pas, sur un `stats` sans clé, sur une propriété qu'aucune métrique ne rend. `size: 1` ne suffit pas (il collecte tous les seaux et ne tronque qu'après) : c'est bien le nombre de seaux **retenus** qui décide. ferrite valide avant d'exécuter — sinon la même requête serait tantôt acceptée tantôt refusée, selon le jeu de données. Voir la divergence assumée n° 23 |
+
+À côté, une divergence **ouverte** que la campagne de `query_string` a sortie
+sans la chercher, et qui n'a rien à voir avec elle : sur un champ `integer`,
+`{"term": {"f": "1.0"}}` rend 4 documents chez ES et **400** chez ferrite
+(`valeur "1.0" non convertible en un entier`). ES lit la chaîne comme un
+flottant puis la tronque si elle est entière ; ferrite refuse la chaîne.
+Elle est antérieure à la carte — le binaire 0.11.0 rend la même erreur — et
+elle est laissée telle, mesurée : le refus est **bruyant**, ce n'est pas un
+silence. Elle sort ici parce qu'une expression `query_string` sur les champs
+par défaut pose la même valeur sur tous les types à la fois.
+
+Et une seconde, de la même famille — sortie par la même campagne, antérieure
+elle aussi : un `bool` dont une clause **obligatoire** est une négation que le
+`_source` ne sait pas trancher (`{"bool": {"must_not": […], "should":
+[{"match_all": {}}]}}`) fait perdre au surlignage le fragment d'une **autre**
+clause obligatoire du même `bool`, dès qu'un `should` voisin existe. ES le rend,
+ferrite non. La règle du dépôt dit pourtant qu'une feuille indécidable est
+**supposée satisfaite** — « dans le doute il vaut mieux marquer de trop que se
+taire » —, et une négation indécidable ne l'est pas. Elle se reproduit en Query
+DSL **écrit à la main**, donc elle n'appartient pas à `query_string` ; c'est le
+générateur du mini-langage qui a produit la forme, parce que `-x +y (z)` est une
+expression qu'on écrit sans y penser et que personne n'avait posée en JSON. Le
+binaire 0.11.0 rend la même chose : elle est laissée telle, et nommée ici.
 
 La ligne des divergences de pertinence est étroite **exprès** : elle n'accepte
 un ordre différent que si ES lui-même donne deux scores **différents** aux

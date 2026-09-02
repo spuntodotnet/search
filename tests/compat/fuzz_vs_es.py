@@ -294,6 +294,12 @@ BRIQUES = {
     "q.constant_score": "dsl.constant_score",
     "q.dis_max": "dsl.dis_max",
     "q.boosting": "dsl.boosting",
+    # Le mini-langage. C'est exactement le genre de code ou une entree tordue
+    # trouve un `unwrap` : la brique tire donc autant d'expressions bien formees
+    # que de bords (operateur pendant, guillemet non ferme, `^` sans nombre,
+    # borne inachevee), et le predicat `survivant` veille apres chaque cas.
+    "q.query_string": "dsl.query_string",
+    "q.simple_query_string": "dsl.simple_query_string",
     # `function_score` a **quatre** briques et pas une, pour la meme raison que
     # les trois de la cle de tri : chacune est silencieuse quand elle est
     # fausse. Un `weight` non applique rend le meme ensemble de documents dans
@@ -978,6 +984,7 @@ class Generateur:
         if profondeur < 2:
             choix += ["bool", "bool", "constant_score", "dis_max",
                       "function_score", "boosting"]
+        choix += ["query_string", "simple_query_string"]
 
         for _ in range(8):
             quoi = rng.choice(choix)
@@ -1212,6 +1219,120 @@ class Generateur:
             q["transpositions"] = self.rng.choice([True, False])
         return {"fuzzy": {c.chemin: q}}
 
+    # -- le mini-langage ---------------------------------------------------
+
+    def _expression(self, champs, docs, tordue):
+        """Une expression du langage de `query_string`, batie sur le mapping et
+        la donnee tires au sort.
+
+        `tordue` autorise les formes que les deux serveurs doivent refuser de la
+        meme facon : c'est la moitie qui compte, un analyseur d'expression se
+        casse sur ce qu'il n'attendait pas."""
+        rng = self.rng
+        interrogeables = [c for c in champs if c.ty not in ("object", "nested")]
+
+        def terme():
+            if interrogeables and rng.random() < 0.7:
+                c = rng.choice(interrogeables)
+                v = self._valeur_pour(c, docs)
+                v = echappe_lucene(str(v)) if v is not None else self._mot()
+                if not v:
+                    v = self._mot()
+                forme = rng.choice(["nu", "nu", "champ", "champ", "phrase",
+                                    "prefixe", "joker", "flou", "boost",
+                                    "borne", "borne_courte", "existe"])
+                if forme == "nu":
+                    return v
+                if forme == "champ":
+                    return f"{c.chemin}:{v}"
+                if forme == "phrase":
+                    return f'{c.chemin}:"{v}"'
+                if forme == "prefixe":
+                    return f"{c.chemin}:{v[:2]}*"
+                if forme == "joker":
+                    return f"{c.chemin}:{v[:1]}?{v[2:3]}*"
+                if forme == "flou":
+                    return f"{c.chemin}:{v}~" + rng.choice(["", "1", "2"])
+                if forme == "boost":
+                    return f"{c.chemin}:{v}^" + rng.choice(["2", "0.5", "3"])
+                if forme == "existe":
+                    return f"_exists_:{c.chemin}"
+                if forme == "borne_courte":
+                    return f"{c.chemin}:" + rng.choice([">", ">=", "<", "<="]) + v
+                bas, haut = ("[", "]") if rng.random() < 0.5 else ("{", "}")
+                return f"{c.chemin}:{bas}{v} TO *{haut}"
+            return self._mot()
+
+        morceaux = []
+        for i in range(rng.randint(1, 4)):
+            if i:
+                morceaux.append(rng.choice([" ", " AND ", " OR ", " ", " ",
+                                            " AND NOT ", " && ", " || "]))
+            prefixe = rng.choice(["", "", "", "+", "-", "NOT "])
+            corps = terme()
+            if rng.random() < 0.2:
+                corps = f"({corps} OR {terme()})"
+            morceaux.append(prefixe + corps)
+        expr = "".join(morceaux)
+        if tordue:
+            expr = rng.choice([
+                expr + rng.choice([" AND", " OR", " (", ")", "^", "~", ":",
+                                   ' "', " [1 TO"]),
+                rng.choice(["AND ", "OR ", ":", "^2 "]) + expr,
+                expr.replace(":", "", 1) if ":" in expr else expr + "\\",
+            ])
+        return expr
+
+    def _q_query_string(self, champs, docs, prof):
+        if not self.brique("q.query_string"):
+            return None
+        rng = self.rng
+        q = {"query": self._expression(champs, docs, rng.random() < 0.25)}
+        # Sans `default_field`, ES **force** `lenient` : les deux moitiees se
+        # tirent, sinon la moitie mesuree serait toujours la meme.
+        interrogeables = [c for c in champs if c.ty not in ("object", "nested")]
+        if interrogeables and rng.random() < 0.6:
+            if rng.random() < 0.5:
+                q["default_field"] = rng.choice(interrogeables).chemin
+            else:
+                n = min(len(interrogeables), rng.randint(1, 3))
+                q["fields"] = [c.chemin + (rng.choice(["", "", "^2"]))
+                               for c in rng.sample(interrogeables, n)]
+        for cle, valeurs in (("default_operator", ["AND", "OR"]),
+                             ("analyze_wildcard", [True, False]),
+                             ("allow_leading_wildcard", [True, False]),
+                             ("lenient", [True, False]),
+                             ("tie_breaker", [0.0, 0.3, 1.0]),
+                             ("boost", [0.5, 2.0]),
+                             ("minimum_should_match", ["2", "50%", "-1"]),
+                             ("fuzziness", ["AUTO", 1, 2])):
+            if rng.random() < 0.15:
+                q[cle] = rng.choice(valeurs)
+        return {"query_string": q}
+
+    def _q_simple_query_string(self, champs, docs, prof):
+        if not self.brique("q.simple_query_string"):
+            return None
+        rng = self.rng
+        expr = self._expression(champs, docs, rng.random() < 0.3)
+        # Le langage de `simple_query_string` a ses propres operateurs : ils
+        # sont poses **en plus**, puisqu'aucun caractere n'y est illegal.
+        if rng.random() < 0.5:
+            expr = expr.replace(" AND ", " + ").replace(" OR ", " | ")
+        q = {"query": expr}
+        interrogeables = [c for c in champs if c.ty not in ("object", "nested")]
+        if interrogeables and rng.random() < 0.7:
+            n = min(len(interrogeables), rng.randint(1, 3))
+            q["fields"] = [c.chemin for c in rng.sample(interrogeables, n)]
+        for cle, valeurs in (("default_operator", ["AND", "OR"]),
+                             ("lenient", [True, False]),
+                             ("boost", [0.5, 2.0]),
+                             ("minimum_should_match", ["2", "50%"]),
+                             ("flags", ["ALL"])):
+            if rng.random() < 0.15:
+                q[cle] = rng.choice(valeurs)
+        return {"simple_query_string": q}
+
     def _q_match(self, champs, docs, prof):
         if not self.brique("q.match"):
             return None
@@ -1228,6 +1349,11 @@ class Generateur:
         q = {"query": v}
         if self.rng.random() < 0.4:
             q["operator"] = self.rng.choice(["or", "and"])
+        # Le minimum se pose sur le booleen des **positions** analysees : il n'a
+        # de sens que sur un `text` a plusieurs mots, et c'est la que
+        # `query_string` le descend quand toute l'expression tient en un groupe.
+        if c.ty in ("text", "text_devine") and self.rng.random() < 0.2:
+            q["minimum_should_match"] = self.rng.choice(["2", "50%", "-1", 1])
         if self.rng.random() < 0.3:
             q["lenient"] = True
         return {"match": {c.chemin: q}}
@@ -2771,6 +2897,11 @@ def _refus_declare(e, _requete=None, ecarts=()):
         "ne filtre les termes d'un [terms] que sur un champ de chaines",
         "la forme partitionnee de",
         "et [missing] sur la meme agregation [terms]",
+        # Une borne posee sur un champ `text` : `champ:[a TO b]` ou
+        # `champ:>a` dans une expression `query_string`. `range` y est refuse
+        # dans tout ce depot, et le raccourci de `query_string` mene au meme
+        # endroit — le refus est declare (`dsl.range`, `dsl.query_string`).
+        "[range] sur un champ [text]",
         # Les trois champs de metadonnees qu'ES sert et pas ferrite
         # (`_routing`, `_seq_no`, `_ignored`) : le refus les nomme, avec sa
         # raison. C'est un cout de perimetre declare — `dsl.meta_champs` dans

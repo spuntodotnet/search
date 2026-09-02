@@ -2966,9 +2966,6 @@ def clause_de_dsl_inconnue_refusee(es):
                               query={"clause_inexistante": {"titre": "x"}}),
             contains="clause_inexistante")
     refused(lambda: es.search(index=INDEX,
-                              query={"query_string": {"query": "titre:bel"}}),
-            contains="query_string")
-    refused(lambda: es.search(index=INDEX,
                               query={"intervals": {"titre": {"match": {}}}}),
             contains="intervals")
 
@@ -4931,6 +4928,212 @@ def explain_dans_la_recherche_et_sur_un_document(es):
     es.indices.delete(index=EX)
 
 
+
+# ---------------------------------------------------------------------------
+# Le mini-langage : `query_string` et `simple_query_string`
+# ---------------------------------------------------------------------------
+
+QS = "compat-query-string"
+
+
+def prepare_qs(es):
+    """Le meme corpus que la suite, dans un index a part : ces trois scenarios
+    passent apres ceux qui suppriment `INDEX`."""
+    es.options(ignore_status=404).indices.delete(index=QS)
+    es.indices.create(index=QS, mappings=MAPPINGS,
+                      settings={"number_of_shards": 1, "number_of_replicas": 0})
+    for id_, doc in DOCS.items():
+        es.index(index=QS, id=id_, document=doc)
+    es.indices.refresh(index=QS)
+
+
+@scenario
+def query_string_le_mini_langage(es):
+    """La barre de recherche « avancee », par le client officiel.
+
+    C'est la clause qu'envoie tout ce qui laisse quelqu'un ecrire sa requete —
+    Kibana, Grafana, un filtre maison. Chaque attendu ci-dessous a ete constate
+    sur un ES 8.15 (`tests/compat/diff_query_string.py`, 687 questions).
+
+    Le corpus : le document 1 est « Le Horla » de Maupassant (1887), le 2
+    « Bel-Ami » (1885), le 3 « Germinal » de Zola (1885).
+    """
+    prepare_qs(es)
+
+    def q(expr, **kw):
+        return sorted(ids(es.search(index=QS, size=10, query={
+            "query_string": dict(query=expr, **kw)})))
+
+    # Un champ, une valeur.
+    assert q("titre:Germinal") == ["3"]
+    assert q("auteur:Maupassant") == ["1", "2"]
+    assert q("annee:1885") == ["2", "3"]
+    assert q("dispo:true") == ["1", "3"]
+
+    # Les operateurs, et leur precedence — celle de Lucene, pas celle qu'on
+    # croit : `a AND b OR c` rend obligatoire la clause **precedente**.
+    assert q("auteur:Maupassant AND annee:1885") == ["2"]
+    assert q("auteur:Zola OR auteur:Maupassant") == ["1", "2", "3"]
+    assert q("auteur:Maupassant AND NOT annee:1885") == ["1"]
+    assert q("+auteur:Maupassant -annee:1885") == ["1"]
+    assert q("NOT auteur:Zola") == ["1", "2"]
+    assert q("auteur:(Zola OR Maupassant) AND annee:1885") == ["2", "3"]
+
+    # Une expression exacte, un intervalle, un joker, un prefixe, une regexp,
+    # un flou, une ponderation.
+    assert q('resume:"la greve"') == ["3"]
+    assert q("annee:[1886 TO 1900]") == ["1"]
+    assert q("annee:{1885 TO 1887}") == []
+    assert q("annee:>1885") == ["1"]
+    assert q("annee:<=1885") == ["2", "3"]
+    assert q("auteur:Zol*") == ["3"]
+    assert q("auteur:/Zol./") == ["3"]
+    assert q("auteur:Zloa~2") == ["3"]
+    assert q("titre:Germinal^3 OR titre:Bel-Ami") == ["2", "3"]
+
+    # `_exists_`, `champ:*` et `*:*`.
+    assert q("_exists_:auteur") == ["1", "2", "3"]
+    assert q("_exists_:inconnu") == []
+    assert q("*:*") == ["1", "2", "3"]
+
+    # Deux mots separes par un blanc font **une** clause (`split_on_whitespace`
+    # est fige a `false` chez ES depuis la 7.0) : sur un `keyword`, c'est le
+    # terme entier qui est cherche.
+    assert q("Le Horla", default_field="titre") == ["1"]
+    assert q("Le Horla", fields=["auteur"]) == []
+    # Un champ nomme **coupe** le groupe : `resume:la` est une clause, `greve`
+    # en est une autre, posee sur les champs par defaut.
+    assert q("resume:la greve") == ["2", "3"]
+
+    # Les champs par defaut : `default_field`, `fields` et leur ponderation.
+    assert q("Maupassant") == ["1", "2"]
+    assert q("Maupassant", default_field="auteur") == ["1", "2"]
+    assert q("Maupassant", default_field="titre") == []
+    assert q("Maupassant", fields=["auteur^2", "titre"]) == ["1", "2"]
+    assert q("Maupassant", fields=["aut*"]) == ["1", "2"]
+
+    # `default_operator` et `minimum_should_match`.
+    assert q("Maupassant Zola", fields=["auteur"]) == []
+    # Sur un `keyword`, deux mots separes par un blanc ne font pas deux
+    # clauses : le terme cherche est `fantastique nouvelle`, et aucun tag ne
+    # porte cette valeur. C'est la meme regle que ci-dessus, du cote ou elle
+    # se voit.
+    assert q("fantastique nouvelle", fields=["tags"],
+             default_operator="AND") == []
+    assert q("fantastique", fields=["tags"]) == ["1"]
+    assert q("fantastique OR social", fields=["tags"]) == ["1", "3"]
+    # `minimum_should_match` se pose sur la requete que le parseur rend : ici
+    # le booleen des trois termes analyses du champ `text`.
+    assert q("greve mineurs presse", default_field="resume") == ["2", "3"]
+    assert q("greve mineurs presse", default_field="resume",
+             minimum_should_match="2") == ["3"]
+    assert q("greve mineurs presse", default_field="resume",
+             minimum_should_match="3") == []
+
+    # `lenient` : son defaut se **deduit** des champs. Sans `default_field`, la
+    # clause ne vise que `*` et ES le force a `true` — sinon taper un mot
+    # ferait echouer la recherche des qu'un champ numerique est dans
+    # l'expansion. Des qu'un champ est nomme, il repasse a `false`.
+    assert q("annee:pas_une_annee") == []
+    refused(lambda: es.search(index=QS, query={"query_string": {
+        "query": "annee:pas_une_annee", "default_field": "titre"}}),
+        contains="For input string")
+    assert q("annee:pas_une_annee", default_field="titre", lenient=True) == []
+
+    # Une syntaxe invalide est refusee avec la phrase d'ES, jamais interpretee
+    # au mieux : un operateur avale rendrait des documents plausibles et faux.
+    for expr in ["titre:", "AND Germinal", "Germinal AND", "(Germinal",
+                 "Germinal)", 'titre:"Germinal', "Germinal^x", "titre:^2"]:
+        refused(lambda e=expr: es.search(index=QS, query={
+            "query_string": {"query": e, "default_field": "titre"}}),
+            contains=f"Failed to parse query [{expr}]")
+
+    # Une distance d'edition hors de [0, 2] : la phrase d'ES, mot pour mot.
+    refused(lambda: es.search(index=QS, query={"query_string": {
+        "query": "titre:Germinal~5", "default_field": "titre"}}),
+        contains="Valid edit distances are [0, 1, 2] but was [5]")
+
+    # Ce qui n'est pas reproduit est refuse **en le nommant**.
+    for params in ({"quote_field_suffix": ".raw"}, {"analyzer": "keyword"},
+                   {"phrase_slop": 2}, {"type": "cross_fields"},
+                   {"rewrite": "constant_score"}):
+        refused(lambda p=params: es.search(index=QS, query={
+            "query_string": dict(query="Germinal", default_field="titre",
+                                 **p)}))
+    refused(lambda: es.search(index=QS, query={"query_string": {
+        "query": "titre:nawak"}, "nawak": 1}), status=400)
+
+
+@scenario
+def query_string_surligne_et_se_nomme(es):
+    """Une expression rend des fragments, et peut se nommer.
+
+    Les deux passent par la meme porte : la clause est **traduite** en Query
+    DSL, donc le surlignage, `explain` et `matched_queries` la lisent comme
+    n'importe quelle autre. Sans cette traduction, une barre de recherche qui
+    envoie `query_string` ne rendait aucun fragment la ou ES en rend — trouve
+    par le fuzzer, pas par les questions ecrites a la main.
+    """
+    prepare_qs(es)
+    r = es.search(index=QS, query={
+        "query_string": {"query": "resume:greve", "_name": "libre"}},
+        highlight={"fields": {"resume": {}}})
+    hit = r["hits"]["hits"][0]
+    assert hit["_id"] == "3"
+    assert "<em>greve</em>" in hit["highlight"]["resume"][0]
+    assert hit["matched_queries"] == ["libre"]
+
+
+@scenario
+def simple_query_string_ne_leve_jamais(es):
+    """`simple_query_string` : le meme langage, sans les operateurs risques.
+
+    Sa definition est qu'une expression mal formee y est interpretee au mieux
+    et **jamais** refusee. Ses bords sont mesures un par un contre ES 8.15.
+    """
+    prepare_qs(es)
+
+    def q(expr, **kw):
+        kw.setdefault("fields", ["auteur"])
+        return sorted(ids(es.search(index=QS, size=10, query={
+            "simple_query_string": dict(query=expr, **kw)})))
+
+    assert q("Maupassant") == ["1", "2"]
+    assert q("Maupassant | Zola") == ["1", "2", "3"]
+    assert q("Maupassant + Zola") == []
+    assert q("-Zola") == ["1", "2"]
+    assert q("Zol*") == ["3"]
+    assert q("Zloa~2") == ["3"]
+    assert q('"Zola"') == ["3"]
+    # Il n'a pas de champs : `auteur:Zola` y est du texte.
+    assert q("auteur:Zola") == []
+    # Une negation se **compte** : deux `-` s'annulent.
+    assert q("--Zola") == ["3"]
+    # Son arbre est binaire, construit de gauche a droite : `a b + c` vaut
+    # `(a OU b) ET c`, pas trois clauses a plat.
+    assert q("Maupassant Zola + Zola") == ["3"]
+    # Et le `~` court jusqu'au bout du mot : ce qui n'est pas un nombre vaut
+    # une distance nulle, donc un terme exact.
+    assert q("Zloa~x") == []
+    # Aucune de ces expressions ne leve, quelle que soit sa forme.
+    for expr in ["(", ")", "()", "+", "-", "|", "~", "\\", "", "   ",
+                 "Zola)", "(Zola", '"Zola', "Zola + + ", "+ Zola", "~2"]:
+        es.search(index=QS, query={
+            "simple_query_string": {"query": expr, "fields": ["auteur"]}})
+    # Les `flags` amputent la grammaire, drapeau par drapeau : sans `PREFIX`,
+    # une etoile finale est un caractere ordinaire.
+    assert q("Zol*", flags="OR|AND") == []
+    assert q("Zol*", flags="PREFIX") == ["3"]
+    # `NONE` desactive tout, y compris la coupure sur les blancs : le terme
+    # cherche est la chaine entiere.
+    assert q("Maupassant + Zola", flags="NONE") == []
+    assert q("Maupassant", flags="NONE") == ["1", "2"]
+    # Un drapeau inconnu est refuse avec la phrase d'ES.
+    refused(lambda: es.search(index=QS, query={"simple_query_string": {
+        "query": "Zola", "fields": ["auteur"], "flags": "NAWAK"}}),
+        contains="Unknown simple_query_string flag [NAWAK]")
+
+
 # ---------------------------------------------------------------------------
 
 def main():
@@ -4946,7 +5149,7 @@ def main():
             print(f"[ echec] {name}")
             print("".join("        " + l for l in
                           traceback.format_exc().splitlines(keepends=True)))
-    for index in (INDEX, SCROLL_INDEX, PQ, PQ2, IF, EX):
+    for index in (INDEX, SCROLL_INDEX, PQ, PQ2, IF, EX, QS):
         es.options(ignore_status=404).indices.delete(index=index)
 
     print()
