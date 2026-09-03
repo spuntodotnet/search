@@ -645,6 +645,20 @@ fn extraire(v: &Value, gen: &Generation) -> EsResult<Noeud> {
         return Ok(Noeud::Opaque);
     };
     Ok(match nom {
+        // Le mini-langage n'a pas de forme propre ici : il se **traduit** en
+        // Query DSL, et c'est cette traduction qu'on parcourt. Sans ca, une
+        // barre de recherche qui envoie `query_string` ne rendrait aucun
+        // fragment la ou ES en rend (trouve par le fuzzer, graine 11700020).
+        "query_string" | "simple_query_string" => {
+            let searcher = gen.searcher();
+            let ctx = crate::dsl::QueryCtx::new(&gen.fields, &gen.index, &searcher);
+            let dsl = if nom == "query_string" {
+                crate::querystring::query_string_en_dsl(corps, &ctx)?
+            } else {
+                crate::querystring::simple_query_string_en_dsl(corps, &ctx)?
+            };
+            extraire(&dsl, gen)?
+        }
         "match_none" => Noeud::Jamais,
         "match_all" => Noeud::Toujours,
         "ids" => match corps.as_object().and_then(|o| o.get("values")) {

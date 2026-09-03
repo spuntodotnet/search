@@ -491,7 +491,7 @@ pub fn apostrophe(t: &str) -> Option<String> {
 ///
 /// Sans lui, `ISTANBUL` rend `istanbul` la ou le turc veut `ıstanbul` — donc un
 /// document qu'une recherche en turc ne retrouve pas.
-fn minuscule_turque(t: &str) -> Option<String> {
+pub fn minuscule_turque(t: &str) -> Option<String> {
     let cs: Vec<char> = t.chars().collect();
     let mut out = String::with_capacity(t.len());
     let mut apres_i = false;

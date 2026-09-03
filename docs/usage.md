@@ -104,11 +104,11 @@ régression.
 
 | Sous-corpus | Requêtes | Servies entièrement |
 |---|---|---|
-| **`github` — du code d'application open source** | 338 | **96,4 %** |
+| **`github` — du code d'application open source** | 338 | **96,7 %** |
 | `clients` — tests et exemples des clients officiels | 143 | 81,8 % |
-| `doc` — la documentation de référence | 3 969 | 40,6 % |
-| `rally` — les tracks de benchmark d'Elastic | 861 | 47,2 % |
-| **tout le corpus** | 5 311 | 46,3 % |
+| `doc` — la documentation de référence | 3 969 | 41,2 % |
+| `rally` — les tracks de benchmark d'Elastic | 861 | 50,6 % |
+| **tout le corpus** | 5 311 | 47,4 % |
 
 Ces quatre nombres ne se contredisent pas, ils mesurent quatre choses
 différentes, et l'écart entre eux **est** le résultat :
@@ -123,13 +123,14 @@ différentes, et l'écart entre eux **est** le résultat :
 - les tracks Rally sont des **bancs d'essai analytiques** : `date_histogram`
   avec `calendar_interval`, `runtime_mappings`, `fields`, `percentiles`. Et le
   track `elastic/logs` rejoue les requêtes de **Kibana**, qui pose
-  systématiquement des `runtime_mappings` et des `fields`. 47,2 % — c'était
+  systématiquement des `runtime_mappings` et des `fields`. 50,6 % — c'était
   17,4 % avant que `fields`, `docvalue_fields` et `stored_fields` ne soient
   livrés, 28,6 % avant les trois paramètres de `sort`, 30,5 % avant que
   `terms` ne sache filtrer ses termes et classer ses seaux sur une
   sous-agrégation, et **32,8 % avant que `date_histogram` ne sache dire « par
   mois »** : ce dernier saut de 13,8 points est le plus gros qu'une seule carte
-  ait fait bouger sur ce sous-corpus, et il dit ce qu'un banc analytique
+  ait fait bouger sur ce sous-corpus, et **47,2 % avant que `query_string`
+  ne sache lire son mini-langage** ; il dit ce qu'un banc analytique
   demande vraiment — c'est le prix d'entrée pour servir un Kibana, pas celui
   d'une application.
 
@@ -148,7 +149,7 @@ source » compte autant que le total :
 | Capacité refusée | Tout le corpus | doc | rally | applications |
 |---|---|---|---|---|
 | `hors.xpack` — sécurité, ML, ILM, watcher, transform, EQL/SQL… | 18,9 % | 25,2 % | 0,2 % | — |
-| `dsl.non_supportees` — `query_string`, `function_score`… | 6,5 % | 4,4 % | 18,9 % | 0,6 % |
+| `dsl.non_supportees` — `intervals`, `terms_set`, `script`… | 4,4 % | 3,2 % | 12,0 % | — |
 | `agg.non_supportees` — `percentiles`, `top_hits`, `filters`… | 6,1 % | 3,0 % | 23,2 % | 0,6 % |
 | `recherche.non_supportes` — `search_after`, `pit`, `collapse`… | 3,1 % | 2,0 % | 7,0 % | 1,2 % |
 | `type.autres` — `geo_point`, `ip`, `binary`… | 3,0 % | 3,2 % | 3,6 % | — |
@@ -399,6 +400,15 @@ comptés sur `tests/compat/usage/verdicts.jsonl` (`manques[].trait`).
   d'un autre refus. Les faire ne fera passer aucune requête de plus tant que le
   reste n'est pas fait. C'est un argument pour les **grouper**, pas pour les
   abandonner.
+
+  Et c'est ce que la suite a mesuré, ce qui est la meilleure chose qui pouvait
+  arriver à cette ligne : `query_string` livrée, le corpus passe de **46,3 % à
+  47,4 %** (+58 requêtes) et les tracks Rally de **47,2 % à 50,6 %**. Le
+  « zéro » n'était pas faux — il était **daté**. Les compagnons qui tombaient
+  avec elle (`fields`, les paramètres de `sort`, `date_histogram`, `highlight`,
+  `function_score`, `min_score`) ont été livrés entre-temps, et c'est
+  exactement ce que « grouper » voulait dire. Un classement d'impact ne vaut
+  que pour l'état du périmètre au jour où il est calculé, et il se recalcule.
 - **La carte 13 (`date_histogram`) bloque 259 requêtes et n'en débloque que 11.**
   Le tableau de bord qui l'envoie envoie aussi `runtime_mappings` et `fields`
   (carte 18). Les deux ensemble sont un lot ; l'une sans l'autre ne sert pas un

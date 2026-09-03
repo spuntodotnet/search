@@ -472,7 +472,7 @@ pas le champ interrogé, et **zéro** sur un champ que tous les documents porten
 ([`sonde_explain.py --ecart`](tests/compat/sonde_explain.py)).
 
 **Ce qui n'y est pas encore** : `search_after`, `_msearch`,
-`_reindex`, `query_string`, les templates de composants
+`_reindex`, `intervals`, les templates de composants
 (`_component_template`), les champs calculés par un script Painless
 (`script_fields`, `runtime_mappings` — leur objet **vide** est accepté, il ne
 demande rien) et les analyzers des autres langues.
@@ -488,9 +488,9 @@ rang qu'un `significant_terms` avec script. Sur un corpus de **5 311 requêtes
 réelles** — la documentation de référence d'ES 8.15, les tracks Rally d'Elastic,
 les tests des clients officiels et le code de 184 dépôts open source — la
 question posée est « celle-ci passerait-elle **entièrement** ? », parce qu'une
-requête supportée à 90 % est une requête qui échoue. Réponse : **96,4 % des
-requêtes trouvées dans du code d'application**, 40,6 % des exemples de la
-documentation, 47,2 % des tracks de benchmark. L'écart entre ces trois nombres
+requête supportée à 90 % est une requête qui échoue. Réponse : **96,7 % des
+requêtes trouvées dans du code d'application**, 41,2 % des exemples de la
+documentation, 50,6 % des tracks de benchmark. L'écart entre ces trois nombres
 est le résultat ; la méthode, les sources et les biais sont dans
 [`docs/usage.md`](docs/usage.md), le corpus est publié avec.
 

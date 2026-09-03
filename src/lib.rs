@@ -61,6 +61,7 @@ pub mod msm;
 pub mod nested;
 pub mod ngram;
 pub mod parrequete;
+pub mod querystring;
 pub mod regexp;
 pub mod reglages;
 pub mod scroll;

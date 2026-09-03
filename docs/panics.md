@@ -26,7 +26,7 @@ Trois choses en sont sorties, et deux n'etaient pas dans la carte :
 
 ## Le relevé
 
-87 sites, tous les fichiers de `src/` et `src/api/` compris, hors `#[cfg(test)]`.
+92 sites, tous les fichiers de `src/` et `src/api/` compris, hors `#[cfg(test)]`.
 La commande qui les liste :
 
 ```bash
@@ -50,7 +50,7 @@ d'empoisonnement possible — le processus est deja mort. Sous `panic = "unwind"
 panique, qui serait le vrai defaut. Ils ne peuvent donc jamais etre la cause
 d'un incident, seulement sa consequence.
 
-### 2. Les invariants verifies deux lignes plus haut — 14 sites
+### 2. Les invariants verifies deux lignes plus haut — 19 sites
 
 | Site | Ce qui le garde |
 |---|---|
@@ -66,6 +66,7 @@ d'un incident, seulement sa consequence.
 | `dsl.rs:2857` | `s.contains_key("_name")` est la garde du bras |
 | `highlight.rs:291-292` | le `match` au-dessus a rejete toutes les combinaisons ou l'un des deux est absent |
 | `highlight.rs:1944` | `groupes.push(...)` a eu lieu si `ouvrir`, et `groupes` n'est jamais vide sinon |
+| `querystring.rs` (5 sites) | l'analyseur d'expression. Quatre `expect("une clause")` sont des branches `len() == 1` d'un `match` ou d'un `if` teste juste au-dessus, ou un `pop()` sur un vecteur qu'on vient de mesurer ; le cinquieme (`borne_courte(texte).expect(…)`) est la garde du bras. L'indexation par `c[i]` du lexer est bornee par la boucle `while i < c.len()`, et tous les regards en avant passent par `c.get(…)`. C'est le module que la carte 06 ajoute, et c'est exactement le genre de code ou une entree tordue trouve un `unwrap` : le fuzzer y tire donc une expression **tordue** une fois sur quatre (operateur pendant, guillemet non ferme, `^` sans nombre, borne inachevee), et le predicat `survivant` est pose apres chaque cas |
 
 ### 3. Les listes non vides par construction — 6 sites
 

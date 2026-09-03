@@ -36,11 +36,11 @@
     }
   },
   "totaux": {
-    "capacites": 208,
+    "capacites": 210,
     "supporte": 101,
-    "partiel": 63,
+    "partiel": 65,
     "refuse": 44,
-    "poids_renseignes": 149
+    "poids_renseignes": 151
   },
   "capacites": [
     {
@@ -1496,11 +1496,11 @@
           "query",
           "operator",
           "boost",
-          "lenient"
+          "lenient",
+          "minimum_should_match"
         ],
         "refuses": [
           "fuzziness",
-          "minimum_should_match",
           "analyzer",
           "zero_terms_query",
           "prefix_length",
@@ -1851,14 +1851,89 @@
       "detail": "`_name` se pose **la ou `boost` se pose** — au niveau du champ pour les clauses qui en citent un (`{\"term\": {\"k\": {\"value\": …, \"_name\": …}}}`), au niveau du corps pour les autres (`bool`, `nested`, `dis_max`, `terms`…) : une valeur ecrite en raccourci ne peut donc pas etre nommee, et ES ne le permet pas non plus. Chaque clause nommee est **rejouee seule** contre chaque document rendu, comme le fait ES : un `should` place sous un `must_not` ne se nomme pas dans un document qui, lui, correspond. L'ordre de `matched_queries` n'est ni celui de la requete ni l'alphabetique — c'est l'ordre d'iteration d'une `HashMap` de Java, reproductible et reproduit (voir [`src/explain.rs`](../src/explain.rs)) ; deux noms qui tombent dans le **meme seau** sont la seule chose que ferrite ne classe pas comme ES. Un nom pose deux fois ne compte qu'une, le dernier gagnant, comme chez ES. `include_named_queries_score` (ES 8.13) rend le meme bloc en objet `{nom: score}`"
     },
     {
+      "id": "dsl.query_string",
+      "table": "dsl",
+      "nom": "`query_string`",
+      "nom_texte": "query_string",
+      "etat": "partiel",
+      "poids": 1.5,
+      "detail": "le mini-langage du `QueryParser` classique de Lucene, porté règle par règle : ses **états lexicaux** (`^` n'accepte qu'un nombre, et pas même un blanc derrière), son plus-long-match (`AND` est un opérateur, `ANDx` un terme, `and` un terme), et son `addClause` — celui qui décide que `a AND b OR c` n'est ni `(a AND b) OR c` ni `a AND (b OR c)` mais une liste plate où `AND` rend obligatoire la clause **précédente**. Une expression que la grammaire refuse rend `query_shard_exception` avec la phrase d'ES (`Failed to parse query [...]`) ; le détail JavaCC qu'ES range sous `caused_by` n'est pas reproduit. Trois règles mesurées qu' aucune documentation ne donne : une clause dont l'analyzer ne tire **aucun** terme n'est pas « ne correspond à rien », elle **disparaît** de la requête (donc `chat AND …` vaut `chat`, et elle ne compte pas dans le dénominateur d'un `minimum_should_match`) ; `lenient` vaut `true` **par défaut** quand la clause ne vise que `*`, et `false` sinon ; et un motif à jokers est *normalisé* et non analysé — ES n'y applique que les filtres « multi-term aware » (`lowercase`, `asciifolding`, `elision`, `german_normalization`), sauf sous `analyze_wildcard`. Mesuré par [`diff_query_string.py`](../tests/compat/diff_query_string.py)",
+      "parametres": {
+        "supportes": [
+          "query",
+          "default_field",
+          "fields",
+          "default_operator",
+          "analyze_wildcard",
+          "allow_leading_wildcard",
+          "lenient",
+          "minimum_should_match",
+          "boost",
+          "tie_breaker",
+          "type",
+          "fuzziness",
+          "fuzzy_transpositions",
+          "time_zone",
+          "escape",
+          "auto_generate_synonyms_phrase_query",
+          "_name",
+          "la grammaire"
+        ],
+        "refuses": [
+          "la proximité d'une phrase (\"a b\"~n) et phrase_slop",
+          "analyzer",
+          "quote_analyzer",
+          "quote_field_suffix",
+          "fuzzy_prefix_length",
+          "fuzzy_max_expansions",
+          "rewrite",
+          "fuzzy_rewrite",
+          "max_determinized_states",
+          "enable_position_increments",
+          "type: cross_fields, bool_prefix, phrase, phrase_prefix",
+          "une borne posée sur un champ text"
+        ]
+      }
+    },
+    {
+      "id": "dsl.simple_query_string",
+      "table": "dsl",
+      "nom": "`simple_query_string`",
+      "nom_texte": "simple_query_string",
+      "etat": "partiel",
+      "poids": 0.2,
+      "detail": "la variante qui **ne lève jamais** : son langage n'a ni champs, ni bornes, ni regexp, et un caractère mal placé y est du texte. `+` est le ET, `|` le OU, `-` la négation, `\"…\"` une phrase, un `*` final un préfixe, un `~n` final un flou, et les parenthèses groupent. Quatre règles mesurées : une négation se **compte** (`--chat` en annule une), un opérateur posé avant la première clause ne relie rien (`+chat -chien` rend l'**union**, pas l'intersection), le `~…` court jusqu'au bout du mot et ce qui le suit est lu comme un entier — `~` nu vaut la distance **2** (et non `AUTO`), un nombre est ramené dans `[0, 2]`, et ce qui n'est pas un nombre vaut **0**, donc un terme exact (`chot~x` ne rend aucun document là où `chot~` en rend cinq) —, et les champs s'y combinent en **somme** (un `dis_max` de `tie_breaker` 1.0) là où ceux de `query_string` se combinent au meilleur",
+      "parametres": {
+        "supportes": [
+          "query",
+          "fields",
+          "default_operator",
+          "lenient",
+          "minimum_should_match",
+          "boost",
+          "flags",
+          "auto_generate_synonyms_phrase_query",
+          "_name"
+        ],
+        "refuses": [
+          "la proximité d'une phrase (\"a b\"~n)",
+          "analyzer",
+          "quote_field_suffix",
+          "analyze_wildcard",
+          "fuzzy_prefix_length",
+          "fuzzy_max_expansions"
+        ]
+      }
+    },
+    {
       "id": "dsl.non_supportees",
       "table": "dsl",
-      "nom": "`query_string`, `simple_query_string`, `intervals`, `terms_set`, `script`…",
-      "nom_texte": "query_string, simple_query_string, intervals, terms_set, script…",
+      "nom": "`intervals`, `terms_set`, `script`, `span_*`…",
+      "nom_texte": "intervals, terms_set, script, span_*…",
       "etat": "refuse",
-      "poids": 6.1,
+      "poids": 4.4,
       "motif": "pas_encore",
-      "raison": "`parsing_exception: unknown query [...]`, avec la liste des clauses connues — la plus regrettée est `query_string`, dont la syntaxe est un langage à part entière."
+      "raison": "`parsing_exception: unknown query [...]`, avec la liste des clauses connues."
     },
     {
       "id": "libre.lenient",
