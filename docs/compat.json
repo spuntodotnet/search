@@ -36,11 +36,11 @@
     }
   },
   "totaux": {
-    "capacites": 213,
-    "supporte": 101,
+    "capacites": 215,
+    "supporte": 103,
     "partiel": 68,
     "refuse": 44,
-    "poids_renseignes": 154
+    "poids_renseignes": 156
   },
   "capacites": [
     {
@@ -206,7 +206,7 @@
       "nom": "Les autres routes de recherche — `_search_shards`, `_termvectors`, `_mtermvectors`, `_suggest`, `_source`",
       "nom_texte": "Les autres routes de recherche — _search_shards, _termvectors, _mtermvectors, _suggest, _source",
       "etat": "refuse",
-      "poids": 0.6,
+      "poids": 0.5,
       "motif": "pas_encore",
       "raison": "aucune n'est demandée par le code client qu'on cherche à servir."
     },
@@ -2047,6 +2047,8 @@
         "supportes": [
           "missing",
           "mode",
+          "_doc",
+          "_shard_doc",
           "unmapped_type"
         ],
         "refuses": [
@@ -2272,14 +2274,59 @@
       }
     },
     {
+      "id": "recherche.search_after",
+      "table": "corps_search",
+      "nom": "`search_after`",
+      "nom_texte": "search_after",
+      "etat": "supporte",
+      "poids": 0.1,
+      "detail": "la pagination profonde que la 8.x recommande à la place du `scroll` : le tableau `sort` du dernier hit rendu sert de point de reprise. Elle ne tient qu'à une chose, et ce n'est pas celle que la documentation met en avant : **il faut un tri total**. `search_after` reprend *strictement après* la clé donnée, donc tout document dont la clé est ex æquo avec elle est **sauté** — et ES ne s'en plaint pas (mesuré : `sort: [{\"n\": \"asc\"}]`, `search_after: [1]` sur un corpus où trois documents portent `n = 1` rend directement les `n = 2`). C'est pourquoi ES ajoute lui-même `_shard_doc` sous un point-in-time, et pourquoi ferrite l'ajoute aussi. Le point de reprise est converti **au type du champ**, index par index — une date s'y écrit `\"2026-01-05\"` comme un nombre de millisecondes, là où `missing` n'accepte que le nombre. Mesuré par [`sonde_pagination.py`](../tests/compat/sonde_pagination.py)",
+      "parametres": {
+        "supportes": [
+          "la reprise sur toutes les clés de tri : keyword, numérique, date, boolean, _score, _doc, _shard_doc",
+          "null comme valeur de reprise",
+          "la coercition d'ES : \"3\" sur un long, un flottant tronqué vers zéro (2,7 et 2,2 reprennent tous deux après 2), un nombre sur un keyword (qui devient sa forme texte)"
+        ],
+        "refuses": [
+          "from non nul à côté de search_after",
+          "search_after dans un contexte de scroll",
+          "un tri sans aucun champ",
+          "une arité qui ne correspond pas au tri",
+          "un tableau vide, un non-tableau, un élément qui n'est pas un scalaire"
+        ]
+      }
+    },
+    {
+      "id": "recherche.pit",
+      "table": "corps_search",
+      "nom": "`POST /{index}/_pit`, `DELETE /_pit`, et le bloc `pit` du corps",
+      "nom_texte": "POST /{index}/_pit, DELETE /_pit, et le bloc pit du corps",
+      "etat": "supporte",
+      "poids": 0.2,
+      "detail": "le **point-in-time** : une vue figée qu'on interroge autant de fois qu'on veut. Ce n'est pas un `scroll` sous un autre nom — un `scroll` fige un **résultat** (une requête, un classement, un curseur côté serveur), un PIT fige un **lecteur** : il ne connaît aucune requête, et chaque recherche qu'on lui pose est une recherche complète sur l'instantané. C'est ce qui permet de changer de requête, de tri ou de taille de page entre deux appels, et c'est pourquoi le curseur, lui, vit chez le client (`search_after`). ferrite retient par index visé son nom, sa génération et **le `Searcher` tantivy du moment** — mesuré : ouvrir un PIT, écrire un document, puis compter *sous* le PIT rend l'ancien total quand la même recherche hors PIT rend le nouveau. Une recherche sous PIT ne prend **pas** d'index dans l'URL (il vient du PIT), rend `pit_id` en tête de la réponse, et voit son `sort` complété d'un `_shard_doc` implicite dès qu'un tri est demandé. Voir [`src/pit.rs`](../src/pit.rs)",
+      "parametres": {
+        "supportes": [
+          "keep_alive",
+          "l'expression d'index habituelle à l'ouverture : nom, liste, motif, alias, _all, et expand_wildcards / ignore_unavailable",
+          "DELETE /_pit avec {\"id\": \"...\"}"
+        ],
+        "refuses": [
+          "un index dans l'URL d'une recherche sous PIT",
+          "pit et ?scroll= ensemble",
+          "index_filter dans le corps de _pit",
+          "_shard_doc en clé de tri hors d'un point-in-time"
+        ]
+      }
+    },
+    {
       "id": "recherche.non_supportes",
       "table": "corps_search",
-      "nom": "`search_after`, `pit`, `collapse`, `knn`, `seq_no_primary_term`, `post_filter`, `suggest`, `rescore`, `track_scores`, `q`, `terminate_after`, `version`, `indices_boost`, `profile`, `slice`, `stats`, `ext`, `retriever`",
-      "nom_texte": "search_after, pit, collapse, knn, seq_no_primary_term, post_filter, suggest, rescore, track_scores, q, terminate_after, version, indices_boost, profile, slice, stats, ext, retriever",
+      "nom": "`collapse`, `knn`, `seq_no_primary_term`, `post_filter`, `suggest`, `rescore`, `track_scores`, `q`, `terminate_after`, `version`, `indices_boost`, `profile`, `slice`, `stats`, `ext`, `retriever`",
+      "nom_texte": "collapse, knn, seq_no_primary_term, post_filter, suggest, rescore, track_scores, q, terminate_after, version, indices_boost, profile, slice, stats, ext, retriever",
       "etat": "refuse",
-      "poids": 3.0,
+      "poids": 2.9,
       "motif": "pas_encore",
-      "raison": "aucun n'est un obstacle de moteur ; `search_after` est celui qui manque le plus, pour paginer au-delà de 10 000."
+      "raison": "aucun n'est un obstacle de moteur. `search_after` et `pit`, qui manquaient le plus, sont servis depuis la carte 08."
     },
     {
       "id": "recherche.timeout",

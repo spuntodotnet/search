@@ -60,8 +60,8 @@
  },
  "totaux": {
   "requetes": 5311,
-  "servies": 2545,
-  "refusees": 2749,
+  "servies": 2546,
+  "refusees": 2748,
   "indeterminees": 17,
   "taux_servies": 47.9
  },
@@ -73,11 +73,11 @@
    "taux_servies": 81.8
   },
   "doc": {
-   "servie": 1646,
+   "servie": 1651,
    "total": 3969,
-   "refusee": 2308,
+   "refusee": 2303,
    "indeterminee": 15,
-   "taux_servies": 41.5
+   "taux_servies": 41.6
   },
   "github": {
    "refusee": 10,
@@ -86,11 +86,11 @@
    "taux_servies": 97.0
   },
   "rally": {
-   "refusee": 405,
+   "refusee": 409,
    "total": 861,
-   "servie": 454,
+   "servie": 450,
    "indeterminee": 2,
-   "taux_servies": 52.7
+   "taux_servies": 52.3
   }
  },
  "concentration": [
@@ -172,9 +172,9 @@
  ],
  "par_api": {
   "search": {
-   "servie": 1025,
+   "servie": 1022,
    "total": 1801,
-   "refusee": 775,
+   "refusee": 778,
    "indeterminee": 1
   },
   "indices.create": {
@@ -1266,11 +1266,11 @@
    "total": 2
   },
   "open_point_in_time": {
-   "refusee": 2,
+   "servie": 2,
    "total": 2
   },
   "close_point_in_time": {
-   "refusee": 2,
+   "servie": 2,
    "total": 2
   },
   "scroll": {
@@ -8166,7 +8166,7 @@
   "expr.liste": 0.6,
   "expr.nom": null,
   "hors.api_typee": null,
-  "hors.autres_recherches": 0.6,
+  "hors.autres_recherches": 0.5,
   "hors.cat": 1.1,
   "hors.cluster_distribue": 1.8,
   "hors.cycle_de_vie": 2.6,
@@ -8241,7 +8241,8 @@
   "recherche.highlight": 1.9,
   "recherche.min_score": 0.0,
   "recherche.msearch": 0.0,
-  "recherche.non_supportes": 3.0,
+  "recherche.non_supportes": 2.9,
+  "recherche.pit": 0.2,
   "recherche.preference": null,
   "recherche.query": 25.3,
   "recherche.reglages_de_shards": null,
@@ -8251,6 +8252,7 @@
   "recherche.scoring": null,
   "recherche.script_fields": 0.5,
   "recherche.scroll": null,
+  "recherche.search_after": 0.1,
   "recherche.sort": 3.2,
   "recherche.source": 3.7,
   "recherche.stored_fields": 6.6,
@@ -10697,94 +10699,6 @@
    ]
   },
   {
-   "capacite": "recherche.non_supportes",
-   "nom": "search_after, pit, collapse, knn, seq_no_primary_term, post_filter, suggest, rescore, track_scores, q, terminate_after, version, indices_boost, profile, slice, stats, ext, retriever",
-   "etat": "refuse",
-   "motif": "pas_encore",
-   "requetes": 161,
-   "part": 3.0,
-   "par_source": {
-    "clients": {
-     "requetes": 18,
-     "part": 12.6
-    },
-    "doc": {
-     "requetes": 79,
-     "part": 2.0
-    },
-    "github": {
-     "requetes": 4,
-     "part": 1.2
-    },
-    "rally": {
-     "requetes": 60,
-     "part": 7.0
-    }
-   },
-   "traits": [
-    {
-     "trait": "corps:version",
-     "requetes": 56
-    },
-    {
-     "trait": "corps:suggest",
-     "requetes": 28
-    },
-    {
-     "trait": "corps:knn",
-     "requetes": 26
-    },
-    {
-     "trait": "corps:rescore",
-     "requetes": 9
-    },
-    {
-     "trait": "corps:retriever",
-     "requetes": 9
-    },
-    {
-     "trait": "corps:collapse",
-     "requetes": 8
-    },
-    {
-     "trait": "corps:pit",
-     "requetes": 6
-    },
-    {
-     "trait": "corps:search_after",
-     "requetes": 6
-    },
-    {
-     "trait": "corps:profile",
-     "requetes": 5
-    },
-    {
-     "trait": "corps:slice",
-     "requetes": 5
-    },
-    {
-     "trait": "corps:terminate_after",
-     "requetes": 4
-    },
-    {
-     "trait": "corps:indices_boost",
-     "requetes": 2
-    },
-    {
-     "trait": "corps:post_filter",
-     "requetes": 2
-    },
-    {
-     "trait": "corps:seq_no_primary_term",
-     "requetes": 2
-    },
-    {
-     "trait": "corps:track_scores",
-     "requetes": 1
-    }
-   ]
-  },
-  {
    "capacite": "type.autres",
    "nom": "Tout autre type (geo_point, ip, binary…)",
    "etat": "refuse",
@@ -11008,6 +10922,86 @@
     },
     {
      "trait": "route:update_by_query_rethrottle",
+     "requetes": 1
+    }
+   ]
+  },
+  {
+   "capacite": "recherche.non_supportes",
+   "nom": "collapse, knn, seq_no_primary_term, post_filter, suggest, rescore, track_scores, q, terminate_after, version, indices_boost, profile, slice, stats, ext, retriever",
+   "etat": "refuse",
+   "motif": "pas_encore",
+   "requetes": 153,
+   "part": 2.9,
+   "par_source": {
+    "clients": {
+     "requetes": 18,
+     "part": 12.6
+    },
+    "doc": {
+     "requetes": 74,
+     "part": 1.9
+    },
+    "github": {
+     "requetes": 4,
+     "part": 1.2
+    },
+    "rally": {
+     "requetes": 57,
+     "part": 6.6
+    }
+   },
+   "traits": [
+    {
+     "trait": "corps:version",
+     "requetes": 56
+    },
+    {
+     "trait": "corps:suggest",
+     "requetes": 28
+    },
+    {
+     "trait": "corps:knn",
+     "requetes": 26
+    },
+    {
+     "trait": "corps:rescore",
+     "requetes": 9
+    },
+    {
+     "trait": "corps:retriever",
+     "requetes": 9
+    },
+    {
+     "trait": "corps:collapse",
+     "requetes": 8
+    },
+    {
+     "trait": "corps:profile",
+     "requetes": 5
+    },
+    {
+     "trait": "corps:slice",
+     "requetes": 5
+    },
+    {
+     "trait": "corps:terminate_after",
+     "requetes": 4
+    },
+    {
+     "trait": "corps:indices_boost",
+     "requetes": 2
+    },
+    {
+     "trait": "corps:post_filter",
+     "requetes": 2
+    },
+    {
+     "trait": "corps:seq_no_primary_term",
+     "requetes": 2
+    },
+    {
+     "trait": "corps:track_scores",
      "requetes": 1
     }
    ]
@@ -11725,12 +11719,12 @@
    "nom": "Les autres routes de recherche — _search_shards, _termvectors, _mtermvectors, _suggest, _source",
    "etat": "refuse",
    "motif": "pas_encore",
-   "requetes": 30,
-   "part": 0.6,
+   "requetes": 26,
+   "part": 0.5,
    "par_source": {
     "doc": {
-     "requetes": 30,
-     "part": 0.8
+     "requetes": 26,
+     "part": 0.7
     }
    },
    "traits": [
@@ -11747,15 +11741,7 @@
      "requetes": 4
     },
     {
-     "trait": "route:close_point_in_time",
-     "requetes": 2
-    },
-    {
      "trait": "route:get_source",
-     "requetes": 2
-    },
-    {
-     "trait": "route:open_point_in_time",
      "requetes": 2
     },
     {
@@ -11893,6 +11879,30 @@
     {
      "trait": "tri:nested",
      "requetes": 2
+    }
+   ]
+  },
+  {
+   "capacite": "agg.top_hits",
+   "nom": "top_hits",
+   "etat": "partiel",
+   "motif": null,
+   "requetes": 15,
+   "part": 0.3,
+   "par_source": {
+    "doc": {
+     "requetes": 3,
+     "part": 0.1
+    },
+    "rally": {
+     "requetes": 12,
+     "part": 1.4
+    }
+   },
+   "traits": [
+    {
+     "trait": "agg:top_hits.sort",
+     "requetes": 15
     }
    ]
   },

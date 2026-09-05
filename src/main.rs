@@ -11,7 +11,8 @@ use ferrite::engine::Catalog;
 /// visibles au plus tard apres ce delai.
 const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
-/// A quelle frequence les contextes de `scroll` expires sont oublies.
+/// A quelle frequence les contextes de `scroll` et de `pit` expires sont
+/// oublies.
 const PURGE_SCROLL_INTERVAL: Duration = Duration::from_secs(30);
 
 #[tokio::main]
@@ -23,10 +24,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let catalog = Catalog::open(data_dir.clone(), cluster_name, node_name)?;
     let scrolls = Arc::new(ferrite::scroll::Registre::default());
+    let pits = Arc::new(ferrite::pit::Registre::default());
     let state = Arc::new(AppState {
         catalog: catalog.clone(),
         started: Instant::now(),
         scrolls: scrolls.clone(),
+        pits: pits.clone(),
     });
 
     {
@@ -42,15 +45,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     {
-        // Un contexte de `scroll` retient un instantane de l'index : un client
-        // qui disparait sans appeler `DELETE /_search/scroll` ne doit pas
-        // pouvoir en garder un ouvert pour toujours.
+        // Un contexte de `scroll` ou de `pit` retient un instantane de
+        // l'index : un client qui disparait sans appeler
+        // `DELETE /_search/scroll` ou `DELETE /_pit` ne doit pas pouvoir en
+        // garder un ouvert pour toujours.
         let scrolls = scrolls.clone();
+        let pits = pits.clone();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(PURGE_SCROLL_INTERVAL);
             loop {
                 ticker.tick().await;
                 scrolls.purger();
+                pits.purger();
             }
         });
     }

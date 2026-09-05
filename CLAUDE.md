@@ -322,6 +322,7 @@ développement, pas de CI).
 | `tests/compat/diff_multi_index.py` | `index=["a","b"]`, `logs-*`, les alias : **les mêmes index visés, fusionnés pareil** ? (87/87, 0 écart, plus aucune divergence assumée ; `--calibrer` : 87/87 contre deux ES) |
 | `tests/compat/sonde_facettes.py` | ce qui sépare un `terms` d'une **facette** : `include` / `exclude` (expression régulière de Lucene, liste exacte, partition) et l'**ordre par sous-agrégation**. Compare le **bloc `terms` entier** — seaux dans leur ordre, valeurs des sous-agrégations, `sum_other_doc_count` et `doc_count_error_upper_bound` : **145/170 identiques, 25 refus assumés, 0 écart** (`--calibrer` : 170/170 contre deux ES). Le même fichier lancé contre le ferrite d'avant rend **30/170** |
 | `tests/compat/sonde_msm.py` | les mêmes documents sur un **`minimum_should_match`** — entier, pourcentage, formes négatives, conditions `3<90%`, et sous un `nested` ? (53/53) |
+| `tests/compat/sonde_pagination.py` | **paginer au-delà de 10 000** : `search_after`, le point-in-time, et le tri total qu'ils exigent. Elle compare trois choses, et seule la troisième rend les deux premières utiles — les documents rendus dans leur ordre (tableau `sort` compris), le **parcours complet** d'un index page par page (mêmes documents, même ordre, **même découpe**), et la **totalité** de `_doc` / `_shard_doc`, qui ne se compare pas à ES (les deux moteurs n'ont pas les mêmes numéros internes) mais se vérifie de chaque côté. **101/111 identiques, 6 refus assumés, 0 écart** (`--calibrer` : 106/106 contre deux ES). Le même fichier contre le ferrite d'avant rend **0/111** |
 | `tests/compat/sonde_tri.py` | les mêmes documents **dans le même ordre** sur un `missing`, un `mode` ou un `unmapped_type` — et la même chose dans le tableau `sort` de chaque hit ? (224 questions, **220 identiques, 4 refus assumés, 0 écart** ; `--calibrer` : 224/224 contre deux ES). Le même fichier lancé contre le ferrite d'avant rend **17/224** |
 | `tests/compat/releve_mots_vides.py` | quelle est **vraiment** la liste de mots vides d'un analyzer d'ES ? Le relevé par candidats — exact *pour les candidats proposés*, et c'est sa limite : il avait manqué `celà` en français. Les listes livrées viennent maintenant de `sonde_langues.py --mots-vides` |
 | `tests/compat/sonde_fields.py` | **ce que la réponse transporte** — `fields`, `docvalue_fields`, `stored_fields`. Compare le **hit entier** (bloc `fields` clé par clé, présence de `_source`, présence de `_id`) : 103/110 identiques, 3 refus assumés écrits, 4 différences d'ordre assumées, 0 écart. Refuse de tourner si elle ne trouve pas les deux serveurs |
@@ -595,6 +596,30 @@ bouger**, pas après.
   chaque document sort une fois et une seule, la Nième page ne coûte pas N
   recherches, et ce qui est écrit pendant l'export ne s'y invite pas. Le prix est
   la mémoire du contexte, d'où le `keep_alive` et la purge.
+- **Un point-in-time fige un lecteur, pas un résultat** —
+  ([`src/pit.rs`](src/pit.rs)). C'est ce qui le sépare du `scroll`, et ce n'est
+  pas une nuance : un contexte de `scroll` connaît *une* requête, *un*
+  classement, et avance son curseur tout seul ; un PIT ne connaît **aucune**
+  requête, et chaque recherche qu'on lui pose est une recherche complète sur
+  l'instantané. C'est pour ça qu'on peut changer de requête, de tri et de taille
+  de page entre deux appels, et pour ça que le curseur vit chez le client
+  (`search_after`). Concrètement, un PIT ne retient par index visé que trois
+  choses — le nom, la génération, et le `Searcher` tantivy du moment — et tout
+  le chemin de recherche est le même ensuite. La seule ligne qui change est
+  celle qui décide de l'instantané. Mesuré : ouvrir, écrire, puis compter *sous*
+  le PIT rend l'ancien total quand la même recherche hors PIT rend le nouveau.
+- **Le numéro de document que ferrite publie est son `_seq_no`.** `_doc` et
+  `_shard_doc` ne sont pas des décorations : ce sont les seules clés de tri
+  **totales** qu'un client puisse écrire, donc les seules sur lesquelles un
+  `search_after` ne saute rien. L'adresse tantivy ne pouvait tenir ni l'une ni
+  l'autre de leurs deux propriétés — elle n'est pas unique (locale au segment)
+  et son ordre n'est pas l'ordre d'écriture. Le `_seq_no`, attribué sous le
+  verrou d'écriture et déjà en colonne, tient les deux : sur un index qui n'a
+  pas été réécrit il vaut le `docID` de Lucene, valeur pour valeur. Il sert donc
+  aussi de **départage** du tri, à la place de `(segment, position)` — sans quoi
+  `[{"n": "asc"}]` et `[{"n": "asc"}, "_shard_doc"]` ordonneraient les ex æquo
+  autrement, ce qui est précisément la contradiction qu'un PIT rendrait visible
+  puisqu'il ajoute la seconde clé lui-même.
 - **Une borne de date est une expression, et elle s'arrondit par son côté.**
   `{"lt": "now"}` se résout côté serveur ; `{"lte": "2026-03-15"}` couvre la
   journée entière alors que `{"lt": "2026-03-15"}` s'arrête à minuit. Les deux
@@ -1117,6 +1142,19 @@ bouger**, pas après.
   fuzzer (2727085), pas par le raisonnement qui avait écrit la première
   version — lequel avait pris pour une garantie ce qui n'était qu'une
   ressemblance entre deux moteurs.
+
+  **Et corriger un appelant ne corrige pas la cause** : `max_docs` réparé, la
+  même adresse tantivy servait encore de départage à *tout* tri — donc l'ordre
+  des documents ex æquo de ferrite n'était celui d'aucun Elasticsearch, en 200
+  et depuis toujours. Invisible parce qu'aucune sonde ne posait un corpus avec
+  des ex æquo **sur plusieurs segments** : `sonde_tri.py` charge son corpus en
+  un seul lot, et dans un segment unique l'ordre paraît plausible. C'est
+  `search_after` qui l'a sorti, parce qu'il est le seul mécanisme dont le
+  résultat *dépend* de ce départage : reprendre « après le dernier hit »
+  n'a de sens que si l'ordre est celui que l'autre serveur donne. Le `_seq_no`
+  est donc devenu le numéro de document que ferrite publie (`_doc`,
+  `_shard_doc`) **et** son départage de tri — une seule clé, à un seul endroit,
+  au lieu d'une correction par appelant.
 - **`Math.min` de Java n'est pas `f64::min` de Rust, et la différence est un
   `NaN`.** Java propage `NaN`, Rust rend l'autre opérande. Un score de fonction
   `NaN` — un `sqrt` sur une valeur négative, un `log1p` sous -1, ce que produit
@@ -1576,6 +1614,33 @@ plus un seul refus que ferrite prononce là où ES sait répondre. Le chemin est
 dans [`docs/application.md`](docs/application.md), et il vaut plus que le
 chiffre : le blocage est tombé d'un cran à chaque carte, et **à chaque fois le
 suivant était un refus de trop** plutôt qu'un manque.
+
+**Paginer au-delà de 10 000** ne demande plus le `scroll` : `search_after` et
+le **point-in-time** sont servis, c'est-à-dire ce que la documentation d'Elastic
+recommande partout depuis que le `scroll` est déconseillé. Ce que la carte a
+coûté n'est pas d'écrire les deux routes — c'est que trois choses qu'elle
+supposait sont fausses, et que la mesure les a retournées avant qu'une ligne
+soit écrite. ES **ne se plaint pas** d'un `search_after` sur un tri non total :
+il saute les ex æquo, en 200, ce qui est exactement l'échec silencieux que ce
+dépôt refuse en premier — et c'est pour ça qu'il ajoute lui-même `_shard_doc`
+sous un PIT. Trier sur `_id` est **interdit** en 8.x (`Fielddata access on the
+_id field is disallowed`), donc le départage « unique » que la carte proposait
+n'existe pas. Et un PIT n'est pas un `scroll` sous un autre nom : le premier
+fige un **lecteur** (aucune requête, curseur chez le client), le second fige un
+**résultat** (une requête, un classement, curseur chez le serveur) — d'où
+`src/pit.rs` à côté de `src/scroll.rs` plutôt qu'un paramètre de plus.
+
+Le vrai travail était ailleurs, et il était dans le chemin critique : **le
+numéro de document que ferrite publiait n'était pas un numéro de document.**
+C'était l'adresse locale d'un segment tantivy, donc deux documents portaient
+`[0]`, et un `search_after` bâti dessus boucle ou saute. Le décaler aurait rendu
+la clé unique sans la rendre juste — l'ordre des documents de tantivy n'est pas
+l'ordre d'écriture. La clé était celle qui avait déjà sauvé
+`_delete_by_query ?max_docs=1` : le `_seq_no`, attribué sous le verrou
+d'écriture. En la posant à un seul endroit — le numéro publié **et** le
+départage de tri — l'ordre des documents ex æquo de ferrite devient celui d'ES,
+ce qu'il n'avait jamais été. Personne ne l'avait vu parce qu'aucune sonde ne
+posait d'ex æquo **sur plusieurs segments**.
 
 **Les trois métriques qui restaient** sont servies — `percentiles`,
 `extended_stats`, `top_hits` — et la première a demandé de trancher une question
