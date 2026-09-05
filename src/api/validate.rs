@@ -185,7 +185,10 @@ fn rendu(query: &dyn tantivy::query::Query, schema: &tantivy::schema::Schema) ->
     let brut = format!("{query:?}");
     // `AllQuery` est le seul cas ou les deux moteurs disent la meme chose, et
     // c'est le plus frequent (`_validate/query` sans corps, ou `match_all`).
-    if brut == "AllQuery" {
+    // ferrite l'enveloppe d'un score constant pour que tantivy ne laisse pas
+    // tomber son score dans un booleen (voir [`crate::dsl::tous_les_documents`])
+    // — l'enveloppe ne se rend pas ici, elle n'a rien a dire au client.
+    if brut == "AllQuery" || brut == "Const(score=1, query=AllQuery)" {
         return "*:*".to_string();
     }
     nommer_les_champs(&brut, schema)

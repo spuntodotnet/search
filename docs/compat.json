@@ -36,11 +36,11 @@
     }
   },
   "totaux": {
-    "capacites": 210,
+    "capacites": 213,
     "supporte": 101,
-    "partiel": 65,
+    "partiel": 68,
     "refuse": 44,
-    "poids_renseignes": 151
+    "poids_renseignes": 154
   },
   "capacites": [
     {
@@ -2615,6 +2615,75 @@
       "raison": "l'estimation de tantivy diffère de celle d'ES (mesuré : 582 valeurs distinctes annoncées là où ES en compte 598), y compris sous le seuil où ES est exact — un compte approché sous le nom d'ES serait faux sans le dire."
     },
     {
+      "id": "agg.extended_stats",
+      "table": "aggs",
+      "nom": "`extended_stats`",
+      "nom_texte": "extended_stats",
+      "etat": "partiel",
+      "poids": 0.1,
+      "detail": "les dix-huit valeurs d'ES, dont l'objet `std_deviation_bounds` a six bornes. La variance et l'écart-type sont **recalculés par ferrite** avec les expressions d'`InternalExtendedStats` (`(Σx² − (Σx)²/n) / n`) à partir des trois sommes que tantivy accumule comme ES, compensation de Kahan comprise : celui de tantivy passe par l'algorithme de Welford, et deux formules justes ne rendent pas le même `double`. Trois bords viennent de la mesure et d'aucune documentation — à **zéro** document ES rend `sum: 0.0` et tout le reste à `null` (l'objet des bornes compris, à six `null`) ; à **un** document la variance d'échantillon divise par zéro et ES rend la **chaîne** `\"NaN\"`, qu'il propage dans `std_deviation_sampling` et dans les deux bornes d'échantillon ; une variance négative est ramenée à `0`, et `NaN < 0` étant faux un `NaN` traverse ce garde-fou intact",
+      "parametres": {
+        "supportes": [
+          "field",
+          "missing",
+          "sigma",
+          "en sous-agrégation, et comme clé d'ordre d'un terms"
+        ],
+        "refuses": [
+          "un champ date"
+        ]
+      }
+    },
+    {
+      "id": "agg.percentiles",
+      "table": "aggs",
+      "nom": "`percentiles`",
+      "nom_texte": "percentiles",
+      "etat": "partiel",
+      "poids": 0.6,
+      "detail": "**exact**, et c'est une décision qui s'est prise sur une mesure. Elasticsearch annonce une approximation (un t-digest) — mais il n'est approché qu'**au-delà de 2 000 valeurs** dans le seau. En dessous, son `TDigestState` garde les valeurs telles quelles et son quantile est une interpolation linéaire sur le tableau trié (`v[lo] + w × (v[lo+1] − v[lo])`, `idx = p/100 × (n−1)`), que ferrite reproduit au bit près ([`metriques.rs`](../src/metriques.rs)). La bascule se mesure à la valeur près : **1 999 valeurs, les deux serveurs rendent le même `double` ; 2 000, ES ne rend plus le percentile exact et ferrite si.** L'écart au-delà du seuil n'est pas négligeable et il ne croît pas avec la taille — il dépend du corpus : mesuré à **1,14 % à 2 000 valeurs, 4,95 % à 2 048, 6,59 % à 5 000 et 0,97 % à 20 000** (écart relatif maximal sur `[1, 5, 25, 50, 75, 95, 99]`, `sonde_metriques.py --frontiere`, corpus tiré par un générateur figé). C'est donc le nombre d'ES qui change, pas celui de ferrite : un tableau de bord branché sur un vrai Elasticsearch lira d'autres chiffres dès qu'un seau dépasse 2 000 valeurs, et la divergence assumée n° 24 publie le tableau des deux côtés de la bascule. Le prix est celui d'une liste : ferrite retient les valeurs du seau pour les trier, là où ES bascule sur une esquisse de taille bornée",
+      "parametres": {
+        "supportes": [
+          "field",
+          "percents",
+          "keyed",
+          "missing",
+          "en sous-agrégation d'un terms, d'un range, d'un histogram, d'un date_histogram ou d'un filter"
+        ],
+        "refuses": [
+          "tdigest non vide et hdr",
+          "comme clé d'ordre d'un terms (order: {p.50: \"desc\"})"
+        ]
+      }
+    },
+    {
+      "id": "agg.top_hits",
+      "table": "aggs",
+      "nom": "`top_hits`",
+      "nom_texte": "top_hits",
+      "etat": "partiel",
+      "poids": 0.6,
+      "detail": "les N meilleurs documents de chaque seau : le bloc `hits` complet (`total`, `max_score`, `_index`, `_id`, `_score`, `_source`, le tableau `sort`), rendu par **le même chemin** que celui de la recherche — mêmes clés de tri, même plan de lecture, même `build_hit`. Il est exécuté par ferrite, seau par seau : la requête d'un seau est celle de la recherche **croisée avec la contrainte qui définit le seau** (un terme pour un `terms`, un intervalle pour un `range`, un `histogram` ou un `date_histogram`), et cette contrainte **filtre sans noter** — chez ES, l'agrégateur reçoit des documents que la requête a déjà notés, et l'appartenance au seau n'entre pas dans leur score (mesuré : `2.263` au lieu de `1.0` quand elle y entrait). Le prix est une recherche par seau et par index, payé seulement si un `top_hits` est demandé",
+      "parametres": {
+        "supportes": [
+          "size",
+          "from",
+          "sort",
+          "_source",
+          "fields, docvalue_fields, stored_fields",
+          "script_fields"
+        ],
+        "refuses": [
+          "highlight",
+          "explain",
+          "version, seq_no_primary_term",
+          "track_scores",
+          "comme clé d'ordre d'un terms",
+          "l'ordre des hits qu'un score laisse ex æquo, sans sort"
+        ]
+      }
+    },
+    {
       "id": "agg.filter",
       "table": "aggs",
       "nom": "`filter`",
@@ -2631,12 +2700,12 @@
     {
       "id": "agg.non_supportees",
       "table": "aggs",
-      "nom": "`percentiles`, `extended_stats`, `top_hits`, `composite`, `filters`, `nested`, `significant_terms`, `date_range`, `ip_range`…",
-      "nom_texte": "percentiles, extended_stats, top_hits, composite, filters, nested, significant_terms, date_range, ip_range…",
+      "nom": "`composite`, `filters`, `nested`, `significant_terms`, `date_range`, `ip_range`, `percentile_ranks`, `median_absolute_deviation`…",
+      "nom_texte": "composite, filters, nested, significant_terms, date_range, ip_range, percentile_ranks, median_absolute_deviation…",
       "etat": "refuse",
-      "poids": 6.1,
+      "poids": 5.0,
       "motif": "pas_encore",
-      "raison": "`filters` (la sœur plurielle de `filter`) et `top_hits` sont les deux qui manquent le plus ; aucune n'est un obstacle de moteur."
+      "raison": "`filters` (la sœur plurielle de `filter`) et `composite` sont les deux qui manquent le plus ; aucune n'est un obstacle de moteur."
     },
     {
       "id": "nested.clause",

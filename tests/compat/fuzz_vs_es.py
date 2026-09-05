@@ -122,9 +122,21 @@ NEUTRALISATIONS = {
     "took": "une duree ne coincide pas entre deux serveurs",
     "_scroll_id": "un identifiant opaque, propre a chaque serveur",
     "_score": "BM25 par tantivy d'un cote, par Lucene de l'autre — c'est l'ordre "
-              "qui est compare, pas la valeur",
+              "qui est compare, pas la valeur. Vaut pour les hits de la reponse "
+              "**et** pour ceux d'un `top_hits`, qui sont les memes documents "
+              "notes par le meme BM25",
+    "ordre d'un `top_hits` sans `sort`": "un `top_hits` sans cle de tri classe "
+              "par score, et l'ordre des documents que le score laisse ex aequo "
+              "est l'ordre **interne** du moteur — celui de Lucene d'un cote, "
+              "celui de tantivy de l'autre. C'est la divergence que "
+              "`diff_relevance.py` rapporte deja a la racine (« ordre permute "
+              "uniquement entre ex aequo d'ES »), vue depuis un seau. Les hits "
+              "d'un tel bloc sont donc compares tries par `_id` : l'ensemble "
+              "des documents, leur contenu, le total et la presence de "
+              "`max_score` restent compares, et l'ordre reste compare des qu'un "
+              "`sort` est demande (le hit porte alors son tableau `sort`)",
     "max_score": "meme raison que _score ; seule sa presence (null ou non) est "
-                 "comparee",
+                 "comparee, la aussi dans un `top_hits`",
     "_shards.failures[].reason": "le texte d'un echec de shard est propre au moteur",
     "_seq_no / _primary_term / _version": "des compteurs de replication, hors "
                                           "perimetre mono-noeud",
@@ -352,6 +364,16 @@ BRIQUES = {
     "agg.date_histogram": "agg.date_histogram",
     "agg.filter": "agg.filter",
     "agg.sous": "agg.sous_agregations",
+    # Les trois metriques que ferrite ne delegue pas a tantivy. Chacune a sa
+    # brique parce qu'aucune ne se trompe de la meme facon : `extended_stats`
+    # est une **formule** (celle d'ES, moins juste que celle de tantivy, et
+    # c'est la sienne qu'il faut rendre), `percentiles` est une structure de
+    # donnees dont ES change au-dela de 2 000 valeurs, et `top_hits` est une
+    # recherche entiere rejouee sur la requete d'un seau — donc le seul endroit
+    # ou une contrainte de seau pourrait entrer dans un score.
+    "agg.extended_stats": "agg.extended_stats",
+    "agg.percentiles": "agg.percentiles",
+    "agg.top_hits": "agg.top_hits",
     # routes exercees a chaque cas
     "route.creer": "index.creation",
     "route.bulk": "ingestion.bulk",
@@ -1968,12 +1990,12 @@ class Generateur:
         if cles:
             possibles += ["terms"] * 3
         if numeriques or dates:
-            possibles += ["range"]
+            possibles += ["range", "extended_stats", "percentiles"]
         if numeriques:
             possibles += ["histogram"]
         if dates:
             possibles += ["date_histogram"]
-        possibles += ["filter"]
+        possibles += ["filter", "top_hits"]
         if not possibles:
             return None
         quoi = rng.choice(possibles)
@@ -2073,6 +2095,43 @@ class Generateur:
             if prof > 0:
                 return None
             return {"filter": self.feuille(champs, docs, 1)}
+        if quoi == "extended_stats" and self.brique("agg.extended_stats"):
+            # Le champ **date** est tire aussi : il est refuse, et un refus
+            # qu'on n'exerce pas n'est qu'une phrase.
+            c = rng.choice(numeriques + dates)
+            q = {"field": c.chemin}
+            if rng.random() < 0.35:
+                q["sigma"] = rng.choice([0, 1, 1.5, 3])
+            if rng.random() < 0.2 and c.ty in NUMERIQUES:
+                q["missing"] = 0
+            return {"extended_stats": q}
+        if quoi == "percentiles" and self.brique("agg.percentiles"):
+            c = rng.choice(numeriques + dates)
+            q = {"field": c.chemin}
+            if rng.random() < 0.5:
+                # Les bords `0` et `100` sont tires expres : ce sont les deux
+                # gardes de l'interpolation, et les seuls ou lire `v[lo+1]`
+                # sortirait du tableau.
+                q["percents"] = sorted(set(rng.choice(
+                    [[0], [100], [0, 50, 100], [1, 99], [33.3], [50], [25, 75]])))
+            if rng.random() < 0.3:
+                q["keyed"] = rng.choice([True, False])
+            if rng.random() < 0.2 and c.ty in NUMERIQUES:
+                q["missing"] = 0
+            return {"percentiles": q}
+        if quoi == "top_hits" and self.brique("agg.top_hits"):
+            q = {"size": rng.choice([1, 2, 3, 5])}
+            if rng.random() < 0.3:
+                q["from"] = rng.choice([0, 1, 2])
+            triables = [c for c in champs
+                        if c.ty in ("keyword", "boolean", "date") + tuple(NUMERIQUES)]
+            if triables and rng.random() < 0.6:
+                c = rng.choice(triables)
+                q["sort"] = [{c.chemin: rng.choice(["asc", "desc"])}]
+            if rng.random() < 0.4:
+                q["_source"] = rng.choice(
+                    [True, False] + ([[rng.choice(champs).chemin]] if champs else []))
+            return {"top_hits": q}
         return None
 
     def _peut_etre_sous(self, q, nom, champs, docs, prof):
@@ -2199,6 +2258,13 @@ def arbre_egal(a, b, chemin, ecarts, tol=1e-9):
         if a is None or b is None:
             if a is not b:
                 ecart(ecarts, chemin, a, b)
+        # Un nombre d'un cote et **autre chose** de l'autre est un ecart de
+        # forme, pas de valeur : le convertir en flottant faisait tomber le
+        # comparateur (`float() argument must be ... not 'list'`) sur un
+        # `sort: [3]` rendu en face d'un scalaire. Un instrument qui meurt sur
+        # un ecart ne le rapporte pas.
+        elif not isinstance(a, (int, float)) or not isinstance(b, (int, float)):
+            ecart(ecarts, chemin, a, b)
         elif abs(float(a) - float(b)) > tol * max(1.0, abs(float(b))):
             ecart(ecarts, chemin, a, b)
     elif a != b:
@@ -2908,6 +2974,13 @@ def _refus_declare(e, _requete=None, ecarts=()):
         # compat.yaml — et pas un vide, qui etait justement le defaut de la
         # carte 41.
         "le champ de metadonnees",
+        # `extended_stats` sur un champ **date** : la somme des carres
+        # s'accumule en nanosecondes chez tantivy, et ne se ramene pas en
+        # millisecondes carrees sans perdre ses bits de poids faible. Sur un
+        # seul document, ES rend `std_deviation: 0.0` et ferrite rendrait
+        # `23170.475` — un ecart-type invente. Refus declare
+        # (`agg.extended_stats`), et le seul de cette agregation.
+        "[extended_stats] sur le champ [date]",
     ))
 
 
@@ -3113,10 +3186,50 @@ def compare_recherche(st_a, ra, st_b, rb, tri_score=()):
               f"aggregations : {'presente' if 'aggregations' in ra else 'absente'} "
               f"a gauche, l'inverse a droite")
     else:
-        arbre_egal(ra.get("aggregations"), rb.get("aggregations"),
+        arbre_egal(sans_scores_de_top_hits(ra.get("aggregations")),
+                   sans_scores_de_top_hits(rb.get("aggregations")),
                    "aggregations", ecarts)
     arbre_egal(ra.get("timed_out"), rb.get("timed_out"), "timed_out", ecarts)
     return ("ecart" if ecarts else "ok"), ecarts
+
+
+def sans_scores_de_top_hits(aggs):
+    """Le meme bloc d'agregations, sans les scores que porte un `top_hits`.
+
+    Un `top_hits` rend des **hits**, donc des `_score` et un `max_score` — et
+    ce sont les memes documents, notes par le meme BM25 que ceux de la reponse.
+    La neutralisation qui vaut a la racine vaut donc ici, sans quoi le fuzzer
+    rapporterait comme un ecart ce que `NEUTRALISATIONS` declare deja.
+
+    Ce qui n'est **pas** neutralise est le reste du bloc : l'ordre des hits,
+    leur `_id`, leur `_source`, leur tableau `sort`, le `total` et la
+    **presence** de `max_score` (`null` ou non) — c'est-a-dire tout ce qu'un
+    `top_hits` faux changerait.
+    """
+    if isinstance(aggs, list):
+        return [sans_scores_de_top_hits(x) for x in aggs]
+    if not isinstance(aggs, dict):
+        return aggs
+    out = {}
+    for cle, v in aggs.items():
+        if (cle == "hits" and isinstance(v, dict) and isinstance(v.get("hits"), list)
+                and "total" in v):
+            bloc = dict(v)
+            hits = [nettoie_hit(h) for h in v["hits"]]
+            # Sans `sort`, le classement est celui du score, et les ex aequo
+            # sortent dans l'ordre interne du moteur : les hits sont alors
+            # compares tries par `_id`. Un hit rendu sous un `sort` porte son
+            # tableau `sort` — c'est ce qui distingue les deux cas dans la
+            # reponse elle-meme, sans relire la demande.
+            if hits and not any("sort" in h for h in hits):
+                hits.sort(key=lambda h: str(h.get("_id")))
+            bloc["hits"] = hits
+            if "max_score" in bloc:
+                bloc["max_score"] = bloc["max_score"] is not None
+            out[cle] = bloc
+        else:
+            out[cle] = sans_scores_de_top_hits(v)
+    return out
 
 
 def nettoie_hit(h, tri_score=()):

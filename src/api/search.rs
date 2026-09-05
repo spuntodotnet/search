@@ -319,7 +319,7 @@ pub async fn search(
             .avec_incidents(incidents.clone());
         let query = match requete.as_ref() {
             Some(v) => build_query(v, &ctx),
-            None => Ok(Box::new(tantivy::query::AllQuery) as Box<dyn tantivy::query::Query>),
+            None => Ok(crate::dsl::tous_les_documents()),
         };
         let query = match query {
             Ok(q) => q,
@@ -349,13 +349,13 @@ pub async fn search(
         };
         // Meme raisonnement pour les agregations : un index qui ne mappe pas le
         // champ agrege n'a aucune valeur a y verser.
-        let (agrege, filtres) = match &aggs {
-            None => (false, crate::aggs::Filtres::default()),
-            Some(a) => match crate::aggs::validate(a, Some(&gen.fields), &ctx) {
-                Ok(filtres) => (true, filtres),
+        let (agrege, prep) = match &aggs {
+            None => (false, crate::aggs::Prepare::default()),
+            Some(a) => match crate::aggs::validate(a, Some(&gen), &ctx, &demande.fields) {
+                Ok(prep) => (true, prep),
                 Err(e) if e.champ_inconnu.is_some() => {
                     agg_ignore.get_or_insert(e);
-                    (false, crate::aggs::Filtres::default())
+                    (false, crate::aggs::Prepare::default())
                 }
                 Err(e) => return Err(e),
             },
@@ -405,7 +405,7 @@ pub async fn search(
             query,
             sort,
             agrege,
-            filtres,
+            prep,
             incidents,
             nommees: std::sync::Arc::new(nommees),
         });
@@ -613,7 +613,7 @@ fn valider_sans_index(
         sans_verdict_de_mapping(build_query(v, &ctx))?;
     }
     if let Some(a) = aggs {
-        sans_verdict_de_mapping(crate::aggs::validate(a, None, &ctx))?;
+        sans_verdict_de_mapping(crate::aggs::validate(a, None, &ctx, &[]))?;
     }
     Ok(())
 }
@@ -897,7 +897,7 @@ pub async fn count(
                 .selon_le_mapping(&gen.mapping);
             match requete.as_ref() {
                 Some(v) => build_query(v, &ctx),
-                None => Ok(Box::new(tantivy::query::AllQuery) as Box<dyn tantivy::query::Query>),
+                None => Ok(crate::dsl::tous_les_documents()),
             }
         };
         match query {
@@ -1101,7 +1101,7 @@ fn source_filter_opt(p: &mut Params) -> EsResult<Option<SourceFilter>> {
     }
 }
 
-fn parse_source_body(v: &Value) -> EsResult<SourceFilter> {
+pub(crate) fn parse_source_body(v: &Value) -> EsResult<SourceFilter> {
     match v {
         Value::Bool(true) => Ok(SourceFilter::All),
         Value::Bool(false) => Ok(SourceFilter::None),
@@ -1176,7 +1176,10 @@ fn tri_par_defaut(specs: Vec<SortSpec>) -> Vec<SortSpec> {
     }
 }
 
-fn parse_sort_body(v: &Value, champs: &crate::mapping::Fields) -> EsResult<Vec<SortSpec>> {
+pub(crate) fn parse_sort_body(
+    v: &Value,
+    champs: &crate::mapping::Fields,
+) -> EsResult<Vec<SortSpec>> {
     let entries: Vec<&Value> = match v {
         Value::Array(a) => a.iter().collect(),
         other => vec![other],

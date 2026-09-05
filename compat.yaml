@@ -2930,6 +2930,131 @@ tables:
           où ES est exact — un compte approché sous le nom d'ES serait faux sans
           le dire.
 
+      - id: agg.extended_stats
+        nom: "`extended_stats`"
+        etat: partiel
+        poids: 0.1
+        detail: >-
+          les dix-huit valeurs d'ES, dont l'objet `std_deviation_bounds` a six
+          bornes. La variance et l'écart-type sont **recalculés par ferrite**
+          avec les expressions d'`InternalExtendedStats`
+          (`(Σx² − (Σx)²/n) / n`) à partir des trois sommes que tantivy
+          accumule comme ES, compensation de Kahan comprise : celui de tantivy
+          passe par l'algorithme de Welford, et deux formules justes ne rendent
+          pas le même `double`. Trois bords viennent de la mesure et d'aucune
+          documentation — à **zéro** document ES rend `sum: 0.0` et tout le
+          reste à `null` (l'objet des bornes compris, à six `null`) ; à **un**
+          document la variance d'échantillon divise par zéro et ES rend la
+          **chaîne** `"NaN"`, qu'il propage dans `std_deviation_sampling` et
+          dans les deux bornes d'échantillon ; une variance négative est ramenée
+          à `0`, et `NaN < 0` étant faux un `NaN` traverse ce garde-fou intact
+        parametres:
+          supportes:
+            - {nom: "field"}
+            - {nom: "missing"}
+            - {nom: "sigma", note: "défaut `2`. Un sigma **négatif** est refusé à la lecture du corps, avec le type d'erreur d'ES (`x_content_parse_exception`) et non celui d'une agrégation qui aurait commencé"}
+            - {texte: "en sous-agrégation, et comme clé d'**ordre** d'un `terms`", note: "`order: {s.variance: \"desc\"}` ; les douze propriétés de son énumération `InternalStats.Metrics` sont acceptées, les six alias de bornes (`std_upper`…) non — ils désignent des valeurs qu'ES range *dans* `std_deviation_bounds`"}
+          refuses:
+            - texte: "un champ **`date`**"
+              note: >-
+                la somme des carrés s'accumule sur la valeur en
+                **nanosecondes** et ne se ramène pas en millisecondes carrées
+                sans perdre ses bits de poids faible : sur **un seul**
+                document, ES rend `std_deviation: 0.0` et ferrite rendait
+                `23170.475` (mesuré). Un écart-type inventé sur un document
+                unique est exactement le nombre plausible et faux que ce dépôt
+                refuse de rendre. `stats` sur une date reste servi — il ne
+                calcule aucun carré
+
+      - id: agg.percentiles
+        nom: "`percentiles`"
+        etat: partiel
+        poids: 0.6
+        detail: >-
+          **exact**, et c'est une décision qui s'est prise sur une mesure.
+          Elasticsearch annonce une approximation (un t-digest) — mais il n'est
+          approché qu'**au-delà de 2 000 valeurs** dans le seau. En dessous, son
+          `TDigestState` garde les valeurs telles quelles et son quantile est
+          une interpolation linéaire sur le tableau trié
+          (`v[lo] + w × (v[lo+1] − v[lo])`, `idx = p/100 × (n−1)`), que ferrite
+          reproduit au bit près ([`metriques.rs`](../src/metriques.rs)). La
+          bascule se mesure à la valeur près : **1 999 valeurs, les deux
+          serveurs rendent le même `double` ; 2 000, ES ne rend plus le
+          percentile exact et ferrite si.** L'écart au-delà du seuil n'est pas
+          négligeable et il ne croît pas avec la taille — il dépend du corpus :
+          mesuré à **1,14 % à 2 000 valeurs, 4,95 % à 2 048, 6,59 % à 5 000 et
+          0,97 % à 20 000** (écart relatif maximal sur `[1, 5, 25, 50, 75, 95,
+          99]`, `sonde_metriques.py --frontiere`, corpus tiré par un générateur
+          figé). C'est donc le nombre d'ES qui change, pas celui de ferrite :
+          un tableau de bord branché sur un vrai Elasticsearch lira d'autres
+          chiffres dès qu'un seau dépasse 2 000 valeurs, et la divergence
+          assumée n° 24 publie le tableau des deux côtés de la bascule. Le prix
+          est celui d'une liste : ferrite retient les valeurs du seau pour les
+          trier, là où ES bascule sur une esquisse de taille bornée
+        parametres:
+          supportes:
+            - {nom: "field", note: "numérique ou `date` ; sur une date, chaque percentile porte sa forme lisible à côté (`\"50.0_as_string\"`), comme chez ES"}
+            - {nom: "percents", note: "ES les rend **triés croissants** quel que soit l'ordre demandé, et refuse la liste vide, un doublon et une valeur hors de `[0, 100]` — les trois avec la même phrase, celle de son constructeur"}
+            - {nom: "keyed", note: "défaut `true`"}
+            - {nom: "missing"}
+            - {texte: "en sous-agrégation d'un `terms`, d'un `range`, d'un `histogram`, d'un `date_histogram` ou d'un `filter`"}
+          refuses:
+            - texte: "`tdigest` non vide et `hdr`"
+              note: >-
+                ces deux paramètres règlent l'**approximation** d'ES, et ferrite
+                ne s'approxime pas. Les ignorer rendrait un nombre que le client
+                n'a pas demandé. `tdigest: {}` est accepté : un objet vide ne
+                demande rien
+            - texte: "comme clé d'**ordre** d'un `terms` (`order: {p.50: \"desc\"}`)"
+              note: >-
+                ES la calcule pendant la collecte ; ferrite la calcule
+                **après**, seau par seau, sur la requête du seau — au moment où
+                l'ordre se décide, la valeur n'existe pas encore
+
+      - id: agg.top_hits
+        nom: "`top_hits`"
+        etat: partiel
+        poids: 0.6
+        detail: >-
+          les N meilleurs documents de chaque seau : le bloc `hits` complet
+          (`total`, `max_score`, `_index`, `_id`, `_score`, `_source`, le
+          tableau `sort`), rendu par **le même chemin** que celui de la
+          recherche — mêmes clés de tri, même plan de lecture, même `build_hit`.
+          Il est exécuté par ferrite, seau par seau : la requête d'un seau est
+          celle de la recherche **croisée avec la contrainte qui définit le
+          seau** (un terme pour un `terms`, un intervalle pour un `range`, un
+          `histogram` ou un `date_histogram`), et cette contrainte **filtre sans
+          noter** — chez ES, l'agrégateur reçoit des documents que la requête a
+          déjà notés, et l'appartenance au seau n'entre pas dans leur score
+          (mesuré : `2.263` au lieu de `1.0` quand elle y entrait). Le prix est
+          une recherche par seau et par index, payé seulement si un `top_hits`
+          est demandé
+        parametres:
+          supportes:
+            - {nom: "size", note: "défaut `3`. `size: 0` est refusé, avec la phrase de Lucene qu'ES remonte"}
+            - {nom: "from"}
+            - {nom: "sort", note: "les mêmes clés que celles de `_search`, `missing` / `mode` / `unmapped_type` compris"}
+            - {nom: "_source", note: "`true` / `false`, une liste, ou `{includes, excludes}`"}
+            - {texte: "`fields`, `docvalue_fields`, `stored_fields`"}
+            - {nom: "script_fields", note: "l'objet **vide** seulement, qui ne définit rien"}
+          refuses:
+            - {nom: "highlight", note: "le surlignage se résout sur la requête de la recherche et sur le mapping de l'index, pas sur la requête d'un seau"}
+            - {nom: "explain", note: "l'arbre du score est construit pour la requête de la recherche ; celle d'un seau porte la contrainte du seau, et son arbre ne serait pas celui d'ES"}
+            - {texte: "`version`, `seq_no_primary_term`", note: "le hit d'un `top_hits` ne les porte pas"}
+            - {nom: "track_scores", note: "il faudrait noter les documents sous un tri par champ, là où le collecteur ne demande aucun score"}
+            - {texte: "comme clé d'**ordre** d'un `terms`", note: "ES refuse aussi (`invalid_path`), mais pas avec la même phrase"}
+            - texte: "l'ordre des hits qu'un score laisse **ex æquo**, sans `sort`"
+              note: >-
+                un `top_hits` sans clé de tri classe par score, et l'ordre des
+                documents que le score ne sépare pas est l'ordre **interne** du
+                moteur — celui de Lucene d'un côté, celui de tantivy de
+                l'autre. C'est la divergence que
+                [`diff_relevance.py`](../tests/compat/diff_relevance.py)
+                rapporte déjà à la racine (« ordre permuté uniquement entre ex
+                æquo d'ES »), vue depuis un seau ; elle décide de **quels**
+                documents un `from` saute. Dès qu'un `sort` est demandé,
+                l'ordre est comparé en entier et il est identique
+
       - id: agg.filter
         nom: "`filter`"
         etat: partiel
@@ -2945,13 +3070,13 @@ tables:
 
       - id: agg.non_supportees
         nom: >-
-          `percentiles`, `extended_stats`, `top_hits`, `composite`, `filters`,
-          `nested`, `significant_terms`, `date_range`, `ip_range`…
+          `composite`, `filters`, `nested`, `significant_terms`, `date_range`,
+          `ip_range`, `percentile_ranks`, `median_absolute_deviation`…
         etat: refuse
         motif: pas_encore
-        poids: 6.1
+        poids: 5.0
         raison: >-
-          `filters` (la sœur plurielle de `filter`) et `top_hits` sont les deux
+          `filters` (la sœur plurielle de `filter`) et `composite` sont les deux
           qui manquent le plus ; aucune n'est un obstacle de moteur.
         conformance:
           erreurs: ["ferrite ne supporte pas l'agregation", "agregation \\[[a-z_]+\\] inconnue"]

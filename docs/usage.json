@@ -60,10 +60,10 @@
  },
  "totaux": {
   "requetes": 5311,
-  "servies": 2517,
-  "refusees": 2777,
+  "servies": 2545,
+  "refusees": 2749,
   "indeterminees": 17,
-  "taux_servies": 47.4
+  "taux_servies": 47.9
  },
  "par_source": {
   "clients": {
@@ -73,24 +73,24 @@
    "taux_servies": 81.8
   },
   "doc": {
-   "servie": 1637,
+   "servie": 1646,
    "total": 3969,
-   "refusee": 2317,
+   "refusee": 2308,
    "indeterminee": 15,
-   "taux_servies": 41.2
+   "taux_servies": 41.5
   },
   "github": {
-   "refusee": 11,
+   "refusee": 10,
    "total": 338,
-   "servie": 327,
-   "taux_servies": 96.7
+   "servie": 328,
+   "taux_servies": 97.0
   },
   "rally": {
-   "refusee": 423,
+   "refusee": 405,
    "total": 861,
-   "servie": 436,
+   "servie": 454,
    "indeterminee": 2,
-   "taux_servies": 50.6
+   "taux_servies": 52.7
   }
  },
  "concentration": [
@@ -172,9 +172,9 @@
  ],
  "par_api": {
   "search": {
-   "servie": 997,
+   "servie": 1025,
    "total": 1801,
-   "refusee": 803,
+   "refusee": 775,
    "indeterminee": 1
   },
   "indices.create": {
@@ -8075,14 +8075,17 @@
  "poids": {
   "agg.cardinality": 1.5,
   "agg.date_histogram": 5.3,
+  "agg.extended_stats": 0.1,
   "agg.filter": 1.1,
   "agg.histogram": 0.2,
   "agg.metriques": 3.6,
   "agg.multivalue": null,
-  "agg.non_supportees": 6.1,
+  "agg.non_supportees": 5.0,
+  "agg.percentiles": 0.6,
   "agg.range": 0.2,
   "agg.sous_agregations": 8.8,
   "agg.terms": 7.5,
+  "agg.top_hits": 0.6,
   "alias.a_la_creation": null,
   "alias.aliases": 0.3,
   "alias.cat_aliases": 0.0,
@@ -9511,23 +9514,23 @@
   },
   {
    "capacite": "agg.non_supportees",
-   "nom": "percentiles, extended_stats, top_hits, composite, filters, nested, significant_terms, date_range, ip_range…",
+   "nom": "composite, filters, nested, significant_terms, date_range, ip_range, percentile_ranks, median_absolute_deviation…",
    "etat": "refuse",
    "motif": "pas_encore",
-   "requetes": 322,
-   "part": 6.1,
+   "requetes": 268,
+   "part": 5.0,
    "par_source": {
     "doc": {
-     "requetes": 120,
-     "part": 3.0
+     "requetes": 106,
+     "part": 2.7
     },
     "github": {
-     "requetes": 2,
-     "part": 0.6
+     "requetes": 1,
+     "part": 0.3
     },
     "rally": {
-     "requetes": 200,
-     "part": 23.2
+     "requetes": 161,
+     "part": 18.7
     }
    },
    "traits": [
@@ -9564,27 +9567,11 @@
      "requetes": 34
     },
     {
-     "trait": "agg:percentiles",
-     "requetes": 31
-    },
-    {
-     "trait": "agg:percentiles.field",
-     "requetes": 31
-    },
-    {
-     "trait": "agg:top_hits",
-     "requetes": 31
-    },
-    {
      "trait": "agg:geo_centroid",
      "requetes": 29
     },
     {
      "trait": "agg:geo_centroid.field",
-     "requetes": 29
-    },
-    {
-     "trait": "agg:top_hits.size",
      "requetes": 29
     },
     {
@@ -9600,14 +9587,6 @@
      "requetes": 24
     },
     {
-     "trait": "agg:percentiles.percents",
-     "requetes": 24
-    },
-    {
-     "trait": "agg:top_hits._source",
-     "requetes": 24
-    },
-    {
      "trait": "agg:auto_date_histogram",
      "requetes": 23
     },
@@ -9618,10 +9597,6 @@
     {
      "trait": "agg:auto_date_histogram.field",
      "requetes": 23
-    },
-    {
-     "trait": "agg:top_hits.sort",
-     "requetes": 15
     },
     {
      "trait": "agg:top_metrics",
@@ -9748,14 +9723,6 @@
      "requetes": 4
     },
     {
-     "trait": "agg:extended_stats",
-     "requetes": 4
-    },
-    {
-     "trait": "agg:extended_stats.field",
-     "requetes": 4
-    },
-    {
      "trait": "agg:geo_distance.unit",
      "requetes": 4
     },
@@ -9805,14 +9772,6 @@
     },
     {
      "trait": "agg:string_stats.field",
-     "requetes": 4
-    },
-    {
-     "trait": "agg:top_hits.docvalue_fields",
-     "requetes": 4
-    },
-    {
-     "trait": "agg:top_hits.stored_fields",
      "requetes": 4
     },
     {
@@ -9936,10 +9895,6 @@
      "requetes": 2
     },
     {
-     "trait": "agg:percentiles.tdigest",
-     "requetes": 2
-    },
-    {
      "trait": "agg:sampler",
      "requetes": 2
     },
@@ -10044,14 +9999,6 @@
      "requetes": 1
     },
     {
-     "trait": "agg:extended_stats.missing",
-     "requetes": 1
-    },
-    {
-     "trait": "agg:extended_stats.sigma",
-     "requetes": 1
-    },
-    {
      "trait": "agg:extended_stats_bucket",
      "requetes": 1
     },
@@ -10149,18 +10096,6 @@
     },
     {
      "trait": "agg:percentile_ranks.missing",
-     "requetes": 1
-    },
-    {
-     "trait": "agg:percentiles.hdr",
-     "requetes": 1
-    },
-    {
-     "trait": "agg:percentiles.keyed",
-     "requetes": 1
-    },
-    {
-     "trait": "agg:percentiles.missing",
      "requetes": 1
     },
     {
@@ -12338,6 +12273,30 @@
     {
      "trait": "dsl:nested.inner_hits",
      "requetes": 4
+    }
+   ]
+  },
+  {
+   "capacite": "agg.percentiles",
+   "nom": "percentiles",
+   "etat": "partiel",
+   "motif": null,
+   "requetes": 3,
+   "part": 0.1,
+   "par_source": {
+    "doc": {
+     "requetes": 3,
+     "part": 0.1
+    }
+   },
+   "traits": [
+    {
+     "trait": "agg:percentiles.tdigest",
+     "requetes": 2
+    },
+    {
+     "trait": "agg:percentiles.hdr",
+     "requetes": 1
     }
    ]
   },

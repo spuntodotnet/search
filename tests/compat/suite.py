@@ -3467,8 +3467,8 @@ def agregations_refusees(es):
             contains="inconnu")
     # Agregation hors perimetre.
     refused(lambda: es.search(index=INDEX, size=0,
-                              aggs={"f": {"percentiles": {"field": "annee"}}}),
-            contains="percentiles")
+                              aggs={"f": {"filters": {"filters": {}}}}),
+            contains="filters")
     # Refus assumes, avec la raison.
     refused(lambda: es.search(index=INDEX, size=0,
                               aggs={"f": {"cardinality": {"field": "auteur"}}}),
@@ -3488,6 +3488,128 @@ def agregations_refusees(es):
     # Une metrique ne porte pas de sous-agregations.
     refused(lambda: es.search(index=INDEX, size=0, aggs={
         "m": {"avg": {"field": "annee"}, "aggs": {"x": {"max": {"field": "annee"}}}}}))
+
+
+@scenario
+def metriques_percentiles_extended_stats_top_hits(es):
+    """Les trois metriques que ferrite execute ou recalcule lui-meme.
+
+    Elles ne se verifient pas de la meme facon, et c'est le sujet :
+    `extended_stats` est purement calculatoire (donc rien a tolerer),
+    `percentiles` est **exact** (donc identique a ES tant qu'un seau porte
+    moins de 2 000 valeurs), et `top_hits` reproduit une recherche entiere a
+    l'interieur d'un seau (donc c'est le bloc `hits` qu'on lit, pas un nombre).
+    """
+    # --- extended_stats : les trois notes sont 4.5, 4.1 et 4.8.
+    r = es.search(index=INDEX, size=0,
+                  aggs={"e": {"extended_stats": {"field": "annee"}}})
+    e = r["aggregations"]["e"]
+    assert e["count"] == 3 and e["sum"] == 5657.0, e
+    # La variance est celle d'ES **au bit pres**, et non la plus juste : sa
+    # formule est `(Sx2 - (Sx)^2/n) / n`, qui soustrait ici 10 667 218,11 a
+    # 10 667 219 — donc perd ses decimales. La vraie variance de
+    # [1885, 1885, 1887] vaut 0,888888888888889 ; les deux serveurs rendent
+    # 0,8888888886819283, et c'est cette valeur-la qu'il faut rendre. Celle de
+    # tantivy (Welford) aurait ete plus proche du vrai nombre, donc fausse ici.
+    assert e["variance"] == 0.8888888886819283, e
+    assert e["variance"] == e["variance_population"], e
+    assert e["variance_sampling"] == 1.3333333330228925, e
+    # `sigma` deplace les bornes, et ES en rend six.
+    b = es.search(index=INDEX, size=0, aggs={
+        "e": {"extended_stats": {"field": "annee", "sigma": 3}}}
+    )["aggregations"]["e"]["std_deviation_bounds"]
+    assert set(b) == {"upper", "lower", "upper_population", "lower_population",
+                      "upper_sampling", "lower_sampling"}, b
+    assert abs(b["upper"] - (e["avg"] + 3 * e["std_deviation"])) < 1e-9, b
+    # Un seul document : la variance d'echantillon divise par zero, et ES rend
+    # la **chaine** "NaN" plutot qu'un nombre.
+    un = es.search(index=INDEX, size=0, query={"term": {"auteur": "Zola"}},
+                   aggs={"e": {"extended_stats": {"field": "annee"}}}
+                   )["aggregations"]["e"]
+    assert un["variance"] == 0.0 and un["variance_sampling"] == "NaN", un
+    # Zero document : `sum` a `0.0`, tout le reste a `null` — l'objet des
+    # bornes compris, avec ses six cles.
+    vide = es.search(index=INDEX, size=0, query={"term": {"auteur": "personne"}},
+                     aggs={"e": {"extended_stats": {"field": "annee"}}}
+                     )["aggregations"]["e"]
+    assert vide["count"] == 0 and vide["sum"] == 0.0, vide
+    assert vide["variance"] is None and vide["std_deviation_bounds"]["upper"] is None, vide
+    # Une date est refusee **en la nommant** : la somme des carres s'accumule
+    # en nanosecondes et ne se ramene pas sans perdre ses bits de poids faible.
+    refused(lambda: es.search(index=INDEX, size=0,
+                              aggs={"e": {"extended_stats": {"field": "paru"}}}),
+            contains="extended_stats")
+
+    # --- percentiles : exact, donc verifiable a la main. Sur [1885, 1885,
+    # 1887], la mediane est 1885 et le 100e percentile 1887.
+    p = es.search(index=INDEX, size=0, aggs={
+        "p": {"percentiles": {"field": "annee", "percents": [0, 50, 100]}}}
+    )["aggregations"]["p"]["values"]
+    assert p == {"0.0": 1885.0, "50.0": 1885.0, "100.0": 1887.0}, p
+    # `keyed: false` change la forme, pas les nombres.
+    liste = es.search(index=INDEX, size=0, aggs={
+        "p": {"percentiles": {"field": "annee", "percents": [50], "keyed": False}}}
+    )["aggregations"]["p"]["values"]
+    assert liste == [{"key": 50.0, "value": 1885.0}], liste
+    # Sous un `terms` : chaque seau a ses propres valeurs.
+    seaux = es.search(index=INDEX, size=0, aggs={
+        "a": {"terms": {"field": "auteur"},
+              "aggs": {"p": {"percentiles": {"field": "annee",
+                                             "percents": [50]}}}}}
+    )["aggregations"]["a"]["buckets"]
+    par_auteur = {b["key"]: b["p"]["values"]["50.0"] for b in seaux}
+    assert par_auteur == {"Maupassant": 1886.0, "Zola": 1885.0}, par_auteur
+    # Ce qui regle l'**approximation** d'ES est refuse en le nommant : ferrite
+    # rend l'exact, il n'a ni compression ni chiffres significatifs.
+    refused(lambda: es.search(index=INDEX, size=0, aggs={
+        "p": {"percentiles": {"field": "annee", "hdr": {
+            "number_of_significant_value_digits": 3}}}}),
+        contains="hdr")
+
+    # --- top_hits : le bloc `hits` entier, a l'interieur de chaque seau.
+    t = es.search(index=INDEX, size=0, aggs={
+        "a": {"terms": {"field": "auteur"},
+              "aggs": {"t": {"top_hits": {"size": 1, "sort": [{"annee": "desc"}],
+                                          "_source": ["titre"]}}}}}
+    )["aggregations"]["a"]["buckets"]
+    par_auteur = {b["key"]: b["t"]["hits"] for b in t}
+    assert par_auteur["Maupassant"]["total"] == {"value": 2, "relation": "eq"}
+    assert par_auteur["Maupassant"]["max_score"] is None  # un tri remplace le score
+    premier = par_auteur["Maupassant"]["hits"][0]
+    assert premier["_id"] == "1" and premier["_source"] == {"titre": "Le Horla"}
+    assert premier["_index"] == INDEX and premier["sort"] == [1887]
+    # Sans tri, le hit garde le score de la requete de la recherche : la
+    # contrainte du seau filtre, elle ne note pas.
+    sans_tri = es.search(index=INDEX, size=0, aggs={
+        "a": {"terms": {"field": "auteur"},
+              "aggs": {"t": {"top_hits": {"size": 1, "_source": False}}}}}
+    )["aggregations"]["a"]["buckets"]
+    assert all(b["t"]["hits"]["max_score"] == 1.0 for b in sans_tri), sans_tri
+    # `fields` **s'herite** de la recherche englobante — et rien d'autre.
+    # Aucune documentation ne le dit ; ferrite rendait le hit sans son bloc
+    # `fields`, en 200 et sans un mot, jusqu'a ce qu'une plage de controle du
+    # fuzzer le sorte.
+    herite = es.search(index=INDEX, size=0, fields=["annee"], aggs={
+        "t": {"top_hits": {"size": 1, "sort": [{"annee": "desc"}]}}}
+    )["aggregations"]["t"]["hits"]["hits"][0]
+    assert herite["fields"] == {"annee": [1887]}, herite
+    # Un `fields` declare dans le `top_hits` **remplace** celui du dehors.
+    remplace = es.search(index=INDEX, size=0, fields=["annee"], aggs={
+        "t": {"top_hits": {"size": 1, "sort": [{"annee": "desc"}],
+                           "fields": ["auteur"]}}}
+    )["aggregations"]["t"]["hits"]["hits"][0]
+    assert remplace["fields"] == {"auteur": ["Maupassant"]}, remplace
+    # `docvalue_fields`, lui, ne s'herite pas.
+    sans = es.search(index=INDEX, size=0, docvalue_fields=["annee"], aggs={
+        "t": {"top_hits": {"size": 1, "sort": [{"annee": "desc"}]}}}
+    )["aggregations"]["t"]["hits"]["hits"][0]
+    assert "fields" not in sans, sans
+
+    # Ce que ferrite ne sait pas rendre dans un `top_hits` est refuse en le
+    # nommant, jamais ignore.
+    refused(lambda: es.search(index=INDEX, size=0, aggs={
+        "t": {"top_hits": {"size": 1, "version": True}}}),
+        contains="version")
 
 
 @scenario
