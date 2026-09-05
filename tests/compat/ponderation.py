@@ -492,6 +492,12 @@ CORPS = {
     # tomberaient dans « aucune capacite ne la reclame », qui compte **contre**
     # nous — c'est le garde-fou du troisieme verdict.
     "min_score": "recherche.min_score",
+    # Servis depuis la carte 17, et pour la meme raison qu'au-dessus : sans ce
+    # rattachement, les dix requetes du corpus qui les posent tomberaient dans
+    # « aucune capacite ne la reclame », qui compte **contre** nous. Oublier de
+    # declarer une capacite ne doit jamais faire monter le taux.
+    "post_filter": "recherche.post_filter",
+    "collapse": "recherche.collapse",
 }
 # La liste des clefs refusees n'est pas recopiee ici : elle se lit dans le
 # `nom` de la capacite `recherche.non_supportes`, qui les cite entre accents

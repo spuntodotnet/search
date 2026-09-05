@@ -349,6 +349,14 @@ BRIQUES = {
     # score cesse d'etre un ordre pour devenir un **seuil**, donc le seul ou un
     # score faux change `hits.total`, la pagination et les agregations.
     "corps.min_score": "recherche.min_score",
+    # `post_filter` et `collapse` ont chacun la leur, et pour la meme raison
+    # que `min_score` : ce qui se mesure n'est pas qu'ils filtrent, c'est **ou**
+    # ils le font. Un `post_filter` applique trop tot change les agregations ;
+    # un repliement fait apres la pagination rend le mauvais nombre de lignes.
+    # Les deux sont silencieux quand ils sont faux.
+    "corps.post_filter": "recherche.post_filter",
+    "corps.collapse": "recherche.collapse",
+    "corps.collapse_inner": "recherche.collapse",
     # agregations
     "agg.metriques": "agg.metriques",
     "agg.terms": "agg.terms",
@@ -468,6 +476,10 @@ FUSEAUX = ["Europe/Paris", "America/New_York", "Australia/Sydney",
            "Asia/Kolkata", "Australia/Lord_Howe", "America/Santiago",
            "America/Phoenix", "Pacific/Chatham", "+05:30", "-08:00", "UTC"]
 TRIABLES = ("keyword", "boolean", "date") + tuple(NUMERIQUES)
+# Les types sur lesquels ES sait **replier** : ni `text`, ni `date`, ni
+# `boolean` — c'est lui qui refuse les trois, et le fuzzer n'a donc pas a les
+# tirer pour un `collapse` (`sonde_repli.py` mesure ces refus un par un).
+REPLIABLES = ("keyword",) + tuple(NUMERIQUES)
 # La cle unique ajoutee a tout mapping : elle sert de dernier critere de tri, et
 # c'est elle qui rend une pagination comparable entre deux moteurs.
 TIEBREAK = "fuzz_cle"
@@ -1782,6 +1794,39 @@ class Generateur:
             # sont la parce qu'ES ne les refuse pas — un seuil nul garde meme
             # les documents notes 0.0 d'un `bool.filter`.
             corps["min_score"] = rng.choice([-1, 0, 0.5, 1, 1.5, 2, 3, 10])
+        # `post_filter` : une clause de plus, mais posee **apres** les
+        # agregations. Ce qui l'exerce vraiment est donc sa cohabitation avec
+        # ce que le corps porte deja — `aggs`, `sort`, `min_score`, `from` /
+        # `size`, un `_name` — et c'est ce que le tirage lui donne, puisqu'il
+        # est pose en dernier sur un corps deja complet.
+        if rng.random() < 0.2 and self.brique("corps.post_filter"):
+            corps["post_filter"] = self.feuille(champs, docs)
+        # `collapse` : le champ doit etre un `keyword` ou un numerique, et il
+        # est tire **sans regarder s'il est multivalue** — un document a deux
+        # valeurs fait tomber la recherche entiere des deux cotes, et c'est
+        # exactement un des bords a mesurer.
+        repliables = [c for c in champs
+                      if c.ty in REPLIABLES and c.chemin != TIEBREAK]
+        if repliables and rng.random() < 0.2 and self.brique("corps.collapse"):
+            col = {"field": rng.choice(repliables).chemin}
+            # Une fois sur deux, avec ses `inner_hits` : le total d'un groupe,
+            # sa taille par defaut (3, pas 10), son tri propre et le second
+            # niveau de repliement.
+            if rng.random() < 0.5 and self.brique("corps.collapse_inner"):
+                inner = {"name": "grp"}
+                if rng.random() < 0.5:
+                    inner["size"] = rng.choice([0, 1, 2, 5])
+                if rng.random() < 0.3:
+                    inner["from"] = rng.choice([1, 2])
+                tries = [c for c in champs if c.ty in TRIABLES]
+                if tries and rng.random() < 0.4:
+                    inner["sort"] = [{rng.choice(tries).chemin:
+                                      rng.choice(["asc", "desc"])}]
+                autres = [c for c in repliables if c.chemin != col["field"]]
+                if autres and rng.random() < 0.3:
+                    inner["collapse"] = {"field": rng.choice(autres).chemin}
+                col["inner_hits"] = inner
+            corps["collapse"] = col
         if rng.random() < 0.25 and self.brique("corps.highlight"):
             hl = self._highlight(champs)
             if hl:
@@ -2463,7 +2508,11 @@ _illisible_confirme = {"court_circuite": False}
 def _corpus_ampute(ecarts):
     """ferrite a-t-il vu **moins** de documents que l'oracle ?"""
     for x in ecarts:
-        if x["chemin"].endswith(("hits.total.value", "doc_count")) \
+        # `count` est celui d'une metrique (`stats`, `value_count`) : c'est le
+        # meme constat qu'un `doc_count`, vu par une agregation plutot que par
+        # un seau — et une fois qu'il a baisse, la `somme` et la `moyenne` de la
+        # meme metrique suivent, sans etre une divergence de plus.
+        if x["chemin"].endswith(("hits.total.value", "doc_count", ".count")) \
                 and isinstance(x["a"], int) and isinstance(x["b"], int) \
                 and x["a"] < x["b"]:
             return True
@@ -2596,6 +2645,18 @@ def _exists_sur_text(e, requete, ecarts):
     # seule aux deux serveurs avant de conclure.
     if e["chemin"] == "hits.ordre" and _exists_confirme.get("ampute"):
         return True
+    # Et une **troisieme** face, trouvee par une plage de controle : le manque
+    # peut faire disparaitre non pas un document mais une **erreur**. Sous un
+    # `collapse`, ES tombe en 500 sur un document dont le champ de repliement
+    # porte deux valeurs ; si c'est justement un document que ferrite ne voit
+    # pas, ferrite rend 200. C'est le meme defaut, vu par ce qu'il empeche de
+    # rencontrer. Le predicat exige les trois : la sonde a confirme que ferrite
+    # en voit moins, ES rend bien 500, et sa phrase est celle-la — un 500 d'ES
+    # pour une autre raison reste un ecart.
+    if (e["chemin"] == "statut" and e["a"] == 200 and e["b"] == 500
+            and _exists_confirme.get("ampute")
+            and "the grouping field must be single valued" in e["texte"]):
+        return True
     if e["chemin"] == "hits.hits":
         # `<=` et non `<` : des que la requete tronque (`from` / `size`), les
         # deux serveurs rendent le meme nombre de documents mais pas les memes,
@@ -2606,6 +2667,65 @@ def _exists_sur_text(e, requete, ecarts):
     if e["chemin"].endswith(("doc_count", "hits.total.value")):
         return isinstance(e["a"], int) and isinstance(e["b"], int) and e["a"] < e["b"]
     return False
+
+
+def _collapse_multivalue(e, requete):
+    """Un champ de repliement multivalue, dont ES ne se plaint pas toujours.
+
+    ES leve `the grouping field must be single valued` quand son collecteur
+    **rencontre** un document a deux valeurs — et il ne les rencontre pas tous.
+    Mesure sur un meme index, meme requete, meme tri : `size: 2` rend 200,
+    `size: 40` rend 500. La difference est l'elagage de Lucene, qui cesse de
+    collecter des que la file est pleine et que plus rien n'est competitif ;
+    le document fautif n'est alors jamais lu.
+
+    ferrite n'a pas cet elagage : il classe l'ensemble des correspondances,
+    donc il voit **tous** les documents et refuse des qu'un seul porte deux
+    valeurs. Son refus couvre donc un sur-ensemble de celui d'ES — jamais un
+    resultat faux, toujours un refus visible, et jamais un repliement decide
+    sur une valeur choisie au hasard entre deux. Divergence declaree
+    (`recherche.collapse` dans compat.yaml).
+
+    Deux directions, et une seule est absorbee dans chaque sens :
+
+    * ferrite refuse, ES repond ou refuse autrement — c'est le sur-ensemble
+      ci-dessus ;
+    * ES refuse **sur son propre repliement** pendant que ferrite refuse pour
+      une raison declaree : les deux refusent, il n'y a pas d'oracle.
+
+    Ce qui n'est **pas** absorbe : ferrite qui repond 200 la ou ES leve. Ce
+    sens-la resterait un silence, et c'est bien ainsi qu'il doit se lire."""
+    if not requete or "collapse" not in json.dumps(requete):
+        return False
+    if e.get("chemin") != "statut":
+        return False
+    phrase = "the grouping field must be single valued"
+    texte = e.get("texte") or ""
+    # « gauche 500 » : le refus vient de ferrite. C'est le sur-ensemble.
+    if e.get("a") == 500 and phrase in texte:
+        return True
+    # L'inverse, et il est mesure : ES echoue en **developpant** un groupe sur
+    # un document que son propre resultat ne contient pas. Sur la graine
+    # 17400081, la requete rend un seul document des deux cotes (`d000`) et ES
+    # leve quand meme, sur `d010`, que ni l'un ni l'autre ne rend. Sa
+    # sous-recherche d'`inner_hits` ne porte pas la meme restriction que sa
+    # page ; ferrite n'en lance aucune, et repond. Ce n'est pas un defaut de
+    # ferrite, c'est le meme alea que son elagage, une phase plus loin.
+    #
+    # La frontiere est etroite expres : seule la phase de **developpement**
+    # (`failed to expand hits`) est absorbee dans ce sens. Un echec du
+    # collecteur d'ES (la phrase ci-dessus) pendant que ferrite repond 200
+    # reste un silence — c'est celui-la qui signalerait un vrai manque.
+    if e.get("a") == 200 and e.get("b") in (400, 500) \
+            and "failed to expand hits" in texte:
+        return True
+    # Les deux refusent, et celui d'ES est son repliement : pas d'oracle. ES
+    # nomme la panne de deux facons selon la phase ou elle tombe — la phrase
+    # elle-meme quand son collecteur bute, `failed to expand hits` quand c'est
+    # le developpement des `inner_hits` qui bute apres coup.
+    return (isinstance(e.get("a"), int) and e["a"] != 200
+            and e.get("b") in (400, 500)
+            and (phrase in texte or "failed to expand hits" in texte))
 
 
 def _es_casse(e):
@@ -3027,6 +3147,7 @@ DIVERGENCES_ASSUMEES = [
      _ordre_non_verifie_par_es),
     ("ordre par score sous un nested", _nested_et_score),
     ("exists sur un text sans terme", _exists_sur_text),
+    ("champ de repliement multivalue (elagage d'ES)", _collapse_multivalue),
     ("ES 8.15 casse sur epoch_millis", _es_casse),
     ("ES 8.15 casse sur deux lectures du meme champ", _es_deux_lectures),
     ("ES 8.15 casse sur exists d'un champ non indexe et stocke",
@@ -3238,6 +3359,19 @@ def nettoie_hit(h, tri_score=()):
                         "_node", "_shard", "_ignored")}
     if tri_score and isinstance(out.get("sort"), list):
         out["sort"] = [v for i, v in enumerate(out["sort"]) if i not in tri_score]
+    # Les documents replies d'un `collapse` se comparent comme le hit qui les
+    # porte : leur `_score` sort de la comparaison, exactement comme celui du
+    # premier niveau. Ce fuzzer ne compare **aucun** score — c'est le travail
+    # de `sonde_score.py`, dont la tolerance est mesuree — mais il compare tout
+    # le reste : le total du groupe, ses documents, leur ordre, leur `sort` et
+    # la valeur que le second niveau de repliement pose dans `fields`. Seule la
+    # **presence** de `max_score` est gardee : elle dit si le bloc a ete note.
+    if isinstance(out.get("inner_hits"), dict):
+        out["inner_hits"] = {
+            nom: {"total": b["hits"].get("total"),
+                  "note": b["hits"].get("max_score") is not None,
+                  "hits": [nettoie_hit(y) for y in b["hits"].get("hits", [])]}
+            for nom, b in out["inner_hits"].items()}
     return out
 
 
