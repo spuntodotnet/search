@@ -492,6 +492,13 @@ CORPS = {
     # tomberaient dans « aucune capacite ne la reclame », qui compte **contre**
     # nous — c'est le garde-fou du troisieme verdict.
     "min_score": "recherche.min_score",
+    # Troisieme fois, meme piege : servis depuis la carte 08, donc ils ont
+    # chacun leur capacite et quittent la liste des non supportes. Sans ce
+    # rattachement, les requetes du corpus qui les posent tomberaient dans
+    # « aucune capacite ne la reclame » — et le taux **baisserait** en livrant la
+    # fonctionnalite. Mesure : 6 requetes posent `search_after`, 6 posent `pit`.
+    "search_after": "recherche.search_after",
+    "pit": "recherche.pit",
 }
 # La liste des clefs refusees n'est pas recopiee ici : elle se lit dans le
 # `nom` de la capacite `recherche.non_supportes`, qui les cite entre accents

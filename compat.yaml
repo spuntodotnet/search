@@ -245,13 +245,13 @@ tables:
           `_termvectors`, `_mtermvectors`, `_suggest`, `_source`
         etat: refuse
         motif: pas_encore
-        poids: 0.6
+        poids: 0.5
         raison: >-
           aucune n'est demandée par le code client qu'on cherche à servir.
         conformance:
           apis: [search_shards, termvectors, mtermvectors, suggest,
                  get_source, exists_source, mlt, rank_eval, knn_search,
-                 terms_enum, search_mvt, open_point_in_time, close_point_in_time]
+                 terms_enum, search_mvt]
 
       - id: hors.api_typee
         nom: >-
@@ -2151,6 +2151,8 @@ tables:
           supportes:
             - {nom: "missing", note: "`_last` (le défaut), `_first`, ou une valeur de substitution. Les deux mots-clés sont **sensibles à la casse** — `_FIRST` est une valeur, pas un mot-clé. La substitution est lue **au type du champ** : une chaîne suit `Long.parseLong` / `Double.parseDouble` (donc `\"+7\"` passe et `\"7.9\"` non), un nombre JSON se tronque (`7.9` vaut 7, `1e300` sature). Une **date** se substitue par un nombre de millisecondes et un `boolean` par `0` / `1` : `\"2020-03-01\"` et `true` y rendent 400, comme chez ES"}
             - {nom: "mode", note: "`min` / `max` / `sum` / `avg` / `median`, insensible à la casse. Le défaut n'est pas un mode mais une règle : le **minimum** en ordre croissant, le **maximum** en décroissant. `sum` sur des entiers **déborde en silence** comme un `long` de Java (`[1, i64::MAX]` se classe sur `i64::MIN`), `avg` arrondit par le `Math.round` de Java (donc vers le haut à la demie), et `median` moyenne les deux valeurs du milieu quand elles sont en nombre pair — la colonne étant triée à l'indexation des deux côtés"}
+            - {nom: "_doc", note: "le numéro **interne** du document. Chez ferrite c'est le `_seq_no`, attribué sous le verrou d'écriture — donc l'ordre d'écriture, comme le `docID` de Lucene, et une clé **unique** : c'est la seule propriété dont `search_after` dépende. L'adresse tantivy ne pouvait tenir ni l'une ni l'autre (locale au segment, et pas dans l'ordre d'écriture)"}
+            - {nom: "_shard_doc", note: "`(rang du shard << 32) | numéro interne`, le départage **total** qu'ES ajoute lui-même sous un point-in-time. Refusé hors d'un PIT, comme chez ES"}
             - {nom: "unmapped_type", note: "le type sous lequel traiter un champ que **cet** index ne mappe pas, plutôt que de faire échouer son shard. Tous ses documents y sont « sans valeur ». Ignoré quand l'index mappe le champ, et refusé en le nommant sur un type que ferrite ne mappe pas (`ip`, `binary`, ...) ou qui n'est pas une feuille (`object`, `nested`)"}
           refuses:
             - {nom: "nested"}
@@ -2438,26 +2440,118 @@ tables:
             - {texte: "une chaîne illisible", note: "`number_format_exception` / « For input string: \"abc\" », la phrase d'ES"}
             - {texte: "reproduire les agrégations qu'**ES** calcule sans tenir compte de son propre seuil", note: "divergence assumée, et c'est ES qui se contredit : avec `{\"query\": {\"match_all\": {}}, \"min_score\": 2}` sur cinq documents, il rend `hits.total: 0` et, **dans la même réponse**, un `value_count` à 0 mais un `terms` avec ses deux seaux pleins. Les deux agrégateurs ne prennent pas le même chemin ; le même seuil sur un `term` ou un `match` est honoré par les deux. ferrite applique le seuil **uniformément** — ses agrégations voient exactement les documents que `hits.total` compte. Reproduire l'écart demanderait une table « quel agrégateur fuit, sous quelle forme de requête » dont la règle n'est écrite nulle part, et qu'ES ne tient pas dans une seule réponse"}
 
+      - id: recherche.search_after
+        nom: "`search_after`"
+        etat: supporte
+        poids: 0.1
+        detail: >-
+          la pagination profonde que la 8.x recommande à la place du `scroll` :
+          le tableau `sort` du dernier hit rendu sert de point de reprise. Elle
+          ne tient qu'à une chose, et ce n'est pas celle que la documentation
+          met en avant : **il faut un tri total**. `search_after` reprend
+          *strictement après* la clé donnée, donc tout document dont la clé est
+          ex æquo avec elle est **sauté** — et ES ne s'en plaint pas (mesuré :
+          `sort: [{"n": "asc"}]`, `search_after: [1]` sur un corpus où trois
+          documents portent `n = 1` rend directement les `n = 2`). C'est
+          pourquoi ES ajoute lui-même `_shard_doc` sous un point-in-time, et
+          pourquoi ferrite l'ajoute aussi. Le point de reprise est converti **au
+          type du champ**, index par index — une date s'y écrit `"2026-01-05"`
+          comme un nombre de millisecondes, là où `missing` n'accepte que le
+          nombre. Mesuré par
+          [`sonde_pagination.py`](../tests/compat/sonde_pagination.py)
+        parametres:
+          supportes:
+            - {texte: "la reprise sur toutes les clés de tri : `keyword`, numérique, `date`, `boolean`, `_score`, `_doc`, `_shard_doc`"}
+            - {texte: "`null` comme valeur de reprise", note: "c'est la **sentinelle** d'une valeur absente, donc exactement ce que le tableau `sort` d'un document sans valeur rend sur un `keyword` — un parcours doit pouvoir renvoyer au serveur ce qu'il vient d'en recevoir"}
+            - {texte: "la coercition d'ES : `\"3\"` sur un `long`, un flottant **tronqué vers zéro** (`2,7` et `2,2` reprennent tous deux après 2), un nombre sur un `keyword` (qui devient sa forme texte)"}
+          refuses:
+            - {texte: "`from` non nul à côté de `search_after`", note: "comme ES : `action_request_validation_exception`, « [from] parameter must be set to 0 when [search_after] is used »"}
+            - {texte: "`search_after` dans un contexte de `scroll`", note: "comme ES ; les deux portent leur curseur à des endroits différents"}
+            - {texte: "un tri sans aucun champ", note: "« Sort must contain at least one field. » — et `_score` **n'en est pas un** (mesure), là où `_doc` en est un"}
+            - {texte: "une arité qui ne correspond pas au tri", note: "« search_after has N value(s) but sort has M. »"}
+            - {texte: "un tableau vide, un non-tableau, un élément qui n'est pas un scalaire", note: "les trois phrases d'ES, coquille comprise (« Values must contains at least one value. »)"}
+        divergences:
+          - texte: >-
+              une valeur de reprise `null` sur un champ **numérique** : ES y
+              rend **500** (`null_pointer_exception`, « Cannot invoke
+              "java.lang.Long.longValue()" because "value" is null »), ce qui
+              est un défaut de son côté — mesuré contre 8.15. ferrite rend le
+              résultat que sa propre sentinelle implique. Reproduire un 500
+              serait servir une panne sous le nom de la compatibilité
+        conformance:
+          erreurs:
+            - "search_after has [0-9]+ value\\(s\\) but sort has [0-9]+\\."
+            - "Sort must contain at least one field\\."
+
+      - id: recherche.pit
+        nom: "`POST /{index}/_pit`, `DELETE /_pit`, et le bloc `pit` du corps"
+        etat: supporte
+        poids: 0.2
+        detail: >-
+          le **point-in-time** : une vue figée qu'on interroge autant de fois
+          qu'on veut. Ce n'est pas un `scroll` sous un autre nom — un `scroll`
+          fige un **résultat** (une requête, un classement, un curseur côté
+          serveur), un PIT fige un **lecteur** : il ne connaît aucune requête,
+          et chaque recherche qu'on lui pose est une recherche complète sur
+          l'instantané. C'est ce qui permet de changer de requête, de tri ou de
+          taille de page entre deux appels, et c'est pourquoi le curseur, lui,
+          vit chez le client (`search_after`). ferrite retient par index visé
+          son nom, sa génération et **le `Searcher` tantivy du moment** — mesuré
+          : ouvrir un PIT, écrire un document, puis compter *sous* le PIT rend
+          l'ancien total quand la même recherche hors PIT rend le nouveau. Une
+          recherche sous PIT ne prend **pas** d'index dans l'URL (il vient du
+          PIT), rend `pit_id` en tête de la réponse, et voit son `sort` complété
+          d'un `_shard_doc` implicite dès qu'un tri est demandé. Voir
+          [`src/pit.rs`](../src/pit.rs)
+        parametres:
+          supportes:
+            - {nom: "keep_alive", note: "**obligatoire** à l'ouverture (`action_request_validation_exception` sinon, la phrase d'ES) et facultatif dans le bloc `pit` du corps, où il repousse l'échéance. Mêmes durées et même plafond (`1d`) que `scroll`"}
+            - {texte: "l'expression d'index habituelle à l'ouverture : nom, liste, motif, alias, `_all`, et `expand_wildcards` / `ignore_unavailable`"}
+            - {texte: "`DELETE /_pit` avec `{\"id\": \"...\"}`", note: "rend `{\"succeeded\": true, \"num_freed\": 1}` en 200, et `{\"succeeded\": false, \"num_freed\": 0}` en **404** quand l'identifiant ne désigne plus rien — pas une enveloppe d'erreur, c'est le cas normal d'un client qui nettoie deux fois"}
+          refuses:
+            - {texte: "un index dans l'URL d'une recherche sous PIT", note: "comme ES : deux sources de vérité pour une seule question"}
+            - {texte: "`pit` et `?scroll=` ensemble", note: "comme ES"}
+            - {texte: "`index_filter` dans le corps de `_pit`", note: "chez ES c'est une **optimisation** (« can match ») qui élague les shards, pas un filtre de résultats ; ferrite n'a qu'un shard par index, donc rien à élaguer — l'accepter en silence laisserait croire qu'un filtre a été posé"}
+            - {texte: "`_shard_doc` en clé de tri **hors** d'un point-in-time", note: "comme ES : hors d'une vue figée, un numéro interne change au premier commit, donc une reprise bâtie dessus ne désigne plus rien"}
+        divergences:
+          - texte: >-
+              l'identifiant d'un PIT est **opaque des deux côtés**, mais ES y
+              encode ses shards en base64 : un identifiant mal formé y échoue au
+              décodage (400 `x_content_parse_exception` en recherche, 400 « Last
+              unit does not have enough valid bits » sur `DELETE`). Celui de
+              ferrite est un uuid qui ne porte rien à décoder, donc un
+              identifiant illisible y est un **contexte introuvable** — le 404
+              `search_context_missing_exception` qu'ES rend, lui, pour un
+              identifiant bien formé mais expiré, et que les clients
+              reconnaissent pour dire « recommence »
+          - texte: >-
+              un PIT dont l'index est supprimé pendant sa vie continue de servir
+              l'instantané chez ferrite (le `Searcher` le retient) ; ES rend
+              **503** `no_shard_available_action_exception`. Mesuré, et c'est le
+              sens sûr : ferrite rend les documents que la vue promettait
+        conformance:
+          apis: [open_point_in_time, close_point_in_time]
+
       - id: recherche.non_supportes
         nom: >-
-          `search_after`, `pit`, `collapse`, `knn`,
+          `collapse`, `knn`,
           `seq_no_primary_term`, `post_filter`, `suggest`,
           `rescore`, `track_scores`, `q`, `terminate_after`,
           `version`, `indices_boost`, `profile`, `slice`, `stats`, `ext`,
           `retriever`
         etat: refuse
         motif: pas_encore
-        poids: 3.0
+        poids: 2.9
         raison: >-
-          aucun n'est un obstacle de moteur ; `search_after` est celui qui
-          manque le plus, pour paginer au-delà de 10 000.
+          aucun n'est un obstacle de moteur. `search_after` et `pit`, qui
+          manquaient le plus, sont servis depuis la carte 08.
         conformance:
           erreurs:
             # Le meme refus arrive par deux chemins : dans le corps (« ferrite
-            # ne supporte pas [search_after] dans [_search] ») et en query
+            # ne supporte pas [collapse] dans [_search] ») et en query
             # string (« unrecognized parameter: [docvalue_fields] »).
-            - "ferrite ne supporte pas \\[(search_after|collapse|knn|post_filter|suggest|rescore|track_scores|q|pit|profile|terminate_after|version|indices_boost|slice|stats|ext|retriever)\\] dans \\[_search\\]"
-            - "unrecognized parameter: \\[(search_after|collapse|knn|fields|seq_no_primary_term|post_filter|suggest|rescore|track_scores|q)\\]"
+            - "ferrite ne supporte pas \\[(collapse|knn|post_filter|suggest|rescore|track_scores|q|profile|terminate_after|version|indices_boost|slice|stats|ext|retriever)\\] dans \\[_search\\]"
+            - "unrecognized parameter: \\[(collapse|knn|fields|seq_no_primary_term|post_filter|suggest|rescore|track_scores|q)\\]"
 
       - id: recherche.timeout
         nom: "`timeout` (paramètre et corps)"

@@ -2785,6 +2785,191 @@ def pagination_profonde_refusee(es):
 
 
 # ---------------------------------------------------------------------------
+# search_after et point-in-time — la pagination profonde de la 8.x
+# ---------------------------------------------------------------------------
+
+PAGE_INDEX = "compat_pagination"
+
+
+def _index_de_pagination(es, n=250):
+    """Un index dont le champ `rang` est **unique** et le champ `groupe` ne
+    l'est pas : le premier donne un tri total, le second des ex aequo — et
+    c'est sur les ex aequo que `search_after` se casse quand rien ne les
+    departage."""
+    es.options(ignore_status=404).indices.delete(index=PAGE_INDEX)
+    es.indices.create(index=PAGE_INDEX, mappings={"properties": {
+        "rang": {"type": "integer"}, "groupe": {"type": "keyword"}}})
+    # Plusieurs lots rafraichis : sans plusieurs segments, un numero de document
+    # local a son segment paraitrait unique, et la moitie du test ne mesurerait
+    # rien.
+    for debut in range(0, n, 50):
+        operations = []
+        for i in range(debut, min(debut + 50, n)):
+            operations.append({"index": {"_index": PAGE_INDEX, "_id": str(i)}})
+            operations.append({"rang": i, "groupe": f"g{i % 5}"})
+        es.bulk(operations=operations, refresh=True)
+    return n
+
+
+@scenario
+def search_after_parcours_complet(es):
+    """Le geste que la documentation d'Elastic 8.x recommande a la place du
+    scroll : le tableau `sort` du dernier hit sert de point de reprise.
+
+    Ce qui est verifie n'est pas « ca rend des documents » mais les deux
+    proprietes dont un export depend : **chacun une fois et une seule**, et la
+    decoupe en pages annoncee."""
+    total = _index_de_pagination(es)
+    vus, pages, apres = [], 0, None
+    while True:
+        r = es.search(index=PAGE_INDEX, size=60, sort=[{"rang": "asc"}],
+                      query={"match_all": {}}, source=False,
+                      search_after=apres) if apres else es.search(
+                          index=PAGE_INDEX, size=60, sort=[{"rang": "asc"}],
+                          query={"match_all": {}}, source=False)
+        hits = r["hits"]["hits"]
+        if not hits:
+            break
+        # `search_after` ne touche pas au total : ES compte tout ce qui
+        # correspond et ne coupe que les hits.
+        assert r["hits"]["total"]["value"] == total, r["hits"]["total"]
+        pages += 1
+        vus += [h["_id"] for h in hits]
+        apres = hits[-1]["sort"]
+    assert len(vus) == total and len(set(vus)) == total, len(vus)
+    assert [int(i) for i in vus] == list(range(total)), "l'ordre n'est pas celui du tri"
+    assert pages == 5, pages
+
+
+@scenario
+def search_after_saute_les_ex_aequo(es):
+    """La propriete qui decide de tout, et que la documentation ne met pas en
+    avant : `search_after` reprend **strictement apres** la cle donnee.
+
+    Un tri non total perd donc des documents, en 200 et sans un mot — c'est ce
+    que fait ES aussi (mesure), donc ferrite doit le faire pareil. C'est pour ca
+    qu'un parcours ecrit correctement termine son tri par une cle unique."""
+    _index_de_pagination(es, 50)
+    # `groupe` a cinq valeurs pour cinquante documents : reprendre apres « g1 »
+    # saute les neuf autres documents de g1.
+    r = es.search(index=PAGE_INDEX, size=50, sort=[{"groupe": "asc"}],
+                  query={"match_all": {}}, source=False, search_after=["g1"])
+    groupes = {h["sort"][0] for h in r["hits"]["hits"]}
+    assert groupes == {"g2", "g3", "g4"}, groupes
+
+    # La meme requete terminee par une cle unique ne saute plus rien.
+    r = es.search(index=PAGE_INDEX, size=50,
+                  sort=[{"groupe": "asc"}, {"rang": "asc"}],
+                  query={"match_all": {}}, source=False, search_after=["g1", 6])
+    restants = [h["_id"] for h in r["hits"]["hits"] if h["sort"][0] == "g1"]
+    assert restants == ["11", "16", "21", "26", "31", "36", "41", "46"], restants
+
+
+@scenario
+def search_after_refus(es):
+    """Les refus, avec les phrases d'ES : chacun protege d'une pagination
+    silencieusement fausse."""
+    _index_de_pagination(es, 20)
+    refused(lambda: es.search(index=PAGE_INDEX, size=5, from_=5,
+                              sort=[{"rang": "asc"}], search_after=[3]),
+            contains="[from] parameter must be set to 0 when [search_after] is used")
+    refused(lambda: es.search(index=PAGE_INDEX, size=5, search_after=[3]),
+            contains="Sort must contain at least one field.")
+    refused(lambda: es.search(index=PAGE_INDEX, size=5, sort=[{"rang": "asc"}],
+                              search_after=[3, 4]),
+            contains="search_after has 2 value(s) but sort has 1.")
+    # `_shard_doc` hors d'une vue figee : son numero change au premier commit,
+    # donc une reprise batie dessus ne designerait plus rien.
+    refused(lambda: es.search(index=PAGE_INDEX, size=5, sort=["_shard_doc"]),
+            contains="[_shard_doc] sort field cannot be used without [point in time]")
+    refused(lambda: es.search(index=PAGE_INDEX, size=5, scroll="1m",
+                              sort=[{"rang": "asc"}], search_after=[3]),
+            contains="[search_after] cannot be used in a scroll context")
+
+
+@scenario
+def point_in_time_cycle_de_vie(es):
+    """Ouvrir une vue figee, s'en servir, la fermer — par le client officiel,
+    qui a des methodes dediees (`open_point_in_time`, `close_point_in_time`)."""
+    _index_de_pagination(es, 30)
+    ouverture = es.open_point_in_time(index=PAGE_INDEX, keep_alive="1m")
+    pid = ouverture["id"]
+    assert pid, "pas d'identifiant rendu"
+
+    # Une recherche sous PIT ne prend **pas** d'index dans l'URL : il vient du
+    # PIT. Le client officiel a une methode sans index pour ca.
+    r = es.search(size=5, pit={"id": pid, "keep_alive": "1m"},
+                  sort=[{"rang": "asc"}], source=False)
+    assert r["pit_id"] == pid, "la reponse ne rend pas le pit_id a rejouer"
+    # ES ajoute lui-meme `_shard_doc` : le tableau `sort` a donc **deux**
+    # valeurs alors qu'une seule cle a ete demandee.
+    assert len(r["hits"]["hits"][0]["sort"]) == 2, r["hits"]["hits"][0]["sort"]
+
+    ferme = es.close_point_in_time(id=pid)
+    assert ferme["succeeded"] and ferme["num_freed"] == 1, ferme
+    err = refused(lambda: es.search(size=1, pit={"id": pid},
+                                    sort=[{"rang": "asc"}]),
+                  status=404, contains="all shards failed")
+    assert err["root_cause"][0]["type"] == "search_context_missing_exception"
+
+
+@scenario
+def point_in_time_fige_la_vue(es):
+    """La promesse d'un PIT, et la seule qui compte : ce qui est ecrit apres
+    l'ouverture ne s'y invite pas.
+
+    Un identifiant rendu par un serveur qui ne retient rien serait le pire des
+    deux mondes — le client croit paginer sur une vue stable et lit un index qui
+    bouge."""
+    total = _index_de_pagination(es, 40)
+    pid = es.open_point_in_time(index=PAGE_INDEX, keep_alive="2m")["id"]
+    try:
+        operations = []
+        for i in range(1000, 1020):
+            operations.append({"index": {"_index": PAGE_INDEX, "_id": str(i)}})
+            operations.append({"rang": i, "groupe": "tardif"})
+        es.bulk(operations=operations, refresh=True)
+        # Le serveur, lui, a bien bouge.
+        assert es.search(index=PAGE_INDEX, size=0)["hits"]["total"]["value"] == total + 20
+        # La vue, non.
+        sous_pit = es.search(size=0, pit={"id": pid}, track_total_hits=True)
+        assert sous_pit["hits"]["total"]["value"] == total, sous_pit["hits"]["total"]
+    finally:
+        es.close_point_in_time(id=pid)
+
+
+@scenario
+def export_complet_par_pit_et_search_after(es):
+    """Le remplacant du `scroll` de bout en bout : une vue figee, un tri total,
+    et la reprise par `search_after`.
+
+    C'est le code que la documentation d'Elastic 8.x fait ecrire, et il ne doit
+    demander aucune adaptation."""
+    total = _index_de_pagination(es, 250)
+    pid = es.open_point_in_time(index=PAGE_INDEX, keep_alive="2m")["id"]
+    vus, apres = [], None
+    try:
+        while True:
+            corps = {"size": 40, "pit": {"id": pid, "keep_alive": "2m"},
+                     "sort": [{"groupe": "asc"}], "source": False}
+            if apres:
+                corps["search_after"] = apres
+            r = es.search(**corps)
+            hits = r["hits"]["hits"]
+            if not hits:
+                break
+            vus += [h["_id"] for h in hits]
+            apres = hits[-1]["sort"]
+            pid = r["pit_id"]
+    finally:
+        es.close_point_in_time(id=pid)
+    # Le tri demande n'a que cinq valeurs distinctes : sans le `_shard_doc` que
+    # le serveur ajoute, ce parcours ne rendrait que cinq documents.
+    assert len(vus) == total, f"{len(vus)} documents rendus pour {total}"
+    assert len(set(vus)) == total, "un document a ete rendu deux fois"
+
+
+# ---------------------------------------------------------------------------
 # scroll — la pagination par contexte fige, celle des exports
 # ---------------------------------------------------------------------------
 
@@ -3098,9 +3283,11 @@ def parametres_de_reglages_non_appliques_refuses(es):
 
 @scenario
 def fonctionnalites_hors_perimetre_refusees(es):
+    # `search_after` etait ici jusqu'a la carte 08 : il est servi, et ses
+    # scenarios vivent avec le point-in-time plus haut.
     refused(lambda: es.search(index=INDEX, query={"match_all": {}},
-                              search_after=[1885], sort=[{"annee": "asc"}]),
-            contains="search_after")
+                              collapse={"field": "annee"}),
+            contains="collapse")
     refused(lambda: es.search(index=INDEX, q="titre:bel"), contains="q")
 
 
