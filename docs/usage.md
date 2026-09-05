@@ -104,11 +104,11 @@ régression.
 
 | Sous-corpus | Requêtes | Servies entièrement |
 |---|---|---|
-| **`github` — du code d'application open source** | 338 | **96,7 %** |
-| `clients` — tests et exemples des clients officiels | 143 | 81,8 % |
-| `doc` — la documentation de référence | 3 969 | 41,2 % |
-| `rally` — les tracks de benchmark d'Elastic | 861 | 50,6 % |
-| **tout le corpus** | 5 311 | 47,4 % |
+| **`github` — du code d'application open source** | 338 | **97,0 %** |
+| `clients` — tests et exemples des clients officiels | 143 | 83,2 % |
+| `doc` — la documentation de référence | 3 969 | 41,6 % |
+| `rally` — les tracks de benchmark d'Elastic | 861 | 52,1 % |
+| **tout le corpus** | 5 311 | 47,9 % |
 
 Ces quatre nombres ne se contredisent pas, ils mesurent quatre choses
 différentes, et l'écart entre eux **est** le résultat :
@@ -409,6 +409,16 @@ comptés sur `tests/compat/usage/verdicts.jsonl` (`manques[].trait`).
   `function_score`, `min_score`) ont été livrés entre-temps, et c'est
   exactement ce que « grouper » voulait dire. Un classement d'impact ne vaut
   que pour l'état du périmètre au jour où il est calculé, et il se recalcule.
+
+  La carte 17 (`collapse`, `post_filter`) en est le contre-exemple utile, et
+  il vaut la peine d'être écrit : elle ne déplace le corpus que de **+7
+  requêtes**, parce que les dix requêtes qui les posent sont
+  presque toutes des exemples de documentation qui butent **aussi** sur autre
+  chose. Ce n'est pas la mesure de ce que la carte vaut : les deux paramètres
+  sont la mécanique d'une page à facettes et d'un catalogue dédoublonné, et
+  une page à facettes ne s'écrit pas en dix requêtes de documentation. Le
+  corpus dit ce que les gens **envoient**, pas ce qu'ils ne peuvent pas
+  écrire ; c'est sa limite, et elle se voit ici mieux qu'ailleurs.
 - **La carte 13 (`date_histogram`) bloque 259 requêtes et n'en débloque que 11.**
   Le tableau de bord qui l'envoie envoie aussi `runtime_mappings` et `fields`
   (carte 18). Les deux ensemble sont un lot ; l'une sans l'autre ne sert pas un

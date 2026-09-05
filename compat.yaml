@@ -2438,16 +2438,89 @@ tables:
             - {texte: "une chaîne illisible", note: "`number_format_exception` / « For input string: \"abc\" », la phrase d'ES"}
             - {texte: "reproduire les agrégations qu'**ES** calcule sans tenir compte de son propre seuil", note: "divergence assumée, et c'est ES qui se contredit : avec `{\"query\": {\"match_all\": {}}, \"min_score\": 2}` sur cinq documents, il rend `hits.total: 0` et, **dans la même réponse**, un `value_count` à 0 mais un `terms` avec ses deux seaux pleins. Les deux agrégateurs ne prennent pas le même chemin ; le même seuil sur un `term` ou un `match` est honoré par les deux. ferrite applique le seuil **uniformément** — ses agrégations voient exactement les documents que `hits.total` compte. Reproduire l'écart demanderait une table « quel agrégateur fuit, sous quelle forme de requête » dont la règle n'est écrite nulle part, et qu'ES ne tient pas dans une seule réponse"}
 
+      - id: recherche.post_filter
+        nom: "`post_filter`"
+        etat: supporte
+        poids: 0.0
+        detail: >-
+          un filtre appliqué **après** le calcul des agrégations : la mécanique
+          d'une page à facettes, où choisir « rouge » ne fait pas disparaître
+          les autres couleurs du panneau de gauche. Sa place dans la chaîne
+          **est** sa définition, et chaque moitié est mesurée contre ES 8.15 :
+          il filtre les hits, donc `hits.total` et la pagination (un
+          `post_filter` sur deux documents d'un résultat de quatre rend bien
+          `total: 2`) ; il ne filtre **pas** les agrégations, qui rendent les
+          mêmes seaux avec et sans lui ; il ne **note** rien, un `boost: 10`
+          posé dedans ne déplaçant pas le `_score` d'un hit — d'où
+          [`src/postfiltre.rs`](../src/postfiltre.rs), qui rend le score de la
+          sous-requête au bit près là où l'intersection d'un `bool` **sommerait**
+          les scores de ses clauses ; il n'apparaît pas dans l'arbre d'`explain`
+          et ne surligne rien, les deux lisant la requête sans lui ; mais ses
+          clauses nommées sortent quand même dans `matched_queries`, dans la
+          même liste que celles de la requête. Et il filtre aussi les
+          `inner_hits` d'un `collapse`. Mesuré par
+          [`sonde_repli.py`](../tests/compat/sonde_repli.py)
+        parametres:
+          supportes:
+            - {texte: "n'importe quelle clause du Query DSL, y compris nommée par un `_name`"}
+            - {texte: "avec `from` / `size`, `sort`, `min_score`, `aggs`, `highlight`, `explain`, `scroll`, `collapse` et le multi-index"}
+          refuses:
+            - {texte: "`null`, une chaîne, une liste", note: "`parsing_exception` / « Unknown key for a VALUE_NULL in [post_filter]. », la phrase d'ES, jeton JSON compris"}
+            - {texte: "reproduire le préfixe `[ligne:colonne]` d'un objet vide", note: "ES rend « query malformed, empty clause found at [1:46] » : la position désigne un offset dans le JSON brut, que ferrite n'a plus une fois le corps parsé. Le statut et le refus sont les mêmes"}
+
+      - id: recherche.collapse
+        nom: "`collapse`"
+        etat: partiel
+        poids: 0.2
+        detail: >-
+          un seul document par valeur de champ — « un résultat par produit, pas
+          un par variante ». Le paramètre a l'air d'un `terms` déguisé et ne
+          l'est pas : il ne regroupe rien, il **choisit un représentant** dans
+          la liste déjà ordonnée. Trois conséquences mesurées contre ES 8.15, et
+          aucune devinable : `hits.total` reste celui d'**avant** repliement
+          (une page qui affiche « 7 résultats » et trois lignes n'est pas en
+          panne) ; `from` et `size` paginent les **groupes**, pas les documents ;
+          et les documents **sans valeur** ne disparaissent pas et ne sortent pas
+          un par un — ils forment **un** groupe, dont le représentant ne porte
+          aucune entrée dans `fields`. Un champ **multivalué** fait tomber la
+          recherche entière, comme chez ES : choisir la première valeur rendrait
+          un repliement plausible et faux, en 200. Les `inner_hits` ne sont pas
+          relus par une seconde recherche — les candidats du groupe sont déjà
+          collectés, ce qui garantit qu'ils voient exactement ce que la page
+          voit, `post_filter` et `min_score` compris. Voir
+          [`src/collapse.rs`](../src/collapse.rs), mesuré par
+          [`sonde_repli.py`](../tests/compat/sonde_repli.py)
+        parametres:
+          supportes:
+            - {texte: "`field` sur un `keyword` ou un numérique, y compris `index: false` (le champ garde sa colonne) et un multi-field (`nom.keyword`)"}
+            - {texte: "`max_concurrent_group_searches`", note: "accepté et sans effet : chez ES il borne le parallélisme des sous-recherches d'`inner_hits`, et ferrite n'en lance aucune. Il ne peut donc pas changer une réponse — le même raisonnement que `preference`"}
+            - {texte: "`inner_hits` : `name` (obligatoire, mesure — la documentation d'ES le présente comme optionnel), `from`, `size` (défaut **3**, pas 10), `sort`, `_source`, et un second niveau de `collapse`"}
+            - {texte: "avec `sort` (le représentant est le premier **du tri**), `aggs` (qui ne voient pas le repliement), `post_filter`, `min_score`, `highlight`, `fields`, `docvalue_fields`, `_source` et le multi-index"}
+          refuses:
+            - {texte: "un champ `text`, `date` ou `boolean`", note: "« collapse is not supported for the field [x] of the type [text] », la phrase d'ES — c'est **lui** qui refuse les trois"}
+            - {texte: "un champ non mappé", note: "« no mapping found for `x` in order to collapse on », la phrase d'ES"}
+            - {texte: "dans un `scroll`", note: "« Validation Failed: 1: cannot use `collapse` in a scroll context; », le type et la phrase d'ES"}
+            - {texte: "un sous-champ de `nested`", note: "divergence assumée. ES rend 200 en rangeant **tous** les documents racine dans le groupe sans valeur — ses éléments sont des documents à part, donc la racine n'a pas de colonne. ferrite, lui, en a une à cet endroit et replierait sur les valeurs des éléments : il refuse en le nommant, comme il le fait déjà pour le tri et les agrégations"}
+            - {texte: "`highlight`, `docvalue_fields`, `fields`, `stored_fields`, `script_fields`, `runtime_mappings`, `explain`, `version`, `seq_no_primary_term`, `track_scores` dans un `inner_hits`", note: "ES les sert ; les laisser passer rendrait un bloc `inner_hits` amputé en silence"}
+            - {texte: "un troisième niveau de repliement", note: "« Invalid token in the inner collapse », la phrase d'ES — il s'arrête à deux niveaux lui aussi"}
+            - {texte: "reproduire le numéro de document d'un champ multivalué", note: "divergence assumée. Le refus, son type et son statut sont ceux d'ES (« failed to extract doc:N, the grouping field must be single valued ») ; le numéro est **interne**, celui de Lucene chez ES et celui de tantivy ici, et les deux n'ont aucune raison de coïncider"}
+            - {texte: "reproduire la `NullPointerException` d'un `collapse` sans `field`", note: "ES tombe en 500 sur « Cannot invoke \"Object.hashCode()\" because \"pk\" is null » : un repliement sans champ n'a pas de clé. ferrite refuse explicitement en 400 — reproduire un plantage de la référence n'aurait aucun intérêt"}
+            - {texte: "reproduire le préfixe `[ligne:colonne]` de ses refus de parsing", note: "la même divergence que partout ailleurs : la position désigne un offset dans le JSON brut, que ferrite n'a plus une fois le corps parsé"}
+        conformance:
+          erreurs:
+            - "ferrite ne supporte pas \\[[a-z_]+\\] dans \\[collapse.inner_hits\\]"
+            - "ferrite ne supporte pas \\[collapse\\] sur un sous-champ de \\[nested\\]"
+
       - id: recherche.non_supportes
         nom: >-
-          `search_after`, `pit`, `collapse`, `knn`,
-          `seq_no_primary_term`, `post_filter`, `suggest`,
+          `search_after`, `pit`, `knn`,
+          `seq_no_primary_term`, `suggest`,
           `rescore`, `track_scores`, `q`, `terminate_after`,
           `version`, `indices_boost`, `profile`, `slice`, `stats`, `ext`,
           `retriever`
         etat: refuse
         motif: pas_encore
-        poids: 3.0
+        poids: 2.9
         raison: >-
           aucun n'est un obstacle de moteur ; `search_after` est celui qui
           manque le plus, pour paginer au-delà de 10 000.
@@ -2456,7 +2529,7 @@ tables:
             # Le meme refus arrive par deux chemins : dans le corps (« ferrite
             # ne supporte pas [search_after] dans [_search] ») et en query
             # string (« unrecognized parameter: [docvalue_fields] »).
-            - "ferrite ne supporte pas \\[(search_after|collapse|knn|post_filter|suggest|rescore|track_scores|q|pit|profile|terminate_after|version|indices_boost|slice|stats|ext|retriever)\\] dans \\[_search\\]"
+            - "ferrite ne supporte pas \\[(search_after|knn|suggest|rescore|track_scores|q|pit|profile|terminate_after|version|indices_boost|slice|stats|ext|retriever)\\] dans \\[_search\\]"
             - "unrecognized parameter: \\[(search_after|collapse|knn|fields|seq_no_primary_term|post_filter|suggest|rescore|track_scores|q)\\]"
 
       - id: recherche.timeout

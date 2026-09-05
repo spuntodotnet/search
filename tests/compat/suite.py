@@ -5257,6 +5257,217 @@ def simple_query_string_ne_leve_jamais(es):
 
 
 # ---------------------------------------------------------------------------
+# Une page de resultats : `post_filter` et `collapse` (carte 17)
+# ---------------------------------------------------------------------------
+
+RP = "compat-repli"
+
+
+def _prepare_repli(es):
+    """Un catalogue minuscule : deux marques, deux documents sans marque.
+
+    Les scores sont exacts des deux cotes — `match_all` note tout a 1.0 — donc
+    tout ce que le scenario compare se compare au bit pres.
+    """
+    es.options(ignore_status=404).indices.delete(index=RP)
+    es.indices.create(index=RP, mappings={"properties": {
+        "marque": {"type": "keyword"},
+        "couleur": {"type": "keyword"},
+        "prix": {"type": "long"},
+        "nom": {"type": "text"}}})
+    docs = {
+        "p1": {"marque": "acme", "couleur": "rouge", "prix": 10, "nom": "chaise"},
+        "p2": {"marque": "acme", "couleur": "rouge", "prix": 20, "nom": "chaise"},
+        "p3": {"marque": "acme", "couleur": "bleu", "prix": 30, "nom": "table"},
+        "p4": {"marque": "bolt", "couleur": "bleu", "prix": 40, "nom": "chaise"},
+        # Sans `marque` : les deux suivants doivent faire **un** groupe.
+        "p5": {"couleur": "vert", "prix": 50, "nom": "table"},
+        "p6": {"couleur": "vert", "prix": 60, "nom": "chaise"},
+    }
+    for id_, doc in docs.items():
+        es.index(index=RP, id=id_, document=doc)
+    es.indices.refresh(index=RP)
+
+
+@scenario
+def post_filter_ne_touche_pas_aux_facettes(es):
+    """`post_filter` : filtrer les hits **sans** toucher aux agregations.
+
+    C'est la mecanique d'une page a facettes — choisir « rouge » ne doit pas
+    faire disparaitre les autres couleurs du panneau de gauche. Ce que le
+    scenario verifie n'est donc pas « filtre-t-il » mais ce qu'il **ne touche
+    pas**, et ce qu'il touche quand meme.
+    """
+    _prepare_repli(es)
+    facettes = {"parcouleur": {"terms": {"field": "couleur"}}}
+
+    def seaux(rep):
+        return {b["key"]: b["doc_count"]
+                for b in rep["aggregations"]["parcouleur"]["buckets"]}
+
+    plein = es.search(index=RP, query={"match_all": {}}, aggs=facettes)
+    assert plein["hits"]["total"]["value"] == 6
+    assert seaux(plein) == {"bleu": 2, "rouge": 2, "vert": 2}
+
+    filtre = es.search(index=RP, query={"match_all": {}}, aggs=facettes,
+                       post_filter={"term": {"couleur": "rouge"}})
+    # Les hits sont filtres — et le total avec : c'est ce qui separe
+    # `post_filter` d'un filtrage fait cote client apres coup.
+    assert sorted(ids(filtre)) == ["p1", "p2"]
+    assert filtre["hits"]["total"]["value"] == 2
+    # Les facettes, elles, n'ont pas bouge. C'est tout l'objet du parametre.
+    assert seaux(filtre) == seaux(plein)
+
+    # La pagination porte sur ce qui reste.
+    page = es.search(index=RP, query={"match_all": {}}, from_=1, size=1,
+                     post_filter={"term": {"couleur": "rouge"}})
+    assert ids(page) == ["p2"] and page["hits"]["total"]["value"] == 2
+
+    # Il ne **note** rien : un `boost` pose dedans ne deplace pas le `_score`.
+    boste = es.search(index=RP, query={"match_all": {}},
+                      post_filter={"term": {"couleur": {"value": "rouge",
+                                                        "boost": 10}}})
+    assert [h["_score"] for h in boste["hits"]["hits"]] == [1.0, 1.0]
+
+    # Mais ses clauses nommees sortent dans `matched_queries`, avec celles de
+    # la requete et dans la meme liste.
+    nomme = es.search(
+        index=RP,
+        query={"term": {"couleur": {"value": "rouge", "_name": "q"}}},
+        post_filter={"range": {"prix": {"gte": 20, "_name": "pf"}}})
+    assert ids(nomme) == ["p2"]
+    assert nomme["hits"]["hits"][0]["matched_queries"] == ["q", "pf"]
+
+    # Il s'applique avec un tri, et sous un `scroll`.
+    trie = es.search(index=RP, query={"match_all": {}}, sort=[{"prix": "desc"}],
+                     post_filter={"term": {"couleur": "bleu"}})
+    assert ids(trie) == ["p4", "p3"]
+
+    refused(lambda: es.perform_request(
+        "POST", f"/{RP}/_search", headers={"content-type": "application/json"},
+        body={"query": {"match_all": {}}, "post_filter": None}),
+        contains="Unknown key for a VALUE_NULL in [post_filter].")
+
+
+@scenario
+def collapse_un_resultat_par_valeur(es):
+    """`collapse` : un seul document par valeur de champ.
+
+    Les trois pieges du parametre sont dans la **reponse**, pas dans la liste :
+    `hits.total` reste celui d'avant repliement, `from` / `size` paginent les
+    groupes, et les documents sans valeur forment **un** groupe.
+    """
+    _prepare_repli(es)
+    rep = es.search(index=RP, collapse={"field": "marque"}, size=10)
+    assert ids(rep) == ["p1", "p4", "p5"]
+    # Le total est celui d'**avant** repliement : six documents, trois lignes.
+    assert rep["hits"]["total"]["value"] == 6
+    # Chaque representant porte sa valeur dans `fields` — sauf celui du groupe
+    # sans valeur, qui n'a pas d'entree du tout.
+    assert rep["hits"]["hits"][0]["fields"] == {"marque": ["acme"]}
+    assert rep["hits"]["hits"][1]["fields"] == {"marque": ["bolt"]}
+    assert "fields" not in rep["hits"]["hits"][2]
+
+    # Sous un tri, le representant est le premier **du tri**.
+    trie = es.search(index=RP, collapse={"field": "marque"},
+                     sort=[{"prix": "desc"}], size=10)
+    assert ids(trie) == ["p6", "p4", "p3"]
+
+    # `from` / `size` paginent les groupes, pas les documents.
+    page = es.search(index=RP, collapse={"field": "marque"}, from_=1, size=1)
+    assert ids(page) == ["p4"] and page["hits"]["total"]["value"] == 6
+
+    # Les agregations ne voient pas le repliement.
+    agg = es.search(index=RP, collapse={"field": "marque"}, size=0,
+                    aggs={"parcouleur": {"terms": {"field": "couleur"}}})
+    seaux = {b["key"]: b["doc_count"]
+             for b in agg["aggregations"]["parcouleur"]["buckets"]}
+    assert seaux == {"bleu": 2, "rouge": 2, "vert": 2}
+
+    # Les refus portent les phrases d'ES : c'est **lui** qui refuse un `text`.
+    refused(lambda: es.search(index=RP, collapse={"field": "nom"}),
+            contains="collapse is not supported for the field [nom] of the type [text]")
+    refused(lambda: es.search(index=RP, collapse={"field": "nawak"}),
+            contains="no mapping found for `nawak` in order to collapse on")
+    refused(lambda: es.search(index=RP, collapse={"field": "marque"}, scroll="1m"),
+            contains="cannot use `collapse` in a scroll context")
+
+
+@scenario
+def collapse_inner_hits_ramene_le_groupe(es):
+    """`inner_hits` : les documents replies d'un groupe.
+
+    Ils ne sont pas relus par une seconde recherche — les candidats du groupe
+    sont deja collectes — et c'est ce qui garantit qu'ils voient exactement ce
+    que la page voit, `post_filter` compris.
+    """
+    _prepare_repli(es)
+
+    def bloc(rep, i, nom="g"):
+        b = rep["hits"]["hits"][i]["inner_hits"][nom]["hits"]
+        return b["total"]["value"], [h["_id"] for h in b["hits"]]
+
+    rep = es.search(index=RP, size=10,
+                    collapse={"field": "marque",
+                              "inner_hits": {"name": "g", "size": 10}})
+    assert bloc(rep, 0) == (3, ["p1", "p2", "p3"])
+    assert bloc(rep, 1) == (1, ["p4"])
+    # Les deux documents sans marque sont bien **un** groupe.
+    assert bloc(rep, 2) == (2, ["p5", "p6"])
+
+    # `size` vaut 3 par defaut, pas 10 — mesure contre ES 8.15.
+    defaut = es.search(index=RP, size=10,
+                       collapse={"field": "marque", "inner_hits": {"name": "g"}})
+    assert bloc(defaut, 0) == (3, ["p1", "p2", "p3"])
+
+    # Un bloc a son propre tri, et plusieurs blocs cohabitent.
+    deux = es.search(index=RP, size=10, collapse={"field": "marque", "inner_hits": [
+        {"name": "premier", "size": 1},
+        {"name": "cher", "size": 2, "sort": [{"prix": "desc"}]}]})
+    assert bloc(deux, 0, "premier") == (3, ["p1"])
+    assert bloc(deux, 0, "cher") == (3, ["p3", "p2"])
+    # Sous un tri, l'inner hit porte son tableau `sort` et plus de `_score`.
+    cher = deux["hits"]["hits"][0]["inner_hits"]["cher"]["hits"]["hits"][0]
+    assert cher["sort"] == [30] and cher["_score"] is None
+
+    # Un second niveau de repliement dedoublonne les membres, et pose sa valeur
+    # dans leur `fields`. `total` reste celui d'avant.
+    niveau2 = es.search(index=RP, size=10, collapse={
+        "field": "marque",
+        "inner_hits": {"name": "g", "size": 10, "collapse": {"field": "couleur"}}})
+    assert bloc(niveau2, 0) == (3, ["p1", "p3"])
+    membres = niveau2["hits"]["hits"][0]["inner_hits"]["g"]["hits"]["hits"]
+    assert [m["fields"] for m in membres] == [{"couleur": ["rouge"]},
+                                              {"couleur": ["bleu"]}]
+
+    # Le `post_filter` filtre **aussi** les `inner_hits` : ce n'est pas un
+    # simple masque pose sur les representants.
+    filtre = es.search(index=RP, size=10,
+                       post_filter={"range": {"prix": {"gte": 30}}},
+                       collapse={"field": "marque",
+                                 "inner_hits": {"name": "g", "size": 10}})
+    assert bloc(filtre, 0) == (1, ["p3"])
+    assert filtre["hits"]["total"]["value"] == 4
+
+    # Les refus : `name` est obligatoire (mesure — la doc d'ES le presente
+    # comme optionnel), et ce que ferrite ne rend pas est refuse en le nommant.
+    refused(lambda: es.search(index=RP, collapse={
+        "field": "marque", "inner_hits": {"size": 2}}),
+        contains="inner_hits must have a [name]")
+    refused(lambda: es.search(index=RP, collapse={
+        "field": "marque", "inner_hits": {"name": "g",
+                                          "highlight": {"fields": {"nom": {}}}}}),
+        contains="[highlight] dans [collapse.inner_hits]")
+    refused(lambda: es.search(index=RP, collapse={
+        "field": "marque",
+        "inner_hits": {"name": "g",
+                       "collapse": {"field": "couleur",
+                                    "inner_hits": {"name": "h"}}}}),
+        contains="Invalid token in the inner collapse")
+    es.indices.delete(index=RP)
+
+
+# ---------------------------------------------------------------------------
 
 def main():
     es = Elasticsearch(URL, request_timeout=30)
@@ -5271,7 +5482,7 @@ def main():
             print(f"[ echec] {name}")
             print("".join("        " + l for l in
                           traceback.format_exc().splitlines(keepends=True)))
-    for index in (INDEX, SCROLL_INDEX, PQ, PQ2, IF, EX, QS):
+    for index in (INDEX, SCROLL_INDEX, PQ, PQ2, IF, EX, QS, RP):
         es.options(ignore_status=404).indices.delete(index=index)
 
     print()

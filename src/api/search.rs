@@ -132,6 +132,8 @@ pub async fn search(
             "timeout",
             "min_score",
             "explain",
+            "post_filter",
+            "collapse",
         ],
         "_search",
     )?;
@@ -243,13 +245,55 @@ pub async fn search(
     // traduction : aucun parseur de clause n'a donc a connaitre `_name`, et
     // chaque clause nommee devient une requete a part, rejouee document par
     // document (voir [`crate::dsl::extraire_noms`]).
-    let (requete, clauses_nommees) = match body_obj.get("query") {
+    let (requete, mut clauses_nommees) = match body_obj.get("query") {
         Some(v) => {
             let (nettoye, noms) = crate::dsl::extraire_noms(v)?;
             (Some(nettoye), noms)
         }
         None => (None, Vec::new()),
     };
+
+    // `post_filter` est une requete comme une autre — c'est **sa place** dans
+    // la chaine qui le definit, et elle se mesure : il filtre les hits (donc
+    // `hits.total`, donc la pagination) mais **pas** les agregations, il ne
+    // contribue **pas** au score, il n'apparait **pas** dans l'arbre
+    // d'`explain`, il ne surligne rien — et pourtant ses clauses nommees
+    // sortent bien dans `matched_queries`, dans la meme liste que celles de la
+    // requete (mesure contre ES 8.15 : `["q", "pf"]`).
+    let post_filter = match body_obj.get("post_filter") {
+        None => None,
+        // Une valeur qui n'est pas un objet ne peut pas etre une clause, et ES
+        // le dit **avant** de chercher une clause : le message nomme le jeton
+        // JSON, pas la clause manquante.
+        Some(v) if !v.is_object() => {
+            return Err(EsError::parsing(format!(
+                "Unknown key for a {} in [post_filter].",
+                crate::collapse::jeton(v)
+            )))
+        }
+        Some(v) => {
+            let (nettoye, noms) = crate::dsl::extraire_noms(v)?;
+            clauses_nommees.extend(noms);
+            Some(nettoye)
+        }
+    };
+    // Le bloc `collapse` se lit **avant** la boucle sur les index : sa forme ne
+    // depend d'aucun mapping (seul le type du champ en depend), et un
+    // `inner_hits` sans `name` doit etre refuse meme sans index vise.
+    let repli = match body_obj.get("collapse") {
+        Some(v) => Some(std::sync::Arc::new(crate::collapse::lire(v)?)),
+        None => None,
+    };
+    // ES refuse le repliement dans un `scroll`, avec ce type et cette phrase :
+    // un contexte de scroll rend chaque document une fois, et un repliement en
+    // cache — les deux promesses ne tiennent pas ensemble.
+    if keep_alive.is_some() && repli.is_some() {
+        return Err(EsError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            "action_request_validation_exception",
+            "Validation Failed: 1: cannot use `collapse` in a scroll context;",
+        ));
+    }
 
     // Aucun index vise : la boucle ci-dessous ne tourne pas, donc rien du corps
     // ne serait lu. Il est valide a part, contre un schema vide.
@@ -261,6 +305,18 @@ pub async fn search(
             body_obj.get("sort"),
             maintenant,
         )?;
+        // Le `post_filter` est une requete : sa forme se verifie contre le
+        // schema vide comme celle de `query`, sans quoi
+        // `{"post_filter": {"pas_une_clause": {}}}` rendrait 200 sur un cluster
+        // vide la ou ES rend 400.
+        valider_sans_index(post_filter.as_ref(), None, None, None, maintenant)?;
+        // Le tri d'un `inner_hits` aussi : c'est un `sort` de plus, et ES rend
+        // 400 sur un `order` invalide sans index vise.
+        for bloc in repli.iter().flat_map(|d| d.blocs.iter()) {
+            if let Some(v) = &bloc.sort {
+                valider_sans_index(None, None, None, Some(v), maintenant)?;
+            }
+        }
     }
 
     // Une cible par index vise, chacune avec sa requete, ses cles de tri et son
@@ -281,7 +337,7 @@ pub async fn search(
                 None => Ok(Vec::new()),
             },
         };
-        let sort = match sort {
+        let mut sort = match sort {
             Ok(s) => s,
             // Trier sur un champ que cet index ne mappe pas : ES ne fait pas
             // echouer la recherche, il rapporte l'echec **de ce shard** et rend
@@ -347,6 +403,53 @@ pub async fn search(
             Some(m) => Box::new(crate::seuil::Seuil::new(query, m)),
             None => query,
         };
+        // Le `post_filter` s'intersecte avec la requete **sans y ajouter de
+        // score** : mesure contre ES 8.15, ou un `boost: 10` pose dedans ne
+        // change pas le `_score` du hit. D'ou [`crate::postfiltre::Filtre`],
+        // qui rend le score de la sous-requete au bit pres, plutot qu'un
+        // `bool` dont l'intersection **somme** les scores de ses clauses.
+        let query_hits: Box<dyn tantivy::query::Query> = match &post_filter {
+            None => query.box_clone(),
+            Some(v) => {
+                let filtre = match build_query(v, &ctx) {
+                    Ok(q) => q,
+                    Err(e) if e.champ_inconnu.is_some() => {
+                        ignore.get_or_insert(e);
+                        continue;
+                    }
+                    Err(e) if e.de_shard => {
+                        echecs.push(echec_de_shard(&nom, &uuid, &e, &st.catalog.cluster_uuid));
+                        continue;
+                    }
+                    Err(e) => return Err(e),
+                };
+                Box::new(crate::postfiltre::Filtre::new(query.box_clone(), filtre))
+            }
+        };
+        // Le repliement se resout sur **ce** mapping : c'est le type du champ
+        // qui dit si ES sait replier dessus, et le tri de chaque `inner_hits`
+        // s'y resout aussi. Ses cles se rangent derriere celles de la racine
+        // dans le meme tableau — un seul collecteur les lit toutes.
+        let sort_racine = sort.len();
+        let repli = match &repli {
+            None => None,
+            Some(d) => {
+                let plan = crate::collapse::resoudre(d, &gen.fields, sort_racine, &|v, champs| {
+                    parse_sort_body(v, champs)
+                });
+                match plan {
+                    Ok(p) => {
+                        sort.extend(p.tris());
+                        Some(std::sync::Arc::new(p))
+                    }
+                    Err(e) if e.champ_inconnu.is_some() || e.de_shard => {
+                        echecs.push(echec_de_shard(&nom, &uuid, &e, &st.catalog.cluster_uuid));
+                        continue;
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+        };
         // Meme raisonnement pour les agregations : un index qui ne mappe pas le
         // champ agrege n'a aucune valeur a y verser.
         let (agrege, prep) = match &aggs {
@@ -394,8 +497,11 @@ pub async fn search(
                 Err(e) => return Err(e),
             }
         }
+        // Seules les cles de la **racine** decident du classement de la page :
+        // celles des `inner_hits` la suivent dans le meme tableau, mais ne
+        // trient que leur propre bloc.
         if sort_asc.is_empty() {
-            sort_asc = sort.iter().map(|s| s.asc).collect();
+            sort_asc = sort[..sort_racine].iter().map(|s| s.asc).collect();
         }
         cibles.push(Cible {
             nom,
@@ -403,7 +509,9 @@ pub async fn search(
             plan,
             hl,
             query,
+            query_hits,
             sort,
+            repli,
             agrege,
             prep,
             incidents,
@@ -435,6 +543,7 @@ pub async fn search(
         from,
         size,
         sort_asc,
+        replie: repli.is_some(),
         rendu: Rendu {
             source,
             avec_id: demande.avec_id(),

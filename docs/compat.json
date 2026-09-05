@@ -36,11 +36,11 @@
     }
   },
   "totaux": {
-    "capacites": 213,
-    "supporte": 101,
-    "partiel": 68,
+    "capacites": 215,
+    "supporte": 102,
+    "partiel": 69,
     "refuse": 44,
-    "poids_renseignes": 154
+    "poids_renseignes": 156
   },
   "capacites": [
     {
@@ -2272,12 +2272,59 @@
       }
     },
     {
+      "id": "recherche.post_filter",
+      "table": "corps_search",
+      "nom": "`post_filter`",
+      "nom_texte": "post_filter",
+      "etat": "supporte",
+      "poids": 0.0,
+      "detail": "un filtre appliqué **après** le calcul des agrégations : la mécanique d'une page à facettes, où choisir « rouge » ne fait pas disparaître les autres couleurs du panneau de gauche. Sa place dans la chaîne **est** sa définition, et chaque moitié est mesurée contre ES 8.15 : il filtre les hits, donc `hits.total` et la pagination (un `post_filter` sur deux documents d'un résultat de quatre rend bien `total: 2`) ; il ne filtre **pas** les agrégations, qui rendent les mêmes seaux avec et sans lui ; il ne **note** rien, un `boost: 10` posé dedans ne déplaçant pas le `_score` d'un hit — d'où [`src/postfiltre.rs`](../src/postfiltre.rs), qui rend le score de la sous-requête au bit près là où l'intersection d'un `bool` **sommerait** les scores de ses clauses ; il n'apparaît pas dans l'arbre d'`explain` et ne surligne rien, les deux lisant la requête sans lui ; mais ses clauses nommées sortent quand même dans `matched_queries`, dans la même liste que celles de la requête. Et il filtre aussi les `inner_hits` d'un `collapse`. Mesuré par [`sonde_repli.py`](../tests/compat/sonde_repli.py)",
+      "parametres": {
+        "supportes": [
+          "n'importe quelle clause du Query DSL, y compris nommée par un _name",
+          "avec from / size, sort, min_score, aggs, highlight, explain, scroll, collapse et le multi-index"
+        ],
+        "refuses": [
+          "null, une chaîne, une liste",
+          "reproduire le préfixe [ligne:colonne] d'un objet vide"
+        ]
+      }
+    },
+    {
+      "id": "recherche.collapse",
+      "table": "corps_search",
+      "nom": "`collapse`",
+      "nom_texte": "collapse",
+      "etat": "partiel",
+      "poids": 0.2,
+      "detail": "un seul document par valeur de champ — « un résultat par produit, pas un par variante ». Le paramètre a l'air d'un `terms` déguisé et ne l'est pas : il ne regroupe rien, il **choisit un représentant** dans la liste déjà ordonnée. Trois conséquences mesurées contre ES 8.15, et aucune devinable : `hits.total` reste celui d'**avant** repliement (une page qui affiche « 7 résultats » et trois lignes n'est pas en panne) ; `from` et `size` paginent les **groupes**, pas les documents ; et les documents **sans valeur** ne disparaissent pas et ne sortent pas un par un — ils forment **un** groupe, dont le représentant ne porte aucune entrée dans `fields`. Un champ **multivalué** fait tomber la recherche entière, comme chez ES : choisir la première valeur rendrait un repliement plausible et faux, en 200. Les `inner_hits` ne sont pas relus par une seconde recherche — les candidats du groupe sont déjà collectés, ce qui garantit qu'ils voient exactement ce que la page voit, `post_filter` et `min_score` compris. Voir [`src/collapse.rs`](../src/collapse.rs), mesuré par [`sonde_repli.py`](../tests/compat/sonde_repli.py)",
+      "parametres": {
+        "supportes": [
+          "field sur un keyword ou un numérique, y compris index: false (le champ garde sa colonne) et un multi-field (nom.keyword)",
+          "max_concurrent_group_searches",
+          "inner_hits : name (obligatoire, mesure — la documentation d'ES le présente comme optionnel), from, size (défaut 3, pas 10), sort, _source, et un second niveau de collapse",
+          "avec sort (le représentant est le premier du tri), aggs (qui ne voient pas le repliement), post_filter, min_score, highlight, fields, docvalue_fields, _source et le multi-index"
+        ],
+        "refuses": [
+          "un champ text, date ou boolean",
+          "un champ non mappé",
+          "dans un scroll",
+          "un sous-champ de nested",
+          "highlight, docvalue_fields, fields, stored_fields, script_fields, runtime_mappings, explain, version, seq_no_primary_term, track_scores dans un inner_hits",
+          "un troisième niveau de repliement",
+          "reproduire le numéro de document d'un champ multivalué",
+          "reproduire la NullPointerException d'un collapse sans field",
+          "reproduire le préfixe [ligne:colonne] de ses refus de parsing"
+        ]
+      }
+    },
+    {
       "id": "recherche.non_supportes",
       "table": "corps_search",
-      "nom": "`search_after`, `pit`, `collapse`, `knn`, `seq_no_primary_term`, `post_filter`, `suggest`, `rescore`, `track_scores`, `q`, `terminate_after`, `version`, `indices_boost`, `profile`, `slice`, `stats`, `ext`, `retriever`",
-      "nom_texte": "search_after, pit, collapse, knn, seq_no_primary_term, post_filter, suggest, rescore, track_scores, q, terminate_after, version, indices_boost, profile, slice, stats, ext, retriever",
+      "nom": "`search_after`, `pit`, `knn`, `seq_no_primary_term`, `suggest`, `rescore`, `track_scores`, `q`, `terminate_after`, `version`, `indices_boost`, `profile`, `slice`, `stats`, `ext`, `retriever`",
+      "nom_texte": "search_after, pit, knn, seq_no_primary_term, suggest, rescore, track_scores, q, terminate_after, version, indices_boost, profile, slice, stats, ext, retriever",
       "etat": "refuse",
-      "poids": 3.0,
+      "poids": 2.9,
       "motif": "pas_encore",
       "raison": "aucun n'est un obstacle de moteur ; `search_after` est celui qui manque le plus, pour paginer au-delà de 10 000."
     },

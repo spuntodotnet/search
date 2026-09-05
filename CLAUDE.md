@@ -303,7 +303,7 @@ développement, pas de CI).
 
 | Commande | La question à laquelle elle répond |
 |---|---|
-| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**129/129**, dont la recherche **par `_id`**, le filtrage d'un index par son nom, `min_score` et ce qu'il change (le total, la pagination, les agrégations), l'export par `helpers.scan`, le date math et son `time_zone`, le graphe temporel « par mois » et « par jour à Paris », la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats`, les templates, ce que la réponse transporte — `fields`, `docvalue_fields`, `stored_fields` — la modification par requête, `_delete_by_query` / `_update_by_query`, et les n-grammes de l'autocomplétion, `search_analyzer`, `copy_to` et `store`, et le **réglage de la pertinence** — `function_score`, `boosting`, et le score qu'ils rendent, assertion par assertion — et **pourquoi un document sort** : `_name` / `matched_queries`, `explain: true`, la route `_explain`) |
+| `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**136/136**, dont la recherche **par `_id`**, le filtrage d'un index par son nom, `min_score` et ce qu'il change (le total, la pagination, les agrégations), l'export par `helpers.scan`, le date math et son `time_zone`, le graphe temporel « par mois » et « par jour à Paris », la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats`, les templates, ce que la réponse transporte — `fields`, `docvalue_fields`, `stored_fields` — la modification par requête, `_delete_by_query` / `_update_by_query`, et les n-grammes de l'autocomplétion, `search_analyzer`, `copy_to` et `store`, et le **réglage de la pertinence** — `function_score`, `boosting`, et le score qu'ils rendent, assertion par assertion — et **pourquoi un document sort** : `_name` / `matched_queries`, `explain: true`, la route `_explain`, et enfin ce qui fait une **page de résultats** : `post_filter` qui filtre les hits sans toucher aux facettes, et `collapse` qui n'en garde qu'un par valeur, `inner_hits` compris) |
 | `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (212/213, 0 écart réel) |
 | `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (45/46 ; le seul écart est `_cluster/health`, toujours vert par choix) |
 | `tests/compat/diff_aggs.py` | les mêmes agrégations ? (105/105, `filter` comprise, ce qu'un bucket **vide** doit porter, les deux compteurs d'un `terms` **après** filtrage, et les trois métriques de la ligne suivante) |
@@ -322,6 +322,7 @@ développement, pas de CI).
 | `tests/compat/diff_multi_index.py` | `index=["a","b"]`, `logs-*`, les alias : **les mêmes index visés, fusionnés pareil** ? (87/87, 0 écart, plus aucune divergence assumée ; `--calibrer` : 87/87 contre deux ES) |
 | `tests/compat/sonde_facettes.py` | ce qui sépare un `terms` d'une **facette** : `include` / `exclude` (expression régulière de Lucene, liste exacte, partition) et l'**ordre par sous-agrégation**. Compare le **bloc `terms` entier** — seaux dans leur ordre, valeurs des sous-agrégations, `sum_other_doc_count` et `doc_count_error_upper_bound` : **145/170 identiques, 25 refus assumés, 0 écart** (`--calibrer` : 170/170 contre deux ES). Le même fichier lancé contre le ferrite d'avant rend **30/170** |
 | `tests/compat/sonde_msm.py` | les mêmes documents sur un **`minimum_should_match`** — entier, pourcentage, formes négatives, conditions `3<90%`, et sous un `nested` ? (53/53) |
+| `tests/compat/sonde_repli.py` | ce qui fait une **page de résultats** : `collapse` et `post_filter`. Les deux se définissent par leur **place dans la chaîne** plutôt que par ce qu'ils calculent, donc ce qui se mesure n'est pas « filtrent-ils » mais ce qu'ils **ne touchent pas** — les agrégations, le score, l'arbre d'`explain`, le surlignage — et ce qu'ils touchent quand même : `hits.total`, la pagination, `matched_queries`, et les `inner_hits` d'un repliement. Compare le hit **entier**, chaque bloc `inner_hits` avec son total, son `max_score` et ses documents : **79/97 identiques, 18 refus assumés, 0 écart** (`--calibrer` : 97/97 contre deux ES). Le même fichier lancé contre le ferrite d'avant rend **2/97** |
 | `tests/compat/sonde_tri.py` | les mêmes documents **dans le même ordre** sur un `missing`, un `mode` ou un `unmapped_type` — et la même chose dans le tableau `sort` de chaque hit ? (224 questions, **220 identiques, 4 refus assumés, 0 écart** ; `--calibrer` : 224/224 contre deux ES). Le même fichier lancé contre le ferrite d'avant rend **17/224** |
 | `tests/compat/releve_mots_vides.py` | quelle est **vraiment** la liste de mots vides d'un analyzer d'ES ? Le relevé par candidats — exact *pour les candidats proposés*, et c'est sa limite : il avait manqué `celà` en français. Les listes livrées viennent maintenant de `sonde_langues.py --mots-vides` |
 | `tests/compat/sonde_fields.py` | **ce que la réponse transporte** — `fields`, `docvalue_fields`, `stored_fields`. Compare le **hit entier** (bloc `fields` clé par clé, présence de `_source`, présence de `_id`) : 103/110 identiques, 3 refus assumés écrits, 4 différences d'ordre assumées, 0 écart. Refuse de tourner si elle ne trouve pas les deux serveurs |
@@ -332,14 +333,14 @@ développement, pas de CI).
 | `tests/compat/sonde_meta_champs.py` | un champ de **metadonnees** en clause de requete, c'est quoi au juste ? `_id`, `_index`, `_routing`, `_seq_no`, `_type`, `_source`, `_field_names`, `_version`, `_ignored` x les dix-huit clauses qui prennent un nom de champ. Elle range chaque case dans **trois** issues et pas deux — ES **repond**, ES **refuse**, ES rend **vide** — et c'est la troisieme colonne qui empeche de se tromper de regle : `{"term": {"_id": …}}` rendait 0 en silence, mais `{"term": {"champ_absent": …}}` rend 0 des deux cotes et c'est **juste**. 203 questions, `--calibrer` 203/203 contre deux ES. Le meme fichier lance contre le ferrite d'avant rend **32/203**. `--table` ne demande qu'un serveur et sert a mesurer une **autre version** |
 | `tests/compat/sonde_survie.py` | **le serveur est-il encore là ?** La question qui vient avant toutes les autres sondes : un `panic!` n'est pas un 500, le profil de release porte `panic = "abort"` — le processus meurt, tous les index avec. Le prédicat est explicite et posé **après chaque cas** (`GET /` doit rendre 200), et un cas qui le fait tomber est nommé `MORT` au lieu d'être noyé dans une liste d'écarts. 47 cas : les onze portes du conflit de chemin, les sept routes qui lisent une borne de date, la valeur qui ressemble à un numéro de champ. **47/47 identiques à ES, 0 mort** ; le même fichier contre le binaire 0.10.0 rend **30 cas MORT**. L'inventaire des 87 points de panique est dans [`docs/panics.md`](docs/panics.md) |
 | `tests/compat/sonde_vide.py` | sur un serveur **sans aucun index**, la même chose qu'ES — et rien accepté en silence ? (28/28 identiques, 0 refus muet ; les deux serveurs doivent être vides, c'est l'état mesuré) |
-| `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **670 cas, 30 937 requêtes, 4 divergences ouvertes — toutes antérieures à la carte, mesurées telles** sur quatre plages de graines dont **aucune** n'a servi à corriger : celle sur laquelle on itère ne mesure plus rien, et le générateur ayant changé, les plages du passage précédent ne mesurent plus les mêmes cas. Les mêmes plages contre le **binaire d'avant** rendent 83 divergences : une brique de générateur qui ne fait pas rougir le binaire d'avant ne mesure rien. 21 défauts silencieux trouvés au premier passage, 41 de plus depuis — dont **dix-sept** sur le seul surlignage, quatre sur le scoring (dont trois fois le même : `Math.min` de Java propage `NaN`, celui de Rust non), et cinq sur le voisinage d'`index: false`, qu'une sonde de 244 questions écrites à la main n'avait pas vus. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (50 cas, 2 255 requêtes, 0 divergence réelle) |
+| `tests/compat/fuzz_vs_es.py` | et **en dehors** des combinaisons auxquelles on a pensé ? Mapping, documents et requêtes tirés au sort dans le périmètre déclaré (`compat.yaml` dit ce qui est jouable), posés aux deux serveurs. **480 cas, 21 972 requêtes, 18 divergences ouvertes — toutes antérieures à la carte, mesurées telles** sur quatre plages de graines dont **aucune** n'a servi à corriger : celle sur laquelle on itère ne mesure plus rien, et le générateur ayant changé, les plages du passage précédent ne mesurent plus les mêmes cas. Les mêmes plages contre le **binaire d'avant** rendent 810 divergences : une brique de générateur qui ne fait pas rougir le binaire d'avant ne mesure rien. 21 défauts silencieux trouvés au premier passage, 45 de plus depuis — dont **dix-sept** sur le seul surlignage, quatre sur le scoring (dont trois fois le même : `Math.min` de Java propage `NaN`, celui de Rust non), et cinq sur le voisinage d'`index: false`, qu'une sonde de 244 questions écrites à la main n'avait pas vus. S'étalonne contre **deux** Elasticsearch avant de servir : `--calibrer` (50 cas, 2 255 requêtes, 0 divergence réelle) |
 | `tests/compat/sonde_fuzz.py` | les écarts trouvés par le fuzzing, **figés** hors d'une graine (114/114, plus 12 refus assumés ; les cinq derniers portent sur le motif **vide**, qui désigne la chaîne vide chez Lucene et que ferrite refusait en 400) |
 | `tests/compat/appli_reelle.py` | **un logiciel écrit par d'autres démarre-t-il ?** Clone une vraie application à une révision figée, vérifie que rien n'y a bougé, lance sa **propre** suite d'intégration contre un vrai ES puis contre ferrite, et relève tout le trafic HTTP au passage. Gitea v1.27.2 : **34/34 des deux côtés**. Wagtail v7.1 : **83/83 des deux côtés**, et plus un seul refus que ferrite prononce là où ES répond. Voir [`docs/application.md`](docs/application.md) |
 | `tests/compat/tests_clients.py` | **la suite de tests du client officiel passe-t-elle ?** Pas « un client se connecte » : les cas que l'équipe du client a écrits, joués par **son** lanceur, dans **son** langage. Trois clients, licence Apache-2.0 vérifiée **dans le clone**, révision figée, arbre vérifié intact. `go-elasticsearch` v8.13.0 : 28/30 contre un vrai ES, 16/30 contre ferrite, chaque écart rattaché à une capacité. `elasticsearch-py` v8.15.0 : 71/84 *(origine)* · 45/84 *(adapté)* / 43/84 avec le nettoyage de remplacement, **0/84 telle quelle** — sa fixture nettoie par seize routes x-pack, et les deux chiffres sont publiés. Et le **cycle de vie du client**, joué par le client publié : 9/9 en Python, 7/7 en Go, 7/7 en JavaScript, des deux côtés. Voir [`docs/clients.md`](docs/clients.md) |
 | `tests/compat/genere_compat.py` | le périmètre déclaré et la doc disent-ils la **même chose** ? [`compat.yaml`](compat.yaml) est la source (une entrée par capacité : état, paramètres, motif du refus, poids d'usage) ; [`docs/compat.md`](docs/compat.md) et [`docs/compat.json`](docs/compat.json) en sont **générés**, et la CI échoue s'ils divergent |
 | `tests/compat/perimetre.py` | ce cas qui échoue, il porte sur quoi ? Il rattache un échec de conformance à une capacité déclarée : **régression** si elle est annoncée supportée, **coût de périmètre** si elle est annoncée refusée |
 | `tests/compat/recolte_usage.py` | à quoi ressemblent les requêtes que les gens envoient **vraiment** ? Constitue le corpus ([`tests/compat/usage/corpus.jsonl`](tests/compat/usage/corpus.jsonl), 5 311 requêtes) depuis quatre sources citables : doc de référence 8.15, tracks Rally, clients officiels, code open source. Chaque requête porte l'URL d'où elle vient |
-| `tests/compat/ponderation.py` | **quelle part de ces requêtes passe entièrement ?** (47,4 % du corpus, mais **96,7 % du code d'application** et 50,6 % des tracks Rally — l'écart *est* le résultat). Écrit les `poids` de `compat.yaml`, publie [`docs/usage.json`](docs/usage.json) et la table « ce qui manque, par fréquence d'usage ». `--rejoue` pose la même requête à ferrite et à un vrai ES 8.15 : les deux mesures s'accordent sur 98,8 % des cas |
+| `tests/compat/ponderation.py` | **quelle part de ces requêtes passe entièrement ?** (47,9 % du corpus, mais **97,0 % du code d'application** et 52,1 % des tracks Rally — l'écart *est* le résultat). Écrit les `poids` de `compat.yaml`, publie [`docs/usage.json`](docs/usage.json) et la table « ce qui manque, par fréquence d'usage ». `--rejoue` pose la même requête à ferrite et à un vrai ES 8.15 : les deux mesures s'accordent sur 98,8 % des cas |
 | `tests/compat/conformance_es.py` | que disent les suites de tests **d'Elastic** et d'**OpenSearch** ? Deux sources indépendantes (`--source`), Apache-2.0 toutes les deux, **107** et **112 domaines**, sans liste blanche. Leurs rapports sont des fichiers, pas des phrases : [`conformance.json`](docs/conformance.json) et [`conformance-opensearch.json`](docs/conformance-opensearch.json) (totaux, trois taux, exclusions comptées, détail par cas), régénérés par `--json`, tenus par un cliquet en CI (`--diff`). `--divergences` range à part les cas qu'un **vrai ES 8.15 échoue lui aussi** sur la même suite — mesuré ([`conformance-opensearch-es8150.json`](docs/conformance-opensearch-es8150.json)), pas décidé. `--etat` vérifie entre deux cas que rien n'est **apparu** depuis l'état de départ de la cible — index, alias, templates, réglages de cluster — et arrête la campagne au premier écart (+27 %, payés par la CI) : 79 campagnes consécutives rendent le même rapport à l'octet près |
 | `tests/compat/bench_vs_es.py` | mêmes résultats, **et à quel prix** ? Garde-fou de développement : 600 documents et 138 requêtes **écrites ici**, donc un dénominateur qu'on a choisi soi-même — ne sert plus à publier |
 | `tests/compat/bench_echelle.py` | et **à l'échelle**, sur un corpus que nous n'avons pas écrit ? La track Rally `geonames` d'Elastic (Apache-2.0, révision figée, corpus vérifié à l'octet près), 500 000 et 2 000 000 de documents, **ses** 31 requêtes. `term` ×1,7 et `match_phrase` ×2,6 pour ferrite a deux millions de documents (et l'avance **grandit** avec la taille), RSS ×8 en sa faveur — et le **tri jusqu'a ×290 contre lui**, l'indexation ×0,20, le `scroll` ×0,25. 13 requêtes jouables, 18 refusées, toutes rattachées à une capacité déclarée. Voir [`docs/bench.md`](docs/bench.md) |
@@ -580,6 +581,39 @@ bouger**, pas après.
   constant ne change pas un ensemble de documents — jusqu'à ce qu'un seuil en
   fasse un critère. Trouvé par le fuzzer (graine 9410019), pas par les
   212 questions de `sonde_score.py`.
+- **`post_filter` se définit par ce qu'il ne touche pas.** Filtrer des hits est
+  la partie facile ; ce qui fait le paramètre, c'est qu'il le fasse **après**
+  les agrégations — la mécanique d'une page à facettes, où choisir « rouge » ne
+  doit pas faire disparaître les autres couleurs du panneau de gauche. La
+  frontière se mesure des deux côtés, et aucune moitié ne se devinait : il
+  change `hits.total` et la pagination, mais **pas** les seaux ; ses clauses
+  nommées sortent dans `matched_queries`, **avec** celles de la requête et dans
+  la même liste ; et il n'apparaît **ni** dans l'arbre d'`explain`, **ni** dans
+  le surlignage — les deux lisent la requête sans lui. D'où deux requêtes par
+  index plutôt qu'une ([`Cible::query`] pour les agrégations et l'explication,
+  [`Cible::query_hits`] pour la page), et un filtre écrit à part
+  ([`src/postfiltre.rs`](src/postfiltre.rs)) plutôt qu'un `bool` : l'intersection
+  d'un booléen **somme** les scores de ses clauses, et le premier essai — un
+  `ConstScoreQuery` à 0.0 sous un `Must` — rendait un `_score` de **0.0** là où
+  ES rend 1.0. Un filtre qui note est un filtre faux, en 200.
+- **`collapse` ne regroupe pas, il choisit un représentant — et ses trois
+  pièges sont dans la réponse, pas dans la liste.** `hits.total` reste celui
+  d'**avant** repliement (une page qui affiche « 7 résultats » et trois lignes
+  n'est pas en panne, c'est ce que rend ES) ; `from` et `size` paginent les
+  **groupes** ; et les documents **sans valeur** ne disparaissent pas et ne
+  sortent pas un par un — ils forment **un** groupe, dont le représentant ne
+  porte aucune entrée dans `fields`. Les `inner_hits` ne sont pas relus par une
+  seconde recherche : les membres du groupe sont déjà collectés, et c'est ce
+  qui garantit qu'ils voient exactement ce que la page voit — le `post_filter`
+  **filtre aussi les `inner_hits`**, mesuré, et une sous-recherche écrite à
+  part l'aurait oublié. Deux règles de plus qu'aucune documentation ne donne :
+  `inner_hits.name` est **obligatoire** (la documentation d'ES le présente
+  comme optionnel, il rend 400), sa `size` vaut **3** et non 10, et
+  `inner_hits` sur un champ **non indexé** est refusé alors que le repliement
+  seul y marche — chez ES un `inner_hits` est une vraie sous-recherche, qui a
+  besoin de l'index inverse. Le réflexe d'étendre ce dernier refus au **second**
+  niveau de repliement était faux, et c'est la sonde qui l'a dit : ES l'y
+  accepte, parce qu'il n'a plus de sous-recherche à lancer à ce niveau-là.
 - **Un champ inconnu dans une requête ne correspond à rien, comme chez ES** —
   c'est `index.query.parse.allow_unmapped_fields`, le vrai réglage d'ES, avec
   son défaut (`true`). Ça a longtemps été l'inverse, et la décision était
@@ -920,6 +954,39 @@ bouger**, pas après.
 
 ## Les pièges rencontrés, pour ne pas les repayer
 
+- **L'ordre d'écriture n'est pas l'adresse d'un document, et ça se voit le jour
+  où une liste montre deux ex æquo.** Le départage final d'un classement était
+  l'adresse tantivy (`segment`, `doc`) ; chez Lucene le numéro interne d'un
+  document vaut son ordre d'indexation, chez tantivy **non** — un `_bulk` de 25
+  documents en ressort `d002, d000, d003, d001, …`. Deux documents de même score
+  sortaient donc dans un autre ordre que chez ES, en 200. Invisible depuis
+  toujours : à la racine, toute sonde qui compare un ordre pose une clé de tri
+  totale, et le fuzzer lui-même ajoute une clé unique exprès. Ce qui l'a sorti
+  est un `inner_hits` de `collapse`, le seul endroit de la réponse où une liste
+  **sans tri à elle** est rendue au client. La bonne clé était sous la main, et
+  ce dépôt l'avait déjà nommée une fois pour `_delete_by_query?max_docs` : le
+  `_seq_no`, attribué sous le verrou d'écriture. Deux leçons plutôt qu'une : un
+  défaut d'ordre ne se voit que là où l'ordre est **rendu**, et une correction
+  déjà écrite quelque part ne s'applique pas toute seule ailleurs.
+- **Un champ multivalué ne l'est pas des deux côtés : Lucene dédoublonne les
+  chaînes, pas les nombres.** Un `keyword` qui porte `["x", "x"]` est
+  **mono-valué** pour ES — ses `SortedSetDocValues` dédoublonnent — alors qu'un
+  numérique qui porte `[5, 5]` ne l'est pas : ses `SortedNumericDocValues`
+  gardent les doublons. ferrite refusait les deux, donc rendait 500 là où ES
+  replie sans broncher. Aucune documentation ne dit ça ; c'est le fuzzer qui
+  l'a posé (graine 17100133), et la mesure tient en quatre documents.
+- **ES ne refuse pas toujours ce qu'il déclare refuser : son élagage décide.**
+  Un champ de repliement multivalué fait tomber la recherche entière — quand le
+  collecteur de Lucene **rencontre** le document fautif. Sur le même index et
+  la même requête, `size: 2` rend 200 et `size: 40` rend 500 : la file se
+  remplit, plus rien n'est compétitif, et le document n'est jamais lu. ferrite
+  n'a pas cet élagage : il refuse dès qu'un document correspondant porte deux
+  valeurs, donc sur un **sur-ensemble** des cas d'ES. C'est le seul sens
+  acceptable — un refus visible plutôt qu'un repliement décidé sur une valeur
+  tirée entre deux — et il est déclaré. La leçon dépasse le paramètre : quand
+  une référence lève une exception depuis un chemin d'optimisation, ce n'est
+  pas une règle, c'est un aléa, et le reproduire à l'identique n'est pas
+  possible.
 - **`search(doc_type=…)` d'un client 7.x écrit dans l'index.** L'URL
   `/{index}/_doc/_search` n'est plus une recherche en 8.x : c'est l'indexation
   d'un document dont l'`_id` est `_search`. Vérifié sur un vrai ES 8.15 **et**
@@ -1821,11 +1888,27 @@ ont le champ* et tantivy sur tous. `sonde_explain.py --ecart` les pose côte à
 côte et recalcule les deux scores : jusqu'à 43 % d'écart relatif quand une
 partie du corpus n'a pas le champ interrogé, **zéro** sinon.
 
+**Une page de résultats a enfin ses deux dernières pièces.** `post_filter`
+filtre les hits **sans toucher aux facettes** — la mécanique même d'une page où
+choisir « rouge » ne fait pas disparaître les autres couleurs du panneau de
+gauche — et `collapse` n'en garde qu'un par valeur de champ : « un résultat par
+produit, pas un par variante », avec `inner_hits` pour ramener les variantes
+repliées. Aucun des deux ne se résume à « filtrer » ou « dédoublonner » : ce qui
+a coûté le travail est leur **place dans la chaîne**, et elle se mesure des deux
+côtés. `post_filter` change `hits.total` et la pagination mais pas les
+agrégations, ne contribue à aucun score, n'entre ni dans l'arbre d'`explain` ni
+dans le surlignage — et sort quand même dans `matched_queries`. `collapse`
+laisse `hits.total` à sa valeur d'**avant** repliement, pagine les groupes et
+non les documents, range les documents sans valeur dans **un** groupe, et fait
+tomber la recherche entière sur un champ multivalué, comme ES. Six règles de
+plus qu'aucune documentation ne donne, dont quatre trouvées par le fuzzer.
+
 Ce qui reste, par ordre de gêne pour un projet réel : `rest_total_hits_as_int`,
 `_msearch`, `_reindex`, `intervals`, les templates de **composants** (`_component_template`, et le
 `composed_of` qui les cite — refusé à la pose plutôt qu'appliqué à moitié),
 `random_score` et `script_score`,
-`inner_hits`, `GET /_cat/aliases` et les colonnes `h` / `s` des `_cat`,
+l'`inner_hits` d'un `nested` et d'un `has_child` (celui d'un `collapse` est
+servi), `GET /_cat/aliases` et les colonnes `h` / `s` des `_cat`,
 `GET /{index}/_mapping/field/{champs}`, les agrégations `filters` (la sœur
 plurielle de `filter`) et `composite`, l'`order` d'un `date_histogram` (refusé explicitement),
 les alias **filtrés** (`filter`, refusé explicitement), `?stored_fields=` sur
