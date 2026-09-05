@@ -672,10 +672,11 @@ pub struct Cible {
     /// Les agregations sont-elles collectees sur cet index ? (`false` quand il
     /// ignore un des champs agreges : il n'a alors aucune valeur a apporter.)
     pub agrege: bool,
-    /// Les requetes des agregations [`filter`], construites **dans cette
-    /// generation** comme la requete principale, et rangees par chemin
-    /// d'agregation (voir [`crate::aggs`]).
-    pub filtres: crate::aggs::Filtres,
+    /// Ce que les agregations laissent dans **cette** generation : les requetes
+    /// des agregations [`filter`] et les plans des `top_hits`, construits ici
+    /// comme la requete principale et ranges par chemin d'agregation (voir
+    /// [`crate::aggs`]).
+    pub prep: crate::aggs::Prepare,
     /// Ce que l'execution a rencontre et qu'ES traite en erreur (voir
     /// [`crate::fonction_score::Incidents`]). Relu **apres** chaque recherche :
     /// un `Scorer` ne peut pas echouer, mais son verdict ne doit pas se perdre.
@@ -921,10 +922,12 @@ fn parts_d_agregation<'a>(
         .zip(searchers)
         .filter(|(c, _)| c.agrege)
         .map(|(c, s)| crate::aggs::Part {
+            nom: &c.nom,
             gen: &c.gen,
             searcher: s,
             query: &*c.query,
-            filtres: &c.filtres,
+            prep: &c.prep,
+            nommees: &c.nommees,
         })
         .collect()
 }
@@ -1069,6 +1072,124 @@ pub fn execute(cibles: &[Cible], req: &SearchRequest) -> EsResult<SearchOutcome>
         hits,
         aggregations,
     })
+}
+
+/// Un index sur lequel un `top_hits` va chercher les documents **d'un seau**.
+///
+/// C'est une [`Cible`] amputee de tout ce qui n'a pas de sens ici : le
+/// surlignage et les clauses nommees se resolvent sur la requete de la
+/// recherche, pas sur celle d'un seau, et les deux sont refuses en les nommant
+/// (voir [`crate::metriques`]).
+pub(crate) struct CibleTopHits<'a> {
+    pub nom: &'a str,
+    pub gen: &'a Generation,
+    pub searcher: &'a Searcher,
+    /// La requete de la recherche **croisee avec la contrainte du seau**.
+    pub query: &'a dyn Query,
+    pub plan: &'a crate::fetch::Plan,
+    /// Les cles de tri du `top_hits`, resolues dans cette generation.
+    pub sort: &'a [SortSpec],
+    /// Les clauses nommees de la recherche : ES les rejoue contre les hits d'un
+    /// `top_hits` comme contre ceux de la reponse, et le hit porte alors son
+    /// `matched_queries` (mesure contre ES 8.15). ferrite ne les rendait pas —
+    /// trouve par une plage de controle du fuzzer.
+    pub nommees: &'a [(String, Box<dyn Query>)],
+}
+
+/// Le bloc `hits` d'un `top_hits` : une recherche complete a l'interieur d'un
+/// seau.
+///
+/// C'est le meme `query_then_fetch` que [`execute`], sur le meme collecteur de
+/// tri et le meme `build_hit` — sans quoi deux chemins rendraient deux formes
+/// de hit. Ce qui change est ce qu'il y a autour : la requete est celle du
+/// seau, et le resultat est un objet `{total, max_score, hits}` a poser dans
+/// une agregation plutot qu'a la racine de la reponse.
+pub(crate) fn bloc_top_hits(
+    cibles: &[CibleTopHits<'_>],
+    from: usize,
+    size: usize,
+    sort_asc: &[bool],
+    rendu: &Rendu,
+) -> EsResult<Value> {
+    let trie = !sort_asc.is_empty();
+    let needs_score = !trie
+        || cibles
+            .iter()
+            .any(|c| c.sort.iter().any(|s| matches!(s.key, SortKey::Score)));
+    let fenetre = from + size;
+
+    let mut total = 0usize;
+    let mut max_score: Option<f32> = None;
+    let mut candidats: Vec<Hit> = Vec::new();
+    for (rang, cible) in cibles.iter().enumerate() {
+        if trie {
+            let collector = SortCollector {
+                specs: Arc::new(cible.sort.to_vec()),
+                needs_score,
+                cible: rang,
+            };
+            let mut locaux = cible.searcher.search(cible.query, &collector)?;
+            total += locaux.len();
+            locaux.sort_by(|a, b| compare(sort_asc, a, b));
+            locaux.truncate(fenetre);
+            candidats.extend(locaux);
+        } else {
+            total += cible.searcher.search(cible.query, &CompteAvecScore)?;
+            let top = cible
+                .searcher
+                .search(cible.query, &TopDocs::with_limit(fenetre).order_by_score())?;
+            if let Some((score, _)) = top.first() {
+                max_score = Some(max_score.map_or(*score, |m: f32| m.max(*score)));
+            }
+            candidats.extend(top.into_iter().map(|(score, addr)| Hit {
+                keys: Vec::new(),
+                score,
+                cible: rang,
+                seg: addr.segment_ord,
+                doc: addr.doc_id,
+            }));
+        }
+    }
+    candidats.sort_by(|a, b| compare(sort_asc, a, b));
+
+    let hl = crate::highlight::Plan::default();
+    let incidents = crate::fonction_score::Incidents::anonymes();
+    let mut hits = Vec::new();
+    for hit in candidats.into_iter().skip(from).take(size) {
+        let cible = &cibles[hit.cible];
+        hits.push(build_hit(
+            cible.nom,
+            cible.gen,
+            cible.plan,
+            &hl,
+            cible.searcher,
+            DocAddress::new(hit.seg, hit.doc),
+            (!trie || needs_score).then_some(hit.score),
+            trie.then(|| hit.keys.iter().map(SortValue::to_json).collect()),
+            rendu,
+            cible.query,
+            cible.nommees,
+            &incidents,
+        )?);
+    }
+    // Rejouer une clause nommee **note** le document, donc peut declencher un
+    // garde-fou de `function_score` — et ici, a la restitution. Le verdict ne
+    // doit pas se perdre parce qu'il est tombe dans un seau (meme piege que
+    // celui de la carte 43, une agregation plus loin).
+    if let Some(e) = incidents.erreur() {
+        return Err(e);
+    }
+    Ok(json!({
+        "hits": {
+            // ES ne tronque pas ce total : un `top_hits` porte le compte du
+            // seau, pas celui de la page qu'il rend.
+            "total": {"value": total, "relation": "eq"},
+            "max_score": if trie { Value::Null } else {
+                max_score.map_or(Value::Null, |s| json!(round_score(s)))
+            },
+            "hits": hits,
+        }
+    }))
 }
 
 /// L'ordre entre deux candidats, quel que soit l'index d'ou ils viennent.

@@ -56,6 +56,7 @@ pub mod histodate;
 pub mod langue;
 pub mod mapping;
 pub mod meta;
+pub mod metriques;
 pub mod mots_vides;
 pub mod msm;
 pub mod nested;

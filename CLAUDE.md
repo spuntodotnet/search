@@ -306,7 +306,8 @@ développement, pas de CI).
 | `./tests/compat/run.sh` | est-ce que le client officiel 8.x fait tout ce qu'on prétend ? (**129/129**, dont la recherche **par `_id`**, le filtrage d'un index par son nom, `min_score` et ce qu'il change (le total, la pagination, les agrégations), l'export par `helpers.scan`, le date math et son `time_zone`, le graphe temporel « par mois » et « par jour à Paris », la recherche libre, l'expression de noms d'alias, la recherche sans index, `_field_caps`, `_validate/query`, `_stats`, les templates, ce que la réponse transporte — `fields`, `docvalue_fields`, `stored_fields` — la modification par requête, `_delete_by_query` / `_update_by_query`, et les n-grammes de l'autocomplétion, `search_analyzer`, `copy_to` et `store`, et le **réglage de la pertinence** — `function_score`, `boosting`, et le score qu'ils rendent, assertion par assertion — et **pourquoi un document sort** : `_name` / `matched_queries`, `explain: true`, la route `_explain`) |
 | `tests/compat/diff_relevance.py` | **les mêmes documents dans le même ordre** qu'ES ? (212/213, 0 écart réel) |
 | `tests/compat/diff_against_es.py` | la même *forme* de réponse ? (45/46 ; le seul écart est `_cluster/health`, toujours vert par choix) |
-| `tests/compat/diff_aggs.py` | les mêmes agrégations ? (73/73, `filter` comprise, ce qu'un bucket **vide** doit porter, et les deux compteurs d'un `terms` **après** filtrage) |
+| `tests/compat/diff_aggs.py` | les mêmes agrégations ? (105/105, `filter` comprise, ce qu'un bucket **vide** doit porter, les deux compteurs d'un `terms` **après** filtrage, et les trois métriques de la ligne suivante) |
+| `tests/compat/sonde_metriques.py` | `percentiles`, `extended_stats`, `top_hits` — et surtout **ce qu'on promet sous le nom d'ES** quand ES lui-même annonce une approximation. La mesure a été faite **avant** d'écrire une ligne, et elle a donné une troisième réponse : ES n'est approché qu'**au-delà de 2 000 valeurs** par seau. En dessous, son quantile est une interpolation linéaire sur le tableau trié, que ferrite reproduit au bit près ; au-delà, ferrite reste exact et ES ne l'est plus (**1,14 % à 2 000, 6,59 % à 5 000**, mesuré par `--frontiere`). **97/121 identiques, 15 refus assumés, 7 refus des deux côtés dont la phrase diffère, 2 écarts mesurés et déclarés, 0 écart** (`--calibrer` : 121/121 contre deux ES). Le même fichier contre le ferrite d'avant rend **0/121** |
 | `tests/compat/diff_analyzers.py` | les mêmes tokens, **aux mêmes positions et aux mêmes offsets** ? (51 batteries × 217 textes : 20 analyzers intégrés dont les 12 de langue, 21 déclarations de n-grammes, les 5 analyzers de Wagtail, et les 5 classes de `token_chars` demandées caractère par caractère — toutes identiques) |
 | `tests/compat/sonde_langues.py` | et sur un corpus que nous n'avons **pas** écrit ? Les vocabulaires du projet Snowball (BSD-3-Clause, licence vérifiée, 20 913 à 96 325 mots par langue, **563 000** en tout) posés aux deux serveurs : **43/43 batteries identiques**, `--calibrer` 40/40 contre deux ES. `--ecart` imprime le tableau que la carte demandait — la chaîne d'ES arrêtée après chaque étape, donc **d'où** vient l'écart — et ne demande qu'ES, donc il vaut même sous un refus. `--mots-vides` régénère `src/mots_vides.rs` depuis le jar de Lucene du conteneur, en le vérifiant contre lui dans les deux sens |
 | `tests/compat/diff_datemath.py` | les mêmes documents sur une **borne de date** — `now`, `now-1d/d`, `2026-03-15\|\|+1M`, et l'arrondi selon le côté de la borne ? (276/276, messages d'erreur compris ; 45/276 avant le chantier) |
@@ -1576,6 +1577,55 @@ dans [`docs/application.md`](docs/application.md), et il vaut plus que le
 chiffre : le blocage est tombé d'un cran à chaque carte, et **à chaque fois le
 suivant était un refus de trop** plutôt qu'un manque.
 
+**Les trois métriques qui restaient** sont servies — `percentiles`,
+`extended_stats`, `top_hits` — et la première a demandé de trancher une question
+que les autres ne posent pas. `percentiles` n'est pas une fonction : c'est une
+**structure de données**. ES annonce lui-même une approximation, dont le
+résultat dépend de l'ordre d'insertion ; deux implémentations justes ne rendent
+donc pas le même nombre, et rendre un nombre approché sous le nom d'ES sans le
+dire est ce que ce dépôt refuse en premier (c'est le raisonnement qui fait
+refuser `cardinality`). La mesure, faite **avant** d'écrire une ligne, a donné
+une troisième réponse que ni le refus ni la « divergence favorable »
+n'anticipaient : **ES n'est approché qu'au-delà de 2 000 valeurs par seau**. En
+dessous, son `TDigestState` garde les valeurs telles quelles et son quantile est
+une interpolation linéaire sur le tableau trié. ferrite reproduit cette
+formule-là, donc il est **identique à ES au bit près** sur tout le régime où ES
+est exact — et la seule divergence commence là où ES cesse de promettre une
+valeur (1,14 % à 2 000, 6,59 % à 5 000, mesuré). Le tableau des deux côtés de la
+bascule est publié dans les divergences assumées, pas résumé en une phrase : un
+tableau de bord branché sur un vrai ES lira d'autres chiffres au-delà du seuil,
+et il vaut mieux qu'il le sache avant.
+
+Les deux autres n'avaient pas de décision à prendre, seulement des bords à
+mesurer. `extended_stats` est purement calculatoire, et c'est ce qui le rend
+piégeux : sa variance est **recalculée par ferrite avec la formule d'ES**
+(`(Σx² − (Σx)²/n)/n`) plutôt que reprise de tantivy, qui passe par Welford. Les
+deux sont justes en mathématiques et ne rendent pas le même `double` — et sur le
+corpus de la suite, celle d'ES *perd* ses décimales (`0,8888888886819283` là où
+la vraie variance vaut `0,888888888888889`). C'est cette valeur-là qu'il faut
+rendre. `top_hits`, lui, reproduit une recherche entière à l'intérieur d'un
+seau : ferrite l'exécute en croisant la requête de la recherche avec la
+contrainte qui définit le seau, et cette contrainte **filtre sans noter** — ES
+donne aux hits d'un seau le score de la requête, pas celui du seau (mesuré :
+`2.263` au lieu de `1.0` quand elle y entrait).
+
+Et la brique nouvelle a sorti un défaut qui ne la concerne pas, énième fois :
+tantivy **retire un `AllScorer` de la liste des clauses obligatoires** d'un
+booléen — l'intersection avec « tous les documents » ne change pas l'ensemble
+rendu, et c'est une optimisation légitime — mais elle emporte **le score** de la
+clause avec elle. `{"bool": {"must": [{"match_all": {}}], "filter": [...]}}`,
+l'écriture la plus banale d'une recherche filtrée, rendait `0.0` là où ES rend
+`1.0` ; `must: [match_all, term]` rendait le seul score du terme (`0.875` contre
+`1.875`). Une enveloppe de score constant suffit à l'en empêcher
+([`dsl::tous_les_documents`](src/dsl.rs)), et elle ne coûte rien là où
+l'optimisation compte : `ConstScoreQuery` rend le poids interne tel quel quand
+le collecteur ne demande aucun score. Personne ne l'avait vu parce qu'aucune
+sonde ne posait un `match_all` **dans un `must` à côté d'autre chose** — c'est
+le `top_hits` d'un seau, qui croise exactement ces deux-là, qui l'a fait sortir.
+
+Le corpus d'usage passe de 47,4 % à **47,9 %**, et les tracks Rally de 50,6 % à
+**52,7 %**.
+
 **Écrire sa requête à la main** ne demande plus de la traduire en JSON :
 `query_string` et `simple_query_string` sont servis — la barre de Kibana, un
 panneau Grafana, un filtre « recherche avancée ». C'était le **premier manque
@@ -1776,8 +1826,8 @@ Ce qui reste, par ordre de gêne pour un projet réel : `rest_total_hits_as_int`
 `composed_of` qui les cite — refusé à la pose plutôt qu'appliqué à moitié),
 `random_score` et `script_score`,
 `inner_hits`, `GET /_cat/aliases` et les colonnes `h` / `s` des `_cat`,
-`GET /{index}/_mapping/field/{champs}`, l'agrégation `filters` (la sœur
-plurielle de `filter`), l'`order` d'un `date_histogram` (refusé explicitement),
+`GET /{index}/_mapping/field/{champs}`, les agrégations `filters` (la sœur
+plurielle de `filter`) et `composite`, l'`order` d'un `date_histogram` (refusé explicitement),
 les alias **filtrés** (`filter`, refusé explicitement), `?stored_fields=` sur
 `GET /{index}/_doc/{id}` (le geste se fait par `_search`), et les analyzers des
 langues non latines ou slaves (`arabic`, `czech`, `greek`, `thai`… — ils

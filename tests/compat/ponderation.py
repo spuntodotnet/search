@@ -505,6 +505,8 @@ AGGS = {
     "terms": "agg.terms", "range": "agg.range", "histogram": "agg.histogram",
     "date_histogram": "agg.date_histogram", "filter": "agg.filter",
     "cardinality": "agg.cardinality",
+    "extended_stats": "agg.extended_stats", "percentiles": "agg.percentiles",
+    "top_hits": "agg.top_hits",
     # pas un nom d'agregation : le trait que leve une agregation qui en
     # contient une autre. compat.yaml le declare comme une capacite a part.
     "sous_agregations": "agg.sous_agregations",

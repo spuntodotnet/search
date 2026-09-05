@@ -401,7 +401,27 @@ fn dans_la_colonne(
 fn match_all(body: &Value) -> EsResult<Box<dyn Query>> {
     let obj = as_object(body, "match_all")?;
     expect_only(obj, &["boost"], "match_all")?;
-    boost(Box::new(AllQuery), obj.get("boost"))
+    boost(tous_les_documents(), obj.get("boost"))
+}
+
+/// « Tous les documents », sous une forme dont le score **survit** a une
+/// combinaison booleenne.
+///
+/// tantivy retire un `AllScorer` de la liste des clauses obligatoires d'un
+/// `BooleanQuery` — l'intersection avec « tous les documents » ne change pas
+/// l'ensemble rendu, et c'est une optimisation legitime. Mais elle emporte
+/// **le score** de la clause avec elle : `{"bool": {"must": [{"match_all": {}}],
+/// "filter": [...]}}` rendait `0.0` la ou ES rend `1.0`, et
+/// `must: [match_all, term]` rendait le seul score du terme (mesure contre
+/// ES 8.15 : `0.875` contre `1.875`). Un score faux en 200, sur l'ecriture la
+/// plus banale d'une recherche filtree.
+///
+/// L'enveloppe de score constant suffit a l'en empecher, et elle ne coute rien
+/// la ou l'optimisation compte : `ConstScoreQuery` rend le poids **interne**
+/// tel quel quand le collecteur ne demande aucun score (un `Count`, un tri par
+/// champ), donc `AllScorer` y est toujours reconnu et toujours retire.
+pub fn tous_les_documents() -> Box<dyn Query> {
+    Box::new(ConstScoreQuery::new(Box::new(AllQuery), 1.0))
 }
 
 fn match_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
@@ -1774,7 +1794,7 @@ fn bool_query(body: &Value, ctx: &QueryCtx) -> EsResult<Box<dyn Query>> {
     }
 
     if clauses.is_empty() {
-        return boost(Box::new(AllQuery), obj.get("boost"));
+        return boost(tous_les_documents(), obj.get("boost"));
     }
 
     // Un `bool` qui n'a que des `must_not` ne matche rien chez tantivy, alors

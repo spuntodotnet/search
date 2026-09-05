@@ -41,6 +41,95 @@ def aggregations():
         ("metrique sur champ partiel", {"m": {"avg": {"field": "note"}}}),
         ("deux metriques", {"a": {"min": {"field": "prix"}},
                             "b": {"max": {"field": "prix"}}}),
+        # --- extended_stats : purement calculatoire, donc rien a tolerer.
+        #
+        # La variance et l'ecart-type sont **recalcules** par ferrite avec les
+        # expressions d'ES a partir des trois sommes compensees que tantivy
+        # accumule (celui de tantivy passe par Welford, et les deux ne rendent
+        # pas le meme `double`). Les bords sont mesures un par un par
+        # `sonde_metriques.py` ; ce qui est verrouille ici, ce sont les cles de
+        # la reponse — ES en pose dix-huit, dont un objet `std_deviation_bounds`
+        # a six valeurs qu'il ne retire jamais.
+        ("extended_stats", {"m": {"extended_stats": {"field": "prix"}}}),
+        ("extended_stats sur un entier", {"m": {"extended_stats": {"field": "stock"}}}),
+        ("extended_stats sigma 3", {"m": {"extended_stats": {"field": "prix",
+                                                             "sigma": 3}}}),
+        ("extended_stats sur champ partiel", {"m": {"extended_stats": {"field": "note"}}}),
+        ("extended_stats missing", {"m": {"extended_stats": {"field": "note",
+                                                             "missing": 0}}}),
+        # Un seul document : la variance de population vaut `0.0`, celle
+        # d'echantillon divise par zero et ES rend la **chaine** `"NaN"`.
+        ("extended_stats sur un document", {"m": {"extended_stats": {"field": "prix"}}},
+         {"term": {"_id": "1"}}),
+        ("extended_stats sur zero document", {"m": {"extended_stats": {"field": "prix"}}},
+         {"term": {"categorie": "categorie_inexistante"}}),
+        ("terms + extended_stats", {"f": {"terms": {"field": "marque", "size": 3},
+                                          "aggs": {"s": {"extended_stats": {
+                                              "field": "prix"}}}}}),
+        ("terms order extended_stats.variance", {"f": {"terms": {
+            "field": "marque", "size": 3, "order": {"s.variance": "desc"}},
+            "aggs": {"s": {"extended_stats": {"field": "prix"}}}}}),
+        # --- percentiles : exact chez ferrite, et exact chez ES tant qu'un
+        # seau porte moins de 2 000 valeurs. Le corpus en compte 600, donc les
+        # deux doivent coincider **au bit pres** ; au-dela, la divergence est
+        # declaree et chiffree par `sonde_metriques.py --frontiere`.
+        ("percentiles", {"m": {"percentiles": {"field": "prix"}}}),
+        ("percentiles percents", {"m": {"percentiles": {"field": "prix",
+                                                        "percents": [10, 50, 90]}}}),
+        ("percentiles keyed false", {"m": {"percentiles": {"field": "prix",
+                                                           "keyed": False}}}),
+        ("percentiles sur un entier", {"m": {"percentiles": {"field": "stock"}}}),
+        ("percentiles sur une date", {"m": {"percentiles": {"field": "cree_le"}}}),
+        ("percentiles missing", {"m": {"percentiles": {"field": "note",
+                                                       "missing": 0}}}),
+        ("percentiles sur zero document", {"m": {"percentiles": {"field": "prix"}}},
+         {"term": {"categorie": "categorie_inexistante"}}),
+        ("terms + percentiles", {"f": {"terms": {"field": "marque", "size": 3},
+                                       "aggs": {"p": {"percentiles": {
+                                           "field": "prix"}}}}}),
+        ("range + percentiles", {"r": {"range": {"field": "prix", "ranges": [
+            {"to": 200}, {"from": 200}]},
+            "aggs": {"p": {"percentiles": {"field": "prix"}}}}}),
+        ("date_histogram + percentiles", {"d": {"date_histogram": {
+            "field": "cree_le", "fixed_interval": "30d"},
+            "aggs": {"p": {"percentiles": {"field": "prix"}}}}}),
+        ("filter + percentiles", {"f": {"filter": {"term": {"categorie": "audio"}},
+                                        "aggs": {"p": {"percentiles": {
+                                            "field": "prix"}}}}}),
+        # --- top_hits : une recherche complete a l'interieur d'un seau. Le
+        # bloc `hits` entier est compare — `total`, `max_score`, l'ordre, et le
+        # tableau `sort` de chaque hit.
+        ("top_hits", {"t": {"top_hits": {"size": 2, "sort": [{"prix": "desc"}]}}}),
+        ("top_hits from", {"t": {"top_hits": {"size": 2, "from": 3,
+                                              "sort": [{"prix": "asc"}]}}}),
+        ("top_hits _source liste", {"t": {"top_hits": {
+            "size": 1, "sort": [{"prix": "asc"}], "_source": ["marque", "prix"]}}}),
+        ("top_hits _source false", {"t": {"top_hits": {
+            "size": 1, "sort": [{"prix": "asc"}], "_source": False}}}),
+        ("top_hits docvalue_fields", {"t": {"top_hits": {
+            "size": 1, "sort": [{"prix": "asc"}], "docvalue_fields": ["prix"]}}}),
+        ("terms + top_hits", {"f": {"terms": {"field": "marque", "size": 3},
+                                    "aggs": {"t": {"top_hits": {
+                                        "size": 1, "sort": [{"prix": "desc"}]}}}}}),
+        ("terms + top_hits + avg", {"f": {"terms": {"field": "categorie", "size": 2},
+                                          "aggs": {"t": {"top_hits": {
+                                              "size": 2, "sort": [{"prix": "asc"}]}},
+                                              "m": {"avg": {"field": "prix"}}}}}),
+        ("range + top_hits", {"r": {"range": {"field": "prix", "ranges": [
+            {"to": 200}, {"from": 200}]},
+            "aggs": {"t": {"top_hits": {"size": 1, "sort": [{"prix": "asc"}]}}}}}),
+        ("histogram + top_hits, seaux vides", {"h": {
+            "histogram": {"field": "prix", "interval": 200},
+            "aggs": {"t": {"top_hits": {"size": 1, "sort": [{"prix": "asc"}]}}}}},
+         {"term": {"categorie": "audio"}}),
+        ("date_histogram + top_hits", {"d": {"date_histogram": {
+            "field": "cree_le", "fixed_interval": "30d"},
+            "aggs": {"t": {"top_hits": {"size": 1, "sort": [{"cree_le": "asc"}]}}}}}),
+        ("filter + top_hits", {"f": {"filter": {"term": {"categorie": "audio"}},
+                                     "aggs": {"t": {"top_hits": {
+                                         "size": 2, "sort": [{"prix": "asc"}]}}}}}),
+        ("terms + top_hits sans tri", {"f": {"terms": {"field": "marque", "size": 2},
+                                             "aggs": {"t": {"top_hits": {"size": 1}}}}}),
         # --- terms : le coeur des facettes
         ("terms keyword", {"f": {"terms": {"field": "marque"}}}),
         ("terms size=3", {"f": {"terms": {"field": "marque", "size": 3}}}),

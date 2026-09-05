@@ -145,7 +145,7 @@ async fn executer(
             .avec_incidents(incidents.clone());
         let query = match &requete {
             Some(v) => build_query(v, &ctx),
-            None => Ok(Box::new(tantivy::query::AllQuery) as Box<dyn tantivy::query::Query>),
+            None => Ok(crate::dsl::tous_les_documents()),
         };
         match query {
             Ok(q) => cibles.push(Cible {

@@ -1611,6 +1611,64 @@ pas pour être découverts en production.
     comparer, les cinq refus de chemin d'ordre sont mesurés **identiques aux
     siens** ([`sonde_facettes.py`](../tests/compat/sonde_facettes.py)).
 
+24. **`percentiles` est exact, et il cesse d'être identique à ES au-delà de
+    2 000 valeurs par seau.** C'est la divergence la plus délibérée de cette
+    liste : elle a été mesurée **avant** qu'une ligne de code soit écrite,
+    parce que la question n'était pas « sait-on calculer un percentile » mais
+    « que promet-on sous le nom d'Elasticsearch ».
+
+    `percentiles` n'est pas une fonction, c'est une structure de données : ES
+    annonce lui-même une approximation (un t-digest), dont le résultat dépend
+    de l'ordre d'insertion. Deux implémentations justes ne rendent donc pas le
+    même nombre, et il n'y a pas de « bonne » valeur à viser dans l'absolu —
+    c'est exactement le raisonnement qui fait refuser `cardinality`. Rendre un
+    nombre approché sous le nom d'ES sans le dire est ce que ce dépôt refuse en
+    premier.
+
+    La mesure a donné une troisième réponse, que ni le refus ni la
+    « divergence favorable » n'anticipaient : **ES n'est approché
+    qu'au-delà de 2 000 valeurs**. En dessous, son `TDigestState` retient les
+    valeurs telles quelles et son quantile est une interpolation linéaire sur
+    le tableau trié. La bascule se mesure à la valeur près
+    ([`sonde_metriques.py --frontiere`](../tests/compat/sonde_metriques.py)),
+    écart relatif maximal au percentile exact sur `[1, 5, 25, 50, 75, 95, 99]`,
+    corpus tiré par un générateur figé :
+
+    | valeurs dans le seau | ferrite | Elasticsearch 8.15 |
+    |---|---|---|
+    | 1 997 | 0,00000 % | 0,00000 % |
+    | 1 998 | 0,00000 % | 0,00000 % |
+    | 1 999 | 0,00000 % | 0,00000 % |
+    | **2 000** | 0,00000 % | **1,13717 %** |
+    | 2 001 | 0,00000 % | 0,88678 % |
+    | 2 048 | 0,00000 % | 4,94512 % |
+    | 5 000 | 0,00000 % | 6,59060 % |
+    | 20 000 | 0,00000 % | 0,96984 % |
+
+    ferrite calcule donc l'exact, et ce n'est pas « une divergence
+    favorable » : c'est **la réponse d'ES elle-même**, au bit près, sur tout le
+    régime où ES est exact — la formule reproduite est la sienne
+    (`idx = p/100 × (n−1)`, `v[lo] + (idx − lo) × (v[lo+1] − v[lo])`, plus les
+    deux gardes de bord). La seule divergence commence là où ES cesse de
+    promettre une valeur, et elle est du côté qui rend le nombre **juste**.
+
+    Deux conséquences se paient, et elles sont ici pour être lues avant qu'on
+    les découvre :
+
+    - **le prix est une liste.** ferrite retient les valeurs du seau pour les
+      trier, là où ES bascule sur une esquisse de taille bornée. C'est le même
+      échange que celui du `scroll`, et il grandit avec le nombre de documents
+      du seau, pas avec le nombre de seaux ;
+    - **les chiffres différeront** d'un tableau de bord branché sur un vrai ES
+      dès qu'un seau dépasse 2 000 valeurs. Le tableau ci-dessus dit de
+      combien ; c'est la raison pour laquelle il est publié ici plutôt que
+      résumé en une phrase.
+
+    Ce qui règle l'approximation d'ES (`tdigest` non vide, `hdr`) est refusé en
+    le nommant : ces paramètres choisissent un algorithme dont ferrite ne rend
+    ni l'un ni l'autre, et les ignorer rendrait un nombre que le client n'a pas
+    demandé.
+
 ### L'ordre dans lequel une agrégation lit les valeurs d'un document
 
 Ce n'est pas une divergence — c'est une décision, et elle est ici parce qu'elle

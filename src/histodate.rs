@@ -314,6 +314,18 @@ impl Histo {
         self.keyed
     }
 
+    /// La fin d'un seau, en millisecondes : la borne qui suit son debut.
+    ///
+    /// Elle ne se deduit pas d'une duree : un mois civil n'en a pas de
+    /// constante, et un jour a Paris en a deux (23 h et 25 h). Elle se lit donc
+    /// dans la liste de bornes que [`Self::pose_les_bornes`] a deroulee — la
+    /// meme que celle qui a servi a executer l'agregation, ce qui est la seule
+    /// facon de ne pas refaire le calcul autrement.
+    pub fn fin_du_seau(&self, debut: i64) -> Option<i64> {
+        let i = self.bornes.iter().position(|b| *b == debut)?;
+        self.bornes.get(i + 1).copied()
+    }
+
     /// Les seaux d'un `date_histogram`, tires du resultat `range` de tantivy.
     ///
     /// `sous` remet en forme les sous-agregations d'un seau (elles sont rendues

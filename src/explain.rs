@@ -292,6 +292,19 @@ fn traduire_avec_boost(b: &Brut, schema: &Schema, boost: f32) -> Noeud {
         }
     }
 
+    // « Tous les documents » est enveloppe d'un score constant de 1.0 pour que
+    // tantivy ne laisse pas tomber son score dans un booleen (voir
+    // [`crate::dsl::tous_les_documents`]). L'arbre d'ES ne connait que la
+    // feuille, et c'est elle qu'il faut rendre : l'enveloppe est un detail
+    // d'implementation, pas une etape du calcul.
+    if d == T_CONST {
+        if let [enfant] = &b.details[..] {
+            if enfant.description == T_TOUT {
+                return Noeud::feuille("*:*", b.valeur * boost);
+            }
+        }
+    }
+
     // `Const` porte deux choses chez tantivy : l'enveloppe de `constant_score`
     // (un enfant) et l'intervalle sur colonne (aucun). ES rend une **feuille**
     // dans les deux cas — un score constant n'a rien a expliquer.
