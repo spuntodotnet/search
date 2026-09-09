@@ -106,9 +106,9 @@ régression.
 |---|---|---|
 | **`github` — du code d'application open source** | 338 | **97,0 %** |
 | `clients` — tests et exemples des clients officiels | 143 | 83,2 % |
-| `doc` — la documentation de référence | 3 969 | 41,6 % |
-| `rally` — les tracks de benchmark d'Elastic | 861 | 52,1 % |
-| **tout le corpus** | 5 311 | 47,9 % |
+| `doc` — la documentation de référence | 3 969 | 41,7 % |
+| `rally` — les tracks de benchmark d'Elastic | 861 | 52,3 % |
+| **tout le corpus** | 5 311 | 48,1 % |
 
 Ces quatre nombres ne se contredisent pas, ils mesurent quatre choses
 différentes, et l'écart entre eux **est** le résultat :
@@ -411,8 +411,8 @@ comptés sur `tests/compat/usage/verdicts.jsonl` (`manques[].trait`).
   que pour l'état du périmètre au jour où il est calculé, et il se recalcule.
 
   La carte 17 (`collapse`, `post_filter`) en est le contre-exemple utile, et
-  il vaut la peine d'être écrit : elle ne déplace le corpus que de **+7
-  requêtes**, parce que les dix requêtes qui les posent sont
+  il vaut la peine d'être écrit : elle ne déplace le corpus que de **+8
+  requêtes** (47,9 % → 48,1 %), parce que les dix requêtes qui les posent sont
   presque toutes des exemples de documentation qui butent **aussi** sur autre
   chose. Ce n'est pas la mesure de ce que la carte vaut : les deux paramètres
   sont la mécanique d'une page à facettes et d'un catalogue dédoublonné, et

@@ -10,6 +10,7 @@ pub mod explain;
 pub mod fieldcaps;
 pub mod indices;
 pub mod parrequete;
+pub mod pit;
 pub mod search;
 pub mod stats;
 pub mod templates;
@@ -36,6 +37,8 @@ pub struct AppState {
     pub started: Instant,
     /// Les contextes de `scroll` ouverts (voir [`crate::scroll`]).
     pub scrolls: crate::scroll::RegistrePartage,
+    /// Les vues figees ouvertes par `POST /{index}/_pit`. Voir [`crate::pit`].
+    pub pits: crate::pit::RegistrePartage,
 }
 
 pub type SharedState = Arc<AppState>;
@@ -169,6 +172,11 @@ fn routes(state: SharedState) -> Router {
         .route("/_search", post(search::search_all).get(search::search_all))
         // `scroll` : la pagination par contexte fige. C'est ce dont se sert
         // `helpers.scan` du client officiel, donc tout export d'index.
+        // Le point-in-time : la vue figee que la 8.x recommande a la place du
+        // scroll. `POST /_pit` sans index existe pour que le refus soit celui
+        // d'ES (« [index] is not specified ») et non un 404 de routage.
+        .route("/_pit", post(pit::ouvrir_sans_index).delete(pit::fermer))
+        .route("/{index}/_pit", post(pit::ouvrir))
         .route(
             "/_search/scroll",
             post(search::scroll_suivant)

@@ -60,10 +60,10 @@
  },
  "totaux": {
   "requetes": 5311,
-  "servies": 2546,
-  "refusees": 2748,
+  "servies": 2554,
+  "refusees": 2740,
   "indeterminees": 17,
-  "taux_servies": 47.9
+  "taux_servies": 48.1
  },
  "par_source": {
   "clients": {
@@ -73,11 +73,11 @@
    "taux_servies": 83.2
   },
   "doc": {
-   "servie": 1650,
+   "servie": 1657,
    "total": 3969,
-   "refusee": 2304,
+   "refusee": 2297,
    "indeterminee": 15,
-   "taux_servies": 41.6
+   "taux_servies": 41.7
   },
   "github": {
    "refusee": 10,
@@ -86,11 +86,11 @@
    "taux_servies": 97.0
   },
   "rally": {
-   "refusee": 410,
+   "refusee": 409,
    "total": 861,
-   "servie": 449,
+   "servie": 450,
    "indeterminee": 2,
-   "taux_servies": 52.1
+   "taux_servies": 52.3
   }
  },
  "concentration": [
@@ -172,9 +172,9 @@
  ],
  "par_api": {
   "search": {
-   "servie": 1026,
+   "servie": 1030,
    "total": 1801,
-   "refusee": 774,
+   "refusee": 770,
    "indeterminee": 1
   },
   "indices.create": {
@@ -1266,11 +1266,11 @@
    "total": 2
   },
   "open_point_in_time": {
-   "refusee": 2,
+   "servie": 2,
    "total": 2
   },
   "close_point_in_time": {
-   "refusee": 2,
+   "servie": 2,
    "total": 2
   },
   "scroll": {
@@ -8166,7 +8166,7 @@
   "expr.liste": 0.6,
   "expr.nom": null,
   "hors.api_typee": null,
-  "hors.autres_recherches": 0.6,
+  "hors.autres_recherches": 0.5,
   "hors.cat": 1.1,
   "hors.cluster_distribue": 1.8,
   "hors.cycle_de_vie": 2.6,
@@ -8242,7 +8242,8 @@
   "recherche.highlight": 1.9,
   "recherche.min_score": 0.0,
   "recherche.msearch": 0.0,
-  "recherche.non_supportes": 2.9,
+  "recherche.non_supportes": 2.7,
+  "recherche.pit": 0.2,
   "recherche.post_filter": 0.0,
   "recherche.preference": null,
   "recherche.query": 25.3,
@@ -8253,6 +8254,7 @@
   "recherche.scoring": null,
   "recherche.script_fields": 0.5,
   "recherche.scroll": null,
+  "recherche.search_after": 0.1,
   "recherche.sort": 3.2,
   "recherche.source": 3.7,
   "recherche.stored_fields": 6.6,
@@ -10927,86 +10929,6 @@
    ]
   },
   {
-   "capacite": "recherche.non_supportes",
-   "nom": "search_after, pit, knn, seq_no_primary_term, suggest, rescore, track_scores, q, terminate_after, version, indices_boost, profile, slice, stats, ext, retriever",
-   "etat": "refuse",
-   "motif": "pas_encore",
-   "requetes": 154,
-   "part": 2.9,
-   "par_source": {
-    "clients": {
-     "requetes": 16,
-     "part": 11.2
-    },
-    "doc": {
-     "requetes": 74,
-     "part": 1.9
-    },
-    "github": {
-     "requetes": 4,
-     "part": 1.2
-    },
-    "rally": {
-     "requetes": 60,
-     "part": 7.0
-    }
-   },
-   "traits": [
-    {
-     "trait": "corps:version",
-     "requetes": 56
-    },
-    {
-     "trait": "corps:suggest",
-     "requetes": 28
-    },
-    {
-     "trait": "corps:knn",
-     "requetes": 26
-    },
-    {
-     "trait": "corps:rescore",
-     "requetes": 9
-    },
-    {
-     "trait": "corps:retriever",
-     "requetes": 9
-    },
-    {
-     "trait": "corps:pit",
-     "requetes": 6
-    },
-    {
-     "trait": "corps:search_after",
-     "requetes": 6
-    },
-    {
-     "trait": "corps:profile",
-     "requetes": 5
-    },
-    {
-     "trait": "corps:slice",
-     "requetes": 5
-    },
-    {
-     "trait": "corps:terminate_after",
-     "requetes": 4
-    },
-    {
-     "trait": "corps:indices_boost",
-     "requetes": 2
-    },
-    {
-     "trait": "corps:seq_no_primary_term",
-     "requetes": 2
-    },
-    {
-     "trait": "corps:track_scores",
-     "requetes": 1
-    }
-   ]
-  },
-  {
    "capacite": "type.autres_parametres",
    "nom": "Autres paramètres de champ (null_value, doc_values, norms…)",
    "etat": "refuse",
@@ -11154,6 +11076,78 @@
     },
     {
      "trait": "champ:search_quote_analyzer",
+     "requetes": 1
+    }
+   ]
+  },
+  {
+   "capacite": "recherche.non_supportes",
+   "nom": "knn, seq_no_primary_term, suggest, rescore, track_scores, q, terminate_after, version, indices_boost, profile, slice, stats, ext, retriever",
+   "etat": "refuse",
+   "motif": "pas_encore",
+   "requetes": 145,
+   "part": 2.7,
+   "par_source": {
+    "clients": {
+     "requetes": 16,
+     "part": 11.2
+    },
+    "doc": {
+     "requetes": 68,
+     "part": 1.7
+    },
+    "github": {
+     "requetes": 4,
+     "part": 1.2
+    },
+    "rally": {
+     "requetes": 57,
+     "part": 6.6
+    }
+   },
+   "traits": [
+    {
+     "trait": "corps:version",
+     "requetes": 56
+    },
+    {
+     "trait": "corps:suggest",
+     "requetes": 28
+    },
+    {
+     "trait": "corps:knn",
+     "requetes": 26
+    },
+    {
+     "trait": "corps:rescore",
+     "requetes": 9
+    },
+    {
+     "trait": "corps:retriever",
+     "requetes": 9
+    },
+    {
+     "trait": "corps:profile",
+     "requetes": 5
+    },
+    {
+     "trait": "corps:slice",
+     "requetes": 5
+    },
+    {
+     "trait": "corps:terminate_after",
+     "requetes": 4
+    },
+    {
+     "trait": "corps:indices_boost",
+     "requetes": 2
+    },
+    {
+     "trait": "corps:seq_no_primary_term",
+     "requetes": 2
+    },
+    {
+     "trait": "corps:track_scores",
      "requetes": 1
     }
    ]
@@ -11719,12 +11713,12 @@
    "nom": "Les autres routes de recherche — _search_shards, _termvectors, _mtermvectors, _suggest, _source",
    "etat": "refuse",
    "motif": "pas_encore",
-   "requetes": 30,
-   "part": 0.6,
+   "requetes": 26,
+   "part": 0.5,
    "par_source": {
     "doc": {
-     "requetes": 30,
-     "part": 0.8
+     "requetes": 26,
+     "part": 0.7
     }
    },
    "traits": [
@@ -11741,15 +11735,7 @@
      "requetes": 4
     },
     {
-     "trait": "route:close_point_in_time",
-     "requetes": 2
-    },
-    {
      "trait": "route:get_source",
-     "requetes": 2
-    },
-    {
-     "trait": "route:open_point_in_time",
      "requetes": 2
     },
     {

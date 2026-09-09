@@ -20,8 +20,60 @@ use crate::mapping::{FieldKind, FieldType};
 #[derive(Debug, Clone)]
 pub enum SortKey {
     Score,
+    /// `_doc` : le numero **interne** du document dans son index.
+    ///
+    /// Chez Lucene c'est le `docID` du shard : un entier unique **et pose dans
+    /// l'ordre d'indexation**. ferrite rendait celui du segment tantivy, qui
+    /// repart de zero a chaque segment — deux documents y portaient tous les
+    /// deux `[0]`, et un `search_after` bati la-dessus boucle ou saute.
+    ///
+    /// Le decaler par la base de son segment le rendrait unique et ne suffirait
+    /// pas : **l'ordre des documents de tantivy n'est pas l'ordre d'ecriture**
+    /// (un `_bulk` de 25 documents ressort en `d002, d000, d003, d001`), donc
+    /// `_doc` designerait un ordre que personne ne partage. La bonne cle est
+    /// celle qui avait deja servi a `_delete_by_query ?max_docs=1` : le
+    /// `_seq_no`, attribue sous le verrou d'ecriture — il **est** l'ordre
+    /// d'ecriture, il est unique, et il est en colonne. Sur un index qui n'a
+    /// pas ete reecrit, il vaut donc le `docID` de Lucene, valeur pour valeur.
     Doc,
+    /// `_shard_doc` : `(rang du shard << 32) | numero interne`, la cle de tri
+    /// **totale** qu'ES ajoute lui-meme sous un point-in-time.
+    ///
+    /// ferrite etant mono-shard par index, le rang du shard est celui de
+    /// l'index dans la liste visee — triee par nom, donc stable. Elle n'a de
+    /// sens que sous un PIT : hors d'une vue figee, les numeros internes
+    /// changent au premier commit, et ES la refuse pour cette raison.
+    ShardDoc,
     Field(Box<SortField>),
+}
+
+/// Le numero de document que ferrite publie : son `_seq_no`.
+///
+/// Le repli sur l'adresse tantivy ne sert qu'a un index dont la colonne
+/// manquerait — il garde alors la seule propriete indispensable, l'unicite.
+fn numero_de_document(seq: Option<&Column<u64>>, base: u32, doc: DocId) -> i64 {
+    #[allow(clippy::cast_possible_wrap)]
+    match seq.and_then(|c| c.first(doc)) {
+        Some(n) => n as i64,
+        None => i64::from(base + doc),
+    }
+}
+
+/// Le `docBase` de chaque segment d'un `searcher` : combien de documents le
+/// precedent.
+///
+/// C'est ce qui transforme un numero local en numero d'index, et c'est la seule
+/// facon d'avoir un `_doc` **unique**. `max_doc` (et non le nombre de documents
+/// vivants) est ce que Lucene additionne : les documents supprimes gardent leur
+/// place dans la numerotation tant que le segment n'a pas ete fusionne.
+pub fn bases_de_segments(searcher: &Searcher) -> Vec<u32> {
+    let mut bases = Vec::with_capacity(searcher.segment_readers().len());
+    let mut cumul = 0u32;
+    for reader in searcher.segment_readers() {
+        bases.push(cumul);
+        cumul = cumul.saturating_add(reader.max_doc());
+    }
+    bases
 }
 
 /// Une cle de tri sur un champ, **resolue dans le mapping d'un index**.
@@ -288,19 +340,6 @@ pub enum ValeurRepli {
 #[derive(Debug, Clone)]
 struct Hit {
     keys: Vec<SortValue>,
-    /// Le numero de sequence du document : **l'ordre d'ecriture**.
-    ///
-    /// C'est lui qui departage deux candidats que tout le reste laisse ex
-    /// aequo, et ce n'est pas un detail de confort : chez Lucene le numero
-    /// interne d'un document vaut son ordre d'indexation, chez tantivy non
-    /// (un `_bulk` de 25 documents en ressort `d002, d000, d003, d001, ...`).
-    /// Departager sur l'adresse tantivy rendait donc un **autre ordre** qu'ES
-    /// des que deux documents ont le meme score — invisible tant qu'aucune
-    /// liste ne les montrait cote a cote, et parfaitement visible dans les
-    /// `inner_hits` d'un `collapse`, qui n'ont pas de tri a eux. C'est la meme
-    /// cle que `_delete_by_query?max_docs` avait deja demandee, pour la meme
-    /// raison (voir CLAUDE.md).
-    seq: u64,
     /// Les valeurs de repliement lues sur ce document, dans l'ordre de
     /// [`crate::collapse::Plan::colonnes`]. Vide sans `collapse`.
     replis: Vec<ValeurRepli>,
@@ -308,6 +347,22 @@ struct Hit {
     cible: usize,
     seg: SegmentOrdinal,
     doc: DocId,
+    /// Le `_seq_no` du document, donc son ordre d'ecriture — c'est lui qui
+    /// departage deux documents que toutes les cles de tri laissent ex aequo.
+    ///
+    /// L'adresse tantivy ne pouvait pas le faire : elle classe par segment puis
+    /// par position **dans** le segment, et ni l'un ni l'autre ne suit l'ordre
+    /// d'ecriture. Deux documents ex aequo sortaient donc dans un ordre que
+    /// Lucene ne rend pas — invisible tant qu'on ne regardait que des ensembles
+    /// de documents, et decisif des qu'un `search_after` reprend « apres le
+    /// dernier ».
+    ///
+    /// Deux cartes l'ont trouve separement, et la seconde mesure vaut d'etre
+    /// gardee : les `inner_hits` d'un `collapse` n'ont pas de tri a eux, donc
+    /// c'est la premiere liste que ferrite rende dans l'ordre « score puis
+    /// document » — et la premiere ou l'ecart se voyait a l'oeil nu (fuzzer,
+    /// graine 17200099).
+    seq: i64,
 }
 
 /// Le `Count` de tantivy, mais qui **demande les scores**.
@@ -364,11 +419,17 @@ struct SortCollector {
     replis: Arc<Vec<crate::collapse::Colonne>>,
     needs_score: bool,
     cible: usize,
+    /// Le `docBase` de chaque segment (voir [`bases_de_segments`]) : sans lui,
+    /// `_doc` et `_shard_doc` ne sont pas des cles uniques.
+    bases: Arc<Vec<u32>>,
 }
 
 enum Accessor {
     Score,
+    /// Le numero interne, decale par la base du segment.
     Doc,
+    /// Le meme, prefixe du rang du shard sur les 32 bits hauts.
+    ShardDoc,
     /// Le champ n'est pas mappe par cet index : c'est l'echappatoire
     /// `unmapped_type`, ou chaque document porte la valeur de remplacement.
     Aucune,
@@ -447,9 +508,12 @@ fn une<T>(mut vals: impl Iterator<Item = T>, f: impl Fn(T) -> ValeurRepli) -> Va
 struct SortSegmentCollector {
     seg: SegmentOrdinal,
     cible: usize,
+    /// Combien de documents precedent ce segment dans son index. Ne sert que de
+    /// repli quand la colonne `_seq_no` manque.
+    base: u32,
+    /// La colonne `_seq_no` de ce segment (voir [`numero_de_document`]).
+    seq: Option<Column<u64>>,
     accessors: Vec<Cle>,
-    /// La colonne `_seq_no`, qui porte l'ordre d'ecriture.
-    seqs: Column<u64>,
     replis: Vec<AccRepli>,
     hits: Vec<Hit>,
     buf: Vec<u8>,
@@ -475,6 +539,11 @@ impl Collector for SortCollector {
             let (acc, mode, absente) = match &spec.key {
                 SortKey::Score => (Accessor::Score, None, SortValue::Absente { en_tete: false }),
                 SortKey::Doc => (Accessor::Doc, None, SortValue::Absente { en_tete: false }),
+                SortKey::ShardDoc => (
+                    Accessor::ShardDoc,
+                    None,
+                    SortValue::Absente { en_tete: false },
+                ),
                 // Un `unmapped_type` sur un index qui ignore le champ : il n'y a
                 // pas de colonne a ouvrir, tous ses documents sont « sans
                 // valeur ».
@@ -509,8 +578,9 @@ impl Collector for SortCollector {
         Ok(SortSegmentCollector {
             seg,
             cible: self.cible,
+            base: self.bases.get(seg as usize).copied().unwrap_or(0),
+            seq: ff.u64(crate::mapping::F_SEQ_NO).ok(),
             accessors,
-            seqs: ff.u64(crate::mapping::F_SEQ_NO)?,
             replis,
             hits: Vec::new(),
             buf: Vec::new(),
@@ -554,6 +624,7 @@ impl SegmentCollector for SortSegmentCollector {
     type Fruit = Vec<Hit>;
 
     fn collect(&mut self, doc: DocId, score: Score) {
+        let numero = numero_de_document(self.seq.as_ref(), self.base, doc);
         let mut keys = Vec::with_capacity(self.accessors.len());
         for cle in &self.accessors {
             // Sans `mode`, un champ multivalue se trie sur son minimum en
@@ -566,7 +637,13 @@ impl SegmentCollector for SortSegmentCollector {
             let reels = &mut self.reels;
             keys.push(match &cle.acc {
                 Accessor::Score => SortValue::F64(f64::from(score)),
-                Accessor::Doc => SortValue::I64(i64::from(doc)),
+                Accessor::Doc => SortValue::I64(numero),
+                // `(shardIndex << 32) | docId`, l'ecriture exacte d'ES —
+                // mesure : le premier document du second index d'un PIT y
+                // porte `4294967296`. ferrite etant mono-shard par index, le
+                // rang du shard est celui de l'index dans la liste visee.
+                #[allow(clippy::cast_possible_wrap)]
+                Accessor::ShardDoc => SortValue::I64(((self.cible as i64) << 32) | numero),
                 Accessor::Aucune => absente(),
                 Accessor::Str(col) => match col {
                     // Les ordinaux d'un dictionnaire tantivy suivent l'ordre
@@ -632,12 +709,12 @@ impl SegmentCollector for SortSegmentCollector {
         }
         self.hits.push(Hit {
             keys,
-            seq: self.seqs.first(doc).unwrap_or(0),
             replis,
             score,
             cible: self.cible,
             seg: self.seg,
             doc,
+            seq: numero,
         });
     }
 
@@ -770,6 +847,14 @@ pub fn glob_match(pattern: &str, text: &str) -> bool {
 pub struct Cible {
     pub nom: String,
     pub gen: Arc<Generation>,
+    /// L'instantane sur lequel **toute** la requete travaille.
+    ///
+    /// Il etait re-tire de la generation au moment de l'execution, donc la
+    /// requete etait construite contre un `Searcher` et executee contre un
+    /// autre. Sans consequence tant que rien ne fige la vue ; sous un
+    /// point-in-time, c'est tout le sujet — c'est ce champ qui porte
+    /// l'instantane retenu a l'ouverture du PIT.
+    pub searcher: Searcher,
     /// Ce que le hit transporte au-dela du `_source`, resolu **sur ce
     /// mapping** : deux index ne rendent pas les memes champs pour le meme
     /// motif.
@@ -813,6 +898,14 @@ pub struct Cible {
     /// ne se nomme pas dans un hit qui, lui, correspond (voir
     /// [`crate::dsl::extraire_noms`]).
     pub nommees: Arc<Vec<(String, Box<dyn Query>)>>,
+    /// Le point de reprise de `search_after`, **converti au type que ce
+    /// mapping-la donne aux cles de tri**.
+    ///
+    /// Il est resolu par index et pas une fois pour toutes, parce que les cles
+    /// de tri le sont : deux index vises par la meme recherche peuvent lire le
+    /// meme champ par des mappings differents (`unmapped_type`), et c'est
+    /// exactement ce que fait ES, qui pose un `FieldDoc` par shard.
+    pub apres: Option<Vec<SortValue>>,
 }
 
 pub struct SearchRequest {
@@ -904,7 +997,7 @@ pub struct Balayage {
 /// et ses cles de tri). C'est le meme choix que le collecteur de tri, et il est
 /// note dans `docs/compat.md`.
 pub fn balayer(cibles: Vec<Cible>, req: &SearchRequest) -> EsResult<Balayage> {
-    let searchers: Vec<Searcher> = cibles.iter().map(|c| c.gen.searcher()).collect();
+    let searchers: Vec<Searcher> = cibles.iter().map(|c| c.searcher.clone()).collect();
 
     let aggregations = match &req.aggs {
         Some(aggs) => Some(crate::aggs::run(
@@ -930,12 +1023,22 @@ pub fn balayer(cibles: Vec<Cible>, req: &SearchRequest) -> EsResult<Balayage> {
             replis: Arc::new(Vec::new()),
             needs_score,
             cible: rang,
+            bases: Arc::new(bases_de_segments(searcher)),
         };
-        let locaux = searcher.search(&cible.query_hits, &collector)?;
+        // `query_hits` et non `query` : le `post_filter` filtre les hits d'une
+        // page de `scroll` comme ceux d'une recherche (mesure). Le `mut` est
+        // celui que le point de reprise reclame juste en dessous.
+        let mut locaux = searcher.search(&cible.query_hits, &collector)?;
         if let Some(e) = cible.incidents.erreur() {
             return Err(e);
         }
         total += locaux.len();
+        // `search_after` coupe **avant** le total ? Non : ES compte tout ce qui
+        // correspond et ne coupe que les hits (mesure — `track_total_hits`
+        // rend le meme nombre avec et sans). Le total est donc pris au-dessus.
+        if let Some(apres) = &cible.apres {
+            locaux.retain(|h| compare_cles(&req.sort_asc, &h.keys, apres) == Ordering::Greater);
+        }
         apporte[rang] = !locaux.is_empty();
         if !trie {
             for h in &locaux {
@@ -1071,7 +1174,7 @@ fn parts_d_agregation<'a>(
 /// index — ils ne le sont pas davantage entre shards chez ES, qui fait
 /// exactement ce calcul par defaut.
 pub fn execute(cibles: &[Cible], req: &SearchRequest) -> EsResult<SearchOutcome> {
-    let searchers: Vec<Searcher> = cibles.iter().map(|c| c.gen.searcher()).collect();
+    let searchers: Vec<Searcher> = cibles.iter().map(|c| c.searcher.clone()).collect();
 
     // Les agregations portent sur tous les documents qui correspondent, pas sur
     // la page rendue : elles se calculent a part, et se fusionnent a part.
@@ -1122,12 +1225,19 @@ pub fn execute(cibles: &[Cible], req: &SearchRequest) -> EsResult<SearchOutcome>
                 ),
                 needs_score,
                 cible: rang,
+                bases: Arc::new(bases_de_segments(searcher)),
             };
             let mut locaux = searcher.search(&cible.query_hits, &collector)?;
             if let Some(e) = cible.incidents.erreur() {
                 return Err(e);
             }
             total += locaux.len();
+            // Le point de reprise coupe les candidats, jamais le total : ES
+            // rend le meme `hits.total` avec et sans `search_after` (mesure).
+            // Il coupe donc **avant** que `max_score` ne se lise.
+            if let Some(apres) = &cible.apres {
+                locaux.retain(|h| compare_cles(&req.sort_asc, &h.keys, apres) == Ordering::Greater);
+            }
             if !trie {
                 // Sans cle de tri, le classement est le score : `max_score` se
                 // lit sur l'ensemble collecte, comme le fait `TopDocs` dans
@@ -1173,25 +1283,20 @@ pub fn execute(cibles: &[Cible], req: &SearchRequest) -> EsResult<SearchOutcome>
             if let Some((score, _)) = top.first() {
                 max_score = Some(max_score.map_or(*score, |m: f32| m.max(*score)));
             }
-            let seqs = |addr: DocAddress| -> tantivy::Result<u64> {
-                Ok(searcher
-                    .segment_reader(addr.segment_ord)
-                    .fast_fields()
-                    .u64(crate::mapping::F_SEQ_NO)?
-                    .first(addr.doc_id)
-                    .unwrap_or(0))
-            };
-            for (score, addr) in top {
-                candidats.push(Hit {
-                    keys: Vec::new(),
-                    seq: seqs(addr)?,
-                    replis: Vec::new(),
-                    score,
-                    cible: rang,
-                    seg: addr.segment_ord,
-                    doc: addr.doc_id,
-                });
-            }
+            candidats.extend(top.into_iter().map(|(score, addr)| Hit {
+                keys: Vec::new(),
+                // Aucun repliement ne passe par ici : `collapse` force la
+                // collecte complete, l'autre branche.
+                replis: Vec::new(),
+                score,
+                cible: rang,
+                seg: addr.segment_ord,
+                doc: addr.doc_id,
+                // Sans cle de tri, `TopDocs` a deja classe : le departage ne
+                // sert qu'entre index, et il n'y a pas de collecteur ou lire la
+                // colonne.
+                seq: 0,
+            }));
         }
     }
 
@@ -1366,6 +1471,7 @@ pub(crate) fn bloc_top_hits(
                 replis: Arc::new(Vec::new()),
                 needs_score,
                 cible: rang,
+                bases: Arc::new(bases_de_segments(cible.searcher)),
             };
             let mut locaux = cible.searcher.search(cible.query, &collector)?;
             total += locaux.len();
@@ -1380,27 +1486,19 @@ pub(crate) fn bloc_top_hits(
             if let Some((score, _)) = top.first() {
                 max_score = Some(max_score.map_or(*score, |m: f32| m.max(*score)));
             }
-            for (score, addr) in top {
-                candidats.push(Hit {
-                    keys: Vec::new(),
-                    // Le departage d'un ex aequo est l'ordre d'ecriture ici
-                    // aussi : un `top_hits` rend une liste, et une liste qui
-                    // sort dans un autre ordre que celle d'ES est fausse
-                    // (voir [`Hit::seq`]).
-                    seq: cible
-                        .searcher
-                        .segment_reader(addr.segment_ord)
-                        .fast_fields()
-                        .u64(crate::mapping::F_SEQ_NO)?
-                        .first(addr.doc_id)
-                        .unwrap_or(0),
-                    replis: Vec::new(),
-                    score,
-                    cible: rang,
-                    seg: addr.segment_ord,
-                    doc: addr.doc_id,
-                });
-            }
+            candidats.extend(top.into_iter().map(|(score, addr)| Hit {
+                keys: Vec::new(),
+                // Un `top_hits` ne replie pas.
+                replis: Vec::new(),
+                score,
+                cible: rang,
+                seg: addr.segment_ord,
+                doc: addr.doc_id,
+                // Sans cle de tri, `TopDocs` a deja classe : le departage ne
+                // sert qu'entre index, et il n'y a pas de collecteur ou lire la
+                // colonne.
+                seq: 0,
+            }));
         }
     }
     candidats.sort_by(|a, b| compare(sort_asc, a, b));
@@ -1642,8 +1740,29 @@ fn compare(sort_asc: &[bool], a: &Hit, b: &Hit) -> Ordering {
             return ord;
         }
     }
+    let ord = compare_cles(sort_asc, &a.keys, &b.keys);
+    if ord != Ordering::Equal {
+        return ord;
+    }
+    // Departage : l'index vise, puis **l'ordre d'ecriture**, comme ES departage
+    // par shard puis par numero de document. `seg` et `doc` ne restent qu'en
+    // dernier recours (un index sans colonne `_seq_no`), pour que l'ordre
+    // reste total quoi qu'il arrive.
+    (a.cible, a.seq, a.seg, a.doc).cmp(&(b.cible, b.seq, b.seg, b.doc))
+}
+
+/// L'ordre entre deux **vecteurs de cles**, sans le departage par adresse.
+///
+/// C'est ce que `search_after` compare, et l'absence du departage n'est pas un
+/// oubli : ES reprend « strictement apres cette cle de tri », donc un document
+/// dont les cles sont ex aequo avec le point de reprise est **saute**. C'est la
+/// raison pour laquelle un tri non total perd des documents en 200 — mesure
+/// contre ES 8.15, qui ne s'en plaint pas.
+pub(crate) fn compare_cles(sort_asc: &[bool], a: &[SortValue], b: &[SortValue]) -> Ordering {
     for (i, asc) in sort_asc.iter().enumerate() {
-        let (av, bv) = (&a.keys[i], &b.keys[i]);
+        let (Some(av), Some(bv)) = (a.get(i), b.get(i)) else {
+            break;
+        };
         let ord = match (av, bv) {
             // Sur un `keyword`, ES n'a pas de sentinelle de chaine : le
             // document part en tete ou en queue **quel que soit le sens du
@@ -1664,12 +1783,7 @@ fn compare(sort_asc: &[bool], a: &Hit, b: &Hit) -> Ordering {
             return ord;
         }
     }
-    // Departage stable : l'index vise, puis **l'ordre d'ecriture**, comme ES
-    // departage par shard puis par numero de document. L'adresse tantivy
-    // (`seg`, `doc`) ne convient pas : elle ne suit pas l'ordre d'indexation
-    // (voir [`Hit::seq`]). Elle reste en dernier recours, pour que l'ordre
-    // soit total meme si deux documents portaient le meme numero.
-    (a.cible, a.seq, a.seg, a.doc).cmp(&(b.cible, b.seq, b.seg, b.doc))
+    Ordering::Equal
 }
 
 fn bout(en_tete: bool) -> Ordering {
@@ -1926,21 +2040,21 @@ mod tests {
     fn tri_valeurs_manquantes_en_dernier() {
         let present = Hit {
             keys: vec![SortValue::I64(1)],
-            seq: 0,
             replis: Vec::new(),
             score: 1.0,
             cible: 0,
             seg: 0,
             doc: 0,
+            seq: 0,
         };
         let missing = Hit {
             keys: vec![SortValue::Absente { en_tete: false }],
-            seq: 1,
             replis: Vec::new(),
             score: 1.0,
             cible: 0,
             seg: 0,
             doc: 1,
+            seq: 1,
         };
         assert_eq!(compare(&[false], &present, &missing), Ordering::Less);
         assert_eq!(compare(&[false], &missing, &present), Ordering::Greater);
@@ -1973,12 +2087,12 @@ mod tests {
         // c'est la cle suivante qui les departage — comme chez ES.
         let cle_suivante = |v: SortValue, id: u32| Hit {
             keys: vec![v, SortValue::Str(format!("d{id}"))],
-            seq: u64::from(id),
             replis: Vec::new(),
             score: 1.0,
             cible: 0,
             seg: 0,
             doc: id,
+            seq: i64::from(id),
         };
         let vide = cle_suivante(sentinelle(FieldType::Long, true, false), 4);
         let plein = cle_suivante(SortValue::I64(i64::MAX), 8);
@@ -2089,21 +2203,21 @@ mod tests {
     fn ex_aequo_departages_par_index() {
         let a = Hit {
             keys: vec![],
-            seq: 0,
             replis: Vec::new(),
             score: 2.0,
             cible: 1,
             seg: 0,
             doc: 0,
+            seq: 0,
         };
         let b = Hit {
             keys: vec![],
-            seq: 9,
             replis: Vec::new(),
             score: 2.0,
             cible: 0,
             seg: 0,
             doc: 9,
+            seq: 9,
         };
         assert_eq!(compare(&[], &b, &a), Ordering::Less);
         // Le score reste prioritaire sur l'index.
