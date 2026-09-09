@@ -94,7 +94,9 @@ réel est la **couche de compatibilité** au-dessus.
   `match_phrase_prefix`, `term(s)`, `range` avec le **date math** (`now`),
   `exists`, `prefix`, `wildcard`, `regexp`, `nested`…), `sort` (avec `missing`,
   `mode` et `unmapped_type`), `from`/`size`,
-  `scroll` (donc `helpers.scan`), filtrage de `_source`.
+  `search_after` et le **point-in-time** (la pagination profonde que la 8.x
+  recommande à la place du `scroll`), `scroll` (donc `helpers.scan`),
+  filtrage de `_source`.
 - **Agrégations** : métriques + `terms` / `date_histogram` / `range` /
   `histogram` / `filter`, avec sous-agrégations. `terms` filtre ses termes
   (`include` / `exclude`, par expression régulière ou liste exacte) et classe
@@ -396,6 +398,18 @@ L'**export d'un index** marche avec le code que tout le monde écrit :
 `helpers.scan` du client officiel, donc `?scroll=1m` et `/_search/scroll`. Le
 contexte fige l'index : ce qui est écrit pendant l'export ne s'y invite pas, et
 chaque document sort une fois et une seule.
+
+**Paginer au-delà de 10 000** se fait comme la documentation d'Elastic 8.x le
+recommande depuis que le `scroll` est déconseillé : `POST /{index}/_pit` ouvre
+une vue figée, et le tableau `sort` du dernier hit sert de point de reprise
+(`search_after`). Un point-in-time ne fige pas un résultat mais un **lecteur** :
+on peut changer de requête, de tri et de taille de page entre deux appels. Et
+le tri qu'il faut n'est pas celui qu'on croit — `search_after` reprend
+*strictement après* la clé donnée, donc un tri non total **saute** des
+documents, sans un mot, chez Elasticsearch comme ici. C'est pour ça qu'un PIT
+complète le tri d'un `_shard_doc` que le serveur ajoute lui-même. Un parcours de
+50 000 documents rend les mêmes documents, dans le même ordre et **avec la même
+découpe en pages** qu'un vrai ES 8.15 (`tests/compat/sonde_pagination.py`).
 
 Les **petites routes** qui bloquent un outil entier passent aussi :
 `_field_caps` (ce que chaque champ sait faire, et son type index par index —

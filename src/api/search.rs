@@ -24,8 +24,12 @@ use crate::MAX_RESULT_WINDOW;
 const DEFAULT_SIZE: usize = 10;
 
 /// `POST|GET /_search` — sans index dans l'URL, ES cherche partout.
+///
+/// C'est aussi **la seule** route d'une recherche sous point-in-time : l'index
+/// vient alors du PIT, et en nommer un dans l'URL serait deux sources de verite
+/// pour une seule question. ES le refuse, d'ou le drapeau porte jusqu'ici.
 pub async fn search_all(State(st): State<SharedState>, uri: Uri, body: Bytes) -> EsResult<Json> {
-    search(State(st), Path("_all".to_string()), uri, body).await
+    rechercher(st, "_all".to_string(), false, uri, body).await
 }
 
 /// `POST|GET /{index}/_search`
@@ -35,6 +39,16 @@ pub async fn search_all(State(st): State<SharedState>, uri: Uri, body: Bytes) ->
 pub async fn search(
     State(st): State<SharedState>,
     Path(index): Path<String>,
+    uri: Uri,
+    body: Bytes,
+) -> EsResult<Json> {
+    rechercher(st, index, true, uri, body).await
+}
+
+async fn rechercher(
+    st: SharedState,
+    index: String,
+    index_dans_url: bool,
     uri: Uri,
     body: Bytes,
 ) -> EsResult<Json> {
@@ -97,15 +111,6 @@ pub async fn search(
     let param_explain = p.bool_opt("explain")?;
     p.done()?;
 
-    let indices = resoudre(&st.catalog, &index, &opts)?;
-    // Une seule generation par index pour toute la requete : les `Field` d'une
-    // generation n'ont aucun sens dans une autre.
-    let generations: Vec<(String, String, std::sync::Arc<Generation>)> = indices
-        .iter()
-        .map(|i| (i.name.clone(), i.uuid.clone(), i.current()))
-        .collect();
-    let champs_connus = union_des_champs(&generations);
-
     let body = parse_body(&body)?;
     let body_obj = match &body {
         Value::Null => Map::new(),
@@ -132,9 +137,18 @@ pub async fn search(
             "timeout",
             "min_score",
             "explain",
+            "search_after",
+            "pit",
         ],
         "_search",
     )?;
+
+    // Les deux nouveautes de la pagination profonde se lisent **avant** la
+    // boucle sur les index, comme `min_score` et `highlight` : leur forme ne
+    // depend d'aucun mapping, et un `search_after` mal ecrit doit etre refuse
+    // meme quand la recherche ne vise aucun index.
+    let apres_brut = lire_search_after(body_obj.get("search_after"))?;
+    let pit = lire_bloc_pit(body_obj.get("pit"))?;
 
     // `min_score` se lit **avant** la boucle sur les index : sa forme ne depend
     // d'aucun mapping, et un `"abc"` doit etre refuse meme quand la recherche
@@ -179,20 +193,66 @@ pub async fn search(
         None => body_usize(&body_obj, "size")?.unwrap_or(DEFAULT_SIZE),
     };
 
-    // `from` n'a pas de sens dans un scroll : le contexte avance tout seul, et
-    // sauter des documents ferait perdre en silence ceux d'avant. ES le refuse,
-    // avec ce type d'erreur et ce message.
-    if keep_alive.is_some() && from != 0 {
+    // Ce qui ne peut pas cohabiter. ES les accumule dans **une** exception de
+    // validation, numerotee, levee avant toute resolution d'index — et chacune
+    // de ces phrases est la sienne, mot pour mot.
+    //
+    // Les trois premieres disent la meme chose de trois facons : un `scroll`
+    // porte son curseur dans le serveur, `search_after` le porte chez le
+    // client, et un PIT ne porte pas de curseur du tout. Les melanger
+    // demanderait de choisir lequel gagne — donc de rendre, en 200, une
+    // pagination que personne n'a demandee.
+    let mut validations: Vec<String> = Vec::new();
+    if keep_alive.is_some() {
+        // `from` n'a pas de sens dans un scroll : le contexte avance tout seul,
+        // et sauter des documents ferait perdre en silence ceux d'avant.
+        if from != 0 {
+            validations.push("using [from] is not allowed in a scroll context".into());
+        }
+        if pit.is_some() {
+            validations.push("using [point in time] is not allowed in a scroll context".into());
+        }
+        if apres_brut.is_some() {
+            validations.push("[search_after] cannot be used in a scroll context".into());
+        }
+    }
+    if pit.is_some() && index_dans_url {
+        validations.push(
+            "[indices] cannot be used with point in time. Do not specify any index with point in \
+             time."
+                .into(),
+        );
+    }
+    if apres_brut.is_some() && from != 0 {
+        validations.push("[from] parameter must be set to 0 when [search_after] is used".into());
+    }
+    // `_shard_doc` est le numero interne d'un document dans une vue. Hors d'une
+    // vue figee il change au premier commit, donc un `search_after` bati dessus
+    // ne designe plus rien — ES le refuse pour cette raison, et seulement au
+    // premier niveau : un `top_hits` peut le poser sans PIT (mesure).
+    if pit.is_none() && cite_shard_doc(param_sort.as_deref(), body_obj.get("sort")) {
+        validations.push("[_shard_doc] sort field cannot be used without [point in time]".into());
+    }
+    if !validations.is_empty() {
+        let mut phrase = String::from("Validation Failed: ");
+        for (i, v) in validations.iter().enumerate() {
+            phrase.push_str(&format!("{}: {v};", i + 1));
+        }
         return Err(EsError::new(
             axum::http::StatusCode::BAD_REQUEST,
             "action_request_validation_exception",
-            "Validation Failed: 1: using [from] is not allowed in a scroll context;",
+            phrase,
         ));
     }
     if from + size > MAX_RESULT_WINDOW {
+        // La phrase entiere d'ES, les deux conseils compris : elle nomme la
+        // sortie (`search_after`, `scroll`) et le reglage qui deplace la borne.
+        // Un client qui la journalise doit lire la meme des deux cotes.
         return Err(EsError::illegal_argument(format!(
             "Result window is too large, from + size must be less than or equal to: \
-             [{MAX_RESULT_WINDOW}] but was [{}].",
+             [{MAX_RESULT_WINDOW}] but was [{}]. See the scroll api for a more efficient way to \
+             request large data sets. This limit can be set by changing the \
+             [index.max_result_window] index level setting.",
             from + size
         )));
     }
@@ -251,6 +311,35 @@ pub async fn search(
         None => (None, Vec::new()),
     };
 
+    // Les index vises, et **l'instantane sur lequel on les lit**. C'est la
+    // seule difference entre une recherche ordinaire et une recherche sous
+    // point-in-time : la premiere prend la generation courante et lui demande
+    // un `Searcher` neuf, la seconde reprend celui que l'ouverture du PIT a
+    // retenu. Tout ce qui suit est identique — c'est ce qui fait qu'un PIT
+    // accepte n'importe quelle requete, contrairement a un `scroll`.
+    let generations: Vec<(
+        String,
+        String,
+        std::sync::Arc<Generation>,
+        tantivy::Searcher,
+    )> = match &pit {
+        Some((id, keep)) => st
+            .pits
+            .lire(id, *keep)?
+            .into_iter()
+            .map(|c| (c.nom, c.uuid, c.gen, c.searcher))
+            .collect(),
+        None => resoudre(&st.catalog, &index, &opts)?
+            .iter()
+            .map(|i| {
+                let gen = i.current();
+                let searcher = gen.searcher();
+                (i.name.clone(), i.uuid.clone(), gen, searcher)
+            })
+            .collect(),
+    };
+    let champs_connus = union_des_champs(&generations);
+
     // Aucun index vise : la boucle ci-dessous ne tourne pas, donc rien du corps
     // ne serait lu. Il est valide a part, contre un schema vide.
     if generations.is_empty() {
@@ -260,6 +349,8 @@ pub async fn search(
             param_sort.as_deref(),
             body_obj.get("sort"),
             maintenant,
+            apres_brut.as_deref(),
+            pit.is_some(),
         )?;
     }
 
@@ -273,14 +364,13 @@ pub async fn search(
     let mut echecs: Vec<Value> = Vec::new();
     let nb_index = generations.len();
 
-    for (nom, uuid, gen) in generations {
-        let sort = match param_sort.as_ref() {
-            Some(list) => parse_sort_params(list, &gen.fields),
-            None => match body_obj.get("sort") {
-                Some(v) => parse_sort_body(v, &gen.fields),
-                None => Ok(Vec::new()),
-            },
-        };
+    for (nom, uuid, gen, searcher) in generations {
+        let sort = tri_effectif(
+            param_sort.as_deref(),
+            body_obj.get("sort"),
+            &gen.fields,
+            pit.is_some(),
+        );
         let sort = match sort {
             Ok(s) => s,
             // Trier sur un champ que cet index ne mappe pas : ES ne fait pas
@@ -299,10 +389,15 @@ pub async fn search(
             }
             Err(e) => return Err(e),
         };
-        // Le meme contexte de traduction sert a la requete et aux requetes
-        // internes des agregations [filter] : toutes doivent etre construites
-        // dans **cette** generation, leurs `Field` n'ont de sens que la.
-        let searcher = gen.searcher();
+        // Le point de reprise se convertit **au type que ce mapping-la donne
+        // aux cles de tri** : c'est ce que fait ES, qui pose un `FieldDoc` par
+        // shard. Les fautes de forme (arite, tri sans champ, valeur illisible)
+        // sont des erreurs de requete, pas des verdicts de mapping : elles
+        // remontent telles quelles.
+        let apres = match &apres_brut {
+            Some(valeurs) => Some(convertir_search_after(valeurs, &sort, &gen.fields)?),
+            None => None,
+        };
         // Les incidents de scoring sont ranges par index, et enveloppes des
         // maintenant : la mise en forme d'un echec de shard a besoin du nom et
         // de l'uuid, que le `Scorer` n'a pas.
@@ -400,6 +495,7 @@ pub async fn search(
         cibles.push(Cible {
             nom,
             gen,
+            searcher,
             plan,
             hl,
             query,
@@ -408,6 +504,7 @@ pub async fn search(
             prep,
             incidents,
             nommees: std::sync::Arc::new(nommees),
+            apres,
         });
     }
 
@@ -505,7 +602,303 @@ pub async fn search(
     if let Some(aggs) = outcome.aggregations {
         reponse.insert("aggregations".into(), aggs);
     }
+    // Le `pit_id` en tete, comme le `_scroll_id` : c'est l'ordre d'ES, et
+    // surtout c'est **cet** identifiant-la qu'un client bien ecrit renvoie au
+    // coup suivant (ES peut en changer entre deux pages ; ferrite ne le fait
+    // pas, mais un client qui suivrait l'autre convention se casserait chez ES).
+    if let Some((id, _)) = &pit {
+        let mut avec_id = Map::new();
+        avec_id.insert("pit_id".into(), json!(id));
+        avec_id.extend(reponse);
+        return Ok(Json::ok(Value::Object(avec_id)));
+    }
     Ok(Json::ok(Value::Object(reponse)))
+}
+
+// ---------------------------------------------------------------------------
+// search_after et point-in-time
+// ---------------------------------------------------------------------------
+
+/// Le tableau `search_after` du corps, verifie dans sa **forme** seule.
+///
+/// Deux refus tombent ici, avant tout mapping et meme sans index vise, parce
+/// qu'ES les leve a la lecture du corps : la valeur doit etre un tableau, et il
+/// ne doit pas etre vide. Le troisieme refus de forme — un element qui n'est pas
+/// un scalaire — est leve ici aussi : `[[1]]` et `[{}]` ne designent aucune cle
+/// de tri possible.
+fn lire_search_after(v: Option<&Value>) -> EsResult<Option<Vec<Value>>> {
+    let Some(v) = v else { return Ok(None) };
+    let Value::Array(a) = v else {
+        return Err(EsError::parsing(format!(
+            "Unknown key for a {} in [search_after].",
+            jeton_json(v)
+        )));
+    };
+    if a.is_empty() {
+        // La coquille est celle d'ES, et elle se reproduit : un client qui
+        // journalise le message doit lire la meme phrase des deux cotes.
+        return Err(EsError::illegal_argument(
+            "Values must contains at least one value.",
+        ));
+    }
+    for e in a {
+        if matches!(e, Value::Array(_) | Value::Object(_)) {
+            return Err(EsError::parsing(format!(
+                "Expected [VALUE_STRING] or [VALUE_NUMBER] or [VALUE_BOOLEAN] or [VALUE_NULL] but \
+                 found [{}] inside search_after.",
+                jeton_json(e)
+            )));
+        }
+    }
+    Ok(Some(a.clone()))
+}
+
+/// Le nom que le parseur d'ES donne a un jeton JSON. Il apparait mot pour mot
+/// dans trois de ses messages.
+fn jeton_json(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "VALUE_NULL",
+        Value::Bool(_) => "VALUE_BOOLEAN",
+        Value::Number(_) => "VALUE_NUMBER",
+        Value::String(_) => "VALUE_STRING",
+        Value::Array(_) => "START_ARRAY",
+        Value::Object(_) => "START_OBJECT",
+    }
+}
+
+/// Le bloc `pit` du corps : `{"id": "...", "keep_alive": "1m"}`.
+///
+/// `keep_alive` y est **facultatif** (contrairement a l'ouverture, ou ES
+/// l'exige) : sans lui la vue garde l'echeance posee au coup precedent.
+fn lire_bloc_pit(v: Option<&Value>) -> EsResult<Option<(String, Option<std::time::Duration>)>> {
+    let Some(v) = v else { return Ok(None) };
+    let Value::Object(o) = v else {
+        return Err(EsError::parsing(format!(
+            "Unknown key for a {} in [pit].",
+            jeton_json(v)
+        )));
+    };
+    expect_only(o, &["id", "keep_alive"], "pit")?;
+    let id = match o.get("id") {
+        Some(Value::String(s)) => s.clone(),
+        None => {
+            return Err(EsError::illegal_argument(
+                "point in time id is not provided",
+            ))
+        }
+        Some(autre) => {
+            return Err(EsError::new(
+                axum::http::StatusCode::BAD_REQUEST,
+                "x_content_parse_exception",
+                format!(
+                    "[pit] id doesn't support values of type: {}",
+                    jeton_json(autre)
+                ),
+            ))
+        }
+    };
+    let keep = match o.get("keep_alive") {
+        Some(Value::String(s)) => Some(scroll::duree(s, "keep_alive")?),
+        None | Some(Value::Null) => None,
+        Some(autre) => {
+            return Err(EsError::new(
+                axum::http::StatusCode::BAD_REQUEST,
+                "x_content_parse_exception",
+                format!(
+                    "[pit] keep_alive doesn't support values of type: {}",
+                    jeton_json(autre)
+                ),
+            ))
+        }
+    };
+    Ok(Some((id, keep)))
+}
+
+/// Le `sort` demande cite-t-il `_shard_doc` ?
+///
+/// La question se pose sur le **JSON brut** plutot que sur les cles resolues,
+/// et c'est voulu : la reponse ne depend d'aucun mapping, et ES leve ce refus
+/// avant meme de resoudre les index (une recherche sans index vise le leve
+/// aussi).
+fn cite_shard_doc(param: Option<&[String]>, corps: Option<&Value>) -> bool {
+    const NOM: &str = "_shard_doc";
+    if let Some(list) = param {
+        return list
+            .iter()
+            .any(|e| e.split_once(':').map_or(e.as_str(), |(f, _)| f) == NOM);
+    }
+    let Some(v) = corps else { return false };
+    let entrees: Vec<&Value> = match v {
+        Value::Array(a) => a.iter().collect(),
+        autre => vec![autre],
+    };
+    entrees.iter().any(|e| match e {
+        Value::String(s) => s == NOM,
+        Value::Object(o) => o.keys().any(|k| k == NOM),
+        _ => false,
+    })
+}
+
+/// Les cles de tri effectives : celles du corps, **plus le departage implicite
+/// d'un point-in-time**.
+///
+/// Sous un PIT, ES ajoute lui-meme `_shard_doc` en dernier des que le client a
+/// demande un tri — et c'est la moitie du produit : sans elle, `search_after`
+/// sauterait les ex aequo du dernier critere. Mesure contre ES 8.15 :
+/// `sort: [{"n": "asc"}]` sous un PIT rend des tableaux `sort` a **deux**
+/// elements. Il ne l'ajoute pas deux fois si le client l'a deja pose, et pas du
+/// tout si le client n'a demande aucun tri.
+///
+/// Consequence a ne pas manquer : la normalisation « `[_score desc]` **est** le
+/// tri par defaut » (voir [`tri_par_defaut`]) ne s'applique plus sous un PIT,
+/// puisque le departage en fait un vrai tri a deux cles — ES rend alors bien un
+/// tableau `sort` et `max_score: null` (mesure).
+fn tri_effectif(
+    param: Option<&[String]>,
+    corps: Option<&Value>,
+    champs: &crate::mapping::Fields,
+    sous_pit: bool,
+) -> EsResult<Vec<SortSpec>> {
+    let brut = match param {
+        Some(list) => parse_sort_params_brut(list, champs)?,
+        None => match corps {
+            Some(v) => parse_sort_body_brut(v, champs)?,
+            None => Vec::new(),
+        },
+    };
+    if !sous_pit {
+        return Ok(tri_par_defaut(brut));
+    }
+    let mut specs = brut;
+    if !specs.is_empty() && !specs.iter().any(|s| matches!(s.key, SortKey::ShardDoc)) {
+        specs.push(SortSpec {
+            key: SortKey::ShardDoc,
+            asc: true,
+        });
+    }
+    Ok(specs)
+}
+
+/// Le point de reprise, converti au type des cles de tri de **cet** index.
+///
+/// Trois refus sortent d'ici, et aucun ne se devine :
+///
+/// - un `search_after` sans cle de tri utilisable rend « Sort must contain at
+///   least one field. » — et `_score` **n'en est pas une** (mesure :
+///   `sort: [{"_score": "desc"}]` avec un `search_after` rend ce refus, la ou
+///   `sort: ["_doc"]` repond) ;
+/// - une arite qui ne correspond pas rend « search_after has N value(s) but
+///   sort has M. » ;
+/// - une valeur que le type du champ ne sait pas lire rend « Failed to parse
+///   search_after value for field [x]. », **une seule phrase** quelle que soit
+///   la faute — ES n'y detaille pas la cause.
+fn convertir_search_after(
+    valeurs: &[Value],
+    sort: &[SortSpec],
+    champs: &crate::mapping::Fields,
+) -> EsResult<Vec<crate::search::SortValue>> {
+    if !sort
+        .iter()
+        .any(|s| matches!(s.key, SortKey::Field(_) | SortKey::Doc | SortKey::ShardDoc))
+    {
+        return Err(EsError::illegal_argument(
+            "Sort must contain at least one field.",
+        ));
+    }
+    if valeurs.len() != sort.len() {
+        return Err(EsError::illegal_argument(format!(
+            "search_after has {} value(s) but sort has {}.",
+            valeurs.len(),
+            sort.len()
+        )));
+    }
+    valeurs
+        .iter()
+        .zip(sort)
+        .map(|(v, spec)| valeur_de_reprise(v, spec, champs))
+        .collect()
+}
+
+fn valeur_de_reprise(
+    v: &Value,
+    spec: &SortSpec,
+    champs: &crate::mapping::Fields,
+) -> EsResult<crate::search::SortValue> {
+    use crate::search::SortValue;
+    let illisible = |nom: &str| {
+        EsError::illegal_argument(format!(
+            "Failed to parse search_after value for field [{nom}]."
+        ))
+    };
+    match &spec.key {
+        SortKey::Score => lit_double(v)
+            .map(SortValue::F64)
+            .map_err(|_| illisible("_score")),
+        SortKey::Doc => lit_long(v)
+            .map(SortValue::I64)
+            .map_err(|_| illisible("_doc")),
+        SortKey::ShardDoc => lit_long(v)
+            .map(SortValue::I64)
+            .map_err(|_| illisible("_shard_doc")),
+        SortKey::Field(f) => {
+            // `null` designe la **sentinelle** de la cle : c'est ce que le
+            // tableau `sort` d'un document sans valeur porte sur un `keyword`,
+            // donc c'est ce qu'un parcours renvoie tel quel au coup suivant.
+            // Le lire autrement casserait la seule boucle qui compte : rendre
+            // au serveur ce qu'il vient de rendre au client.
+            if v.is_null() {
+                return Ok(f.absente.clone());
+            }
+            match f.ty.kind() {
+                FieldKind::Keyword | FieldKind::Text => Ok(SortValue::Str(match v {
+                    Value::String(s) => s.clone(),
+                    autre => autre.to_string(),
+                })),
+                FieldKind::F64 => lit_double(v)
+                    .map(SortValue::F64)
+                    .map_err(|_| illisible(&f.name)),
+                // Une date se lit **par le format du champ**, pas comme un
+                // nombre : ES accepte `"2026-01-05"` la ou `missing` exige des
+                // millisecondes (mesure). Les deux parametres ne lisent donc
+                // pas la meme grammaire, et les confondre rendrait 400 sur
+                // l'ecriture la plus courante d'un point de reprise.
+                // Une date de reprise se lit **comme une borne de `range`**,
+                // date math comprise : `"2026-01-05||+1d"` y designe bien le
+                // lendemain (mesure contre ES 8.15), et un mois ecrit sans son
+                // jour s'arrondit vers le bas comme une borne basse. Elle
+                // remonte donc aussi la phrase de ce parseur-la — celle qui dit
+                // au client ce qu'il aurait fallu ecrire — plutot que la phrase
+                // generique de `search_after`.
+                //
+                // Un seul point l'en separe, et il se mesure : `now` y est
+                // **refuse** par ES. Sa cle de tri est construite sans horloge
+                // (le fournisseur d'instant est nul), d'ou sa phrase — que
+                // ferrite reprend au lieu de resoudre `now`, ce qui rendrait
+                // des documents qu'ES ne rend pas.
+                FieldKind::Date => {
+                    if v.as_str()
+                        .is_some_and(|s| s.trim_start().starts_with("now"))
+                    {
+                        return Err(EsError::new(
+                            axum::http::StatusCode::BAD_REQUEST,
+                            "parse_exception",
+                            "could not read the current timestamp",
+                        ));
+                    }
+                    crate::datemath::borne(
+                        v,
+                        champs.format_ou_defaut(&f.name),
+                        0,
+                        crate::datemath::Arrondi::Bas,
+                    )
+                    .map(SortValue::I64)
+                }
+                _ => lit_long(v)
+                    .map(SortValue::I64)
+                    .map_err(|_| illisible(&f.name)),
+            }
+        }
+    }
 }
 
 /// Lit ce que la reponse doit transporter : `fields`, `docvalue_fields`,
@@ -596,6 +989,8 @@ fn valider_sans_index(
     param_sort: Option<&[String]>,
     body_sort: Option<&Value>,
     maintenant: i64,
+    apres: Option<&[Value]>,
+    sous_pit: bool,
 ) -> EsResult<()> {
     let vide = crate::engine::sans_index();
     let searcher = vide.searcher();
@@ -604,10 +999,15 @@ fn valider_sans_index(
         .selon_le_mapping(&vide.mapping)
         .sans_index_vise();
 
-    match (param_sort, body_sort) {
-        (Some(list), _) => sans_verdict_de_mapping(parse_sort_params(list, &vide.fields))?,
-        (None, Some(v)) => sans_verdict_de_mapping(parse_sort_body(v, &vide.fields))?,
-        (None, None) => {}
+    let sort = tri_effectif(param_sort, body_sort, &vide.fields, sous_pit);
+    let sort: Vec<SortSpec> = sans_verdict_de_mapping_val(sort)?.unwrap_or_default();
+    // `search_after` se verifie contre le schema vide comme le reste : son
+    // arite et l'exigence d'au moins une cle de tri ne dependent d'aucun
+    // mapping, et ES les leve bien sur un cluster vide. La **conversion** des
+    // valeurs, elle, en depend — un champ inconnu du schema vide n'a pas de
+    // type — donc elle ne rend pas de verdict ici.
+    if let Some(valeurs) = apres {
+        sans_verdict_de_mapping(convertir_search_after(valeurs, &sort, &vide.fields))?;
     }
     if let Some(v) = query {
         sans_verdict_de_mapping(build_query(v, &ctx))?;
@@ -624,21 +1024,28 @@ fn valider_sans_index(
 /// ES la fait aussi : `POST /rien-*/_delete_by_query` avec une clause inconnue
 /// rend 400 sur un cluster vide, alors qu'il ne vise aucun index.
 pub(crate) fn valider_sans_index_query(query: Option<&Value>, maintenant: i64) -> EsResult<()> {
-    valider_sans_index(query, None, None, None, maintenant)
+    valider_sans_index(query, None, None, None, maintenant, None, false)
 }
 
 /// Jette ce qu'une validation sans index a produit, et avec lui les erreurs
 /// qu'aucun mapping ne peut trancher (voir [`valider_sans_index`]).
 fn sans_verdict_de_mapping<T>(r: EsResult<T>) -> EsResult<()> {
+    sans_verdict_de_mapping_val(r).map(|_| ())
+}
+
+/// La meme chose, mais qui **garde** ce que la validation a produit : le tri
+/// resolu contre le schema vide sert ensuite a verifier l'arite d'un
+/// `search_after`.
+fn sans_verdict_de_mapping_val<T>(r: EsResult<T>) -> EsResult<Option<T>> {
     match r {
-        Ok(_) => Ok(()),
+        Ok(v) => Ok(Some(v)),
         // `query_shard_exception` est precisement le type qu'ES reserve a ce
         // qu'un shard decide : sans shard, il n'y a pas de verdict a rendre.
         // Un echec de shard explicite non plus — mesure : sur un cluster vide,
         // `{"sort": [{"i": {"missing": "abc"}}]}` et `unmapped_type: nawak`
         // rendent 200, alors que `mode: nawak` rend 400.
         Err(e) if e.ty == "query_shard_exception" || e.champ_inconnu.is_some() || e.de_shard => {
-            Ok(())
+            Ok(None)
         }
         Err(e) => Err(e),
     }
@@ -871,7 +1278,12 @@ pub async fn count(
         .iter()
         .map(|i| (i.name.clone(), i.uuid.clone(), i.current()))
         .collect();
-    let champs_connus = union_des_champs(&generations);
+    let champs_connus = union_des_champs_de(
+        &generations
+            .iter()
+            .map(|(_, _, g)| g.clone())
+            .collect::<Vec<_>>(),
+    );
     let mut prets: Vec<(std::sync::Arc<Generation>, Box<dyn tantivy::query::Query>)> = Vec::new();
     let mut ignore: Option<EsError> = None;
     let maintenant = crate::datemath::maintenant();
@@ -884,7 +1296,7 @@ pub async fn count(
         None => None,
     };
     if generations.is_empty() {
-        valider_sans_index(requete.as_ref(), None, None, None, maintenant)?;
+        valider_sans_index(requete.as_ref(), None, None, None, maintenant, None, false)?;
     }
     for (nom, _, gen) in &generations {
         let gen = gen.clone();
@@ -936,12 +1348,17 @@ pub async fn count(
 /// C'est ce qui distingue « faute de frappe » (personne ne connait ce champ) de
 /// « mapping heterogene » (un index quotidien plus recent a un champ de plus).
 fn union_des_champs(
-    generations: &[(String, String, std::sync::Arc<Generation>)],
+    generations: &[(
+        String,
+        String,
+        std::sync::Arc<Generation>,
+        tantivy::Searcher,
+    )],
 ) -> std::collections::BTreeSet<String> {
     union_des_champs_de(
         &generations
             .iter()
-            .map(|(_, _, g)| g.clone())
+            .map(|(_, _, g, _)| g.clone())
             .collect::<Vec<_>>(),
     )
 }
@@ -1180,6 +1597,16 @@ pub(crate) fn parse_sort_body(
     v: &Value,
     champs: &crate::mapping::Fields,
 ) -> EsResult<Vec<SortSpec>> {
+    parse_sort_body_brut(v, champs).map(tri_par_defaut)
+}
+
+/// Le meme, **sans** la normalisation du tri par defaut.
+///
+/// La distinction ne servait a rien tant que rien ne s'ajoutait au tri : sous un
+/// point-in-time, le departage implicite fait de `[_score desc]` un vrai tri a
+/// deux cles, donc la normalisation doit venir apres l'ajout, pas avant (voir
+/// [`tri_effectif`]).
+fn parse_sort_body_brut(v: &Value, champs: &crate::mapping::Fields) -> EsResult<Vec<SortSpec>> {
     let entries: Vec<&Value> = match v {
         Value::Array(a) => a.iter().collect(),
         other => vec![other],
@@ -1223,7 +1650,7 @@ pub(crate) fn parse_sort_body(
             _ => return Err(EsError::illegal_argument("[sort] : entree invalide")),
         }
     }
-    Ok(tri_par_defaut(specs))
+    Ok(specs)
 }
 
 /// Ce qu'une entree de `sort` peut porter a cote du champ. Les trois derniers
@@ -1238,7 +1665,10 @@ struct Options {
 }
 
 /// `?sort=annee:desc,titre`
-fn parse_sort_params(list: &[String], champs: &crate::mapping::Fields) -> EsResult<Vec<SortSpec>> {
+fn parse_sort_params_brut(
+    list: &[String],
+    champs: &crate::mapping::Fields,
+) -> EsResult<Vec<SortSpec>> {
     list.iter()
         .map(|entry| {
             let (field, order) = match entry.split_once(':') {
@@ -1254,8 +1684,7 @@ fn parse_sort_params(list: &[String], champs: &crate::mapping::Fields) -> EsResu
                 champs,
             )
         })
-        .collect::<EsResult<Vec<_>>>()
-        .map(tri_par_defaut)
+        .collect()
 }
 
 fn sort_spec(field: &str, opts: &Options, champs: &crate::mapping::Fields) -> EsResult<SortSpec> {
@@ -1318,6 +1747,12 @@ fn sort_spec(field: &str, opts: &Options, champs: &crate::mapping::Fields) -> Es
             SortKey::Score
         }
         "_doc" => SortKey::Doc,
+        // `_shard_doc` accepte les memes parametres decoratifs que `_doc`, et
+        // son refus hors d'un point-in-time se leve **avant** ici (voir
+        // [`cite_shard_doc`]) : ES le range dans la validation de la requete,
+        // pas dans la resolution du tri — ce qui explique qu'un `top_hits`
+        // puisse le poser sans PIT (mesure).
+        "_shard_doc" => SortKey::ShardDoc,
         name => {
             // Un sous-champ de `nested` trie a plat trierait sur autre chose
             // que ce qu'une clause `nested` filtre : ES refuse, et ferrite
