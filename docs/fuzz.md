@@ -224,6 +224,66 @@ aucun `index: false`.
 | `5550051` | 7 documents contre 5, et une métrique à `-0.1` contre `-0.125` | un `dis_max` de `function_score` sur un mapping **sans aucun champ non indexé**. Identique contre le binaire d'avant |
 | `6660176` | même famille que les deux premières (`Missing value for field`) | ferrite prononce le garde-fou du `field_value_factor`, ES ne l'atteint pas. Identique contre le binaire d'avant |
 
+## Le passage de la carte 17 (`collapse`, `post_filter`)
+
+Trois briques de plus — `corps.post_filter`, `corps.collapse` et
+`corps.collapse_inner` — et une raison de les séparer : ce qui se mesure sur ces
+deux paramètres n'est pas qu'ils filtrent, c'est **où** ils le font. Un
+`post_filter` appliqué trop tôt change les agrégations ; un repliement fait après
+la pagination rend le mauvais nombre de lignes. Les deux sont silencieux quand
+ils sont faux.
+
+```
+plages de contrôle, jamais regardées avant ce tableau
+graines 17100000+      120 cas,  5 481 requêtes, 9 divergences (ouvertes, antérieures)
+graines 17200000+      120 cas,  5 558 requêtes, 3 divergences (ouvertes, antérieures)
+graines 17300000+      120 cas,  5 461 requêtes, 6 divergences (ouvertes, antérieures)
+graines 17400000+      120 cas,  5 495 requêtes, 2 divergences (ouvertes, antérieures)
+                     ------------------------------------------------
+                       480 cas, 21 995 requêtes, 20 divergences
+
+les mêmes plages, contre le binaire de `main` (celui d'AVANT la carte)
+                       360 cas, 16 624 requêtes, 840 divergences
+                                  (308 + 260 + 272)
+
+le générateur d'AVANT, contre les deux binaires — la mesure de non-régression
+graines 17100000+      150 cas,  6 903 requêtes, 10 divergences des deux côtés
+```
+
+La ligne du milieu dit que les briques mesurent quelque chose, et elle se lit
+avec la réserve habituelle : `collapse` et `post_filter` étaient **refusés**
+avant, donc chaque requête qui en tire un rendait 400 d'un côté et 200 de
+l'autre. Ces 840 mesurent que les briques sortent souvent, pas qu'elles ont
+trouvé 840 défauts.
+
+La dernière ligne est celle qui compte pour une régression, et c'est la seule
+comparaison honnête : **à générateur constant**, le binaire d'avant et le binaire
+d'après rendent exactement les mêmes 10 divergences. Le nouveau code n'en a
+introduit aucune.
+
+Les **20 divergences ouvertes** sont antérieures à la carte. Cinq portent une
+requête qui contient un `collapse` ou un `post_filter`, et chacune a été
+vérifiée à part : `17100078` se reproduit à l'identique **sans** le repliement
+(la requête rend 5 documents contre 4 avec ou sans lui — une expression
+`query_string`), `17100023` est un `unsupported_operation_exception` qu'ES lève
+sur ses **propres** `percentiles`, et les trois autres ont un jumeau sans
+repliement dans la même campagne (`17200019` / `17200026`, `17300039`,
+`17300086`).
+
+### Ce que ce passage a trouvé : cinq défauts, tous silencieux
+
+Aucun n'était visible aux 97 questions écrites à la main de
+[`sonde_repli.py`](../tests/compat/sonde_repli.py) — qui avaient pourtant servi
+à **écrire** la fonctionnalité.
+
+| Graine | Ce qui était faux | Ce que c'était |
+|---|---|---|
+| sept graines | le tableau `sort` d'un hit portait **un élément de plus** | les clés de tri d'un `inner_hits` étaient rangées derrière celles de la racine dans le même tableau, et rendues avec elles. Un `sort` est ce qu'un client relit pour paginer |
+| sept graines | `matched_queries` manquait dans les documents repliés | ES les y rend ; ne pas les rendre, c'est taire **pourquoi** ce document-là représente son groupe |
+| `17100133` | un `keyword` à valeurs **répétées** faisait tomber la recherche | les `SortedSetDocValues` de Lucene dédoublonnent, ses `SortedNumericDocValues` non : `["x", "x"]` est mono-valué pour ES, `[5, 5]` ne l'est pas |
+| quatre graines | `inner_hits` sur un champ **non indexé** répondait | chez ES un `inner_hits` est une vraie sous-recherche, qui a besoin de l'index inverse : il refuse. Le repliement **seul**, lui, y marche — et le réflexe d'étendre le refus au second niveau était faux, ES l'y accepte |
+| `17200099` | deux documents ex æquo sortaient dans un autre ordre qu'ES | le départage final était l'adresse tantivy, qui n'est pas l'ordre d'écriture. Défaut **antérieur** à la carte, invisible partout ailleurs parce qu'une liste sans tri à elle n'était jamais rendue au client. Corrigé par le `_seq_no` |
+
 ### Ce que ce passage a trouvé : quatre défauts, tous silencieux
 
 Aucun n'était visible aux 244 questions écrites à la main de

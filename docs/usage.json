@@ -60,24 +60,24 @@
  },
  "totaux": {
   "requetes": 5311,
-  "servies": 2546,
-  "refusees": 2748,
+  "servies": 2554,
+  "refusees": 2740,
   "indeterminees": 17,
-  "taux_servies": 47.9
+  "taux_servies": 48.1
  },
  "par_source": {
   "clients": {
-   "servie": 117,
+   "servie": 119,
    "total": 143,
-   "refusee": 26,
-   "taux_servies": 81.8
+   "refusee": 24,
+   "taux_servies": 83.2
   },
   "doc": {
-   "servie": 1651,
+   "servie": 1657,
    "total": 3969,
-   "refusee": 2303,
+   "refusee": 2297,
    "indeterminee": 15,
-   "taux_servies": 41.6
+   "taux_servies": 41.7
   },
   "github": {
    "refusee": 10,
@@ -172,9 +172,9 @@
  ],
  "par_api": {
   "search": {
-   "servie": 1022,
+   "servie": 1030,
    "total": 1801,
-   "refusee": 778,
+   "refusee": 770,
    "indeterminee": 1
   },
   "indices.create": {
@@ -8231,6 +8231,7 @@
   "nested.score_mode": null,
   "nested.tri_et_aggs": null,
   "recherche.aggs": 14.0,
+  "recherche.collapse": 0.2,
   "recherche.docvalue_fields": 0.5,
   "recherche.explain": 0.1,
   "recherche.expressions_index": null,
@@ -8241,8 +8242,9 @@
   "recherche.highlight": 1.9,
   "recherche.min_score": 0.0,
   "recherche.msearch": 0.0,
-  "recherche.non_supportes": 2.9,
+  "recherche.non_supportes": 2.7,
   "recherche.pit": 0.2,
+  "recherche.post_filter": 0.0,
   "recherche.preference": null,
   "recherche.query": 25.3,
   "recherche.reglages_de_shards": null,
@@ -10927,86 +10929,6 @@
    ]
   },
   {
-   "capacite": "recherche.non_supportes",
-   "nom": "collapse, knn, seq_no_primary_term, post_filter, suggest, rescore, track_scores, q, terminate_after, version, indices_boost, profile, slice, stats, ext, retriever",
-   "etat": "refuse",
-   "motif": "pas_encore",
-   "requetes": 153,
-   "part": 2.9,
-   "par_source": {
-    "clients": {
-     "requetes": 18,
-     "part": 12.6
-    },
-    "doc": {
-     "requetes": 74,
-     "part": 1.9
-    },
-    "github": {
-     "requetes": 4,
-     "part": 1.2
-    },
-    "rally": {
-     "requetes": 57,
-     "part": 6.6
-    }
-   },
-   "traits": [
-    {
-     "trait": "corps:version",
-     "requetes": 56
-    },
-    {
-     "trait": "corps:suggest",
-     "requetes": 28
-    },
-    {
-     "trait": "corps:knn",
-     "requetes": 26
-    },
-    {
-     "trait": "corps:rescore",
-     "requetes": 9
-    },
-    {
-     "trait": "corps:retriever",
-     "requetes": 9
-    },
-    {
-     "trait": "corps:collapse",
-     "requetes": 8
-    },
-    {
-     "trait": "corps:profile",
-     "requetes": 5
-    },
-    {
-     "trait": "corps:slice",
-     "requetes": 5
-    },
-    {
-     "trait": "corps:terminate_after",
-     "requetes": 4
-    },
-    {
-     "trait": "corps:indices_boost",
-     "requetes": 2
-    },
-    {
-     "trait": "corps:post_filter",
-     "requetes": 2
-    },
-    {
-     "trait": "corps:seq_no_primary_term",
-     "requetes": 2
-    },
-    {
-     "trait": "corps:track_scores",
-     "requetes": 1
-    }
-   ]
-  },
-  {
    "capacite": "type.autres_parametres",
    "nom": "Autres paramètres de champ (null_value, doc_values, norms…)",
    "etat": "refuse",
@@ -11154,6 +11076,78 @@
     },
     {
      "trait": "champ:search_quote_analyzer",
+     "requetes": 1
+    }
+   ]
+  },
+  {
+   "capacite": "recherche.non_supportes",
+   "nom": "knn, seq_no_primary_term, suggest, rescore, track_scores, q, terminate_after, version, indices_boost, profile, slice, stats, ext, retriever",
+   "etat": "refuse",
+   "motif": "pas_encore",
+   "requetes": 145,
+   "part": 2.7,
+   "par_source": {
+    "clients": {
+     "requetes": 16,
+     "part": 11.2
+    },
+    "doc": {
+     "requetes": 68,
+     "part": 1.7
+    },
+    "github": {
+     "requetes": 4,
+     "part": 1.2
+    },
+    "rally": {
+     "requetes": 57,
+     "part": 6.6
+    }
+   },
+   "traits": [
+    {
+     "trait": "corps:version",
+     "requetes": 56
+    },
+    {
+     "trait": "corps:suggest",
+     "requetes": 28
+    },
+    {
+     "trait": "corps:knn",
+     "requetes": 26
+    },
+    {
+     "trait": "corps:rescore",
+     "requetes": 9
+    },
+    {
+     "trait": "corps:retriever",
+     "requetes": 9
+    },
+    {
+     "trait": "corps:profile",
+     "requetes": 5
+    },
+    {
+     "trait": "corps:slice",
+     "requetes": 5
+    },
+    {
+     "trait": "corps:terminate_after",
+     "requetes": 4
+    },
+    {
+     "trait": "corps:indices_boost",
+     "requetes": 2
+    },
+    {
+     "trait": "corps:seq_no_primary_term",
+     "requetes": 2
+    },
+    {
+     "trait": "corps:track_scores",
      "requetes": 1
     }
    ]

@@ -315,6 +315,23 @@ fn choisir_f64(vals: &[f64], mode: SortMode) -> f64 {
     }
 }
 
+/// La valeur de repliement d'un document (voir [`crate::collapse`]).
+///
+/// Elle sert de **cle de groupe**, donc elle doit se comparer et se hacher — ce
+/// qu'un `f64` ne sait pas faire (deux `NaN` ne sont jamais egaux, alors que
+/// deux documents qui portent `NaN` sont bien le meme groupe). D'ou les bits.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ValeurRepli {
+    /// Le champ n'a aucune valeur pour ce document. Ce n'est pas « pas de
+    /// groupe » : chez ES, tous ces documents-la n'en font qu'**un**.
+    Absente,
+    Str(String),
+    I64(i64),
+    F64(u64),
+    /// Le champ en porte plusieurs : ES fait echouer la recherche entiere.
+    Multiple,
+}
+
 /// Un document candidat, avant la fusion entre index.
 ///
 /// `cible` est le rang de l'index dont il vient : c'est lui qui departage deux
@@ -323,6 +340,9 @@ fn choisir_f64(vals: &[f64], mode: SortMode) -> f64 {
 #[derive(Debug, Clone)]
 struct Hit {
     keys: Vec<SortValue>,
+    /// Les valeurs de repliement lues sur ce document, dans l'ordre de
+    /// [`crate::collapse::Plan::colonnes`]. Vide sans `collapse`.
+    replis: Vec<ValeurRepli>,
     score: Score,
     cible: usize,
     seg: SegmentOrdinal,
@@ -336,6 +356,12 @@ struct Hit {
     /// Lucene ne rend pas — invisible tant qu'on ne regardait que des ensembles
     /// de documents, et decisif des qu'un `search_after` reprend « apres le
     /// dernier ».
+    ///
+    /// Deux cartes l'ont trouve separement, et la seconde mesure vaut d'etre
+    /// gardee : les `inner_hits` d'un `collapse` n'ont pas de tri a eux, donc
+    /// c'est la premiere liste que ferrite rende dans l'ordre « score puis
+    /// document » — et la premiere ou l'ecart se voyait a l'oeil nu (fuzzer,
+    /// graine 17200099).
     seq: i64,
 }
 
@@ -388,6 +414,9 @@ impl SegmentCollector for CompteAvecScoreSegment {
 /// `docs/compat.md`.
 struct SortCollector {
     specs: Arc<Vec<SortSpec>>,
+    /// Les colonnes de repliement a lire en meme temps que les cles de tri.
+    /// Vide sans `collapse`.
+    replis: Arc<Vec<crate::collapse::Colonne>>,
     needs_score: bool,
     cible: usize,
     /// Le `docBase` de chaque segment (voir [`bases_de_segments`]) : sans lui,
@@ -421,6 +450,61 @@ struct Cle {
     absente: SortValue,
 }
 
+/// Comment lire la valeur de repliement d'un document : une colonne, et le
+/// genre qui dit comment la relire.
+enum AccRepli {
+    Str(Option<StrColumn>),
+    I64(Column<i64>),
+    F64(Column<f64>),
+}
+
+impl AccRepli {
+    /// La valeur du document, ou ce qui en tient lieu.
+    ///
+    /// Compter les valeurs n'est pas une precaution : c'est **la** mesure. Un
+    /// document a deux valeurs fait echouer la recherche entiere chez ES, et
+    /// prendre la premiere rendrait un repliement plausible et faux, en 200.
+    fn lire(&self, doc: DocId, buf: &mut Vec<u8>) -> ValeurRepli {
+        match self {
+            Self::Str(None) => ValeurRepli::Absente,
+            Self::Str(Some(c)) => {
+                let mut it = c.term_ords(doc);
+                let Some(ord) = it.next() else {
+                    return ValeurRepli::Absente;
+                };
+                // Un `keyword` qui porte **deux fois la meme valeur** est
+                // mono-value pour ES : ses `SortedSetDocValues` dedoublonnent,
+                // et `["x", "x"]` s'y replie sans broncher. Ses
+                // `SortedNumericDocValues`, elles, ne dedoublonnent pas —
+                // `[5, 5]` fait bien tomber la recherche. Mesure contre ES
+                // 8.15 ; ferrite refusait les deux, donc rendait 500 la ou ES
+                // repond (trouve par le fuzzer, graine 17100133).
+                if it.any(|autre| autre != ord) {
+                    return ValeurRepli::Multiple;
+                }
+                buf.clear();
+                if c.ord_to_bytes(ord, buf).unwrap_or(false) {
+                    ValeurRepli::Str(String::from_utf8_lossy(buf).into_owned())
+                } else {
+                    ValeurRepli::Absente
+                }
+            }
+            Self::I64(c) => une(c.values_for_doc(doc), ValeurRepli::I64),
+            Self::F64(c) => une(c.values_for_doc(doc), |v: f64| {
+                ValeurRepli::F64(v.to_bits())
+            }),
+        }
+    }
+}
+
+fn une<T>(mut vals: impl Iterator<Item = T>, f: impl Fn(T) -> ValeurRepli) -> ValeurRepli {
+    match vals.next() {
+        None => ValeurRepli::Absente,
+        Some(v) if vals.next().is_none() => f(v),
+        Some(_) => ValeurRepli::Multiple,
+    }
+}
+
 struct SortSegmentCollector {
     seg: SegmentOrdinal,
     cible: usize,
@@ -430,6 +514,7 @@ struct SortSegmentCollector {
     /// La colonne `_seq_no` de ce segment (voir [`numero_de_document`]).
     seq: Option<Column<u64>>,
     accessors: Vec<Cle>,
+    replis: Vec<AccRepli>,
     hits: Vec<Hit>,
     buf: Vec<u8>,
     /// Les valeurs d'un document, relues telles que la colonne les porte quand
@@ -482,12 +567,21 @@ impl Collector for SortCollector {
                 absente,
             });
         }
+        let mut replis = Vec::with_capacity(self.replis.len());
+        for col in self.replis.iter() {
+            replis.push(match col.genre {
+                FieldKind::Keyword | FieldKind::Text => AccRepli::Str(ff.str(&col.champ)?),
+                FieldKind::F64 => AccRepli::F64(ff.f64(&col.champ)?),
+                _ => AccRepli::I64(ff.i64(&col.champ)?),
+            });
+        }
         Ok(SortSegmentCollector {
             seg,
             cible: self.cible,
             base: self.bases.get(seg as usize).copied().unwrap_or(0),
             seq: ff.u64(crate::mapping::F_SEQ_NO).ok(),
             accessors,
+            replis,
             hits: Vec::new(),
             buf: Vec::new(),
             nums: Vec::new(),
@@ -609,8 +703,13 @@ impl SegmentCollector for SortSegmentCollector {
                 .unwrap_or_else(absente),
             });
         }
+        let mut replis = Vec::with_capacity(self.replis.len());
+        for acc in &self.replis {
+            replis.push(acc.lire(doc, &mut self.buf));
+        }
         self.hits.push(Hit {
             keys,
+            replis,
             score,
             cible: self.cible,
             seg: self.seg,
@@ -762,9 +861,23 @@ pub struct Cible {
     pub plan: Arc<crate::fetch::Plan>,
     /// Ce que le hit surligne, resolu **sur ce mapping et sur cette requete**.
     pub hl: Arc<crate::highlight::Plan>,
+    /// La requete **sans** `post_filter` : celle des agregations, et celle dont
+    /// `explain` rend l'arbre. Les deux se mesurent — un `post_filter` ne change
+    /// ni les agregations ni l'arbre d'explication (mesure contre ES 8.15).
     pub query: Box<dyn Query>,
-    /// Les cles de tri resolues dans **cette** generation.
+    /// La requete des hits : la precedente, **intersectee** avec le
+    /// `post_filter`. Egale a `query` quand il n'y en a pas.
+    ///
+    /// C'est elle qui compte le total et qui choisit les documents rendus,
+    /// parce que `post_filter` change bel et bien `hits.total` — c'est la
+    /// premiere chose qui le separe d'un filtrage fait cote client.
+    pub query_hits: Box<dyn Query>,
+    /// Les cles de tri resolues dans **cette** generation. Quand un `collapse`
+    /// porte des `inner_hits` tries, leurs cles suivent celles de la racine
+    /// dans le meme tableau (voir [`crate::collapse::BlocResolu::debut`]).
     pub sort: Vec<SortSpec>,
+    /// Le repliement, resolu dans **cette** generation.
+    pub repli: Option<Arc<crate::collapse::Plan>>,
     /// Les agregations sont-elles collectees sur cet index ? (`false` quand il
     /// ignore un des champs agreges : il n'a alors aucune valeur a apporter.)
     pub agrege: bool,
@@ -800,8 +913,11 @@ pub struct SearchRequest {
     pub aggs: Option<Value>,
     pub from: usize,
     pub size: usize,
-    /// Le sens de chaque cle de tri. Vide : tri par score.
+    /// Le sens de chaque cle de tri **de la racine**. Vide : tri par score.
     pub sort_asc: Vec<bool>,
+    /// Un `collapse` est-il demande ? (le plan lui-meme est par index, dans
+    /// [`Cible::repli`] : c'est le mapping qui dit si le champ se replie.)
+    pub replie: bool,
     /// Ce que chaque hit transporte : `_source`, `_id`, `_explanation`,
     /// `matched_queries`.
     pub rendu: Rendu,
@@ -904,11 +1020,15 @@ pub fn balayer(cibles: Vec<Cible>, req: &SearchRequest) -> EsResult<Balayage> {
     for (rang, (cible, searcher)) in cibles.iter().zip(&searchers).enumerate() {
         let collector = SortCollector {
             specs: Arc::new(cible.sort.clone()),
+            replis: Arc::new(Vec::new()),
             needs_score,
             cible: rang,
             bases: Arc::new(bases_de_segments(searcher)),
         };
-        let mut locaux = searcher.search(&cible.query, &collector)?;
+        // `query_hits` et non `query` : le `post_filter` filtre les hits d'une
+        // page de `scroll` comme ceux d'une recherche (mesure). Le `mut` est
+        // celui que le point de reprise reclame juste en dessous.
+        let mut locaux = searcher.search(&cible.query_hits, &collector)?;
         if let Some(e) = cible.incidents.erreur() {
             return Err(e);
         }
@@ -954,6 +1074,8 @@ pub fn balayer(cibles: Vec<Cible>, req: &SearchRequest) -> EsResult<Balayage> {
             searcher: s,
             plan: c.plan,
             hl: c.hl,
+            // L'arbre d'`explain` d'une page de `scroll` est celui de la
+            // requete **sans** `post_filter`, comme sur `_search`.
             query: Arc::from(c.query),
             nommees: c.nommees,
             incidents: c.incidents,
@@ -1065,13 +1187,23 @@ pub fn execute(cibles: &[Cible], req: &SearchRequest) -> EsResult<SearchOutcome>
     };
 
     let trie = !req.sort_asc.is_empty();
-    let needs_score = !trie
+    // Le hit porte-t-il un `_score` ? C'est ce que la reponse montre, et ca ne
+    // se confond pas avec « faut-il calculer le score » : sous un `collapse`,
+    // les `inner_hits` sont **scores** meme quand la racine trie par champ et
+    // rend `max_score: null` (mesure contre ES 8.15).
+    let score_rendu = !trie
         || cibles
             .iter()
             .any(|c| c.sort.iter().any(|s| matches!(s.key, SortKey::Score)));
+    let needs_score = score_rendu || req.replie;
     // Combien de documents chaque index doit remonter pour que la page finale
     // soit exacte : les `from` premiers peuvent tous venir du meme index.
     let fenetre = req.from + req.size;
+    // Un repliement ne peut pas se decider sur une fenetre : le premier
+    // document d'un groupe peut arriver bien apres `from + size`, et le nombre
+    // de groupes n'est connu qu'une fois tout parcouru. On collecte donc tout,
+    // exactement comme le fait deja un tri.
+    let tout_collecter = trie || req.replie;
 
     let mut total = 0usize;
     let mut max_score: Option<f32> = None;
@@ -1081,26 +1213,44 @@ pub fn execute(cibles: &[Cible], req: &SearchRequest) -> EsResult<SearchOutcome>
     let mut apporte = vec![false; cibles.len()];
 
     for (rang, (cible, searcher)) in cibles.iter().zip(&searchers).enumerate() {
-        if trie {
-            let specs = Arc::new(cible.sort.clone());
+        if tout_collecter {
             let collector = SortCollector {
-                specs: specs.clone(),
+                specs: Arc::new(cible.sort.clone()),
+                replis: Arc::new(
+                    cible
+                        .repli
+                        .as_ref()
+                        .map(|p| p.colonnes.clone())
+                        .unwrap_or_default(),
+                ),
                 needs_score,
                 cible: rang,
                 bases: Arc::new(bases_de_segments(searcher)),
             };
-            let mut locaux = searcher.search(&cible.query, &collector)?;
+            let mut locaux = searcher.search(&cible.query_hits, &collector)?;
             if let Some(e) = cible.incidents.erreur() {
                 return Err(e);
             }
             total += locaux.len();
             // Le point de reprise coupe les candidats, jamais le total : ES
             // rend le meme `hits.total` avec et sans `search_after` (mesure).
+            // Il coupe donc **avant** que `max_score` ne se lise.
             if let Some(apres) = &cible.apres {
                 locaux.retain(|h| compare_cles(&req.sort_asc, &h.keys, apres) == Ordering::Greater);
             }
+            if !trie {
+                // Sans cle de tri, le classement est le score : `max_score` se
+                // lit sur l'ensemble collecte, comme le fait `TopDocs` dans
+                // l'autre branche.
+                for h in &locaux {
+                    max_score = Some(max_score.map_or(h.score, |m: f32| m.max(h.score)));
+                }
+            }
             locaux.sort_by(|a, b| compare(&req.sort_asc, a, b));
-            locaux.truncate(fenetre);
+            // La fenetre ne se referme que sans repliement : voir ci-dessus.
+            if !req.replie {
+                locaux.truncate(fenetre);
+            }
             apporte[rang] = !locaux.is_empty();
             candidats.extend(locaux);
         } else {
@@ -1112,9 +1262,9 @@ pub fn execute(cibles: &[Cible], req: &SearchRequest) -> EsResult<SearchOutcome>
             // hits — en 200. A `size: 0` personne ne lit de score, et c'est
             // aussi ce que fait ES.
             total += if fenetre == 0 {
-                searcher.search(&cible.query, &Count)?
+                searcher.search(&cible.query_hits, &Count)?
             } else {
-                searcher.search(&cible.query, &CompteAvecScore)?
+                searcher.search(&cible.query_hits, &CompteAvecScore)?
             };
             if let Some(e) = cible.incidents.erreur() {
                 return Err(e);
@@ -1122,8 +1272,10 @@ pub fn execute(cibles: &[Cible], req: &SearchRequest) -> EsResult<SearchOutcome>
             if fenetre == 0 {
                 continue;
             }
-            let top =
-                searcher.search(&cible.query, &TopDocs::with_limit(fenetre).order_by_score())?;
+            let top = searcher.search(
+                &cible.query_hits,
+                &TopDocs::with_limit(fenetre).order_by_score(),
+            )?;
             if let Some(e) = cible.incidents.erreur() {
                 return Err(e);
             }
@@ -1133,6 +1285,9 @@ pub fn execute(cibles: &[Cible], req: &SearchRequest) -> EsResult<SearchOutcome>
             }
             candidats.extend(top.into_iter().map(|(score, addr)| Hit {
                 keys: Vec::new(),
+                // Aucun repliement ne passe par ici : `collapse` force la
+                // collecte complete, l'autre branche.
+                replis: Vec::new(),
                 score,
                 cible: rang,
                 seg: addr.segment_ord,
@@ -1164,14 +1319,56 @@ pub fn execute(cibles: &[Cible], req: &SearchRequest) -> EsResult<SearchOutcome>
 
     candidats.sort_by(|a, b| compare(&req.sort_asc, a, b));
 
+    // Un champ de repliement multivalue fait echouer la recherche entiere chez
+    // ES : le collecteur l'a marque, il ne reste qu'a le dire. Nommer le
+    // premier suffit — c'est ce que fait Lucene, qui leve des qu'il le voit.
+    if req.replie {
+        if let Some(h) = candidats
+            .iter()
+            .find(|h| h.replis.contains(&ValeurRepli::Multiple))
+        {
+            return Err(crate::collapse::multivalue(h.doc));
+        }
+    }
+
+    // Le repliement choisit un representant par valeur, puis c'est **lui** que
+    // `from` / `size` paginent. `total`, lui, ne bouge pas : ES rend le compte
+    // d'avant repliement.
+    let groupes = if req.replie {
+        crate::collapse::replier(candidats.len(), |i| {
+            candidats[i]
+                .replis
+                .first()
+                .cloned()
+                .unwrap_or(ValeurRepli::Absente)
+        })
+    } else {
+        (0..candidats.len())
+            .map(|i| crate::collapse::Groupe {
+                chef: i,
+                membres: Vec::new(),
+            })
+            .collect()
+    };
+
     let rendu = req.rendu.clone();
     let mut hits = Vec::new();
-    for hit in candidats.into_iter().skip(req.from).take(req.size) {
+    for groupe in groupes.into_iter().skip(req.from).take(req.size) {
+        let hit = &candidats[groupe.chef];
         let cible = &cibles[hit.cible];
         let addr = DocAddress::new(hit.seg, hit.doc);
-        let sort_values = trie.then(|| hit.keys.iter().map(SortValue::to_json).collect());
-        let score = (!trie || needs_score).then_some(hit.score);
-        hits.push(build_hit(
+        // **Les cles de la racine seulement.** Celles qu'un `inner_hits` s'est
+        // reservees suivent dans le meme tableau, et les rendre ici mettrait un
+        // element de plus dans le `sort` du hit — un tableau que des clients
+        // relisent pour paginer. Trouve par le fuzzer, sept graines.
+        let sort_values = trie.then(|| {
+            hit.keys[..req.sort_asc.len()]
+                .iter()
+                .map(SortValue::to_json)
+                .collect()
+        });
+        let score = score_rendu.then_some(hit.score);
+        let mut rendu_hit = build_hit(
             &cible.nom,
             &cible.gen,
             &cible.plan,
@@ -1184,7 +1381,31 @@ pub fn execute(cibles: &[Cible], req: &SearchRequest) -> EsResult<SearchOutcome>
             &*cible.query,
             &cible.nommees,
             &cible.incidents,
-        )?);
+        )?;
+        if let Some(plan) = &cible.repli {
+            let Value::Object(obj) = &mut rendu_hit else {
+                return Err(EsError::internal("hit qui n'est pas un objet"));
+            };
+            crate::collapse::poser_valeur(
+                obj,
+                &plan.champ,
+                hit.replis.first().unwrap_or(&ValeurRepli::Absente),
+            );
+            if !plan.blocs.is_empty() {
+                obj.insert(
+                    "inner_hits".into(),
+                    rendre_replies(
+                        cibles,
+                        &searchers,
+                        &candidats,
+                        &groupe.membres,
+                        plan,
+                        &rendu,
+                    )?,
+                );
+            }
+        }
+        hits.push(rendu_hit);
     }
     Ok(SearchOutcome {
         total,
@@ -1246,6 +1467,8 @@ pub(crate) fn bloc_top_hits(
         if trie {
             let collector = SortCollector {
                 specs: Arc::new(cible.sort.to_vec()),
+                // Un `top_hits` ne replie pas : aucune colonne a lire.
+                replis: Arc::new(Vec::new()),
                 needs_score,
                 cible: rang,
                 bases: Arc::new(bases_de_segments(cible.searcher)),
@@ -1265,6 +1488,8 @@ pub(crate) fn bloc_top_hits(
             }
             candidats.extend(top.into_iter().map(|(score, addr)| Hit {
                 keys: Vec::new(),
+                // Un `top_hits` ne replie pas.
+                replis: Vec::new(),
                 score,
                 cible: rang,
                 seg: addr.segment_ord,
@@ -1316,6 +1541,192 @@ pub(crate) fn bloc_top_hits(
             "hits": hits,
         }
     }))
+}
+
+/// Les blocs `inner_hits` d'un groupe.
+///
+/// Les membres ne sont pas relus par une seconde recherche : ce sont les
+/// candidats deja collectes. C'est ce qui garantit qu'ils voient exactement ce
+/// que la page voit — le `post_filter` et le `min_score` compris, ce qui est
+/// bien ce que fait ES (mesure : un `post_filter` fait tomber le total d'un
+/// groupe, il ne se contente pas de cacher son representant).
+fn rendre_replies(
+    cibles: &[Cible],
+    searchers: &[Searcher],
+    candidats: &[Hit],
+    membres: &[usize],
+    plan: &crate::collapse::Plan,
+    rendu: &Rendu,
+) -> EsResult<Value> {
+    let mut out = Map::new();
+    for bloc in &plan.blocs {
+        // Le tri du bloc a ses propres cles, rangees derriere celles de la
+        // racine dans le meme tableau.
+        let asc: Vec<bool> = bloc.tri.iter().map(|s| s.asc).collect();
+        let mut rangs: Vec<usize> = membres.to_vec();
+        if asc.is_empty() {
+            // Sans tri a lui, un bloc classe ses membres **par score**, pas
+            // dans l'ordre de la racine : sous `sort: prix desc`, deux membres
+            // ex aequo en score sortent quand meme dans l'ordre du document
+            // (mesure — ferrite rendait l'ordre du tri de la page, donc
+            // l'inverse).
+            rangs.sort_by(|a, b| compare(&[], &candidats[*a], &candidats[*b]));
+        } else {
+            rangs.sort_by(|a, b| compare_tranche(&asc, bloc.debut, &candidats[*a], &candidats[*b]));
+        }
+        let trie = !asc.is_empty();
+        // Un second niveau de repliement dedoublonne les membres — et `total`
+        // reste celui d'avant, comme a la racine (mesure).
+        let visibles: Vec<usize> = match bloc.colonne {
+            None => rangs.clone(),
+            Some(col) => crate::collapse::replier(rangs.len(), |i| {
+                candidats[rangs[i]]
+                    .replis
+                    .get(col)
+                    .cloned()
+                    .unwrap_or(ValeurRepli::Absente)
+            })
+            .into_iter()
+            .map(|g| rangs[g.chef])
+            .collect(),
+        };
+        // `max_score` porte sur le groupe entier, pas sur la tranche rendue :
+        // `from: 100` sur un groupe de 4 rend zero hit et **garde** le score
+        // (mesure). A `size: 0`, personne ne lit de score : il repasse a `null`,
+        // exactement comme a la racine.
+        let max_score = (!trie && bloc.size > 0)
+            .then(|| {
+                membres
+                    .iter()
+                    .map(|i| candidats[*i].score)
+                    .fold(None, |m: Option<f32>, s| Some(m.map_or(s, |m| m.max(s))))
+            })
+            .flatten();
+        let mut hits = Vec::new();
+        for i in visibles.into_iter().skip(bloc.from).take(bloc.size) {
+            let hit = &candidats[i];
+            let cible = &cibles[hit.cible];
+            let addr = DocAddress::new(hit.seg, hit.doc);
+            hits.push(rendre_replie(
+                cible,
+                &searchers[hit.cible],
+                addr,
+                hit,
+                bloc,
+                trie,
+                rendu,
+            )?);
+        }
+        out.insert(
+            bloc.nom.clone(),
+            crate::collapse::bloc_inner(membres.len(), max_score, hits),
+        );
+    }
+    Ok(Value::Object(out))
+}
+
+/// Un document replie, tel qu'un `inner_hits` le rend : `_index`, `_id`,
+/// `_score`, le `_source` que le bloc demande, et — sous un second niveau de
+/// repliement — sa valeur dans `fields`.
+#[allow(clippy::too_many_arguments)]
+fn rendre_replie(
+    cible: &Cible,
+    searcher: &Searcher,
+    addr: DocAddress,
+    hit: &Hit,
+    bloc: &crate::collapse::BlocResolu,
+    trie: bool,
+    rendu: &Rendu,
+) -> EsResult<Value> {
+    let (index_name, gen) = (cible.nom.as_str(), &*cible.gen);
+    let doc: tantivy::schema::TantivyDocument = searcher.doc(addr)?;
+    use tantivy::schema::Value as _;
+    let id = doc
+        .get_first(gen.fields.id)
+        .and_then(|v| v.as_str().map(str::to_string))
+        .ok_or_else(|| EsError::internal("hit replie sans _id"))?;
+    let source = doc
+        .get_first(gen.fields.source)
+        .and_then(|v| v.as_str().map(str::to_string))
+        .ok_or_else(|| EsError::internal("hit replie sans _source"))?;
+    let source: Value = serde_json::from_str(&source)
+        .map_err(|e| EsError::internal(format!("_source illisible: {e}")))?;
+
+    let mut out = Map::new();
+    out.insert("_index".into(), json!(index_name));
+    out.insert("_id".into(), json!(id));
+    out.insert(
+        "_score".into(),
+        if trie {
+            Value::Null
+        } else {
+            json!(round_score(hit.score))
+        },
+    );
+    if let Some(filtre) = bloc.source.apply(source) {
+        out.insert("_source".into(), filtre);
+    }
+    if let Some(col) = bloc.colonne {
+        crate::collapse::poser_valeur(
+            &mut out,
+            &bloc.champ2,
+            hit.replis.get(col).unwrap_or(&ValeurRepli::Absente),
+        );
+    }
+    if trie {
+        out.insert(
+            "sort".into(),
+            Value::Array(
+                hit.keys[bloc.debut..bloc.debut + bloc.tri.len()]
+                    .iter()
+                    .map(SortValue::to_json)
+                    .collect(),
+            ),
+        );
+    }
+    // Un document replie porte ses clauses nommees comme n'importe quel hit :
+    // ES les y rend, et ne pas les rendre serait taire **pourquoi** ce
+    // document-la represente son groupe. Elles se rejouent contre lui, une par
+    // une, exactement comme a la racine (voir [`build_hit`]) — et l'incident
+    // qu'un `function_score` peut lever a la restitution se relit apres.
+    let noms =
+        crate::explain::matched_queries(searcher, &cible.nommees, addr, rendu.noms_avec_score);
+    if let Some(e) = cible.incidents.erreur() {
+        return Err(e);
+    }
+    if let Some(m) = noms {
+        out.insert("matched_queries".into(), m);
+    }
+    Ok(Value::Object(out))
+}
+
+/// L'ordre entre deux candidats sur une **tranche** de leurs cles de tri :
+/// celle qu'un bloc `inner_hits` s'est reservee.
+///
+/// Le departage final est le meme qu'a la racine (index, puis ordre
+/// d'ecriture) : sans lui, deux membres ex aequo ne sortiraient pas toujours
+/// dans le meme ordre.
+fn compare_tranche(asc: &[bool], debut: usize, a: &Hit, b: &Hit) -> Ordering {
+    for (i, sens) in asc.iter().enumerate() {
+        let (av, bv) = (&a.keys[debut + i], &b.keys[debut + i]);
+        let ord = match (av, bv) {
+            (SortValue::Absente { .. }, SortValue::Absente { .. }) => Ordering::Equal,
+            (SortValue::Absente { en_tete }, _) => bout(*en_tete),
+            (_, SortValue::Absente { en_tete }) => bout(*en_tete).reverse(),
+            _ => {
+                let c = av.cmp_present(bv);
+                if *sens {
+                    c
+                } else {
+                    c.reverse()
+                }
+            }
+        };
+        if ord != Ordering::Equal {
+            return ord;
+        }
+    }
+    (a.cible, a.seq, a.seg, a.doc).cmp(&(b.cible, b.seq, b.seg, b.doc))
 }
 
 /// L'ordre entre deux candidats, quel que soit l'index d'ou ils viennent.
@@ -1629,6 +2040,7 @@ mod tests {
     fn tri_valeurs_manquantes_en_dernier() {
         let present = Hit {
             keys: vec![SortValue::I64(1)],
+            replis: Vec::new(),
             score: 1.0,
             cible: 0,
             seg: 0,
@@ -1637,6 +2049,7 @@ mod tests {
         };
         let missing = Hit {
             keys: vec![SortValue::Absente { en_tete: false }],
+            replis: Vec::new(),
             score: 1.0,
             cible: 0,
             seg: 0,
@@ -1674,6 +2087,7 @@ mod tests {
         // c'est la cle suivante qui les departage — comme chez ES.
         let cle_suivante = |v: SortValue, id: u32| Hit {
             keys: vec![v, SortValue::Str(format!("d{id}"))],
+            replis: Vec::new(),
             score: 1.0,
             cible: 0,
             seg: 0,
@@ -1789,6 +2203,7 @@ mod tests {
     fn ex_aequo_departages_par_index() {
         let a = Hit {
             keys: vec![],
+            replis: Vec::new(),
             score: 2.0,
             cible: 1,
             seg: 0,
@@ -1797,6 +2212,7 @@ mod tests {
         };
         let b = Hit {
             keys: vec![],
+            replis: Vec::new(),
             score: 2.0,
             cible: 0,
             seg: 0,
